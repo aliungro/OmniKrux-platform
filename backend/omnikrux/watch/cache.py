@@ -25,11 +25,18 @@ class WatchCache:
         to_row: Callable[[dict, str], ResourceRow],
         *,
         backoff: Sequence[float] = (1, 2, 5, 10, 30),
+        stable_seconds: float = 30,
+        min_watch_interval: float = 1,
     ):
+        """`backoff` steps reset only once a watch proved stable: it delivered an event or stayed
+        up for `stable_seconds`. Watches restart at most once per `min_watch_interval` seconds."""
         self.cluster_id = cluster_id
         self._source_factory = source_factory
         self._to_row = to_row
         self._backoff = tuple(backoff)
+        self._stable_seconds = stable_seconds
+        self._min_watch_interval = min_watch_interval
+        self._stable = False  # the current attempt's watch has proved stable
         self.state: State = "syncing"
         self.message: str | None = None
         self.rows: dict[str, dict] = {}  # uid -> JSON-ready row
@@ -69,20 +76,27 @@ class WatchCache:
     # --- loop -----------------------------------------------------------------
 
     async def _run(self) -> None:
+        loop = asyncio.get_running_loop()
         step = 0
         while True:
+            self._stable = False
             try:
                 self._set_state("syncing", None)
                 source = self._source = await self._source_factory()
                 rv = await self._relist(source)
-                step = 0
+                last_start: float | None = None
                 while True:
+                    if last_start is not None and (wait := last_start + self._min_watch_interval - loop.time()) > 0:
+                        await asyncio.sleep(wait)
+                    last_start = loop.time()
                     try:
                         rv = await self._watch(source, rv)
                     except Expired:
                         rv = await self._relist(source)
             except Exception as exc:
                 await self._discard_source()
+                if self._stable:
+                    step = 0
                 if isinstance(exc, ClusterUnavailable):
                     message = exc.message
                     logger.warning("cluster %s unavailable: %s", self.cluster_id, message)
@@ -108,13 +122,20 @@ class WatchCache:
         return rv
 
     async def _watch(self, source: ResourceSource, rv: str) -> str:
-        """Apply events until the watch ends normally; return the latest resourceVersion."""
+        """Apply events until the watch ends normally; return the latest resourceVersion.
+
+        Marks the attempt stable once the watch delivers an event or stays up `stable_seconds`.
+        """
+        started = asyncio.get_running_loop().time()
         events = source.watch(rv)
         try:
             async for event in events:
+                self._stable = True
                 rv = ((event.object.get("metadata") or {}).get("resourceVersion")) or rv
                 self._apply(event)
         finally:
+            if asyncio.get_running_loop().time() - started >= self._stable_seconds:
+                self._stable = True
             aclose = getattr(events, "aclose", None)
             if aclose is not None:
                 await aclose()

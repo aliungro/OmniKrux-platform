@@ -7,7 +7,7 @@ from omnikrux.watch.source import Expired, WatchEvent
 from tests.resources.test_rows import c, pod
 
 # scripted: list results + event batches/exceptions per call
-from tests.watch.fakes import FakeSource
+from tests.watch.fakes import FakeSource, Hold
 
 
 def p(uid, name="p"):
@@ -121,7 +121,7 @@ async def test_empty_cluster_sends_one_empty_last_part():
 
 async def test_expired_relist_keeps_ready_without_status_message():
     src = FakeSource(lists=[([p("a")], "1"), ([p("b")], "9")], watches=[Expired(), []])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,), min_watch_interval=0)
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 4)
@@ -136,7 +136,7 @@ async def test_watch_resumes_from_latest_resource_version():
     b = p("b")
     b["metadata"]["resourceVersion"] = "7"
     src = FakeSource(lists=[([p("a")], "1")], watches=[[WatchEvent("ADDED", b)], []])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,), min_watch_interval=0)
     q = cache.subscribe()
     await cache.start()
     await drain(q, 4)
@@ -145,18 +145,18 @@ async def test_watch_resumes_from_latest_resource_version():
     await cache.stop()
 
 
-async def test_generic_error_message_and_backoff_resets_after_successful_list():
+async def test_generic_error_message_and_backoff_resets_after_a_watch_delivers_an_event():
     # backoff (0, 60): the first wait is 0s; a second wait of 60s would stall the test,
-    # so reaching "ready" twice proves the step counter reset after the first list.
+    # so reaching "ready" twice proves the step counter reset once the watch delivered an event.
     src = FakeSource(
         factory_errors=[RuntimeError("dns lookup failed")],
         lists=[([p("a")], "1"), ([p("a")], "2")],
-        watches=[RuntimeError("connection reset")],
+        watches=[[WatchEvent("ADDED", p("b"))], RuntimeError("connection reset")],
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60))
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60), min_watch_interval=0)
     q = cache.subscribe()
     await cache.start()
-    msgs = await drain(q, 9)
+    msgs = await drain(q, 10)
     statuses = [(m["state"], m["message"]) for m in msgs if m["type"] == "cluster_status"]
     assert statuses == [
         ("syncing", None),
@@ -168,6 +168,47 @@ async def test_generic_error_message_and_backoff_resets_after_successful_list():
         ("ready", None),
     ]
     await cache.stop()
+
+
+async def test_backoff_keeps_growing_when_list_works_but_watch_fails_at_once():
+    # LIST is allowed but WATCH is not: a successful list alone must not reset the backoff.
+    src = FakeSource(
+        lists=[([p("a")], "1"), ([p("a")], "2"), ([p("a")], "3")],
+        watches=[RuntimeError("watch forbidden"), RuntimeError("watch forbidden")],
+    )
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60), min_watch_interval=0)
+    q = cache.subscribe()
+    await cache.start()
+    msgs = await drain(q, 8)
+    assert [m.get("state") for m in msgs] == ["syncing", "ready", None, "error", "syncing", "ready", None, "error"]
+    await assert_quiet(q)  # now waiting the 60s step instead of listing again
+    assert len(src.lists) == 1 and cache.state == "error"
+    await cache.stop()
+
+
+async def test_backoff_resets_after_the_watch_stayed_up_long_enough():
+    src = FakeSource(
+        factory_errors=[RuntimeError("dns lookup failed")],
+        lists=[([p("a")], "1"), ([p("a")], "2")],
+        watches=[Hold(0.1, RuntimeError("connection reset"))],
+    )
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60), stable_seconds=0.05, min_watch_interval=0)
+    q = cache.subscribe()
+    await cache.start()
+    msgs = await drain(q, 9)
+    assert [m["state"] for m in msgs if m["type"] == "cluster_status"][-1] == "ready"
+    assert len(src.lists) == 0
+    await cache.stop()
+
+
+async def test_watches_that_end_at_once_are_restarted_no_faster_than_the_minimum_interval():
+    src = FakeSource(lists=[([p("a")], "1")], watches=[[], [], []])
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,), min_watch_interval=0.2)
+    await cache.start()
+    await asyncio.sleep(0.5)
+    await cache.stop()
+    gaps = [b - a for a, b in zip(src.watch_times, src.watch_times[1:], strict=False)]
+    assert len(src.watch_times) == 3 and all(g >= 0.18 for g in gaps), src.watch_times
 
 
 async def test_backoff_steps_and_retry_now_skips_the_wait():
