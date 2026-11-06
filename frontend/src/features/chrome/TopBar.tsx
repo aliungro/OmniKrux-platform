@@ -1,6 +1,5 @@
 import type { Territory } from "../territories/model";
 import { ProviderBadge } from "../territories/ProviderBadge";
-import k from "./key.module.css";
 import s from "./TopBar.module.css";
 
 /** What a scope token needs: the cluster plus its live state and failing count. */
@@ -52,9 +51,9 @@ export function TopBar({ clusters }: { clusters: ScopeCluster[] }) {
           ))}
         </div>
       )}
-      {/* Placeholder for the command palette (Plan 3): not interactive yet. */}
+      {/* Quiet placeholder for the command palette (Plan 3): no prompt or shortcut until it works. */}
       <div className={s.cmd} aria-hidden="true">
-        <b>:</b>pods, deploy, svc, helm…<span className={`${k.k} ${s.cmdKey}`}>Ctrl K</span>
+        pods, deploy, svc, helm…
       </div>
     </header>
   );

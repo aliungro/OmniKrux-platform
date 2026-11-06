@@ -69,6 +69,15 @@ describe("TopBar", () => {
     const tokens = screen.getAllByTestId("scope-token");
     expect(tokens.map((t) => t.textContent)).toEqual(["AKSaks-prod-weu1 failing", "KINDkind-dev"]);
   });
+  it("the command-palette placeholder is quiet: no keycap, no prompt, nothing to focus", () => {
+    const { container } = render(<TopBar clusters={[]} />);
+    expect(container.textContent).not.toContain("Ctrl K");
+    expect(container.querySelector("b")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    const placeholder = container.querySelector('[aria-hidden="true"]:not(svg)');
+    expect(placeholder?.textContent).toBe("pods, deploy, svc, helm…");
+  });
   it("error token carries the message", () => {
     render(<TopBar clusters={[{ cluster: cluster(), state: "error", message: "Can't reach this cluster: timeout", failing: 0 }]} />);
     const token = screen.getByTestId("scope-token");
