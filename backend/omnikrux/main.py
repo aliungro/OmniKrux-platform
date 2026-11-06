@@ -42,7 +42,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.hub = hub
         try:
             for path in settings.kubeconfig_paths:
-                for text in read_kubeconfig_files([path]):
+                try:
+                    texts = read_kubeconfig_files([path])
+                except OSError as exc:
+                    log.warning(
+                        "Cannot read kubeconfig %s (%s); make it readable by the container user "
+                        "(for example run with --user \"$(id -u):$(id -g)\" or chmod 644 a copy). "
+                        "Continuing without it.",
+                        path,
+                        exc,
+                    )
+                    continue
+                for text in texts:
                     try:
                         await registry.upsert_from_kubeconfig(text, in_container=settings.in_container)
                     except ValueError as exc:
