@@ -228,3 +228,46 @@ async def test_stop_before_start_and_twice_is_safe():
     await cache.start()
     await cache.stop()
     await cache.stop()
+
+
+class ClosingSource(FakeSource):
+    """FakeSource that records ``aclose()`` calls (and can fail them)."""
+
+    def __init__(self, *args, aclose_error=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.acloses = 0
+        self.aclose_error = aclose_error
+
+    async def aclose(self):
+        self.acloses += 1
+        if self.aclose_error is not None:
+            raise self.aclose_error
+
+
+async def test_discarded_sources_are_closed_on_retry_and_stop():
+    src = ClosingSource(lists=[([p("a")], "1"), ([p("a")], "2")], watches=[RuntimeError("connection reset")])
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    q = cache.subscribe()
+    await cache.start()
+    msgs = await drain(q, 7)
+    assert [m.get("state") for m in msgs] == ["syncing", "ready", None, "error", "syncing", "ready", None]
+    assert src.acloses == 1  # the failed attempt's source, before the factory ran again
+    await cache.stop()
+    assert src.acloses == 2
+
+
+async def test_source_aclose_errors_are_swallowed(caplog):
+    src = ClosingSource(
+        lists=[([p("a")], "1"), ([p("a")], "2")],
+        watches=[RuntimeError("connection reset")],
+        aclose_error=RuntimeError("close failed"),
+    )
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    q = cache.subscribe()
+    with caplog.at_level(logging.DEBUG, logger="omnikrux.watch.cache"):
+        await cache.start()
+        await drain(q, 7)
+        await cache.stop()
+    assert cache.state == "ready" and src.acloses == 2
+    closes = [r for r in caplog.records if "close failed" in str(r.exc_info and r.exc_info[1])]
+    assert [r.levelno for r in closes] == [logging.DEBUG, logging.DEBUG]

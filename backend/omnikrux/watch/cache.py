@@ -36,6 +36,7 @@ class WatchCache:
         self._subscribers: list[asyncio.Queue[dict]] = []
         self._retry = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._source: ResourceSource | None = None
 
     async def start(self) -> None:
         if self._task is None:
@@ -47,6 +48,7 @@ class WatchCache:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await self._discard_source()
 
     def subscribe(self) -> asyncio.Queue[dict]:
         q: asyncio.Queue[dict] = asyncio.Queue()
@@ -71,7 +73,7 @@ class WatchCache:
         while True:
             try:
                 self._set_state("syncing", None)
-                source = await self._source_factory()
+                source = self._source = await self._source_factory()
                 rv = await self._relist(source)
                 step = 0
                 while True:
@@ -80,6 +82,7 @@ class WatchCache:
                     except Expired:
                         rv = await self._relist(source)
             except Exception as exc:
+                await self._discard_source()
                 if isinstance(exc, ClusterUnavailable):
                     message = exc.message
                     logger.warning("cluster %s unavailable: %s", self.cluster_id, message)
@@ -126,6 +129,17 @@ class WatchCache:
         if (row := self._row(event.object)) is not None:
             self.rows[row["uid"]] = row
             self._broadcast({"type": "upsert", "cluster_id": self.cluster_id, "row": row})
+
+    async def _discard_source(self) -> None:
+        """Release the current source's resources (its API client), if it has any."""
+        source, self._source = self._source, None
+        aclose = getattr(source, "aclose", None)
+        if aclose is None:
+            return
+        try:
+            await aclose()
+        except Exception:
+            logger.debug("closing the source for cluster %s failed", self.cluster_id, exc_info=True)
 
     async def _wait_backoff(self, delay: float) -> None:
         with contextlib.suppress(TimeoutError):

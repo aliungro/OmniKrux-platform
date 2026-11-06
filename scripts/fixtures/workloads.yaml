@@ -1,0 +1,54 @@
+# Demo workloads for the kind dev cluster (scripts/dev-kind.sh).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+---
+# Restarts forever: CrashLoopBackOff.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: crasher
+  namespace: demo
+spec:
+  restartPolicy: Always
+  containers:
+    - name: crasher
+      image: busybox:1.36
+      command: ["sh", "-c", "echo boom; exit 1"]
+---
+# Requests more CPU than any node has: stays Pending.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stuck
+  namespace: demo
+spec:
+  containers:
+    - name: stuck
+      image: busybox:1.36
+      command: ["sleep", "infinity"]
+      resources:
+        requests:
+          cpu: "64"
