@@ -82,6 +82,7 @@ class PodDescribe(BaseModel):
     labels: dict[str, str]
     annotations: dict[str, str]
     events: list[EventInfo]
+    events_error: str | None = None  # why `events` is empty when listing them failed
 
 
 def describe_pod(pod: dict, events: list[dict]) -> PodDescribe:

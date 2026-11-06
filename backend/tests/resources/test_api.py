@@ -6,7 +6,7 @@ from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.main import create_app
 from omnikrux.resources import api as resources_api
-from tests.fakekube import FORBIDDEN, kubeconfig_for
+from tests.fakekube import EVENTS_FORBIDDEN, FORBIDDEN, kubeconfig_for
 
 CRASHER = {
     "metadata": {
@@ -87,6 +87,7 @@ async def test_describe_route_returns_describe(client, fake_api):
         {"name": "DB_PASSWORD", "value": None, "source": "Secret db key password"}
     ]
     assert [(e["reason"], e["count"]) for e in body["events"]] == [("BackOff", 5)]
+    assert body["events_error"] is None
     [events_call] = [q for _, path, q in fake_api.requests if path.endswith("/events")]
     assert events_call["fieldSelector"] == "involvedObject.uid=u-crasher"
 
@@ -126,6 +127,20 @@ async def test_describe_forbidden_plain_message(client, fake_api):
     r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/yaml")
     assert r.status_code == 502
     assert r.json() == {"detail": f"Not allowed to read pod demo/crasher as YAML: {FORBIDDEN}"}
+
+
+async def test_describe_survives_forbidden_events(client, fake_api):
+    http, cluster_id = client
+    fake_api.mode = "events_forbidden"
+    r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/describe")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pod"]["name"] == "crasher" and body["pod"]["status"] == "CrashLoopBackOff"
+    assert body["containers"][0]["state"] == "Waiting: CrashLoopBackOff"
+    assert body["events"] == []
+    assert body["events_error"] == (
+        f"Not allowed to list events for pod demo/crasher: {EVENTS_FORBIDDEN}"
+    )
 
 
 async def test_describe_hung_cluster_times_out_plainly(client, fake_api, monkeypatch):

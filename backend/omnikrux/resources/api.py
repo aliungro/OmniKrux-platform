@@ -68,14 +68,19 @@ async def describe(cluster_id: str, namespace: str, name: str, request: Request)
     async def run(api: ApiClient) -> PodDescribe:
         pod = await _read_pod(api, namespace, name)
         uid = (pod.get("metadata") or {}).get("uid", "")
-        events = await _json(
-            CoreV1Api(api).list_namespaced_event(
-                namespace,
-                field_selector=f"involvedObject.uid={uid}",
-                _preload_content=False,
-                _request_timeout=REQUEST_TIMEOUT,
+        try:
+            events = await _json(
+                CoreV1Api(api).list_namespaced_event(
+                    namespace,
+                    field_selector=f"involvedObject.uid={uid}",
+                    _preload_content=False,
+                    _request_timeout=REQUEST_TIMEOUT,
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001 (the pod is still worth showing; say why)
+            out = describe_pod(pod, [])
+            out.events_error = kube_error_message(exc, f"list events for pod {namespace}/{name}")
+            return out
         return describe_pod(pod, events.get("items") or [])
 
     return await _call(request, cluster_id, f"describe pod {namespace}/{name}", run)

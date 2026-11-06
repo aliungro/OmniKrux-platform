@@ -28,6 +28,9 @@ LOG_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 FORBIDDEN = 'pods is forbidden: User "fake" cannot get resource "pods" in the namespace "demo"'
+EVENTS_FORBIDDEN = (
+    'events is forbidden: User "fake" cannot list resource "events" in the namespace "demo"'
+)
 
 
 def status_body(code: int, reason: str, message: str) -> dict:
@@ -97,6 +100,7 @@ class FakeKubeApi:
     ok: everything works; unauthorized: 401 everywhere; hang: never answers until `release`;
     apis_unauthorized: everything works except `/apis`, which answers 401;
     forbidden: 403 everywhere, with FORBIDDEN as the Status message;
+    events_forbidden: listing events answers 403 (EVENTS_FORBIDDEN), everything else works;
     watch_forbidden: a pod watch answers 403; instant_close: a pod watch ends after its event.
     A pod watch in `ok` mode stays open until `release` is set.
     """
@@ -145,6 +149,9 @@ class FakeKubeApi:
             if (body := ROUTES.get(path)) is not None:
                 return web.json_response(body)
             if match := EVENTS_ROUTE.match(path):
+                if self.mode == "events_forbidden":
+                    body = status_body(403, "Forbidden", EVENTS_FORBIDDEN)
+                    return web.json_response(body, status=403)
                 return self._events(request, match["ns"])
         if (match := PODS_ROUTE.match(path)) and method == "POST":
             return await self._create_pod(request, match["ns"])
