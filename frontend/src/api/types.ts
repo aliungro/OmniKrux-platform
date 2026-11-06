@@ -36,4 +36,5 @@ export type WatchMessage =
     }
   | { type: "snapshot"; cluster_id: string; rows: ResourceRow[]; part: number; last: boolean }
   | { type: "upsert"; cluster_id: string; row: ResourceRow }
-  | { type: "delete"; cluster_id: string; uid: string };
+  | { type: "delete"; cluster_id: string; uid: string }
+  | { type: "cluster_removed"; cluster_id: string };

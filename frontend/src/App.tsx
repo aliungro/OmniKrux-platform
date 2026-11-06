@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { retryCluster, useClusters } from "./api/useClusters";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "./api/useClusters";
 import { useWatch } from "./api/useWatch";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
@@ -18,12 +18,20 @@ function isNoFilter(f: Filters): boolean {
 
 /** The whole console page; expects a QueryClientProvider above it. */
 export function Console() {
+  const queryClient = useQueryClient();
   const clusters = useClusters();
-  const watch = useWatch("pods");
+  const list = clusters.data;
+  const { refetch } = clusters;
+  const knownClusterIds = useMemo(() => (list ? new Set(list.map((c) => c.id)) : undefined), [list]);
+  // The watch names clusters the moment the backend adds or drops them; reload the list then.
+  const watch = useWatch("pods", {
+    knownClusterIds,
+    onUnknownCluster: () => void refetch(),
+    onClusterRemoved: () => void queryClient.invalidateQueries({ queryKey: CLUSTERS_QUERY_KEY }),
+  });
   const now = useNow(60_000);
   const [filters, setFilters] = useState<Filters>(NO_FILTER);
 
-  const list = clusters.data;
   // Unfiltered territories drive the scope tokens and every count, so counts never shrink as you filter.
   const all = useMemo(() => buildTerritories(list ?? [], watch, NO_FILTER, now), [list, watch, now]);
   const shown = useMemo(

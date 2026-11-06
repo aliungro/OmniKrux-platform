@@ -3,10 +3,16 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { applyMessage, emptyWatchState, type WatchState } from "./api/watchState";
+import type { WatchOptions } from "./api/useWatch";
 import { Console } from "./App";
 
-const watch = vi.hoisted(() => ({ state: null as WatchState | null }));
-vi.mock("./api/useWatch", () => ({ useWatch: () => watch.state }));
+const watch = vi.hoisted(() => ({ state: null as WatchState | null, opts: undefined as WatchOptions | undefined }));
+vi.mock("./api/useWatch", () => ({
+  useWatch: (_kind: string, opts?: WatchOptions) => {
+    watch.opts = opts;
+    return watch.state;
+  },
+}));
 
 const cluster = { id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443", original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null };
 const pod = (uid: string, status: string, cls: string) => ({ uid, cluster_id: "c1", kind: "Pod", namespace: "default", name: uid, created_at: null, columns: { status, status_class: cls, node: "n1", last_restart_at: null } });
@@ -22,6 +28,7 @@ function renderConsole() {
 
 beforeEach(() => {
   watch.state = emptyWatchState();
+  watch.opts = undefined;
 });
 afterEach(() => {
   cleanup();
@@ -73,5 +80,20 @@ describe("Console wiring", () => {
     renderConsole();
     const token = await screen.findByTestId("scope-token");
     await waitFor(() => expect(token.getAttribute("title")).toBe("Can't reach this cluster: timeout"));
+  });
+});
+
+describe("Console follows cluster changes", () => {
+  it("passes the known cluster ids and reloads the list for an unknown or removed cluster", async () => {
+    const fetch = vi.fn(() => json([cluster]));
+    vi.stubGlobal("fetch", fetch);
+    renderConsole();
+    await screen.findByTestId("scope-token");
+    await waitFor(() => expect(watch.opts?.knownClusterIds).toEqual(new Set(["c1"])));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    watch.opts?.onUnknownCluster?.("c2");
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    watch.opts?.onClusterRemoved?.("c1");
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
   });
 });

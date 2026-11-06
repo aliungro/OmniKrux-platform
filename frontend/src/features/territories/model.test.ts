@@ -80,6 +80,51 @@ describe("territories model details", () => {
   });
 });
 
+describe("territory memoization", () => {
+  const ready = (cluster_id: string) => ({ type: "cluster_status", cluster_id, state: "ready", message: null }) as const;
+  const cl2 = { ...cl, id: "c2", name: "kind-dev" };
+  const all = { status: "all", text: "" } as const;
+  const base = () => {
+    let w = applyMessage(state(), ready("c1"));
+    w = applyMessage(w, { type: "snapshot", cluster_id: "c2", part: 0, last: true, rows: [{ ...r("x", "Running", "ok"), cluster_id: "c2" }] });
+    return applyMessage(w, ready("c2"));
+  };
+
+  it("unchanged cluster keeps its territory object", () => {
+    const w = base();
+    const [t1, t2] = buildTerritories([cl, cl2], w, all, now);
+    const w2 = applyMessage(w, { type: "upsert", cluster_id: "c2", row: { ...r("y", "Running", "ok"), cluster_id: "c2" } });
+    const [u1, u2] = buildTerritories([cl, cl2], w2, { status: "all", text: "" }, new Date(now.getTime() + 30_000));
+    expect(u1).toBe(t1);
+    expect(u1.rows).toBe(t1.rows);
+    expect(u2).not.toBe(t2);
+    expect(u2.rows.map((x) => x.uid)).toEqual(["x", "y"]);
+  });
+
+  it("rebuilds when the filter, the minute, the cluster or its status changes", () => {
+    const w = base();
+    const [t] = buildTerritories([cl], w, all, now);
+    const failing = buildTerritories([cl], w, { status: "failing", text: "" }, now)[0];
+    expect(failing).not.toBe(t);
+    expect(failing.rows.map((x) => x.uid)).toEqual(["crash"]);
+    // Both filters stay cached side by side for the same rows.
+    expect(buildTerritories([cl], w, all, now)[0]).toBe(t);
+    expect(buildTerritories([cl], w, { status: "failing", text: "" }, now)[0]).toBe(failing);
+    expect(buildTerritories([cl], w, all, new Date(now.getTime() + 60_000))[0]).not.toBe(t);
+    expect(buildTerritories([{ ...cl }], w, all, now)[0]).not.toBe(t);
+    const errored = applyMessage(w, { type: "cluster_status", cluster_id: "c1", state: "error", message: "boom" });
+    const [e] = buildTerritories([cl], errored, all, now);
+    expect([e.state, e.rows]).toEqual(["error", []]);
+  });
+
+  it("a cluster without rows keeps its territory too", () => {
+    const w = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "syncing", message: null });
+    const [t] = buildTerritories([cl], w, all, now);
+    const w2 = applyMessage(w, { type: "upsert", cluster_id: "c2", row: { ...r("y", "Running", "ok"), cluster_id: "c2" } });
+    expect(buildTerritories([cl], w2, all, now)[0]).toBe(t);
+  });
+});
+
 describe("filter and kind counts", () => {
   const ready = (cluster_id: string) => ({ type: "cluster_status", cluster_id, state: "ready", message: null }) as const;
   const cl2 = { ...cl, id: "c2", name: "kind-dev" };
