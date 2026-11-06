@@ -14,6 +14,15 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 DOCKER_HOST = "host.docker.internal"
 
 
+class KubeconfigError(ValueError):
+    """The text isn't a usable kubeconfig. The message never quotes the file (it may hold tokens);
+    `error_type` names the underlying parser error, for logs."""
+
+    def __init__(self, message: str, *, error_type: str | None = None):
+        super().__init__(message)
+        self.error_type = error_type
+
+
 @dataclass(frozen=True)
 class ParsedContext:
     context_name: str
@@ -94,7 +103,10 @@ def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise ValueError(f"Not a kubeconfig: invalid YAML ({exc})") from exc
+        # Position only: the YAML error's own text quotes the offending line, which may hold a token.
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+        raise KubeconfigError(f"Not a kubeconfig: invalid YAML{where}", error_type=type(exc).__name__) from None
     if not isinstance(doc, dict) or not isinstance(doc.get("contexts"), list):
         raise ValueError("Not a kubeconfig: missing 'contexts' list")  # noqa: TRY004
 

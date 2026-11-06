@@ -58,7 +58,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     try:
                         await registry.upsert_from_kubeconfig(text, rewrite_loopback=settings.loopback_rewrite)
                     except ValueError as exc:  # our own plain message, free of kubeconfig contents
-                        log.warning("Skipping kubeconfig %s: %s", path, exc)
+                        error_type = getattr(exc, "error_type", None)
+                        log.warning("Skipping kubeconfig %s: %s%s", path, exc, f" ({error_type})" if error_type else "")
                     except Exception as exc:  # noqa: BLE001 (one file must never stop startup; logged by type)
                         log.warning("Skipping kubeconfig %s: it could not be imported (%s)", path, type(exc).__name__)
             yield

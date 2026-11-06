@@ -100,3 +100,38 @@ def test_api_reports_the_original_server_only_when_rewritten(tmp_path):
             "/api/clusters/kubeconfig", json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])}
         ).json()
         assert eks["original_server"] is None
+
+
+SECRET = "s3cr3t-token-value"
+LEAKY = f"""apiVersion: v1
+kind: Config
+users:
+- name: u
+  user:
+    token: {SECRET}: oops
+"""
+
+
+def test_invalid_yaml_never_echoes_kubeconfig_contents(app_with_kubeconfig):
+    client, _ = app_with_kubeconfig
+    r = client.post("/api/clusters/kubeconfig", json={"kubeconfig": LEAKY})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Not a kubeconfig: invalid YAML at line 6, column 30"
+    assert SECRET not in r.text
+
+
+def test_invalid_yaml_file_at_startup_logs_no_contents(tmp_path, caplog):
+    import logging
+
+    from fastapi.testclient import TestClient
+
+    from omnikrux.config import Settings
+    from omnikrux.main import create_app
+
+    bad = tmp_path / "config"
+    bad.write_text(LEAKY, encoding="utf-8")
+    with caplog.at_level(logging.DEBUG), TestClient(create_app(Settings(data_dir=tmp_path, kubeconfig=str(bad)))):
+        pass
+    assert SECRET not in caplog.text
+    [warning] = [r.getMessage() for r in caplog.records if r.name == "omnikrux.main"]
+    assert str(bad) in warning and "ScannerError" in warning and "line 6, column 30" in warning
