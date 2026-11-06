@@ -36,5 +36,5 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = ["kind: needs a running kind cluster"]
 filterwarnings = [
-    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore:Using `httpx` with:Warning",
 ]
