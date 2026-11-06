@@ -4,7 +4,7 @@ Nothing is mocked inside kubernetes_asyncio: the code under test talks to a real
 on 127.0.0.1. Tests seed `pods`, `events`, `logs` and `follow_lines` (None ends a followed stream, CUT
 breaks it) and read back `requests`.
 
-Exec is not served (it needs a SPDY/WebSocket upgrade); it is covered elsewhere.
+Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`.
 """
 
 import asyncio
@@ -121,6 +121,8 @@ class FakeKubeApi:
         self.events: list[dict] = []
         self.logs: dict[tuple[str, str, str, bool], list[str]] = {}
         self.follow_lines: asyncio.Queue[str | None] = asyncio.Queue()
+        self.execs: list[dict] = []
+        self.exec_resizes: list[dict] = []
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
         self.paths.append(request.path)
@@ -168,6 +170,8 @@ class FakeKubeApi:
                 return self._pod_or_404(key)
             if method == "GET" and sub == "/log":
                 return await self._log(request, key)
+            if method == "GET" and sub == "/exec":
+                return await self._exec(request, key)
             if method == "PATCH" and sub == "/ephemeralcontainers":
                 return await self._patch_ephemeral(request, key)
             if method == "DELETE" and sub is None:
@@ -303,6 +307,40 @@ class FakeKubeApi:
         if tail := query.get("tailLines"):
             moments = moments[-int(tail) :] if int(tail) else []
         return web.Response(body=b"".join(render(m, line) for m, line in moments), headers=headers)
+
+    async def _exec(self, request: web.Request, key: tuple[str, str]) -> web.StreamResponse:
+        """An echo shell: stdin comes back on stdout; "exit N" ends it with exit code N. Each call
+        is recorded in `execs`, each resize in `exec_resizes`."""
+        if key not in self.pods:
+            return not_found(f'pods "{key[1]}" not found')
+        query = request.query
+        self.execs.append(
+            {
+                "command": query.getall("command", []),
+                "container": query.get("container"),
+                "flags": {f: _flag(query, f) for f in ("stdin", "stdout", "stderr", "tty")},
+                "protocol": request.headers.get("Sec-WebSocket-Protocol"),
+            }
+        )
+        ws = web.WebSocketResponse(protocols=("v4.channel.k8s.io",))
+        await ws.prepare(request)
+        for channel in (1, 2, 3):  # the API server opens each stream with an empty frame
+            await ws.send_bytes(bytes([channel]))
+        async for msg in ws:
+            channel, data = msg.data[0], msg.data[1:]
+            if channel == 4:
+                self.exec_resizes.append(json.loads(data))
+            elif data.startswith(b"exit "):
+                code = int(data.split()[1])
+                status = {"metadata": {}, "status": "Success"}
+                if code:
+                    status = status_body(500, "NonZeroExitCode", f"exit status {code}")
+                    status["details"] = {"causes": [{"reason": "ExitCode", "message": str(code)}]}
+                await ws.send_bytes(bytes([3]) + json.dumps(status).encode())
+                await ws.close()
+            else:
+                await ws.send_bytes(bytes([1]) + data)
+        return ws
 
     async def _watch(self, request: web.Request) -> web.StreamResponse:
         if self.mode == "watch_forbidden":

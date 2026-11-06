@@ -15,6 +15,7 @@ from omnikrux.clusters.kubeconfig import (
 from omnikrux.clusters.registry import SOURCE_FILE, ClusterRegistry
 from omnikrux.config import Settings, get_settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
+from omnikrux.exec.api import router as exec_router
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.kube.source import KubeResourceSource
 from omnikrux.logs.api import router as logs_router
@@ -159,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(watch_router)
     app.include_router(resources_router)
     app.include_router(logs_router)
+    app.include_router(exec_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
