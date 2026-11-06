@@ -68,6 +68,22 @@ PODS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods$")
 EVENTS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/events$")
 
 
+def _flag(query, name: str) -> bool:
+    """Go's ParseBool via urlencode: kubernetes_asyncio sends Python True as `True`."""
+    return query.get(name, "").lower() in ("1", "true")
+
+
+class PodStore(dict):
+    """Pods by (namespace, name); stored copies, so seeding a shared constant is safe."""
+
+    def __setitem__(self, key, value) -> None:
+        super().__setitem__(key, copy.deepcopy(value))
+
+
+def bad_request(message: str) -> web.Response:
+    return web.json_response(status_body(400, "BadRequest", message), status=400)
+
+
 def _stamp(moment: datetime) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
 
@@ -88,7 +104,8 @@ class FakeKubeApi:
         self.auth: set[str | None] = set()
         self.release = asyncio.Event()
         self.url = ""
-        self.pods: dict[tuple[str, str], dict] = {("demo", "web-1"): copy.deepcopy(POD)}
+        self.pods: dict[tuple[str, str], dict] = PodStore()
+        self.pods[("demo", "web-1")] = POD
         self.events: list[dict] = []
         self.logs: dict[tuple[str, str, str, bool], list[str]] = {}
         self.follow_lines: asyncio.Queue[str | None] = asyncio.Queue()
@@ -109,7 +126,7 @@ class FakeKubeApi:
         method, path = request.method, request.path
         if method == "GET":
             if path == "/api/v1/pods":
-                if request.query.get("watch") in ("1", "true"):
+                if _flag(request.query, "watch"):
                     return await self._watch(request)
                 return web.json_response(
                     {
@@ -187,17 +204,36 @@ class FakeKubeApi:
         if pod is None:
             return not_found(f'pods "{key[1]}" not found')
         query = request.query
-        container = query.get("container") or next(
-            (c["name"] for c in pod.get("spec", {}).get("containers", [])), ""
-        )
-        previous = query.get("previous") in ("1", "true")
-        stamped = query.get("timestamps") in ("1", "true")
+        spec = pod.get("spec", {})
+        names = [c["name"] for c in spec.get("containers", [])]
+        valid = [
+            c["name"]
+            for field in ("initContainers", "containers", "ephemeralContainers")
+            for c in spec.get(field, [])
+        ]
+        container = query.get("container", "")
+        if not container:
+            if len(names) != 1:
+                return bad_request(
+                    f"a container name must be specified for pod {key[1]}, "
+                    f"choose one of: [{' '.join(valid)}]"
+                )
+            container = names[0]
+        elif container not in valid:
+            return bad_request(f"container {container} is not valid for pod {key[1]}")
+        previous = _flag(query, "previous")
+        stamped = _flag(query, "timestamps")
 
         def render(moment: datetime, line: str) -> bytes:
             return f"{_stamp(moment) + ' ' if stamped else ''}{line}\n".encode()
 
+        seeded = self.logs.get((key[0], key[1], container, previous))
+        if seeded is None and previous:
+            return bad_request(
+                f'previous terminated container "{container}" in pod "{key[1]}" not found'
+            )
         headers = {"Content-Type": "text/plain"}
-        if query.get("follow") in ("1", "true"):
+        if _flag(query, "follow"):
             response = web.StreamResponse(headers=headers)
             response.enable_chunked_encoding()
             await response.prepare(request)
@@ -206,10 +242,11 @@ class FakeKubeApi:
             await response.write_eof()
             return response
 
-        seeded = self.logs.get((key[0], key[1], container, previous), [])
-        moments = [(LOG_EPOCH + timedelta(seconds=i), line) for i, line in enumerate(seeded)]
+        moments = [(LOG_EPOCH + timedelta(seconds=i), line) for i, line in enumerate(seeded or [])]
         if since := query.get("sinceTime"):
             cutoff = datetime.fromisoformat(since)
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=UTC)
             moments = [(m, line) for m, line in moments if m >= cutoff]
         if tail := query.get("tailLines"):
             moments = moments[-int(tail) :] if int(tail) else []

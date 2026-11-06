@@ -133,3 +133,75 @@ async def test_watch_modes(fake_api):
     fake_api.release.set()
     status, lines = await asyncio.wait_for(task, 5)
     assert status == 200 and len(lines) == 1
+
+
+async def test_python_booleans_from_the_real_client_are_understood(fake_api):
+    from kubernetes_asyncio.client import CoreV1Api
+
+    from tests.fakekube import kubeconfig_for, make_api_client
+
+    fake_api.pods[("demo", "web-1")] = POD
+    fake_api.logs[("demo", "web-1", "app", True)] = ["earlier"]
+    for line in ("live", None):
+        fake_api.follow_lines.put_nowait(line)
+    api = await make_api_client(kubeconfig_for(fake_api))
+    try:
+        core = CoreV1Api(api)
+        previous = await core.read_namespaced_pod_log(
+            "web-1", "demo", container="app", previous=True, timestamps=True
+        )
+        assert previous.split(" ", 1)[1].strip() == "earlier"  # prefixed by a timestamp
+        resp = await core.read_namespaced_pod_log(
+            "web-1", "demo", container="app", follow=True, _preload_content=False
+        )
+        assert (await resp.content.read()).decode().strip() == "live"
+        resp.release()
+    finally:
+        await api.close()
+    fake_api.mode = "instant_close"
+    async with (
+        aiohttp.ClientSession() as session,
+        session.get(fake_api.url + "/api/v1/pods", params={"watch": "True"}) as resp,
+    ):
+        assert len([line async for line in resp.content]) == 1
+
+
+async def test_log_errors_match_the_real_api(fake_api):
+    two = {
+        "metadata": {"name": "duo", "namespace": "demo"},
+        "spec": {"containers": [{"name": "a"}, {"name": "b"}]},
+    }
+    fake_api.pods[("demo", "duo")] = two
+    fake_api.pods[("demo", "web-1")] = POD
+    fake_api.logs[("demo", "web-1", "app", False)] = []
+    path = "/api/v1/namespaces/demo/pods/{}/log"
+
+    async def body(pod, **params):
+        status, text = await get(fake_api, path.format(pod), **params)
+        return status, json.loads(text) if status != 200 else text
+
+    status, st = await body("web-1", container="nope")
+    assert status == 400 and st["reason"] == "BadRequest"
+    assert st["message"] == "container nope is not valid for pod web-1"
+    status, st = await body("duo")
+    assert status == 400
+    assert st["message"] == "a container name must be specified for pod duo, choose one of: [a b]"
+    status, st = await body("web-1", container="app", previous="true")
+    assert status == 400
+    assert st["message"] == 'previous terminated container "app" in pod "web-1" not found'
+    assert await body("web-1", container="app") == (200, "")  # [] means exists but empty
+    assert await body("web-1") == (200, "")  # a single container needs no name
+
+
+async def test_naive_since_time_is_utc_and_seeded_pods_are_copied(fake_api):
+    fake_api.pods[("demo", "web-1")] = POD
+    fake_api.pods[("demo", "web-1")]["status"] = {"phase": "Failed"}
+    assert POD["status"] == {"phase": "Running"}
+    fake_api.logs[("demo", "web-1", "app", False)] = ["a", "b"]
+    status, text = await get(
+        fake_api,
+        "/api/v1/namespaces/demo/pods/web-1/log",
+        container="app",
+        sinceTime="2026-01-01T00:00:01",
+    )
+    assert status == 200 and text.splitlines() == ["b"]
