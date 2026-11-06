@@ -26,12 +26,12 @@ from omnikrux.web import mount_spa
 log = logging.getLogger(__name__)
 
 
-async def _import_kubeconfig_files(settings: Settings, registry: ClusterRegistry) -> None:
+async def _import_kubeconfig_files(settings: Settings, registry: ClusterRegistry) -> list[str]:
     """Import every configured kubeconfig file, then drop file clusters whose context is gone.
 
-    Removal only happens when every configured file was read and parsed: a missing mount, an
-    unreadable or a broken file must never wipe clusters. Kubeconfig problems never stop
-    startup."""
+    Returns the ids of the clusters it removed. Removal only happens when every configured file
+    was read and parsed: a missing mount, an unreadable or a broken file must never wipe
+    clusters. Kubeconfig problems never stop startup."""
     seen: set[str] = set()
     defined_in: dict[str, Path] = {}  # context name -> the file that defined it first
     complete = bool(settings.kubeconfig_paths)
@@ -57,14 +57,15 @@ async def _import_kubeconfig_files(settings: Settings, registry: ClusterRegistry
             else:
                 seen |= names
     if not complete:
-        return
+        return []
     try:
-        await registry.reconcile_files(seen)  # logs what it removed
+        return await registry.reconcile_files(seen)  # logs what it removed
     except Exception as exc:  # noqa: BLE001 (logged by type; the clusters simply stay)
         log.warning(
             "Could not remove clusters that left the kubeconfig files (%s); keeping them",
             type(exc).__name__,
         )
+        return []
 
 
 async def _import_file(
@@ -137,7 +138,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.registry = registry
         app.state.hub = hub
         try:
-            await _import_kubeconfig_files(settings, registry)
+            for cluster_id in await _import_kubeconfig_files(settings, registry):
+                await hub.forget(cluster_id)
             yield
         finally:
             await hub.close()

@@ -181,3 +181,22 @@ def test_reconcile_error_does_not_stop_startup(tmp_path, monkeypatch, caplog):
         names = sorted(c["name"] for c in client.get("/api/clusters").json())
     assert names == ["kind-a", "kind-b", "kind-c"]
     assert any("RuntimeError" in r.getMessage() for r in caplog.records)
+
+
+def test_startup_reconcile_forgets_removed_clusters_in_the_hub(tmp_path, monkeypatch):
+    from omnikrux.watch.hub import WatchHub
+
+    first, _, settings = _two_files(tmp_path)
+    with TestClient(create_app(settings)) as client:
+        gone = {c["id"] for c in client.get("/api/clusters").json() if c["name"] == "kind-a"}
+    forgotten: list[str] = []
+    real_forget = WatchHub.forget
+
+    async def forget(self, cluster_id):
+        forgotten.append(cluster_id)
+        await real_forget(self, cluster_id)  # no caches yet at startup: a no-op
+
+    monkeypatch.setattr(WatchHub, "forget", forget)
+    first.write_text(kc([("kind-c", "https://127.0.0.1:6445", None)]), encoding="utf-8")
+    assert _names(settings) == ["kind-b", "kind-c"]
+    assert set(forgotten) == gone and len(forgotten) == 1

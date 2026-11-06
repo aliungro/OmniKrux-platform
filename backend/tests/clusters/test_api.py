@@ -43,12 +43,20 @@ def test_unparseable_file_is_skipped_at_startup(tmp_path, caplog):
 class StubHub:
     def __init__(self):
         self.retried: list[str] = []
+        self.forgotten: list[str] = []
+        self.changed = 0
 
     def status(self, cluster_id):
         return ("error", "Can't reach this cluster: boom")
 
     async def retry(self, cluster_id):
         self.retried.append(cluster_id)
+
+    async def forget(self, cluster_id):
+        self.forgotten.append(cluster_id)
+
+    async def clusters_changed(self):
+        self.changed += 1
 
     async def close(self):
         pass
@@ -165,6 +173,32 @@ def test_delete_cluster_204_then_404(app_with_kubeconfig):
     assert client.get("/api/clusters").json() == []
     r = client.delete(f"/api/clusters/{cluster_id}")
     assert r.status_code == 404 and r.json()["detail"] == "Unknown cluster"
+
+
+def test_delete_cluster_forgets_it_in_the_hub(app_with_kubeconfig):
+    client, _ = app_with_kubeconfig
+    client.app.state.hub = hub = StubHub()
+    cluster_id = client.get("/api/clusters").json()[0]["id"]
+    assert client.delete(f"/api/clusters/{cluster_id}").status_code == 204
+    assert hub.forgotten == [cluster_id]
+    assert client.delete(f"/api/clusters/{cluster_id}").status_code == 404
+    assert hub.forgotten == [cluster_id]
+
+
+def test_import_tells_the_hub_clusters_changed(app_with_kubeconfig):
+    from tests.clusters.test_kubeconfig import kc
+
+    client, _ = app_with_kubeconfig
+    client.app.state.hub = hub = StubHub()
+    r = client.post(
+        "/api/clusters/kubeconfig",
+        json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])},
+    )
+    assert r.status_code == 200 and hub.changed == 1
+    assert (
+        client.post("/api/clusters/kubeconfig", json={"kubeconfig": "::: nope"}).status_code == 422
+    )
+    assert hub.changed == 1
 
 
 def test_uploaded_cluster_survives_restart_without_it_in_files(tmp_path):

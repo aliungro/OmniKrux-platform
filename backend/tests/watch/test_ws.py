@@ -1,11 +1,17 @@
 import asyncio
+import time
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from omnikrux.config import Settings
+from omnikrux.main import create_app
 from omnikrux.watch.api import watch
 from omnikrux.watch.hub import WatchHub
+from tests.clusters.test_kubeconfig import kc
 from tests.watch.fakes import FakeSource
 from tests.watch.test_cache import p
 
@@ -109,3 +115,63 @@ async def test_ws_cancel_during_cleanup_is_not_swallowed(fake_registry_two_clust
     assert finished_first or t.cancelled(), "the handler swallowed its cancellation"
     assert hub._subscriptions == set()
     await hub.close()
+
+
+@pytest.fixture
+def app_with_real_registry(tmp_path):
+    """The real app (real registry, no clusters yet), with a hub of FakeSources over it."""
+
+    async def source_for(cluster_id, spec):
+        return await FakeSource(lists=[([p("a")], "1")], watches=[[]]).factory()
+
+    app = create_app(Settings(data_dir=tmp_path, kubeconfig="", in_container=False))
+    real_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async with real_lifespan(app):
+            await app.state.hub.close()
+            app.state.hub = WatchHub(app.state.registry, source_for)
+            yield
+
+    app.router.lifespan_context = lifespan
+    with TestClient(app) as client:
+        yield client
+
+
+def _wait_for_subscription(hub):
+    deadline = time.monotonic() + 2
+    while not hub._subscriptions:
+        assert time.monotonic() < deadline, "the socket never subscribed"
+        time.sleep(0.01)
+
+
+def _import(client, name, server):
+    r = client.post("/api/clusters/kubeconfig", json={"kubeconfig": kc([(name, server, None)])})
+    assert r.status_code == 200
+    return r.json()[0]["id"]
+
+
+def test_import_mid_session_streams_new_cluster(app_with_real_registry):
+    client = app_with_real_registry
+    with client.websocket_connect("/api/watch?kind=pods") as ws:
+        _wait_for_subscription(client.app.state.hub)
+        cluster_id = _import(client, "kind-new", "https://10.0.0.1:6443")
+        assert (cluster_id, "pods") in client.app.state.hub._caches  # attached before responding
+        msgs = [ws.receive_json() for _ in range(3)]
+    assert [(m["type"], m["cluster_id"]) for m in msgs] == [
+        ("cluster_status", cluster_id),
+        ("cluster_status", cluster_id),
+        ("snapshot", cluster_id),
+    ]
+
+
+def test_delete_mid_session_sends_cluster_removed(app_with_real_registry):
+    client = app_with_real_registry
+    cluster_id = _import(client, "kind-gone", "https://10.0.0.2:6443")
+    hub = client.app.state.hub
+    with client.websocket_connect("/api/watch?kind=pods") as ws:
+        assert [ws.receive_json()["type"] for _ in range(3)][-1] == "snapshot"
+        assert client.delete(f"/api/clusters/{cluster_id}").status_code == 204
+        assert hub._caches == {}  # forgotten before responding
+        assert ws.receive_json() == {"type": "cluster_removed", "cluster_id": cluster_id}
