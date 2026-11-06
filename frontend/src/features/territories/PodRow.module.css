@@ -1,0 +1,70 @@
+/* Shared by the pod rows and the column header so they always line up. */
+.grid {
+  display: grid;
+  grid-template-columns:
+    minmax(220px, 2.4fr) minmax(110px, 1fr) 170px 64px 76px minmax(140px, 1.4fr) 56px;
+  column-gap: 12px;
+  align-items: center;
+}
+
+.row {
+  composes: grid;
+  position: relative;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 14px 0 18px;
+  overflow: hidden;
+  white-space: nowrap;
+  background: var(--surf);
+  border: 1px solid var(--rule);
+  border-top-color: color-mix(in srgb, var(--rule) 70%, transparent);
+  border-bottom: 0;
+}
+
+/* The last row closes the territory card. */
+.last {
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0 0 12px 12px;
+}
+
+/* Provider stripe, continuing the band's. */
+.row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--c);
+}
+
+.row:hover {
+  background: color-mix(in srgb, var(--surf-2) 60%, var(--surf));
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.name {
+  font-weight: 600;
+}
+
+.dim {
+  color: var(--ink-2);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.zero {
+  color: var(--ink-3);
+}

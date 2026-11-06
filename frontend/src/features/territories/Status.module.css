@@ -1,0 +1,49 @@
+.st {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shape {
+  flex: none;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.bad { color: var(--bad); }
+.done { color: var(--ink-2); }
+.done .shape { background: var(--ink-3); }
+
+/* Pending: hollow ring. */
+.warn .shape {
+  background: transparent;
+  border: 2px solid currentColor;
+}
+
+/* Failing: rotated square, so it still reads as "failing" without colour. */
+.bad .shape {
+  border-radius: 2px;
+  transform: rotate(45deg);
+  animation: pulse 2.4s ease-out infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bad) 55%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--bad) 0%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bad .shape { animation: none; }
+}

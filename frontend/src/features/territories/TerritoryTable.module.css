@@ -1,0 +1,37 @@
+.scroll {
+  height: 100%;
+  overflow: auto;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.table {
+  min-width: 980px;
+  padding: 0 16px;
+}
+
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
+.cols {
+  composes: grid from "./PodRow.module.css";
+  padding: 8px 14px 6px 18px;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.body {
+  position: relative;
+}
+
+.item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
