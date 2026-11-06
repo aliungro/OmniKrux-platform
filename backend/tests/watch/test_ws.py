@@ -1,5 +1,13 @@
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 from starlette.websockets import WebSocketDisconnect
+
+from omnikrux.watch.api import watch
+from omnikrux.watch.hub import WatchHub
+from tests.watch.fakes import FakeSource
+from tests.watch.test_cache import p
 
 
 def test_ws_streams_snapshot(app_with_fake_sources):  # fixture: app whose hub uses FakeSource per cluster
@@ -29,12 +37,44 @@ def test_ws_disconnect_closes_the_subscription(app_with_fake_sources):
     assert hub._subscriptions == set()
 
 
-def test_ws_repeated_connects_release_everything(app_with_fake_sources):
-    # The client's disconnect races with the server cancelling the handler; cleanup must survive both.
-    client = app_with_fake_sources
-    hub = client.app.state.hub
-    for _ in range(50):
-        with client.websocket_connect("/api/watch?kind=pods") as ws:
-            ws.receive_json()
+
+class FakeWebSocket:
+    """Just enough of a WebSocket for `watch()`; the client disconnects once `gone` is set."""
+
+    def __init__(self, hub):
+        self.app = SimpleNamespace(state=SimpleNamespace(hub=hub))
+        self.gone = asyncio.Event()
+
+    async def accept(self): ...
+
+    async def close(self, code=1000, reason=None): ...
+
+    async def send_text(self, text): ...
+
+    async def receive(self):
+        await self.gone.wait()
+        return {"type": "websocket.disconnect"}
+
+
+@pytest.mark.parametrize("steps", range(12))
+async def test_ws_cancel_during_cleanup_is_not_swallowed(fake_registry_two_clusters, steps):
+    # The server cancels the handler while it is still cleaning up after a disconnect (as Starlette's
+    # TestClient and uvicorn shutdown do). Each `steps` lands the cancellation at a different await
+    # in the cleanup: it must neither be swallowed nor skip releasing the subscription.
+    async def source_for(cid, spec):
+        return await FakeSource(lists=[([p("a")], "1")], watches=[[]]).factory()
+
+    hub = WatchHub(fake_registry_two_clusters, source_for)
+    ws = FakeWebSocket(hub)
+    t = asyncio.create_task(watch(ws, "pods"))
+    while not hub._subscriptions:
+        await asyncio.sleep(0)
+    ws.gone.set()
+    for _ in range(steps):
+        await asyncio.sleep(0)
+    finished_first = t.done()
+    t.cancel()
+    await asyncio.wait([t])
+    assert finished_first or t.cancelled(), "the handler swallowed its cancellation"
     assert hub._subscriptions == set()
-    assert [len(c._subscribers) for c in hub._caches.values()] == [0, 0]
+    await hub.close()
