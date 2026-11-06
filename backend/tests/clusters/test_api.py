@@ -155,3 +155,34 @@ def test_invalid_yaml_file_at_startup_logs_no_contents(tmp_path, caplog):
     assert SECRET not in caplog.text
     [warning] = [r.getMessage() for r in caplog.records if r.name == "omnikrux.main"]
     assert str(bad) in warning and "ScannerError" in warning and "line 6, column 30" in warning
+
+
+def test_delete_cluster_204_then_404(app_with_kubeconfig):
+    client, _ = app_with_kubeconfig
+    cluster_id = client.get("/api/clusters").json()[0]["id"]
+    r = client.delete(f"/api/clusters/{cluster_id}")
+    assert r.status_code == 204 and r.content == b""
+    assert client.get("/api/clusters").json() == []
+    r = client.delete(f"/api/clusters/{cluster_id}")
+    assert r.status_code == 404 and r.json()["detail"] == "Unknown cluster"
+
+
+def test_uploaded_cluster_survives_restart_without_it_in_files(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from omnikrux.config import Settings
+    from omnikrux.main import create_app
+    from tests.clusters.test_kubeconfig import kc
+
+    path = tmp_path / "config"
+    path.write_text(kc([("kind-omnikrux-dev", "https://127.0.0.1:6443", None)]), encoding="utf-8")
+    settings = Settings(data_dir=tmp_path, kubeconfig=str(path))
+    with TestClient(create_app(settings)) as client:
+        r = client.post(
+            "/api/clusters/kubeconfig",
+            json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])},
+        )
+        assert r.status_code == 200
+    with TestClient(create_app(settings)) as client:
+        names = [c["name"] for c in client.get("/api/clusters").json()]
+    assert names == ["eks-prod", "kind-omnikrux-dev"]
