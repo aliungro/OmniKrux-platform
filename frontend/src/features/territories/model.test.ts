@@ -1,6 +1,6 @@
 // frontend/src/features/territories/model.test.ts
 import { describe, it, expect } from "vitest";
-import { buildTerritories, flatten, formatAge, matchesFilter } from "./model";
+import { buildTerritories, countFilters, flatten, formatAge, matchesFilter, podCount } from "./model";
 import { applyMessage, emptyWatchState } from "../../api/watchState";
 const now = new Date("2026-11-06T16:00:00");
 const r = (uid: string, status: string, cls: string, extra = {}) => ({ uid, cluster_id: "c1", kind: "Pod", namespace: "payments", name: uid, created_at: "", columns: { status, status_class: cls, node: "n1", ...extra } });
@@ -77,5 +77,29 @@ describe("territories model details", () => {
   });
   it.each([[null], [""], ["not a date"]])("age of %s is unknown", (created) => {
     expect(formatAge(created, now)).toBe("—");
+  });
+});
+
+describe("filter and kind counts", () => {
+  const ready = (cluster_id: string) => ({ type: "cluster_status", cluster_id, state: "ready", message: null }) as const;
+  const cl2 = { ...cl, id: "c2", name: "kind-dev" };
+  const all = { status: "all", text: "" } as const;
+  it("count every row of ready territories, ignoring the filter", () => {
+    let w = applyMessage(state(), ready("c1"));
+    w = applyMessage(w, { type: "snapshot", cluster_id: "c2", part: 0, last: true,
+      rows: [{ ...r("b2", "Error", "bad", { last_restart_at: "2026-11-06T09:00:00" }), cluster_id: "c2" }] });
+    w = applyMessage(w, ready("c2"));
+    const ts = buildTerritories([cl, cl2], w, all, now);
+    expect(countFilters(ts, now)).toEqual({ failing: 2, pending: 1, restartedToday: 2 });
+    expect(podCount(ts)).toBe(4);
+  });
+  it("territories that are not ready count nothing", () => {
+    const ts = buildTerritories([cl], state(), all, now); // snapshot but no ready status yet
+    expect(countFilters(ts, now)).toEqual({ failing: 0, pending: 0, restartedToday: 0 });
+    expect(podCount(ts)).toBeNull();
+  });
+  it("pod count is zero, not unknown, once a ready cluster has no pods", () => {
+    const w = applyMessage(emptyWatchState(), ready("c1"));
+    expect(podCount(buildTerritories([cl], w, all, now))).toBe(0);
   });
 });

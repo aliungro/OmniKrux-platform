@@ -102,6 +102,30 @@ export function buildTerritories(clusters: Cluster[], w: WatchState, f: Filters,
   });
 }
 
+export interface FilterCounts {
+  failing: number;
+  pending: number;
+  restartedToday: number;
+}
+
+/** Chip counts over every live row, whatever filter is active. Pass territories built with status "all" and no text. */
+export function countFilters(ts: Territory[], now: Date): FilterCounts {
+  const out: FilterCounts = { failing: 0, pending: 0, restartedToday: 0 };
+  for (const t of ts) {
+    if (t.state !== "ready") continue;
+    out.failing += t.failing;
+    out.pending += t.pending;
+    for (const row of t.rows) if (restartedOn(row, now)) out.restartedToday++;
+  }
+  return out;
+}
+
+/** Pods across ready clusters; null while no cluster has reported, so the UI never shows a made-up 0. */
+export function podCount(ts: Territory[]): number | null {
+  const ready = ts.filter((t) => t.state === "ready");
+  return ready.length === 0 ? null : ready.reduce((n, t) => n + t.total, 0);
+}
+
 export function flatten(ts: Territory[]): FlatItem[] {
   const out: FlatItem[] = [];
   for (const t of ts) {

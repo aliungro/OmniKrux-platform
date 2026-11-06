@@ -1,0 +1,89 @@
+.filters {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+}
+
+.fchip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 14px;
+  border: 1px solid var(--rule);
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fchip:hover {
+  border-color: var(--ink-3);
+}
+
+.on {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+/* Failing: diamond, pending: hollow ring (same shapes as the row status). */
+.diamond,
+.ring {
+  flex: none;
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+}
+
+.diamond {
+  border-radius: 1px;
+  background: var(--bad);
+  transform: rotate(45deg);
+}
+
+.ring {
+  border-radius: 50%;
+  border: 2px solid var(--warn);
+}
+
+.search {
+  margin-left: auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 300px;
+  height: 30px;
+  padding: 0 10px 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--rule);
+  background: var(--surf);
+}
+
+.search:focus-within {
+  border-color: var(--focus);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+}
+
+.input::placeholder {
+  color: var(--ink-3);
+}

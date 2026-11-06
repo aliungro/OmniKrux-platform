@@ -1,0 +1,40 @@
+.kinds {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px;
+}
+
+.list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tab {
+  margin-bottom: -1px;
+  padding: 10px 12px 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.on {
+  color: var(--ink);
+  border-bottom-color: var(--focus);
+  font-weight: 600;
+}
+
+.n {
+  margin-left: 5px;
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
