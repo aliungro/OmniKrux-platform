@@ -78,10 +78,12 @@ class WatchCache:
     async def _run(self) -> None:
         loop = asyncio.get_running_loop()
         step = 0
+        last_error: str | None = None
         while True:
             self._stable = False
             try:
-                self._set_state("syncing", None)
+                # While retrying, keep the last failure's reason visible (with Retry in the UI).
+                self._set_state("syncing", None if last_error is None else f"Retrying — {last_error}")
                 source = self._source = await self._source_factory()
                 rv = await self._relist(source)
                 last_start: float | None = None
@@ -105,6 +107,7 @@ class WatchCache:
                     logger.warning("watch failed for cluster %s", self.cluster_id, exc_info=True)
                 self._retry.clear()
                 self._set_state("error", message)
+                last_error = message
                 delay = self._backoff[min(step, len(self._backoff) - 1)]
                 step += 1
                 await self._wait_backoff(delay)

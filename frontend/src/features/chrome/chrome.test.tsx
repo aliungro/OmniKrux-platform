@@ -75,6 +75,16 @@ describe("TopBar", () => {
     expect(token.getAttribute("title")).toBe("Can't reach this cluster: timeout");
     expect(token.getAttribute("data-state")).toBe("error");
   });
+  it("a retrying token carries the last error, a fresh one says Connecting…", () => {
+    const message = "Retrying — Can't reach this cluster: timeout";
+    render(<TopBar clusters={[
+      { cluster: cluster(), state: "syncing", message, failing: 0 },
+      { cluster: cluster({ id: "c2" }), state: "syncing", message: null, failing: 0 },
+    ]} />);
+    const [retrying, fresh] = screen.getAllByTestId("scope-token");
+    expect(retrying.getAttribute("title")).toBe(message);
+    expect(fresh.getAttribute("title")).toBe("Connecting…");
+  });
 });
 
 describe("KindTabs", () => {

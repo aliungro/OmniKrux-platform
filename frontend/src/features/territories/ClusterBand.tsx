@@ -22,6 +22,10 @@ function Summary({ t }: { t: Territory }) {
     const message = t.message ?? "This cluster reported an error without details";
     return <span className={s.error} title={message}>{message}</span>;
   }
+  if (t.state === "syncing" && t.message) {
+    // Retrying after a failure: keep the reason on screen until the retry succeeds or fails.
+    return <span className={s.error} title={t.message}>{t.message}</span>;
+  }
   if (t.state !== "ready") return <span className={s.sum}>Connecting…</span>;
   if (t.total === 0) return <span className={s.sum} data-testid="band-summary">No pods</span>;
   if (t.rows.length === 0) return <span className={s.sum} data-testid="band-summary">No pods match</span>;
@@ -54,7 +58,7 @@ export function ClusterBand({
         {cluster.environment === "production" && <span className={`${s.env} ${s.prod}`}>Production</span>}
         {cluster.environment === "development" && <span className={`${s.env} ${s.dev}`}>Development</span>}
         <Summary t={t} />
-        {t.state === "error" && (
+        {(t.state === "error" || (t.state === "syncing" && t.message)) && (
           <button type="button" className={s.retry} onClick={() => onRetry(cluster.id)}>
             Retry
           </button>

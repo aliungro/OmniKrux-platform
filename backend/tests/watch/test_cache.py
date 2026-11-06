@@ -161,12 +161,33 @@ async def test_generic_error_message_and_backoff_resets_after_a_watch_delivers_a
     assert statuses == [
         ("syncing", None),
         ("error", "Can't reach this cluster: dns lookup failed"),
-        ("syncing", None),
+        ("syncing", "Retrying — Can't reach this cluster: dns lookup failed"),
         ("ready", None),
         ("error", "Can't reach this cluster: connection reset"),
-        ("syncing", None),
+        ("syncing", "Retrying — Can't reach this cluster: connection reset"),
         ("ready", None),
     ]
+    await cache.stop()
+
+
+async def test_retry_keeps_the_last_error_visible_until_the_next_outcome():
+    from omnikrux.kube.client import ClusterUnavailable
+
+    src = FakeSource(factory_errors=[ClusterUnavailable("The cluster rejected the console's credentials: Unauthorized")])
+    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60))
+    q = cache.subscribe()
+    await cache.start()
+    msgs = await drain(q, 3)
+    assert [(m["state"], m["message"]) for m in msgs] == [
+        ("syncing", None),
+        ("error", "The cluster rejected the console's credentials: Unauthorized"),
+        ("syncing", "Retrying — The cluster rejected the console's credentials: Unauthorized"),
+    ]
+    await asyncio.sleep(0.05)  # the retry is now blocked listing: the reason stays on the cluster
+    assert (cache.state, cache.message) == (
+        "syncing",
+        "Retrying — The cluster rejected the console's credentials: Unauthorized",
+    )
     await cache.stop()
 
 

@@ -77,6 +77,15 @@ describe("cluster band copy", () => {
     expect(screen.getByText("Connecting…")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
+  it("syncing after an error keeps the reason and the Retry button", () => {
+    const onRetry = vi.fn();
+    const message = "Retrying — The cluster rejected the console's credentials: Unauthorized";
+    render(<ClusterBand t={terr({ state: "syncing", message })} onRetry={onRetry} />);
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(screen.queryByText("Connecting…")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledWith("c1");
+  });
 });
 
 describe("status and pod row", () => {
