@@ -15,7 +15,7 @@ from omnikrux.clusters.kubeconfig import (
 from omnikrux.clusters.registry import SOURCE_FILE, ClusterRegistry
 from omnikrux.config import Settings, get_settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
-from omnikrux.kube.client import make_api_client
+from omnikrux.kube.connections import ClusterConnections
 from omnikrux.kube.source import KubeResourceSource
 from omnikrux.resources.kinds import KindSpec
 from omnikrux.security.secrets import SecretBox
@@ -127,15 +127,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sessionmaker = make_sessionmaker(engine)
         registry = ClusterRegistry(sessionmaker, SecretBox.from_settings(settings))
 
+        connections = ClusterConnections(registry)
+
         async def source_for(cluster_id: str, spec: KindSpec) -> KubeResourceSource:
-            kubeconfig = await registry.get_kubeconfig(cluster_id)
-            api = await make_api_client(kubeconfig)
+            api = await connections.open_api(cluster_id)
             return KubeResourceSource(api, spec)  # owns `api` and closes it
 
         hub = WatchHub(registry, source_for)
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.registry = registry
+        app.state.connections = connections
         app.state.hub = hub
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
