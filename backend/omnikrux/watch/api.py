@@ -29,7 +29,9 @@ def _cross_origin(websocket: WebSocket) -> bool:
 @router.websocket("/api/watch")
 async def watch(websocket: WebSocket, kind: str) -> None:
     if _cross_origin(websocket):
-        await websocket.close(code=4403, reason="Cross-origin request refused")  # before accept: HTTP 403
+        await websocket.close(
+            code=4403, reason="Cross-origin request refused"
+        )  # before accept: HTTP 403
         return
     await websocket.accept()
     try:
@@ -46,9 +48,15 @@ async def watch(websocket: WebSocket, kind: str) -> None:
         finally:
             for task in tasks:
                 task.cancel()
-            await asyncio.wait(tasks)  # never raises the tasks' exceptions or swallows our cancellation
+            await asyncio.wait(
+                tasks
+            )  # never raises the tasks' exceptions or swallows our cancellation
         for task in tasks:
-            if not task.cancelled() and (exc := task.exception()) and not isinstance(exc, WebSocketDisconnect):
+            if (
+                not task.cancelled()
+                and (exc := task.exception())
+                and not isinstance(exc, WebSocketDisconnect)
+            ):
                 logger.warning("watch socket for %s failed", kind, exc_info=exc)
     finally:
         await sub.close()

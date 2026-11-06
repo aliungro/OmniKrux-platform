@@ -38,4 +38,6 @@ def test_rewrite_loopback_follows_in_container_unless_set(monkeypatch):
     assert Settings(in_container=True, rewrite_loopback=False).loopback_rewrite is False
     monkeypatch.setenv("OMNIKRUX_REWRITE_LOOPBACK", "false")
     assert Settings(in_container=True).loopback_rewrite is False
-    assert Settings(in_container=True).kubeconfig_paths == [Path("/kube/config")]  # path choice unchanged
+    assert Settings(in_container=True).kubeconfig_paths == [
+        Path("/kube/config")
+    ]  # path choice unchanged

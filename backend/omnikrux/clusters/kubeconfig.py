@@ -92,7 +92,11 @@ def _name(value: object) -> str | None:
 def _by_name(items: object, key: str) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for item in items if isinstance(items, list) else []:
-        if isinstance(item, dict) and (name := _name(item.get("name"))) is not None and isinstance(item.get(key), dict):
+        if (
+            isinstance(item, dict)
+            and (name := _name(item.get("name"))) is not None
+            and isinstance(item.get(key), dict)
+        ):
             out[name] = item[key]
     return out
 
@@ -106,7 +110,9 @@ def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext
         # Position only: the YAML error's own text quotes the offending line, which may hold a token.
         mark = getattr(exc, "problem_mark", None)
         where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
-        raise KubeconfigError(f"Not a kubeconfig: invalid YAML{where}", error_type=type(exc).__name__) from None
+        raise KubeconfigError(
+            f"Not a kubeconfig: invalid YAML{where}", error_type=type(exc).__name__
+        ) from None
     if not isinstance(doc, dict) or not isinstance(doc.get("contexts"), list):
         raise ValueError("Not a kubeconfig: missing 'contexts' list")  # noqa: TRY004
 
@@ -119,10 +125,16 @@ def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext
         if (name := _name(entry.get("name"))) is None:
             continue
         try:
-            parsed = _parse_context(name, entry["context"], clusters, users, rewrite_loopback=rewrite_loopback)
+            parsed = _parse_context(
+                name, entry["context"], clusters, users, rewrite_loopback=rewrite_loopback
+            )
         except Exception as exc:  # noqa: BLE001 (logged below by type only)
             # The type only: messages can quote kubeconfig values.
-            log.warning("Skipping kubeconfig context %r: it could not be read (%s)", name, type(exc).__name__)
+            log.warning(
+                "Skipping kubeconfig context %r: it could not be read (%s)",
+                name,
+                type(exc).__name__,
+            )
             continue
         if parsed is not None:
             out.append(parsed)
@@ -130,7 +142,12 @@ def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext
 
 
 def _parse_context(
-    name: str, ctx: dict, clusters: dict[str, dict], users: dict[str, dict], *, rewrite_loopback: bool
+    name: str,
+    ctx: dict,
+    clusters: dict[str, dict],
+    users: dict[str, dict],
+    *,
+    rewrite_loopback: bool,
 ) -> ParsedContext | None:
     cluster_name, user_name = _name(ctx.get("cluster")), _name(ctx.get("user"))
     cluster = clusters.get(cluster_name) if cluster_name is not None else None
@@ -147,14 +164,18 @@ def _parse_context(
     if exec_command is not None:
         exec_cfg["command"] = exec_command
     provider = detect_provider(name, server, exec_command)
-    standalone = copy.deepcopy({
-        "apiVersion": "v1",
-        "kind": "Config",
-        "current-context": name,
-        "clusters": [{"name": cluster_name, "cluster": cluster}],
-        "users": [{"name": user_name, "user": user}],
-        "contexts": [{"name": name, "context": {**ctx, "cluster": cluster_name, "user": user_name}}],
-    })
+    standalone = copy.deepcopy(
+        {
+            "apiVersion": "v1",
+            "kind": "Config",
+            "current-context": name,
+            "clusters": [{"name": cluster_name, "cluster": cluster}],
+            "users": [{"name": user_name, "user": user}],
+            "contexts": [
+                {"name": name, "context": {**ctx, "cluster": cluster_name, "user": user_name}}
+            ],
+        }
+    )
     return ParsedContext(
         name,
         server,

@@ -83,12 +83,17 @@ class WatchCache:
             self._stable = False
             try:
                 # While retrying, keep the last failure's reason visible (with Retry in the UI).
-                self._set_state("syncing", None if last_error is None else f"Retrying — {last_error}")
+                self._set_state(
+                    "syncing", None if last_error is None else f"Retrying — {last_error}"
+                )
                 source = self._source = await self._source_factory()
                 rv = await self._relist(source)
                 last_start: float | None = None
                 while True:
-                    if last_start is not None and (wait := last_start + self._min_watch_interval - loop.time()) > 0:
+                    if (
+                        last_start is not None
+                        and (wait := last_start + self._min_watch_interval - loop.time()) > 0
+                    ):
                         await asyncio.sleep(wait)
                     last_start = loop.time()
                     try:
@@ -202,9 +207,17 @@ class WatchCache:
 
     def _snapshot_messages(self) -> list[dict]:
         rows = list(self.rows.values())
-        parts = [rows[i : i + SNAPSHOT_PART_SIZE] for i in range(0, len(rows), SNAPSHOT_PART_SIZE)] or [[]]
+        parts = [
+            rows[i : i + SNAPSHOT_PART_SIZE] for i in range(0, len(rows), SNAPSHOT_PART_SIZE)
+        ] or [[]]
         return [
-            {"type": "snapshot", "cluster_id": self.cluster_id, "rows": part, "part": n, "last": n == len(parts) - 1}
+            {
+                "type": "snapshot",
+                "cluster_id": self.cluster_id,
+                "rows": part,
+                "part": n,
+                "last": n == len(parts) - 1,
+            }
             for n, part in enumerate(parts)
         ]
 

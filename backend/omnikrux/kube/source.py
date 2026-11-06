@@ -33,7 +33,13 @@ class KubeResourceSource(ResourceSource):
     Owns `api`: `aclose()` closes it. Objects are plain JSON dicts as the API returns them.
     """
 
-    def __init__(self, api: ApiClient, spec: KindSpec, *, discovery_timeout: float = DISCOVERY_TIMEOUT_SECONDS):
+    def __init__(
+        self,
+        api: ApiClient,
+        spec: KindSpec,
+        *,
+        discovery_timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    ):
         self._api = api
         self._spec = spec
         self._discovery_timeout = discovery_timeout

@@ -32,11 +32,17 @@ async def api():
     if (kind := find_kind()) is None:
         pytest.skip("kind is not installed")
     text = await asyncio.to_thread(
-        subprocess.run, [kind, "get", "kubeconfig", "--name", "omnikrux-dev"], check=False, capture_output=True, text=True
+        subprocess.run,
+        [kind, "get", "kubeconfig", "--name", "omnikrux-dev"],
+        check=False,
+        capture_output=True,
+        text=True,
     )
     if text.returncode != 0:
         pytest.skip("kind cluster omnikrux-dev not running (scripts/dev-kind.sh)")
-    client = await make_api_client(parse_kubeconfig(text.stdout, rewrite_loopback=False)[0].standalone)
+    client = await make_api_client(
+        parse_kubeconfig(text.stdout, rewrite_loopback=False)[0].standalone
+    )
     yield client
     await client.close()
 
@@ -48,7 +54,9 @@ async def test_lists_fixture_pods(api):
 
 
 def kubectl(*args: str) -> None:
-    subprocess.run(["kubectl", "--context", CONTEXT, *args], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["kubectl", "--context", CONTEXT, *args], check=True, capture_output=True, text=True
+    )
 
 
 async def test_watch_sees_pod_deletion(api):
@@ -61,7 +69,10 @@ async def test_watch_sees_pod_deletion(api):
     async def stuck_event():
         async for event in events:
             md = event.object["metadata"]
-            if (md["namespace"], md["name"]) == ("demo", "stuck") and event.type in ("MODIFIED", "DELETED"):
+            if (md["namespace"], md["name"]) == ("demo", "stuck") and event.type in (
+                "MODIFIED",
+                "DELETED",
+            ):
                 return event
 
     try:
@@ -70,5 +81,7 @@ async def test_watch_sees_pod_deletion(api):
         assert isinstance(event.object, dict) and event.object["kind"] == "Pod"
     finally:
         await events.aclose()
-        await asyncio.to_thread(kubectl, "wait", "--for=delete", "pod/stuck", "-n", "demo", "--timeout=60s")
+        await asyncio.to_thread(
+            kubectl, "wait", "--for=delete", "pod/stuck", "-n", "demo", "--timeout=60s"
+        )
         await asyncio.to_thread(kubectl, "apply", "-f", str(FIXTURES))

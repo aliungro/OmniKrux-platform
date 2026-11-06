@@ -26,7 +26,13 @@ def c(ready=True, restarts=0, waiting=None, terminated=None, last_finished=None)
         if last_finished
         else {}
     )
-    return {"name": "c", "ready": ready, "restartCount": restarts, "state": state, "lastState": last}
+    return {
+        "name": "c",
+        "ready": ready,
+        "restartCount": restarts,
+        "state": state,
+        "lastState": last,
+    }
 
 
 @pytest.mark.parametrize(
@@ -36,12 +42,18 @@ def c(ready=True, restarts=0, waiting=None, terminated=None, last_finished=None)
         (pod(statuses=[c(ready=False)]), ("Not ready", "warn")),
         (pod(statuses=[c(ready=False, waiting="CrashLoopBackOff")]), ("CrashLoopBackOff", "bad")),
         (pod(statuses=[c(ready=False, waiting="ImagePullBackOff")]), ("ImagePullBackOff", "bad")),
-        (pod("Pending", statuses=[c(ready=False, waiting="ContainerCreating")]), ("ContainerCreating", "warn")),
+        (
+            pod("Pending", statuses=[c(ready=False, waiting="ContainerCreating")]),
+            ("ContainerCreating", "warn"),
+        ),
         (pod("Pending"), ("Pending", "warn")),
         (pod("Succeeded"), ("Completed", "done")),
         (pod("Failed", reason="Evicted"), ("Evicted", "bad")),
         (pod(statuses=[c()], deleting=True), ("Terminating", "warn")),
-        (pod("Pending", init=[c(ready=False, waiting="CrashLoopBackOff")]), ("Init:CrashLoopBackOff", "bad")),
+        (
+            pod("Pending", init=[c(ready=False, waiting="CrashLoopBackOff")]),
+            ("Init:CrashLoopBackOff", "bad"),
+        ),
         (pod(statuses=[c(ready=False, terminated="OOMKilled")]), ("OOMKilled", "bad")),
     ],
 )
@@ -51,7 +63,17 @@ def test_pod_status(p, expected):
 
 def test_pod_row_columns():
     r = pod_row(
-        pod(statuses=[c(restarts=14, ready=False, waiting="CrashLoopBackOff", last_finished="2026-11-06T14:04:14Z"), c()]),
+        pod(
+            statuses=[
+                c(
+                    restarts=14,
+                    ready=False,
+                    waiting="CrashLoopBackOff",
+                    last_finished="2026-11-06T14:04:14Z",
+                ),
+                c(),
+            ]
+        ),
         "cl1",
     )
     assert (r.uid, r.cluster_id, r.kind, r.namespace, r.name) == ("u1", "cl1", "Pod", "ns", "p")

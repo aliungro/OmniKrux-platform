@@ -11,7 +11,10 @@ def test_health_ok(tmp_settings):
 def test_unknown_host_header_is_rejected(tmp_settings):
     client = TestClient(create_app(tmp_settings))
     assert client.get("/api/health", headers={"host": "evil.example"}).status_code == 400
-    assert client.get("/api/health", headers={"host": "rebind.attacker.example:8080"}).status_code == 400
+    assert (
+        client.get("/api/health", headers={"host": "rebind.attacker.example:8080"}).status_code
+        == 400
+    )
 
 
 def test_loopback_hosts_are_allowed_by_default(tmp_path, monkeypatch):

@@ -116,13 +116,17 @@ async def collect(events):
 
 async def test_list_pages_all_namespaces_and_returns_plain_dicts(dyn):
     dyn.script = [
-        FakeResponse({"metadata": {"resourceVersion": "10", "continue": "tok"}, "items": [pod("a", "5")]}),
+        FakeResponse(
+            {"metadata": {"resourceVersion": "10", "continue": "tok"}, "items": [pod("a", "5")]}
+        ),
         FakeResponse({"metadata": {"resourceVersion": "10"}, "items": [pod("b", "6")]}),
     ]
     items, rv = await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
     assert items == [pod("a", "5"), pod("b", "6")] and rv == "10"
     d = dyn.instances[0]
-    assert d.lookups == [{"prefix": "api", "group": None, "api_version": "v1", "kind": "Pod", "name": "pods"}]
+    assert d.lookups == [
+        {"prefix": "api", "group": None, "api_version": "v1", "kind": "Pod", "name": "pods"}
+    ]
     assert [(m, p, r["limit"], r["_continue"]) for m, p, r in d.requests] == [
         ("get", "/api/v1/pods", 500, None),
         ("get", "/api/v1/pods", 500, "tok"),
@@ -154,7 +158,14 @@ async def test_watch_translates_events_and_skips_bookmarks(dyn):
 
 async def test_watch_resumes_from_trailing_bookmark(dyn):
     dyn.script = [
-        FakeResponse(chunks=[lines({"type": "ADDED", "object": pod("a", "11")}, {"type": "BOOKMARK", "object": {"metadata": {"resourceVersion": "20"}}})]),
+        FakeResponse(
+            chunks=[
+                lines(
+                    {"type": "ADDED", "object": pod("a", "11")},
+                    {"type": "BOOKMARK", "object": {"metadata": {"resourceVersion": "20"}}},
+                )
+            ]
+        ),
         FakeResponse(chunks=[]),
         FakeResponse(chunks=[]),
     ]
@@ -166,7 +177,15 @@ async def test_watch_resumes_from_trailing_bookmark(dyn):
 
 
 async def test_error_event_410_raises_expired(dyn):
-    gone = {"type": "ERROR", "object": {"kind": "Status", "code": 410, "reason": "Expired", "message": "too old resource version: 1 (5)"}}
+    gone = {
+        "type": "ERROR",
+        "object": {
+            "kind": "Status",
+            "code": 410,
+            "reason": "Expired",
+            "message": "too old resource version: 1 (5)",
+        },
+    }
     resp = FakeResponse(chunks=[lines(gone)])
     dyn.script = [resp]
     with pytest.raises(Expired):
@@ -175,7 +194,14 @@ async def test_error_event_410_raises_expired(dyn):
 
 
 def status(code, reason, message):
-    body = {"kind": "Status", "apiVersion": "v1", "status": "Failure", "code": code, "reason": reason, "message": message}
+    body = {
+        "kind": "Status",
+        "apiVersion": "v1",
+        "status": "Failure",
+        "code": code,
+        "reason": reason,
+        "message": message,
+    }
     return FakeResponse(body, status=code, reason=reason)
 
 
@@ -188,7 +214,13 @@ async def test_http_410_on_watch_raises_expired(dyn):
 
 
 async def test_bare_status_line_in_watch_stream_raises_expired(dyn):
-    gone = {"kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 410, "message": "too old resource version"}
+    gone = {
+        "kind": "Status",
+        "apiVersion": "v1",
+        "status": "Failure",
+        "code": 410,
+        "message": "too old resource version",
+    }
     dyn.script = [FakeResponse(chunks=[lines(gone)])]
     with pytest.raises(Expired):
         await collect(KubeResourceSource(FakeApi(), KINDS["pods"]).watch("1"))
@@ -199,7 +231,10 @@ async def test_forbidden_list_raises_instead_of_returning_nothing(dyn):
     dyn.script = [resp]
     with pytest.raises(ClusterUnavailable) as info:
         await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
-    assert info.value.message == 'Not allowed to list pods: pods is forbidden: User "x" cannot list resource "pods"'
+    assert (
+        info.value.message
+        == 'Not allowed to list pods: pods is forbidden: User "x" cannot list resource "pods"'
+    )
     assert resp.closed
 
 
@@ -223,7 +258,9 @@ async def test_server_error_on_list_raises_with_status_message(dyn):
 
 
 async def test_non_json_error_body_gives_a_clean_message(dyn):
-    resp = FakeResponse(status=502, reason="Bad Gateway", raw=b"<html><body>upstream gone</body></html>")
+    resp = FakeResponse(
+        status=502, reason="Bad Gateway", raw=b"<html><body>upstream gone</body></html>"
+    )
     dyn.script = [resp]
     with pytest.raises(RuntimeError) as info:
         await collect(KubeResourceSource(FakeApi(), KINDS["pods"]).watch("1"))
@@ -233,9 +270,13 @@ async def test_non_json_error_body_gives_a_clean_message(dyn):
 
 async def test_expired_continue_token_restarts_the_list(dyn):
     dyn.script = [
-        FakeResponse({"metadata": {"resourceVersion": "10", "continue": "tok"}, "items": [pod("a", "5")]}),
+        FakeResponse(
+            {"metadata": {"resourceVersion": "10", "continue": "tok"}, "items": [pod("a", "5")]}
+        ),
         status(410, "Expired", "continue token too old"),
-        FakeResponse({"metadata": {"resourceVersion": "20", "continue": "tok2"}, "items": [pod("a", "5")]}),
+        FakeResponse(
+            {"metadata": {"resourceVersion": "20", "continue": "tok2"}, "items": [pod("a", "5")]}
+        ),
         FakeResponse({"metadata": {"resourceVersion": "20"}, "items": [pod("b", "6")]}),
     ]
     items, rv = await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
@@ -246,14 +287,19 @@ async def test_expired_continue_token_restarts_the_list(dyn):
 async def test_list_gives_up_after_repeated_expiry(dyn):
     page = {"metadata": {"resourceVersion": "10", "continue": "tok"}, "items": [pod("a", "5")]}
     dyn.script = [FakeResponse(page), status(410, "Expired", "continue token too old")] * 3
-    with pytest.raises(RuntimeError, match="^Kubernetes API returned 410: continue token too old$") as info:
+    with pytest.raises(
+        RuntimeError, match="^Kubernetes API returned 410: continue token too old$"
+    ) as info:
         await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
     assert not isinstance(info.value, Expired)
     assert len(dyn.instances[0].requests) == 6
 
 
 async def test_other_error_event_raises_with_status_message(dyn):
-    err = {"type": "ERROR", "object": {"kind": "Status", "code": 500, "message": "etcdserver: leader changed"}}
+    err = {
+        "type": "ERROR",
+        "object": {"kind": "Status", "code": 500, "message": "etcdserver: leader changed"},
+    }
     dyn.script = [FakeResponse(chunks=[lines(err)])]
     with pytest.raises(Exception, match="etcdserver: leader changed") as info:
         await collect(KubeResourceSource(FakeApi(), KINDS["pods"]).watch("1"))
@@ -261,7 +307,14 @@ async def test_other_error_event_raises_with_status_message(dyn):
 
 
 async def test_closing_the_watch_early_closes_the_stream(dyn):
-    resp = FakeResponse(chunks=[lines({"type": "ADDED", "object": pod("a", "11")}, {"type": "ADDED", "object": pod("b", "12")})])
+    resp = FakeResponse(
+        chunks=[
+            lines(
+                {"type": "ADDED", "object": pod("a", "11")},
+                {"type": "ADDED", "object": pod("b", "12")},
+            )
+        ]
+    )
     dyn.script = [resp]
     events = KubeResourceSource(FakeApi(), KINDS["pods"]).watch("10")
     assert (await anext(events)).object == pod("a", "11")

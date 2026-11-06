@@ -42,7 +42,9 @@ class ClusterRegistry:
         self._sessionmaker = sessionmaker
         self._box = box
 
-    async def upsert_from_kubeconfig(self, text: str, *, rewrite_loopback: bool) -> list[ClusterInfo]:
+    async def upsert_from_kubeconfig(
+        self, text: str, *, rewrite_loopback: bool
+    ) -> list[ClusterInfo]:
         parsed = parse_kubeconfig(text, rewrite_loopback=rewrite_loopback)
         out: list[ClusterInfo] = []
         async with self._sessionmaker() as session:

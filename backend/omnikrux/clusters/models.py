@@ -36,10 +36,14 @@ class ClusterRecord(Base):
     source: Mapped[str] = mapped_column(String)
     context_name: Mapped[str] = mapped_column(String)
     server: Mapped[str] = mapped_column(String)
-    original_server: Mapped[str | None] = mapped_column(String, nullable=True)  # set when `server` was rewritten
+    original_server: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )  # set when `server` was rewritten
     provider: Mapped[str] = mapped_column(String)
     region: Mapped[str | None] = mapped_column(String, nullable=True)
     environment: Mapped[str] = mapped_column(String)
     kubeconfig_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )

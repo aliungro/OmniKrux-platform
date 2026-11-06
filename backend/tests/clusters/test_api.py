@@ -16,9 +16,15 @@ def test_post_kubeconfig_imports_clusters(app_with_kubeconfig):
     from tests.clusters.test_kubeconfig import kc
 
     client, _ = app_with_kubeconfig
-    r = client.post("/api/clusters/kubeconfig", json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])})
+    r = client.post(
+        "/api/clusters/kubeconfig",
+        json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])},
+    )
     assert r.status_code == 200 and r.json()[0]["provider"] == "eks"
-    assert [c["name"] for c in client.get("/api/clusters").json()] == ["eks-prod", "kind-omnikrux-dev"]
+    assert [c["name"] for c in client.get("/api/clusters").json()] == [
+        "eks-prod",
+        "kind-omnikrux-dev",
+    ]
 
 
 def test_unparseable_file_is_skipped_at_startup(tmp_path, caplog):
@@ -61,7 +67,9 @@ def test_retry_cluster(app_with_kubeconfig):
     cluster_id = client.get("/api/clusters").json()[0]["id"]
     r = client.post(f"/api/clusters/{cluster_id}/retry")
     assert r.status_code == 204 and r.content == b"" and hub.retried == [cluster_id]
-    assert client.post("/api/clusters/nope/retry").status_code == 404 and hub.retried == [cluster_id]
+    assert client.post("/api/clusters/nope/retry").status_code == 404 and hub.retried == [
+        cluster_id
+    ]
 
 
 def test_loopback_rewrite_follows_the_setting_not_in_container(tmp_path):
@@ -74,12 +82,18 @@ def test_loopback_rewrite_follows_the_setting_not_in_container(tmp_path):
     path = tmp_path / "config"
     path.write_text(kc([("kind-omnikrux-dev", "https://127.0.0.1:6443", None)]), encoding="utf-8")
     # --network host on Linux: in a container, but 127.0.0.1 already is the host.
-    settings = Settings(data_dir=tmp_path / "a", kubeconfig=str(path), in_container=True, rewrite_loopback=False)
+    settings = Settings(
+        data_dir=tmp_path / "a", kubeconfig=str(path), in_container=True, rewrite_loopback=False
+    )
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/clusters").json()[0]["server"] == "https://127.0.0.1:6443"
-    settings = Settings(data_dir=tmp_path / "b", kubeconfig="", in_container=False, rewrite_loopback=True)
+    settings = Settings(
+        data_dir=tmp_path / "b", kubeconfig="", in_container=False, rewrite_loopback=True
+    )
     with TestClient(create_app(settings)) as client:
-        r = client.post("/api/clusters/kubeconfig", json={"kubeconfig": path.read_text(encoding="utf-8")})
+        r = client.post(
+            "/api/clusters/kubeconfig", json={"kubeconfig": path.read_text(encoding="utf-8")}
+        )
         assert r.json()[0]["server"] == "https://host.docker.internal:6443"
 
 
@@ -92,12 +106,15 @@ def test_api_reports_the_original_server_only_when_rewritten(tmp_path):
 
     path = tmp_path / "config"
     path.write_text(kc([("kind-omnikrux-dev", "https://127.0.0.1:6443", None)]), encoding="utf-8")
-    with TestClient(create_app(Settings(data_dir=tmp_path, kubeconfig=str(path), rewrite_loopback=True))) as client:
+    with TestClient(
+        create_app(Settings(data_dir=tmp_path, kubeconfig=str(path), rewrite_loopback=True))
+    ) as client:
         [kind] = client.get("/api/clusters").json()
         assert kind["server"] == "https://host.docker.internal:6443"
         assert kind["original_server"] == "https://127.0.0.1:6443"
         [eks] = client.post(
-            "/api/clusters/kubeconfig", json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])}
+            "/api/clusters/kubeconfig",
+            json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])},
         ).json()
         assert eks["original_server"] is None
 
@@ -130,7 +147,10 @@ def test_invalid_yaml_file_at_startup_logs_no_contents(tmp_path, caplog):
 
     bad = tmp_path / "config"
     bad.write_text(LEAKY, encoding="utf-8")
-    with caplog.at_level(logging.DEBUG), TestClient(create_app(Settings(data_dir=tmp_path, kubeconfig=str(bad)))):
+    with (
+        caplog.at_level(logging.DEBUG),
+        TestClient(create_app(Settings(data_dir=tmp_path, kubeconfig=str(bad)))),
+    ):
         pass
     assert SECRET not in caplog.text
     [warning] = [r.getMessage() for r in caplog.records if r.name == "omnikrux.main"]

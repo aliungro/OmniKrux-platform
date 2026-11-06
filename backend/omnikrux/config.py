@@ -43,7 +43,9 @@ class Settings(BaseSettings):
     @property
     def kubeconfig_paths(self) -> list[Path]:
         if self.kubeconfig is None:
-            default = Path("/kube/config") if self.in_container else Path.home() / ".kube" / "config"
+            default = (
+                Path("/kube/config") if self.in_container else Path.home() / ".kube" / "config"
+            )
             return [default]
         return [Path(p) for p in self.kubeconfig.split(os.pathsep) if p]
 

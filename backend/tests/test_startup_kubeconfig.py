@@ -33,7 +33,9 @@ def test_unreadable_kubeconfig_warns_and_startup_continues(tmp_path, monkeypatch
 def test_int_context_name_does_not_stop_startup(tmp_path):
     path = tmp_path / "config"
     path.write_text(
-        kc([("kind-omnikrux-dev", "https://127.0.0.1:6443", None)]).replace("kind-omnikrux-dev", "2024"),
+        kc([("kind-omnikrux-dev", "https://127.0.0.1:6443", None)]).replace(
+            "kind-omnikrux-dev", "2024"
+        ),
         encoding="utf-8",
     )
     with TestClient(create_app(Settings(data_dir=tmp_path, kubeconfig=str(path)))) as client:
@@ -55,6 +57,9 @@ def test_unexpected_error_in_one_file_skips_only_that_file(tmp_path, monkeypatch
 
     monkeypatch.setattr(ClusterRegistry, "upsert_from_kubeconfig", flaky)
     settings = Settings(data_dir=tmp_path, kubeconfig=os.pathsep.join([str(bad), str(good)]))
-    with caplog.at_level(logging.WARNING, logger="omnikrux.main"), TestClient(create_app(settings)) as client:
+    with (
+        caplog.at_level(logging.WARNING, logger="omnikrux.main"),
+        TestClient(create_app(settings)) as client,
+    ):
         assert [c["name"] for c in client.get("/api/clusters").json()] == ["kind-omnikrux-dev"]
     assert any(str(bad) in r.getMessage() and "KeyError" in r.getMessage() for r in caplog.records)

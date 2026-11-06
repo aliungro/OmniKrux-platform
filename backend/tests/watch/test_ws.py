@@ -10,7 +10,9 @@ from tests.watch.fakes import FakeSource
 from tests.watch.test_cache import p
 
 
-def test_ws_streams_snapshot(app_with_fake_sources):  # fixture: app whose hub uses FakeSource per cluster
+def test_ws_streams_snapshot(
+    app_with_fake_sources,
+):  # fixture: app whose hub uses FakeSource per cluster
     client = app_with_fake_sources
     types = set()
     with client.websocket_connect("/api/watch?kind=pods") as ws:
@@ -23,7 +25,10 @@ def test_ws_streams_snapshot(app_with_fake_sources):  # fixture: app whose hub u
 
 
 def test_ws_unknown_kind_closes_4404(app_with_fake_sources):
-    with pytest.raises(WebSocketDisconnect) as e, app_with_fake_sources.websocket_connect("/api/watch?kind=nope") as ws:
+    with (
+        pytest.raises(WebSocketDisconnect) as e,
+        app_with_fake_sources.websocket_connect("/api/watch?kind=nope") as ws,
+    ):
         ws.receive_json()
     assert e.value.code == 4404 and e.value.reason == "Unknown kind"
 
@@ -32,7 +37,9 @@ def test_ws_from_another_origin_is_rejected(app_with_fake_sources):
     hub = app_with_fake_sources.app.state.hub
     with (
         pytest.raises(WebSocketDisconnect) as e,
-        app_with_fake_sources.websocket_connect("/api/watch?kind=pods", headers={"origin": "http://evil.example"}) as ws,
+        app_with_fake_sources.websocket_connect(
+            "/api/watch?kind=pods", headers={"origin": "http://evil.example"}
+        ) as ws,
     ):
         ws.receive_json()
     assert e.value.code == 4403
@@ -41,7 +48,9 @@ def test_ws_from_another_origin_is_rejected(app_with_fake_sources):
 
 @pytest.mark.parametrize("origin", ["http://testserver", "http://TESTSERVER"])
 def test_ws_from_the_same_origin_is_accepted(app_with_fake_sources, origin):
-    with app_with_fake_sources.websocket_connect("/api/watch?kind=pods", headers={"origin": origin}) as ws:
+    with app_with_fake_sources.websocket_connect(
+        "/api/watch?kind=pods", headers={"origin": origin}
+    ) as ws:
         assert ws.receive_json()["type"] == "cluster_status"
 
 
@@ -57,7 +66,6 @@ def test_ws_disconnect_closes_the_subscription(app_with_fake_sources):
         ws.receive_json()
         assert len(hub._subscriptions) == 1
     assert hub._subscriptions == set()
-
 
 
 class FakeWebSocket:

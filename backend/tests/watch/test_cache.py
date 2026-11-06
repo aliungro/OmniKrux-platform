@@ -21,12 +21,21 @@ async def drain(q, n):
 
 
 async def test_snapshot_then_deltas():
-    src = FakeSource(lists=[([p("a")], "1")], watches=[[WatchEvent("ADDED", p("b")), WatchEvent("DELETED", p("a"))]])
+    src = FakeSource(
+        lists=[([p("a")], "1")],
+        watches=[[WatchEvent("ADDED", p("b")), WatchEvent("DELETED", p("a"))]],
+    )
     cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 5)
-    assert [m["type"] for m in msgs] == ["cluster_status", "cluster_status", "snapshot", "upsert", "delete"]
+    assert [m["type"] for m in msgs] == [
+        "cluster_status",
+        "cluster_status",
+        "snapshot",
+        "upsert",
+        "delete",
+    ]
     assert msgs[1]["state"] == "ready" and [r["uid"] for r in msgs[2]["rows"]] == ["a"]
     assert set(cache.rows) == {"b"}
     await cache.stop()
@@ -47,7 +56,11 @@ async def test_source_failure_sets_error_and_retries():
     from omnikrux.kube.client import ClusterUnavailable
 
     src = FakeSource(
-        factory_errors=[ClusterUnavailable("This cluster signs in with 'kubelogin', which isn't installed in the console.")],
+        factory_errors=[
+            ClusterUnavailable(
+                "This cluster signs in with 'kubelogin', which isn't installed in the console."
+            )
+        ],
         lists=[([p("a")], "1")],
         watches=[[]],
     )
@@ -71,7 +84,11 @@ async def test_snapshot_is_chunked_at_500():
     q = cache.subscribe()
     await cache.start()
     msgs = [m for m in await drain(q, 5) if m["type"] == "snapshot"]
-    assert [len(m["rows"]) for m in msgs] == [500, 500, 201] and [m["last"] for m in msgs] == [False, False, True]
+    assert [len(m["rows"]) for m in msgs] == [500, 500, 201] and [m["last"] for m in msgs] == [
+        False,
+        False,
+        True,
+    ]
     await cache.stop()
 
 
@@ -94,13 +111,20 @@ async def assert_quiet(q):
 
 
 async def test_initial_status_is_syncing_and_messages_are_json_ready():
-    src = FakeSource(lists=[([p("a")], "1")], watches=[[WatchEvent("MODIFIED", p("a", name="renamed"))]])
+    src = FakeSource(
+        lists=[([p("a")], "1")], watches=[[WatchEvent("MODIFIED", p("a", name="renamed"))]]
+    )
     cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
     assert (cache.state, cache.message) == ("syncing", None)
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 4)
-    assert msgs[0] == {"type": "cluster_status", "cluster_id": "cl", "state": "syncing", "message": None}
+    assert msgs[0] == {
+        "type": "cluster_status",
+        "cluster_id": "cl",
+        "state": "syncing",
+        "message": None,
+    }
     assert msgs[2]["part"] == 0 and msgs[2]["last"] is True and msgs[2]["cluster_id"] == "cl"
     assert isinstance(msgs[2]["rows"][0]["created_at"], str)
     assert msgs[3] == {"type": "upsert", "cluster_id": "cl", "row": msgs[3]["row"]}
@@ -173,7 +197,11 @@ async def test_generic_error_message_and_backoff_resets_after_a_watch_delivers_a
 async def test_retry_keeps_the_last_error_visible_until_the_next_outcome():
     from omnikrux.kube.client import ClusterUnavailable
 
-    src = FakeSource(factory_errors=[ClusterUnavailable("The cluster rejected the console's credentials: Unauthorized")])
+    src = FakeSource(
+        factory_errors=[
+            ClusterUnavailable("The cluster rejected the console's credentials: Unauthorized")
+        ]
+    )
     cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60))
     q = cache.subscribe()
     await cache.start()
@@ -201,7 +229,16 @@ async def test_backoff_keeps_growing_when_list_works_but_watch_fails_at_once():
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 8)
-    assert [m.get("state") for m in msgs] == ["syncing", "ready", None, "error", "syncing", "ready", None, "error"]
+    assert [m.get("state") for m in msgs] == [
+        "syncing",
+        "ready",
+        None,
+        "error",
+        "syncing",
+        "ready",
+        None,
+        "error",
+    ]
     await assert_quiet(q)  # now waiting the 60s step instead of listing again
     assert len(src.lists) == 1 and cache.state == "error"
     await cache.stop()
@@ -213,7 +250,9 @@ async def test_backoff_resets_after_the_watch_stayed_up_long_enough():
         lists=[([p("a")], "1"), ([p("a")], "2")],
         watches=[Hold(0.1, RuntimeError("connection reset"))],
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60), stable_seconds=0.05, min_watch_interval=0)
+    cache = WatchCache(
+        "cl", src.factory, pod_row, backoff=(0, 60), stable_seconds=0.05, min_watch_interval=0
+    )
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 9)
@@ -307,12 +346,22 @@ class ClosingSource(FakeSource):
 
 
 async def test_discarded_sources_are_closed_on_retry_and_stop():
-    src = ClosingSource(lists=[([p("a")], "1"), ([p("a")], "2")], watches=[RuntimeError("connection reset")])
+    src = ClosingSource(
+        lists=[([p("a")], "1"), ([p("a")], "2")], watches=[RuntimeError("connection reset")]
+    )
     cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 7)
-    assert [m.get("state") for m in msgs] == ["syncing", "ready", None, "error", "syncing", "ready", None]
+    assert [m.get("state") for m in msgs] == [
+        "syncing",
+        "ready",
+        None,
+        "error",
+        "syncing",
+        "ready",
+        None,
+    ]
     assert src.acloses == 1  # the failed attempt's source, before the factory ran again
     await cache.stop()
     assert src.acloses == 2

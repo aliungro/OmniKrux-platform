@@ -42,7 +42,8 @@ class Subscription:
         self._out: asyncio.Queue = asyncio.Queue()
         self._closed = False
         self._tasks = [
-            asyncio.create_task(self._forward(q), name=f"watch-sub:{cid}/{kind}") for (cid, kind), q in queues.items()
+            asyncio.create_task(self._forward(q), name=f"watch-sub:{cid}/{kind}")
+            for (cid, kind), q in queues.items()
         ]
 
     async def _forward(self, q: asyncio.Queue[dict]) -> None:
@@ -135,7 +136,9 @@ class WatchHub:
         cache = self._caches.get(key)
         if cache is None:
             cid = key[0]
-            cache = self._caches[key] = WatchCache(cid, lambda: self._source_for(cid, spec), spec.to_row)
+            cache = self._caches[key] = WatchCache(
+                cid, lambda: self._source_for(cid, spec), spec.to_row
+            )
         self._refs[key] = self._refs.get(key, 0) + 1
         return cache
 
@@ -148,7 +151,9 @@ class WatchHub:
             cache.unsubscribe(q)
             self._refs[key] -= 1
             if self._refs[key] == 0:
-                self._evictions[key] = asyncio.create_task(self._evict_later(key), name=f"watch-evict:{key}")
+                self._evictions[key] = asyncio.create_task(
+                    self._evict_later(key), name=f"watch-evict:{key}"
+                )
 
     async def _evict_later(self, key: Key) -> None:
         await asyncio.sleep(self._idle_seconds)

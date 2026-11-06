@@ -14,7 +14,12 @@ pytestmark = pytest.mark.kind
 def kind_kubeconfig(tmp_path):
     if (kind := find_kind()) is None:
         pytest.skip("kind is not installed")
-    result = subprocess.run([kind, "get", "kubeconfig", "--name", "omnikrux-dev"], check=False, capture_output=True, text=True)
+    result = subprocess.run(
+        [kind, "get", "kubeconfig", "--name", "omnikrux-dev"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     if result.returncode != 0:
         pytest.skip("kind cluster omnikrux-dev not running (scripts/dev-kind.sh)")
     path = tmp_path / "config"
@@ -23,7 +28,9 @@ def kind_kubeconfig(tmp_path):
 
 
 def test_ws_streams_kind_pods(tmp_path, kind_kubeconfig):
-    app = create_app(Settings(data_dir=tmp_path, kubeconfig=str(kind_kubeconfig), in_container=False))
+    app = create_app(
+        Settings(data_dir=tmp_path, kubeconfig=str(kind_kubeconfig), in_container=False)
+    )
     with TestClient(app) as client:
         with client.websocket_connect("/api/watch?kind=pods") as ws:
             rows = []

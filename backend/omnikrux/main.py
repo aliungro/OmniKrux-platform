@@ -48,7 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 except OSError as exc:
                     log.warning(
                         "Cannot read kubeconfig %s (%s); make it readable by the container user "
-                        "(for example run with --user \"$(id -u):$(id -g)\" or chmod 644 a copy). "
+                        '(for example run with --user "$(id -u):$(id -g)" or chmod 644 a copy). '
                         "Continuing without it.",
                         path,
                         exc,
@@ -56,12 +56,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     continue
                 for text in texts:
                     try:
-                        await registry.upsert_from_kubeconfig(text, rewrite_loopback=settings.loopback_rewrite)
+                        await registry.upsert_from_kubeconfig(
+                            text, rewrite_loopback=settings.loopback_rewrite
+                        )
                     except ValueError as exc:  # our own plain message, free of kubeconfig contents
                         error_type = getattr(exc, "error_type", None)
-                        log.warning("Skipping kubeconfig %s: %s%s", path, exc, f" ({error_type})" if error_type else "")
+                        log.warning(
+                            "Skipping kubeconfig %s: %s%s",
+                            path,
+                            exc,
+                            f" ({error_type})" if error_type else "",
+                        )
                     except Exception as exc:  # noqa: BLE001 (one file must never stop startup; logged by type)
-                        log.warning("Skipping kubeconfig %s: it could not be imported (%s)", path, type(exc).__name__)
+                        log.warning(
+                            "Skipping kubeconfig %s: it could not be imported (%s)",
+                            path,
+                            type(exc).__name__,
+                        )
             yield
         finally:
             await hub.close()
@@ -70,7 +81,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Omnikrux", lifespan=lifespan)
     app.state.settings = settings
     # No login yet: only answer to the hosts the user reaches us by, so a DNS-rebinding page can't.
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts, www_redirect=False)
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts, www_redirect=False
+    )
     app.include_router(clusters_router)
     app.include_router(watch_router)
 

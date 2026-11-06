@@ -19,7 +19,9 @@ async def test_one_bad_cluster_does_not_block_others(fake_registry_two_clusters)
     good = FakeSource(lists=[([p("a")], "1")], watches=[[]])
     bad = FakeSource(factory_errors=[RuntimeError("dial tcp: i/o timeout")] * 100)
     sources = {"good": good, "bad": bad}
-    hub = WatchHub(fake_registry_two_clusters, lambda cid, spec: sources[cid].factory(), idle_seconds=0.1)
+    hub = WatchHub(
+        fake_registry_two_clusters, lambda cid, spec: sources[cid].factory(), idle_seconds=0.1
+    )
     msgs = await asyncio.wait_for(collect(await hub.subscribe("pods"), 5), 2)
     assert any(m["type"] == "snapshot" and m["cluster_id"] == "good" for m in msgs)
     assert hub.status("bad") == ("error", "Can't reach this cluster: dial tcp: i/o timeout")
@@ -69,7 +71,10 @@ async def test_resubscribe_within_grace_keeps_the_cache(fake_registry_two_cluste
     await asyncio.sleep(0.2)  # past the first eviction deadline
     assert hub.status("good") == ("ready", None) and calls == {"good": 1}
     # The surviving cache replays its state to the new subscriber.
-    assert [m["type"] for m in await asyncio.wait_for(collect(s2, 2), 2)] == ["cluster_status", "snapshot"]
+    assert [m["type"] for m in await asyncio.wait_for(collect(s2, 2), 2)] == [
+        "cluster_status",
+        "snapshot",
+    ]
     await hub.close()
 
 
@@ -83,7 +88,9 @@ async def test_closing_a_subscription_unsubscribes_and_ends_iteration(fake_regis
     assert [len(c._subscribers) for c in caches] == [1, 1]
     assert await asyncio.wait_for(collect(s1, 1), 1) is None  # iteration ends after close
     await hub.close()
-    assert await asyncio.wait_for(collect(s2, 1), 1) is None  # hub.close() closes open subscriptions
+    assert (
+        await asyncio.wait_for(collect(s2, 1), 1) is None
+    )  # hub.close() closes open subscriptions
     assert hub.status("good") == ("unknown", None)
 
 
@@ -91,14 +98,19 @@ async def test_messages_from_one_cluster_keep_their_order(fake_registry_two_clus
     from omnikrux.watch.source import WatchEvent
 
     def source(cid):
-        return FakeSource(lists=[([p(f"{cid}0")], "1")], watches=[[WatchEvent("ADDED", p(f"{cid}{i}")) for i in range(1, 6)]])
+        return FakeSource(
+            lists=[([p(f"{cid}0")], "1")],
+            watches=[[WatchEvent("ADDED", p(f"{cid}{i}")) for i in range(1, 6)]],
+        )
 
     sources = {cid: source(cid) for cid in ("good", "bad")}
     hub = WatchHub(fake_registry_two_clusters, lambda cid, spec: sources[cid].factory())
     msgs = await asyncio.wait_for(collect(await hub.subscribe("pods"), 16), 2)
     for cid in ("good", "bad"):
         mine = [m for m in msgs if m["cluster_id"] == cid]
-        assert [m["type"] for m in mine] == ["cluster_status", "cluster_status", "snapshot"] + ["upsert"] * 5
+        assert [m["type"] for m in mine] == ["cluster_status", "cluster_status", "snapshot"] + [
+            "upsert"
+        ] * 5
         assert [m["row"]["uid"] for m in mine[3:]] == [f"{cid}{i}" for i in range(1, 6)]
     await hub.close()
 

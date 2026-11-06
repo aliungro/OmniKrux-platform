@@ -20,7 +20,9 @@ async def make_api_client(kubeconfig: dict) -> client.ApiClient:
         )
     api = await config.new_client_from_config_dict(kubeconfig)
     clusters = kubeconfig.get("clusters") or []
-    tls_server_name = ((clusters[0].get("cluster") or {}).get("tls-server-name")) if clusters else None
+    tls_server_name = (
+        ((clusters[0].get("cluster") or {}).get("tls-server-name")) if clusters else None
+    )
     if tls_server_name and not api.configuration.tls_server_name:
         api.configuration.tls_server_name = tls_server_name
     return api

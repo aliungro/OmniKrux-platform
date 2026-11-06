@@ -19,7 +19,14 @@ TOKEN = "fake-api-token"
 
 
 def status_body(code: int, reason: str, message: str) -> dict:
-    return {"kind": "Status", "apiVersion": "v1", "status": "Failure", "code": code, "reason": reason, "message": message}
+    return {
+        "kind": "Status",
+        "apiVersion": "v1",
+        "status": "Failure",
+        "code": code,
+        "reason": reason,
+        "message": message,
+    }
 
 
 POD = {"metadata": {"name": "web-1", "namespace": "demo", "uid": "u1", "resourceVersion": "41"}}
@@ -32,10 +39,21 @@ ROUTES = {
         "kind": "APIResourceList",
         "groupVersion": "v1",
         "resources": [
-            {"name": "pods", "singularName": "pod", "namespaced": True, "kind": "Pod", "verbs": ["get", "list", "watch"]}
+            {
+                "name": "pods",
+                "singularName": "pod",
+                "namespaced": True,
+                "kind": "Pod",
+                "verbs": ["get", "list", "watch"],
+            }
         ],
     },
-    "/api/v1/pods": {"kind": "PodList", "apiVersion": "v1", "metadata": {"resourceVersion": "42"}, "items": [POD]},
+    "/api/v1/pods": {
+        "kind": "PodList",
+        "apiVersion": "v1",
+        "metadata": {"resourceVersion": "42"},
+        "items": [POD],
+    },
 }
 
 
@@ -58,7 +76,9 @@ class FakeKubeApi:
         self.auth.add(request.headers.get("Authorization"))
         if self.mode == "hang":
             await self.release.wait()
-        if self.mode == "unauthorized" or (self.mode == "apis_unauthorized" and request.path == "/apis"):
+        if self.mode == "unauthorized" or (
+            self.mode == "apis_unauthorized" and request.path == "/apis"
+        ):
             return web.json_response(status_body(401, "Unauthorized", "Unauthorized"), status=401)
         if (body := ROUTES.get(request.path)) is None:
             return web.json_response(status_body(404, "NotFound", "not found"), status=404)
@@ -128,7 +148,10 @@ async def test_unexpected_discovery_answer_is_a_plain_cluster_unavailable(fake_a
             await source.list()
     finally:
         await source.aclose()
-    assert info.value.message == "The cluster's API discovery failed: it answered with something unexpected"
+    assert (
+        info.value.message
+        == "The cluster's API discovery failed: it answered with something unexpected"
+    )
     assert "NoneType" not in info.value.message
 
 
