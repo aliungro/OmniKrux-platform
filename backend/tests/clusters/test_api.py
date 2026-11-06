@@ -32,3 +32,33 @@ def test_unparseable_file_is_skipped_at_startup(tmp_path, caplog):
     with TestClient(create_app(Settings(data_dir=tmp_path, kubeconfig=str(bad)))) as client:
         assert client.get("/api/clusters").json() == []
     assert "Skipping kubeconfig" in caplog.text
+
+
+class StubHub:
+    def __init__(self):
+        self.retried: list[str] = []
+
+    def status(self, cluster_id):
+        return ("error", "Can't reach this cluster: boom")
+
+    async def retry(self, cluster_id):
+        self.retried.append(cluster_id)
+
+    async def close(self):
+        pass
+
+
+def test_cluster_state_comes_from_the_hub(app_with_kubeconfig):
+    client, _ = app_with_kubeconfig
+    client.app.state.hub = StubHub()
+    body = client.get("/api/clusters").json()
+    assert (body[0]["state"], body[0]["message"]) == ("error", "Can't reach this cluster: boom")
+
+
+def test_retry_cluster(app_with_kubeconfig):
+    client, _ = app_with_kubeconfig
+    client.app.state.hub = hub = StubHub()
+    cluster_id = client.get("/api/clusters").json()[0]["id"]
+    r = client.post(f"/api/clusters/{cluster_id}/retry")
+    assert r.status_code == 204 and r.content == b"" and hub.retried == [cluster_id]
+    assert client.post("/api/clusters/nope/retry").status_code == 404 and hub.retried == [cluster_id]

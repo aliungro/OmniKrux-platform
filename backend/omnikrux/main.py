@@ -9,7 +9,12 @@ from omnikrux.clusters.kubeconfig import read_kubeconfig_files
 from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.config import Settings, get_settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
+from omnikrux.kube.client import make_api_client
+from omnikrux.kube.source import KubeResourceSource
+from omnikrux.resources.kinds import KindSpec
 from omnikrux.security.secrets import SecretBox
+from omnikrux.watch.api import router as watch_router
+from omnikrux.watch.hub import WatchHub
 
 log = logging.getLogger(__name__)
 
@@ -23,9 +28,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await init_db(engine)
         sessionmaker = make_sessionmaker(engine)
         registry = ClusterRegistry(sessionmaker, SecretBox.from_settings(settings))
+
+        async def source_for(cluster_id: str, spec: KindSpec) -> KubeResourceSource:
+            kubeconfig = await registry.get_kubeconfig(cluster_id)
+            api = await make_api_client(kubeconfig)
+            return KubeResourceSource(api, spec)  # owns `api` and closes it
+
+        hub = WatchHub(registry, source_for)
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.registry = registry
+        app.state.hub = hub
         try:
             for path in settings.kubeconfig_paths:
                 for text in read_kubeconfig_files([path]):
@@ -35,11 +48,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         log.warning("Skipping kubeconfig %s: %s", path, exc)
             yield
         finally:
+            await hub.close()
             await engine.dispose()
 
     app = FastAPI(title="Omnikrux", lifespan=lifespan)
     app.state.settings = settings
     app.include_router(clusters_router)
+    app.include_router(watch_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

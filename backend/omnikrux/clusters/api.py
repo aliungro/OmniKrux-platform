@@ -26,14 +26,23 @@ class KubeconfigIn(BaseModel):
     kubeconfig: str
 
 
-def _out(info: ClusterInfo) -> ClusterOut:
-    # TODO(Task 10): take state/message from app.state.hub.status(info.id).
-    return ClusterOut(**asdict(info), state="unknown", message=None)
+def _out(info: ClusterInfo, request: Request) -> ClusterOut:
+    state, message = request.app.state.hub.status(info.id)
+    return ClusterOut(**asdict(info), state=state, message=message)
 
 
 @router.get("")
 async def list_clusters(request: Request) -> list[ClusterOut]:
-    return [_out(c) for c in await request.app.state.registry.list()]
+    return [_out(c, request) for c in await request.app.state.registry.list()]
+
+
+@router.post("/{cluster_id}/retry", status_code=204)
+async def retry_cluster(cluster_id: str, request: Request) -> None:
+    try:
+        await request.app.state.registry.get(cluster_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown cluster") from exc
+    await request.app.state.hub.retry(cluster_id)
 
 
 @router.post("/kubeconfig")
@@ -45,4 +54,4 @@ async def import_kubeconfig(body: KubeconfigIn, request: Request) -> list[Cluste
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return [_out(c) for c in infos]
+    return [_out(c, request) for c in infos]
