@@ -29,3 +29,13 @@ def test_allowed_hosts_from_env_is_comma_separated(monkeypatch):
     assert Settings().allowed_hosts == ["omnikrux.lan", "10.0.0.5"]
     monkeypatch.setenv("OMNIKRUX_ALLOWED_HOSTS", "*")
     assert Settings().allowed_hosts == ["*"]
+
+
+def test_rewrite_loopback_follows_in_container_unless_set(monkeypatch):
+    monkeypatch.delenv("OMNIKRUX_REWRITE_LOOPBACK", raising=False)
+    assert Settings(in_container=True).loopback_rewrite is True
+    assert Settings(in_container=False).loopback_rewrite is False
+    assert Settings(in_container=True, rewrite_loopback=False).loopback_rewrite is False
+    monkeypatch.setenv("OMNIKRUX_REWRITE_LOOPBACK", "false")
+    assert Settings(in_container=True).loopback_rewrite is False
+    assert Settings(in_container=True).kubeconfig_paths == [Path("/kube/config")]  # path choice unchanged

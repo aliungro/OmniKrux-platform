@@ -54,7 +54,8 @@ def guess_environment(name: str, provider: Provider) -> Environment:
     return Environment.UNKNOWN
 
 
-def rewrite_loopback(cluster: dict) -> dict:
+def to_docker_host(cluster: dict) -> dict:
+    """`cluster` with a loopback server address pointed at the Docker host instead."""
     parts = urlsplit(cluster.get("server", ""))
     host = parts.hostname
     if host is None or host not in LOOPBACK_HOSTS:
@@ -70,7 +71,7 @@ def _by_name(items: list, key: str) -> dict:
     return {i["name"]: i[key] for i in items if isinstance(i, dict) and "name" in i and isinstance(i.get(key), dict)}
 
 
-def parse_kubeconfig(text: str, *, in_container: bool) -> list[ParsedContext]:
+def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext]:
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -89,8 +90,8 @@ def parse_kubeconfig(text: str, *, in_container: bool) -> list[ParsedContext]:
         user = users.get(ctx.get("user"))
         if cluster is None or user is None:
             continue
-        if in_container:
-            cluster = rewrite_loopback(cluster)
+        if rewrite_loopback:
+            cluster = to_docker_host(cluster)
         server = cluster.get("server", "")
         exec_cfg = user.get("exec")
         exec_command = exec_cfg.get("command") if isinstance(exec_cfg, dict) else None

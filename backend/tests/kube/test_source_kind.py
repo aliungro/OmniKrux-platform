@@ -36,7 +36,7 @@ async def api():
     )
     if text.returncode != 0:
         pytest.skip("kind cluster omnikrux-dev not running (scripts/dev-kind.sh)")
-    client = await make_api_client(parse_kubeconfig(text.stdout, in_container=False)[0].standalone)
+    client = await make_api_client(parse_kubeconfig(text.stdout, rewrite_loopback=False)[0].standalone)
     yield client
     await client.close()
 

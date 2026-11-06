@@ -62,3 +62,22 @@ def test_retry_cluster(app_with_kubeconfig):
     r = client.post(f"/api/clusters/{cluster_id}/retry")
     assert r.status_code == 204 and r.content == b"" and hub.retried == [cluster_id]
     assert client.post("/api/clusters/nope/retry").status_code == 404 and hub.retried == [cluster_id]
+
+
+def test_loopback_rewrite_follows_the_setting_not_in_container(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from omnikrux.config import Settings
+    from omnikrux.main import create_app
+    from tests.clusters.test_kubeconfig import kc
+
+    path = tmp_path / "config"
+    path.write_text(kc([("kind-omnikrux-dev", "https://127.0.0.1:6443", None)]), encoding="utf-8")
+    # --network host on Linux: in a container, but 127.0.0.1 already is the host.
+    settings = Settings(data_dir=tmp_path / "a", kubeconfig=str(path), in_container=True, rewrite_loopback=False)
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/clusters").json()[0]["server"] == "https://127.0.0.1:6443"
+    settings = Settings(data_dir=tmp_path / "b", kubeconfig="", in_container=False, rewrite_loopback=True)
+    with TestClient(create_app(settings)) as client:
+        r = client.post("/api/clusters/kubeconfig", json={"kubeconfig": path.read_text(encoding="utf-8")})
+        assert r.json()[0]["server"] == "https://host.docker.internal:6443"

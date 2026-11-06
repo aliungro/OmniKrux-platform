@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     database_url: str | None = None
     secret_key: str | None = None
     in_container: bool = False
+    # Point 127.0.0.1-style kubeconfig servers at host.docker.internal. Unset: on in a container.
+    # Turn off with --network host on Linux, where loopback already is the host.
+    rewrite_loopback: bool | None = None
     kubeconfig: str | None = None
     static_dir: Path | None = None
     # OMNIKRUX_ALLOWED_HOSTS: comma-separated; "*" turns the Host check off.
@@ -32,6 +35,10 @@ class Settings(BaseSettings):
     @property
     def db_url(self) -> str:
         return self.database_url or f"sqlite+aiosqlite:///{self.data_dir}/omnikrux.db"
+
+    @property
+    def loopback_rewrite(self) -> bool:
+        return self.in_container if self.rewrite_loopback is None else self.rewrite_loopback
 
     @property
     def kubeconfig_paths(self) -> list[Path]:

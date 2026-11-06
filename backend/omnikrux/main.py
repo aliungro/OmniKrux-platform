@@ -56,7 +56,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     continue
                 for text in texts:
                     try:
-                        await registry.upsert_from_kubeconfig(text, in_container=settings.in_container)
+                        await registry.upsert_from_kubeconfig(text, rewrite_loopback=settings.loopback_rewrite)
                     except ValueError as exc:
                         log.warning("Skipping kubeconfig %s: %s", path, exc)
             yield

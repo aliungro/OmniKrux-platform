@@ -50,7 +50,7 @@ async def import_kubeconfig(body: KubeconfigIn, request: Request) -> list[Cluste
     settings = request.app.state.settings
     try:
         infos = await request.app.state.registry.upsert_from_kubeconfig(
-            body.kubeconfig, in_container=settings.in_container
+            body.kubeconfig, rewrite_loopback=settings.loopback_rewrite
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
