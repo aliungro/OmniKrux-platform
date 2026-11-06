@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
 
 from kubernetes_asyncio.client import ApiClient
+from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.dynamic import DynamicClient
 
 from omnikrux.kube.client import ClusterUnavailable
@@ -19,6 +21,8 @@ WATCH_TIMEOUT_SECONDS = 300
 # (connect, read) client-side timeouts: a silent connection fails instead of hanging.
 LIST_REQUEST_TIMEOUT = (30, 120)
 WATCH_REQUEST_TIMEOUT = (30, WATCH_TIMEOUT_SECONDS + 60)
+# Upper bound for the API probe plus discovery; the dynamic client's own requests have no timeout.
+DISCOVERY_TIMEOUT_SECONDS = 30
 
 EVENT_TYPES = ("ADDED", "MODIFIED", "DELETED")
 
@@ -29,9 +33,10 @@ class KubeResourceSource(ResourceSource):
     Owns `api`: `aclose()` closes it. Objects are plain JSON dicts as the API returns them.
     """
 
-    def __init__(self, api: ApiClient, spec: KindSpec):
+    def __init__(self, api: ApiClient, spec: KindSpec, *, discovery_timeout: float = DISCOVERY_TIMEOUT_SECONDS):
         self._api = api
         self._spec = spec
+        self._discovery_timeout = discovery_timeout
         self._dynamic = None
         self._resource = None
         self._closed = False
@@ -63,7 +68,7 @@ class KubeResourceSource(ResourceSource):
                 serialize=False,
                 _request_timeout=LIST_REQUEST_TIMEOUT,
             )
-            await self._raise_for_status(resp, "list")
+            await self._raise_for_status(resp, f"list {self._spec.plural}")
             try:
                 body = await resp.json()
             finally:
@@ -91,7 +96,7 @@ class KubeResourceSource(ResourceSource):
             serialize=False,
             _request_timeout=WATCH_REQUEST_TIMEOUT,
         )
-        await self._raise_for_status(resp, "watch")
+        await self._raise_for_status(resp, f"watch {self._spec.plural}")
         try:
             buffer = b""
             async for chunk in resp.content.iter_any():
@@ -112,19 +117,50 @@ class KubeResourceSource(ResourceSource):
 
     async def _resolve(self):
         if self._resource is None:
-            dynamic = await DynamicClient(self._api)
-            spec = self._spec
-            self._resource = await dynamic.resources.get(
-                prefix="apis" if spec.group else "api",
-                group=spec.group or None,
-                api_version=spec.version,
-                kind=spec.kind,
-                name=spec.plural,
-            )
-            self._dynamic = dynamic
+            try:
+                async with asyncio.timeout(self._discovery_timeout):
+                    await self._probe()
+                    dynamic = await DynamicClient(self._api)
+                    spec = self._spec
+                    resource = await dynamic.resources.get(
+                        prefix="apis" if spec.group else "api",
+                        group=spec.group or None,
+                        api_version=spec.version,
+                        kind=spec.kind,
+                        name=spec.plural,
+                    )
+            except TimeoutError as exc:
+                raise ClusterUnavailable(
+                    f"The cluster API did not respond within {self._discovery_timeout:g} s"
+                ) from exc
+            except ApiException as exc:
+                detail = " ".join(str(x) for x in (exc.status, exc.reason) if x) or "no details"
+                raise ClusterUnavailable(f"The cluster's API discovery failed: {detail}") from exc
+            except TypeError as exc:  # discovery read a Status (or other) body as a resource list
+                raise ClusterUnavailable(
+                    "The cluster's API discovery failed: it answered with something unexpected"
+                ) from exc
+            self._dynamic, self._resource = dynamic, resource
         return self._dynamic, self._resource
 
-    async def _raise_for_status(self, resp, verb: str) -> None:
+    async def _probe(self) -> None:
+        """GET /api with a timeout, so a refusal gets a plain message before discovery runs.
+
+        Discovery itself reads error bodies as data (a 401 there surfaces as a TypeError).
+        """
+        resp = await self._api.call_api(
+            "/api",
+            "GET",
+            header_params={"Accept": "application/json"},
+            auth_settings=["BearerToken"],
+            _preload_content=False,
+            _return_http_data_only=True,
+            _request_timeout=LIST_REQUEST_TIMEOUT,
+        )
+        await self._raise_for_status(resp, "read the cluster's API list")
+        resp.release()
+
+    async def _raise_for_status(self, resp, action: str) -> None:
         """Raise for a non-2xx response (the dynamic client returns them instead of raising)."""
         status = resp.status
         if 200 <= status < 300:
@@ -138,7 +174,7 @@ class KubeResourceSource(ResourceSource):
         if status == 401:
             raise ClusterUnavailable(f"The cluster rejected the console's credentials: {message}")
         if status == 403:
-            raise ClusterUnavailable(f"Not allowed to {verb} {self._spec.plural}: {message}")
+            raise ClusterUnavailable(f"Not allowed to {action}: {message}")
         raise RuntimeError(f"Kubernetes API returned {status}: {message}")
 
     def _event(self, line: bytes) -> WatchEvent | None:

@@ -79,8 +79,16 @@ class FakeDynamic:
 
 
 class FakeApi:
+    """The ApiClient: answers the source's `/api` probe with 200 (discovery itself is FakeDynamic)."""
+
     def __init__(self):
         self.closes = 0
+        self.probes = 0
+
+    async def call_api(self, path, method, **kwargs):
+        assert (path, method) == ("/api", "GET") and kwargs["_preload_content"] is False
+        self.probes += 1
+        return FakeResponse({"kind": "APIVersions", "versions": ["v1"]})
 
     async def close(self):
         self.closes += 1
