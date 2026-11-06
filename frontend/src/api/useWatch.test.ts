@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useWatch } from "./useWatch";
@@ -15,6 +16,9 @@ class FakeSocket {
   }
   serverMessage(m: unknown) {
     this.onmessage?.({ data: JSON.stringify(m) });
+  }
+  serverRaw(data: string) {
+    this.onmessage?.({ data });
   }
   serverClose(code = 1006) {
     this.onclose?.({ code });
@@ -88,5 +92,31 @@ describe("useWatch", () => {
     const sock = FakeSocket.instances[0];
     unmount();
     expect(sock.closed).toBe(true);
+  });
+
+  it("ignores malformed and non-object frames without throwing or changing state", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { result } = renderHook(() => useWatch("pods"));
+    act(() => FakeSocket.instances[0].serverMessage(status));
+    const before = result.current;
+    for (const raw of ["{not json", "null", "5"]) {
+      expect(() => act(() => FakeSocket.instances[0].serverRaw(raw))).not.toThrow();
+    }
+    expect(result.current).toBe(before);
+    expect(warn).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
+  });
+
+  it("ignores unknown message types", () => {
+    const { result } = renderHook(() => useWatch("pods"));
+    act(() => FakeSocket.instances[0].serverMessage(status));
+    act(() => FakeSocket.instances[0].serverMessage({ type: "ping", cluster_id: "c" }));
+    expect(result.current.clusters.c.state).toBe("ready");
+  });
+
+  it("under StrictMode leaves exactly one open socket and closes the first", () => {
+    renderHook(() => useWatch("pods"), { wrapper: StrictMode });
+    expect(FakeSocket.instances[0].closed).toBe(true);
+    expect(FakeSocket.instances.filter((s) => !s.closed)).toHaveLength(1);
   });
 });

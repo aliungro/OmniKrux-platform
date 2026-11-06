@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { WatchMessage } from "./types";
 import { applyMessage, emptyWatchState, resetForReconnect } from "./watchState";
 const row = (uid: string) => ({ uid, cluster_id: "c", kind: "Pod", namespace: "n", name: uid, created_at: "", columns: {} });
 const snap = (uids: string[], part = 0, last = true) => ({ type: "snapshot", cluster_id: "c", rows: uids.map(row), part, last } as const);
@@ -50,5 +51,15 @@ describe("applyMessage", () => {
     s = resetForReconnect(s);
     expect(s.clusters.c.state).toBe("syncing");
     expect(s.rows.c.size).toBe(1);
+  });
+  it("unknown message type returns the same state object", () => {
+    const s = applyMessage(emptyWatchState(), snap(["a"]));
+    expect(applyMessage(s, { type: "ping" } as unknown as WatchMessage)).toBe(s);
+  });
+  it("reconnect clears buffered snapshot parts", () => {
+    let s = applyMessage(emptyWatchState(), snap(["x"], 0, false));
+    expect(s.pending.c).toHaveLength(1);
+    s = resetForReconnect(s);
+    expect(s.pending).toEqual({});
   });
 });

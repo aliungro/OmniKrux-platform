@@ -24,7 +24,15 @@ export function useWatch(kind: string): WatchState {
       ws.onmessage = (ev) => {
         if (disposed) return;
         attempt = 0;
-        const msg = JSON.parse(ev.data as string) as WatchMessage;
+        let msg: WatchMessage;
+        try {
+          const parsed: unknown = JSON.parse(ev.data as string);
+          if (parsed === null || typeof parsed !== "object") throw new Error("not an object");
+          msg = parsed as WatchMessage;
+        } catch {
+          console.warn("useWatch: ignoring malformed frame");
+          return;
+        }
         setState((s) => applyMessage(s, msg));
       };
       ws.onclose = (ev) => {

@@ -46,6 +46,8 @@ export function applyMessage(s: WatchState, m: WatchMessage): WatchState {
       next.delete(m.uid);
       return { ...s, rows: { ...s.rows, [id]: next } };
     }
+    default:
+      return s;
   }
 }
 
