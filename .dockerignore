@@ -1,0 +1,14 @@
+.git
+.superpowers
+.tools
+.claude
+**/node_modules
+frontend/dist
+backend/.venv
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+.omnikrux-data
+**/.omnikrux-data
+docs
