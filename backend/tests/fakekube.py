@@ -153,8 +153,11 @@ class FakeKubeApi:
                     body = status_body(403, "Forbidden", EVENTS_FORBIDDEN)
                     return web.json_response(body, status=403)
                 return self._events(request, match["ns"])
-        if (match := PODS_ROUTE.match(path)) and method == "POST":
-            return await self._create_pod(request, match["ns"])
+        if match := PODS_ROUTE.match(path):
+            if method == "POST":
+                return await self._create_pod(request, match["ns"])
+            if method == "GET":
+                return self._list_pods(request, match["ns"])
         if match := POD_ROUTE.match(path):
             key, sub = (match["ns"], match["name"]), match["sub"]
             if method == "GET" and sub is None:
@@ -172,6 +175,28 @@ class FakeKubeApi:
         if pod is None:
             return not_found(f'pods "{key[1]}" not found')
         return web.json_response(pod)
+
+    def _list_pods(self, request: web.Request, ns: str) -> web.Response:
+        """Pods in `ns`, filtered by an equality `labelSelector` (`k=v,k2=v2`)."""
+        wanted = [
+            term.partition("=")[::2]
+            for term in request.query.get("labelSelector", "").split(",")
+            if term
+        ]
+        items = [
+            pod
+            for (pod_ns, _), pod in self.pods.items()
+            if pod_ns == ns
+            and all((pod.get("metadata", {}).get("labels") or {}).get(k) == v for k, v in wanted)
+        ]
+        return web.json_response(
+            {
+                "kind": "PodList",
+                "apiVersion": "v1",
+                "metadata": {"resourceVersion": "42"},
+                "items": items,
+            }
+        )
 
     def _events(self, request: web.Request, ns: str) -> web.Response:
         items = [e for e in self.events if e.get("metadata", {}).get("namespace", ns) == ns]
@@ -213,6 +238,13 @@ class FakeKubeApi:
         return web.json_response(pod)
 
     async def _log(self, request: web.Request, key: tuple[str, str]) -> web.StreamResponse:
+        accept = request.headers.get("Accept", "*/*")
+        if not any(t in accept for t in ("*/*", "application/json", "application/yaml")):
+            # The real API negotiates against its serializers: "text/plain" alone is refused.
+            message = (
+                "the server was unable to respond with a content type that the client supports"
+            )
+            return web.json_response(status_body(406, "NotAcceptable", message), status=406)
         pod = self.pods.get(key)
         if pod is None:
             return not_found(f'pods "{key[1]}" not found')

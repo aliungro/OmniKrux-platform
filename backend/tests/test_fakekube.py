@@ -205,3 +205,30 @@ async def test_naive_since_time_is_utc_and_seeded_pods_are_copied(fake_api):
         sinceTime="2026-01-01T00:00:01",
     )
     assert status == 200 and text.splitlines() == ["b"]
+
+
+async def test_namespaced_pod_list_filters_by_label_selector(fake_api):
+    def pod(ns, name, labels):
+        return {"metadata": {"name": name, "namespace": ns, "labels": labels}}
+
+    fake_api.pods[("demo", "a")] = pod("demo", "a", {"app": "web", "tier": "fe"})
+    fake_api.pods[("demo", "b")] = pod("demo", "b", {"app": "db"})
+    fake_api.pods[("other", "c")] = pod("other", "c", {"app": "web"})
+    status, text = await get(
+        fake_api, "/api/v1/namespaces/demo/pods", labelSelector="app=web,tier=fe"
+    )
+    assert status == 200
+    assert [p["metadata"]["name"] for p in json.loads(text)["items"]] == ["a"]
+    status, text = await get(fake_api, "/api/v1/namespaces/demo/pods")
+    assert {p["metadata"]["name"] for p in json.loads(text)["items"]} == {"a", "b", "web-1"}
+
+
+async def test_log_refuses_text_plain_alone_like_the_real_api(fake_api):
+    fake_api.pods[("demo", "web-1")] = POD
+    fake_api.logs[("demo", "web-1", "app", False)] = ["hi"]
+    url = fake_api.url + "/api/v1/namespaces/demo/pods/web-1/log"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers={"Accept": "text/plain"}) as resp:
+            assert resp.status == 406
+        async with session.get(url, headers={"Accept": "text/plain, application/json"}) as resp:
+            assert resp.status == 200 and await resp.text() == "hi\n"

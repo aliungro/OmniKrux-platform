@@ -1,0 +1,366 @@
+"""WS /api/logs streams pod logs in batches; GET .../logs/download returns one log as a file."""
+
+import asyncio
+import json
+import logging
+from collections import deque
+from contextlib import AsyncExitStack, aclosing
+
+from fastapi import APIRouter, HTTPException, Request, WebSocket
+from fastapi.responses import StreamingResponse
+from kubernetes_asyncio.client import ApiClient, CoreV1Api
+from kubernetes_asyncio.client.exceptions import ApiException
+from starlette.websockets import WebSocketDisconnect
+
+from omnikrux.kube.connections import ClusterConnections, kube_error_message
+from omnikrux.kube.http import read_json
+from omnikrux.logs.stream import (
+    KUBE_ERRORS,
+    REQUEST_TIMEOUT,
+    LogLine,
+    LogStream,
+    LogStreamError,
+    Marker,
+    any_container_names,
+    container_names,
+    log_error_message,
+    open_log,
+)
+from omnikrux.web_security import is_cross_origin
+
+log = logging.getLogger(__name__)
+
+router = APIRouter()
+
+QUEUE_LIMIT = 10_000  # entries waiting for a slow client; beyond this the oldest are dropped
+BATCH_MAX = 500  # entries per `lines` message
+FLUSH_SECONDS = 0.1  # the longest an entry waits for company before it is sent
+
+
+class LineBuffer:
+    """Between the log producers and the socket sender. Bounded: when it is full the oldest
+    entry is dropped and counted, so a slow client loses old lines instead of memory growing."""
+
+    def __init__(self, limit: int = QUEUE_LIMIT):
+        self._items: deque[LogLine | Marker] = deque()
+        self._limit = limit
+        self._wake = asyncio.Event()
+        self.dropped = 0
+        self.first_at = 0.0  # loop time the oldest unsent entry arrived
+        self.finished = False
+        self.error: str | None = None
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def put(self, item: LogLine | Marker) -> None:
+        if not self._items:
+            self.first_at = asyncio.get_running_loop().time()
+        elif len(self._items) >= self._limit:
+            self._items.popleft()
+            self.dropped += 1
+        self._items.append(item)
+        self._wake.set()
+
+    def take(self, n: int) -> list[LogLine | Marker]:
+        return [self._items.popleft() for _ in range(min(n, len(self._items)))]
+
+    def finish(self, error: str | None = None) -> None:
+        """No more entries: the sender drains what is left and stops."""
+        self.finished, self.error = True, error
+        self._wake.set()
+
+    async def wait(self, timeout: float | None = None) -> None:
+        """Until something is put or finished (or `timeout` passes); callers re-check state."""
+        self._wake.clear()
+        try:
+            async with asyncio.timeout(timeout):
+                await self._wake.wait()
+        except TimeoutError:
+            pass
+
+
+async def send_batches(websocket: WebSocket, buffer: LineBuffer) -> None:
+    """Send `lines` messages of at most BATCH_MAX entries, each as soon as it is full or its
+    oldest entry has waited FLUSH_SECONDS; a `dropped` count goes first when lines were lost.
+    Returns once the buffer is finished and drained."""
+    loop = asyncio.get_running_loop()
+    while True:
+        while not len(buffer) and not buffer.finished:
+            await buffer.wait()
+        if not len(buffer):
+            return
+        while len(buffer) < BATCH_MAX and not buffer.finished:
+            remaining = buffer.first_at + FLUSH_SECONDS - loop.time()
+            if remaining <= 0:
+                break
+            await buffer.wait(remaining)
+        if buffer.dropped:
+            dropped, buffer.dropped = buffer.dropped, 0
+            await websocket.send_text(json.dumps({"type": "dropped", "count": dropped}))
+        batch = buffer.take(BATCH_MAX)
+        await websocket.send_text(json.dumps({"type": "lines", "lines": batch}))
+
+
+async def _status(websocket: WebSocket, state: str, message: str | None = None) -> None:
+    await websocket.send_text(json.dumps({"type": "status", "state": state, "message": message}))
+
+
+async def _fail(websocket: WebSocket, message: str, code: int, reason: str | None = None) -> None:
+    await _status(websocket, "error", message)
+    await websocket.close(code=code, reason=reason)
+
+
+async def _targets(
+    connections: ClusterConnections,
+    cluster: str,
+    namespace: str,
+    pod: str | None,
+    selector: str | None,
+    container: str | None,
+) -> list[tuple[str, str]]:
+    """(pod, container) pairs to stream. Unknown cluster: KeyError; anything else that stops
+    the session before it starts: LogStreamError."""
+    async with AsyncExitStack() as stack:
+        try:
+            api = await stack.enter_async_context(connections.api(cluster))
+        except KeyError:
+            raise
+        except Exception as exc:  # e.g. a missing exec plugin, said in words
+            raise LogStreamError(kube_error_message(exc, "connect to the cluster")) from exc
+        if pod is not None:
+            return [await _pod_target(api, namespace, pod, container)]
+        return await _selector_targets(api, namespace, selector or "", container)
+
+
+async def _pod_target(
+    api: ApiClient, namespace: str, pod: str, container: str | None
+) -> tuple[str, str]:
+    try:
+        found = await read_json(
+            CoreV1Api(api).read_namespaced_pod(
+                pod, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
+            )
+        )
+    except KUBE_ERRORS as exc:
+        raise LogStreamError(
+            log_error_message(exc, namespace, pod, container or "", False)
+        ) from exc
+    names = container_names(found)
+    if container is None:
+        if not names:
+            raise LogStreamError(f"Pod {namespace}/{pod} has no containers.")
+        return pod, names[0]
+    if container not in any_container_names(found):
+        raise LogStreamError(
+            f'Pod {namespace}/{pod} has no container "{container}". '
+            f"Pick one of: {', '.join(any_container_names(found))}."
+        )
+    return pod, container
+
+
+async def _selector_targets(
+    api: ApiClient, namespace: str, selector: str, container: str | None
+) -> list[tuple[str, str]]:
+    """Every pod matching now; `container` where the pod has it, else the pod's first."""
+    try:
+        listing = await read_json(
+            CoreV1Api(api).list_namespaced_pod(
+                namespace,
+                label_selector=selector,
+                _preload_content=False,
+                _request_timeout=REQUEST_TIMEOUT,
+            )
+        )
+    except KUBE_ERRORS as exc:
+        action = f"list pods matching {selector} in {namespace}"
+        raise LogStreamError(kube_error_message(exc, action)) from exc
+    targets = []
+    for found in listing.get("items") or []:
+        name = (found.get("metadata") or {}).get("name", "")
+        names = container_names(found)
+        if container and container in any_container_names(found):
+            targets.append((name, container))
+        elif names:
+            targets.append((name, names[0]))
+    if not targets:
+        raise LogStreamError(f"No pods match {selector} in {namespace}")
+    return sorted(targets)
+
+
+async def _pump(buffer: LineBuffer, pod: str, stream: LogStream, alone: bool) -> None:
+    try:
+        async with aclosing(stream.lines()) as items:
+            async for item in items:
+                buffer.put(item)
+    except LogStreamError as exc:
+        if alone:
+            raise
+        buffer.put(Marker(marker=f"{pod}: {exc.message}"))  # the other pods go on
+
+
+async def _produce(buffer: LineBuffer, streams: list[tuple[str, LogStream]]) -> None:
+    error = None
+    try:
+        async with asyncio.TaskGroup() as group:
+            for pod, stream in streams:
+                group.create_task(_pump(buffer, pod, stream, alone=len(streams) == 1))
+    except* LogStreamError as group_error:
+        error = group_error.exceptions[0].message
+    except* Exception as group_error:  # a bug: plain words out, details in the log
+        log.warning("log stream failed", exc_info=group_error.exceptions[0])
+        error = "Couldn't read the logs: something went wrong in the console. Try again."
+    finally:
+        buffer.finish(error)
+
+
+async def _send_all(websocket: WebSocket, buffer: LineBuffer) -> int:
+    """Send every entry, then the final status; returns the close code."""
+    await send_batches(websocket, buffer)
+    if buffer.error is None:
+        await _status(websocket, "ended")
+        return 1000
+    await _status(websocket, "error", buffer.error)
+    return 1011
+
+
+async def _until_disconnect(websocket: WebSocket) -> None:
+    """Return once the client goes away; incoming messages are ignored."""
+    while (await websocket.receive())["type"] != "websocket.disconnect":
+        pass
+
+
+@router.websocket("/api/logs")
+async def logs(
+    websocket: WebSocket,
+    cluster: str,
+    namespace: str,
+    pod: str | None = None,
+    selector: str | None = None,
+    container: str | None = None,
+    previous: bool = False,
+    follow: bool = True,
+    since_time: str | None = None,
+    tail_lines: int = 1000,
+) -> None:
+    if is_cross_origin(websocket):
+        await websocket.close(code=4403, reason="Cross-origin request refused")  # HTTP 403
+        return
+    await websocket.accept()
+    pod, selector, container = pod or None, selector or None, container or None
+    if (pod is None) == (selector is None):
+        await _fail(websocket, "Choose a pod or a label selector (one of them, not both).", 1008)
+        return
+    connections = websocket.app.state.connections
+    try:
+        targets = await _targets(connections, cluster, namespace, pod, selector, container)
+    except KeyError:
+        await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
+        return
+    except LogStreamError as exc:
+        await _fail(websocket, exc.message, 1011)
+        return
+    streams = [
+        (
+            name,
+            LogStream(
+                connections,
+                cluster,
+                namespace,
+                name,
+                chosen,
+                previous=previous,
+                follow=follow,
+                since_time=since_time,
+                tail_lines=tail_lines,
+            ),
+        )
+        for name, chosen in targets
+    ]
+    what = f"pod={pod}" if pod is not None else f"selector={selector}"
+    where = f"cluster={cluster} ns={namespace} {what} container={container or targets[0][1]}"
+    log.info("log stream opened %s previous=%s follow=%s", where, previous, follow)
+    buffer = LineBuffer()
+    try:
+        await _status(websocket, "streaming")
+        producer = asyncio.create_task(_produce(buffer, streams))
+        sender = asyncio.create_task(_send_all(websocket, buffer))
+        receiver = asyncio.create_task(_until_disconnect(websocket))
+        tasks = (producer, sender, receiver)
+        try:
+            await asyncio.wait((sender, receiver), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.wait(tasks)  # never raises the tasks' exceptions or swallows ours
+        for task in tasks:
+            if (
+                not task.cancelled()
+                and (exc := task.exception())
+                and not isinstance(exc, WebSocketDisconnect)
+            ):
+                log.warning("log socket failed (%s)", where, exc_info=exc)
+        if sender.done() and not sender.cancelled() and sender.exception() is None:
+            await websocket.close(code=sender.result())
+    finally:
+        log.info("log stream closed %s", where)
+
+
+@router.get("/api/clusters/{cluster_id}/pods/{namespace}/{name}/logs/download")
+async def download(
+    cluster_id: str,
+    namespace: str,
+    name: str,
+    request: Request,
+    container: str | None = None,
+    previous: bool = False,
+) -> StreamingResponse:
+    """The container's whole log as raw text (no timestamps), not followed."""
+    connections: ClusterConnections = request.app.state.connections
+    try:
+        api = await connections.open_api(cluster_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown cluster") from exc
+    except Exception as exc:  # e.g. a missing exec plugin, said in words
+        detail = kube_error_message(exc, f"read logs for pod {namespace}/{name}")
+        raise HTTPException(status_code=502, detail=detail) from exc
+    try:
+        if not container:
+            pod = await read_json(
+                CoreV1Api(api).read_namespaced_pod(
+                    name, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
+                )
+            )
+            names = container_names(pod)
+            if not names:
+                raise HTTPException(
+                    status_code=404, detail=f"Pod {namespace}/{name} has no containers."
+                )
+            container = names[0]
+        resp = await open_log(api, namespace, name, container, previous=previous)
+    except BaseException as exc:
+        await api.close()
+        if isinstance(exc, KUBE_ERRORS):
+            status = 404 if isinstance(exc, ApiException) and exc.status == 404 else 502
+            detail = log_error_message(exc, namespace, name, container or "", previous)
+            raise HTTPException(status_code=status, detail=detail) from exc
+        raise
+
+    async def body():
+        try:
+            async for chunk in resp.content.iter_any():
+                yield chunk
+        finally:
+            resp.close()
+            await api.close()
+
+    log.info(
+        "log download cluster=%s ns=%s pod=%s container=%s previous=%s",
+        cluster_id, namespace, name, container, previous,
+    )  # fmt: skip
+    suffix = "-previous" if previous else ""
+    return StreamingResponse(
+        body(),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name}-{container}{suffix}.log"'},
+    )

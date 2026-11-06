@@ -97,6 +97,11 @@ def _api_exc(status: int, body: dict | None = None) -> ApiException:
         ),
         (_api_exc(403), "Not allowed to list pods: forbidden"),
         (_api_exc(404), "list pods: not found (it may have just been deleted)."),
+        (
+            _api_exc(400, {"message": 'container "x" is not valid for pod "p"'}),
+            'Couldn\'t list pods: container "x" is not valid for pod "p"',
+        ),
+        (_api_exc(400), "Couldn't list pods: the cluster refused the request"),
         (TimeoutError(), "The cluster didn't answer while trying to list pods."),
         (aiohttp.ServerTimeoutError(), "The cluster didn't answer while trying to list pods."),
         (

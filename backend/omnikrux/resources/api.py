@@ -1,6 +1,5 @@
 """Per-resource reads for the inspector: describe and YAML for a pod."""
 
-import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
@@ -11,6 +10,7 @@ from kubernetes_asyncio.client import ApiClient, CoreV1Api
 from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.kube.connections import kube_error_message
+from omnikrux.kube.http import read_json
 from omnikrux.resources.describe import PodDescribe, describe_pod
 
 log = logging.getLogger(__name__)
@@ -18,20 +18,6 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/clusters/{cluster_id}")
 
 REQUEST_TIMEOUT = 15  # seconds per Kubernetes call: a hung cluster gets a plain answer
-
-
-async def _json(call: Awaitable) -> dict:
-    """Await a `_preload_content=False` call; raise ApiException for a non-2xx answer."""
-    resp = await call
-    try:
-        body = await resp.read()
-    finally:
-        resp.release()
-    if not 200 <= resp.status < 300:
-        exc = ApiException(status=resp.status, reason=resp.reason)
-        exc.body = body.decode("utf-8", "replace")
-        raise exc
-    return json.loads(body)
 
 
 async def _call[T](
@@ -56,7 +42,7 @@ async def _call[T](
 
 
 async def _read_pod(api: ApiClient, namespace: str, name: str) -> dict:
-    return await _json(
+    return await read_json(
         CoreV1Api(api).read_namespaced_pod(
             name, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
         )
@@ -69,7 +55,7 @@ async def describe(cluster_id: str, namespace: str, name: str, request: Request)
         pod = await _read_pod(api, namespace, name)
         uid = (pod.get("metadata") or {}).get("uid", "")
         try:
-            events = await _json(
+            events = await read_json(
                 CoreV1Api(api).list_namespaced_event(
                     namespace,
                     field_selector=f"involvedObject.uid={uid}",
