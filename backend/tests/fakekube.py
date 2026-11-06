@@ -27,6 +27,9 @@ TOKEN = "fake-api-token"
 LOG_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
 
+FORBIDDEN = 'pods is forbidden: User "fake" cannot get resource "pods" in the namespace "demo"'
+
+
 def status_body(code: int, reason: str, message: str) -> dict:
     return {
         "kind": "Status",
@@ -93,6 +96,7 @@ class FakeKubeApi:
 
     ok: everything works; unauthorized: 401 everywhere; hang: never answers until `release`;
     apis_unauthorized: everything works except `/apis`, which answers 401;
+    forbidden: 403 everywhere, with FORBIDDEN as the Status message;
     watch_forbidden: a pod watch answers 403; instant_close: a pod watch ends after its event.
     A pod watch in `ok` mode stays open until `release` is set.
     """
@@ -116,6 +120,8 @@ class FakeKubeApi:
         self.auth.add(request.headers.get("Authorization"))
         if self.mode == "hang":
             await self.release.wait()
+        if self.mode == "forbidden":
+            return web.json_response(status_body(403, "Forbidden", FORBIDDEN), status=403)
         if self.mode == "unauthorized" or (
             self.mode == "apis_unauthorized" and request.path == "/apis"
         ):

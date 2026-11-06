@@ -4,7 +4,13 @@ from omnikrux.resources.rows import pod_row, pod_status
 
 
 def pod(phase="Running", statuses=(), init=(), deleting=False, reason=None):
-    md = {"uid": "u1", "name": "p", "namespace": "ns", "creationTimestamp": "2026-11-06T10:00:00Z"}
+    md = {
+        "uid": "u1",
+        "name": "p",
+        "namespace": "ns",
+        "creationTimestamp": "2026-11-06T10:00:00Z",
+        "resourceVersion": "812",
+    }
     if deleting:
         md["deletionTimestamp"] = "2026-11-06T11:00:00Z"
     st = {"phase": phase, "containerStatuses": list(statuses), "initContainerStatuses": list(init)}
@@ -79,6 +85,7 @@ def test_pod_row_columns():
     assert (r.uid, r.cluster_id, r.kind, r.namespace, r.name) == ("u1", "cl1", "Pod", "ns", "p")
     assert r.columns["ready"] == "1/2" and r.columns["restarts"] == 14
     assert r.columns["node"] == "n1" and r.columns["last_restart_at"] == "2026-11-06T14:04:14Z"
+    assert r.columns["resource_version"] == "812"
 
 
 def test_pod_row_tolerates_missing_fields():
@@ -86,7 +93,7 @@ def test_pod_row_tolerates_missing_fields():
     assert r.namespace is None and r.created_at is None
     assert r.columns["ready"] == "0/0" and r.columns["restarts"] == 0
     assert r.columns["node"] is None and r.columns["last_restart_at"] is None
-    assert r.columns["status"] == "Unknown"
+    assert r.columns["status"] == "Unknown" and r.columns["resource_version"] is None
 
 
 def test_pod_row_created_at_is_aware_utc():
