@@ -60,8 +60,31 @@ def test_pod_row_columns():
 
 
 def test_pod_row_tolerates_missing_fields():
-    r = pod_row({"metadata": {"uid": "u2", "name": "bare", "creationTimestamp": "2026-11-06T10:00:00Z"}}, "cl1")
-    assert r.namespace is None and r.created_at.utcoffset().total_seconds() == 0
+    r = pod_row({"metadata": {"uid": "u2", "name": "bare"}}, "cl1")
+    assert r.namespace is None and r.created_at is None
     assert r.columns["ready"] == "0/0" and r.columns["restarts"] == 0
     assert r.columns["node"] is None and r.columns["last_restart_at"] is None
     assert r.columns["status"] == "Unknown"
+
+
+def test_pod_row_created_at_is_aware_utc():
+    assert pod_row(pod(), "cl1").created_at.utcoffset().total_seconds() == 0
+
+
+def test_pod_row_null_restart_count():
+    r = pod_row(pod(statuses=[{**c(), "restartCount": None}, c(restarts=2)]), "cl1")
+    assert r.columns["restarts"] == 2
+
+
+def test_pod_row_sums_restarts_and_picks_latest_restart():
+    r = pod_row(
+        pod(
+            statuses=[
+                c(restarts=3, last_finished="2026-11-06T14:04:14Z"),
+                c(restarts=4, last_finished="2026-11-06T09:00:00Z"),
+            ]
+        ),
+        "cl1",
+    )
+    assert r.columns["restarts"] == 7
+    assert r.columns["last_restart_at"] == "2026-11-06T14:04:14Z"

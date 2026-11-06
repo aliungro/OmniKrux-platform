@@ -22,7 +22,7 @@ class ResourceRow(BaseModel):
     kind: str
     namespace: str | None
     name: str
-    created_at: datetime
+    created_at: datetime | None
     columns: dict[str, Any]
 
 
@@ -87,12 +87,12 @@ def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
         kind="Pod",
         namespace=md.get("namespace"),
         name=md.get("name", ""),
-        created_at=_parse_ts(md["creationTimestamp"]),
+        created_at=_parse_ts(md["creationTimestamp"]) if md.get("creationTimestamp") else None,
         columns={
             "status": label,
             "status_class": status_class,
             "ready": f"{sum(1 for cs in containers if cs.get('ready'))}/{len(containers)}",
-            "restarts": sum(cs.get("restartCount", 0) for cs in containers),
+            "restarts": sum((cs.get("restartCount") or 0) for cs in containers),
             "node": (pod.get("spec") or {}).get("nodeName"),
             "last_restart_at": last_restart,
         },
