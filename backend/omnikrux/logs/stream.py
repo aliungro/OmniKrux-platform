@@ -1,7 +1,8 @@
 """One container's log lines, read from the Kubernetes API as they are written.
 
 `LogStream.lines()` yields `LogLine`s and, while following, `Marker`s for what happened to the
-container: a restart (the stream then resumes on the new run) or the pod's deletion (the end).
+container: a restart (the stream then resumes on the new run), or the pod's deletion or
+replacement (the end). A container that stopped for good ends the stream without a marker.
 """
 
 import asyncio
@@ -158,6 +159,22 @@ def _container_status(pod: dict, container: str) -> dict:
     return {}
 
 
+def will_restart(pod: dict, container: str, terminated: dict) -> bool:
+    """Whether the kubelet starts this terminated container again."""
+    spec = pod.get("spec") or {}
+    if any(c.get("name") == container for c in spec.get("ephemeralContainers") or []):
+        return False
+    exit_code = terminated.get("exitCode")
+    for init in spec.get("initContainers") or []:
+        if init.get("name") == container:
+            if init.get("restartPolicy") == "Always":  # a sidecar: restarted like the pod's
+                break
+            if exit_code == 0:  # a completed init container never runs again
+                return False
+    policy = spec.get("restartPolicy", "Always")
+    return policy == "Always" or (policy == "OnFailure" and exit_code != 0)
+
+
 def pod_missing_message(namespace: str, pod: str) -> str:
     return (
         f"Pod {namespace}/{pod} not found. It may have been deleted; pick it again from the list."
@@ -213,8 +230,11 @@ class LogStream:
 
     While following it survives the stream closing: a restart (seen through `restartCount`) emits
     a marker and resumes on the new run from its start time; a pod that is gone emits
-    "Pod deleted" and ends; otherwise it reopens from the last timestamp it saw, skipping lines it
-    already sent. It gives up after `MAX_FAILURES` consecutive failed attempts.
+    "Pod deleted", and one recreated under the same name (new uid) "Pod replaced", and ends; a
+    container that stopped and won't be restarted (completed init container, restartPolicy Never,
+    OnFailure with exit 0, finished pod) ends it; otherwise it reopens from the last timestamp it
+    saw, skipping lines it already sent. It gives up after `MAX_FAILURES` consecutive immediate
+    failures (an attempt that sent lines or lived `IMMEDIATE_SECONDS` resets the count).
     """
 
     def __init__(
@@ -263,34 +283,46 @@ class LogStream:
         container = self._container or (names[0] if names else None)
         if container is None:
             raise LogStreamError(f"Pod {self._namespace}/{self._pod} has no containers.")
+        uid = (pod.get("metadata") or {}).get("uid")
         restarts = _container_status(pod, container).get("restartCount", 0)
         since, tail = self._since_time, self._tail_lines
         position = ResumePoint()
         skip = position.repeats()  # nothing sent yet: nothing to skip
         failures = 0
-        first = True
+        opened_once = False
         while True:
             opened_at, sent, error = loop.time(), 0, None
             try:
-                async with aclosing(self._read(api, container, since, tail)) as stamped:
-                    async for ts, text in stamped:
-                        if skip(ts):
-                            continue
-                        position.sent(ts)
-                        sent += 1
-                        yield LogLine(pod=self._pod, container=container, ts=ts, text=text)
+                resp = await self._open(api, container, since, tail)
             except KUBE_ERRORS as exc:
-                if first or not self._follow:
+                if not opened_once or not self._follow:  # nothing to resume: say why now
                     raise LogStreamError(self._message(exc, container)) from exc
                 error = exc
-            first = False
+            else:
+                opened_once = True
+                try:
+                    async with aclosing(iter_lines(resp.content.iter_any())) as raws:
+                        async for raw in raws:
+                            ts, text = split_timestamp(raw)
+                            if skip(ts):
+                                continue
+                            position.sent(ts)
+                            sent += 1
+                            yield LogLine(pod=self._pod, container=container, ts=ts, text=text)
+                except KUBE_ERRORS as exc:
+                    if not self._follow:
+                        raise LogStreamError(self._message(exc, container)) from exc
+                    error = exc
+                finally:
+                    resp.close()
             if not self._follow:
                 return
-            quick_empty = error is None and not sent and loop.time() - opened_at < IMMEDIATE_SECONDS
+            lived = sent > 0 or loop.time() - opened_at >= IMMEDIATE_SECONDS
+            if lived:  # only immediate failures count, and only consecutive ones
+                failures = 0
             if error is not None:
                 failures += 1
-            elif not quick_empty:
-                failures = 0
+            quick_empty = error is None and not lived
             # The stream ended: find out why, and where to resume.
             while True:
                 if failures >= MAX_FAILURES:
@@ -317,6 +349,9 @@ class LogStream:
                 status = _container_status(pod, container)
                 state = status.get("state") or {}
                 count = status.get("restartCount", 0)
+                if (pod.get("metadata") or {}).get("uid") != uid or count < restarts:
+                    yield Marker(marker="Pod replaced")  # same name, a different pod
+                    return
                 run = state.get("running") or state.get("terminated")
                 if count > restarts and run is not None:
                     restarts = count
@@ -327,7 +362,7 @@ class LogStream:
                     since, tail = started, None
                     position, skip = ResumePoint(), ResumePoint().repeats()  # a new run
                     break
-                if count == restarts and "running" in state:  # the stream itself just closed
+                if "running" in state:  # same run: the stream itself just closed
                     if quick_empty:
                         failures, quick_empty = failures + 1, False
                         continue
@@ -335,6 +370,8 @@ class LogStream:
                         since, tail, skip = position.ts, None, position.repeats()
                     break
                 if (pod.get("status") or {}).get("phase") in FINISHED_PHASES:
+                    return
+                if "terminated" in state and not will_restart(pod, container, state["terminated"]):
                     return
                 await asyncio.sleep(POLL_INTERVAL)  # stopped; wait for the kubelet to restart it
 
@@ -345,10 +382,10 @@ class LogStream:
             )
         )
 
-    async def _read(
+    async def _open(
         self, api: ApiClient, container: str, since: str | None, tail: int | None
-    ) -> AsyncIterator[tuple[str | None, str]]:
-        resp = await open_log(
+    ) -> aiohttp.ClientResponse:
+        return await open_log(
             api,
             self._namespace,
             self._pod,
@@ -359,11 +396,6 @@ class LogStream:
             since_time=since,
             tail_lines=tail,
         )
-        try:
-            async for raw in iter_lines(resp.content.iter_any()):
-                yield split_timestamp(raw)
-        finally:
-            resp.close()
 
     def _message(self, exc: Exception, container: str) -> str:
         return log_error_message(exc, self._namespace, self._pod, container, self._previous)

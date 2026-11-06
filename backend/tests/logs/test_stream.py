@@ -15,7 +15,7 @@ from omnikrux.logs.stream import (
     split_timestamp,
     ts_key,
 )
-from tests.fakekube import kubeconfig_for
+from tests.fakekube import CUT, kubeconfig_for
 
 CLUSTER = "c1"
 
@@ -256,3 +256,82 @@ def test_resume_point_skips_exactly_what_was_sent():
     # The reopened stream (sinceTime=t2, rounded down to t1 here) repeats t1, t2, t2, then
     # carries a third line stamped t2 that was never sent, then new lines.
     assert [skip(ts) for ts in (t1, t2, t2, t2, t3, t1)] == [True, True, True, False, False, False]
+
+
+async def test_transient_error_in_first_followed_stream_resumes(
+    fake_api, connections, fast_retries
+):
+    fake_api.pods[("demo", "crasher")] = pod()
+    async with aclosing(make(connections, follow=True, tail_lines=5).lines()) as lines:
+        await fake_api.follow_lines.put("one")
+        one = await next_item(lines)
+        await fake_api.follow_lines.put(CUT)  # the connection breaks: not the end
+        await asyncio.sleep(0.05)
+        await fake_api.follow_lines.put("two")
+        assert (await next_item(lines))["text"] == "two"
+    await fake_api.follow_lines.put(None)
+    _, reopened = log_requests(fake_api)
+    assert reopened["sinceTime"] == one["ts"]
+
+
+async def test_errors_after_lines_are_not_consecutive_failures(fake_api, connections, fast_retries):
+    fake_api.pods[("demo", "crasher")] = pod()
+    async with aclosing(make(connections, follow=True).lines()) as lines:
+        for i in range(stream_module.MAX_FAILURES + 1):
+            await fake_api.follow_lines.put(f"line {i}")
+            assert (await next_item(lines))["text"] == f"line {i}"
+            await fake_api.follow_lines.put(CUT)
+            await asyncio.sleep(0.02)  # distinct stamps, even on a coarse clock
+        await fake_api.follow_lines.put("still here")
+        assert (await next_item(lines))["text"] == "still here"
+    await fake_api.follow_lines.put(None)
+
+
+async def end_of(lines) -> None:
+    with pytest.raises(StopAsyncIteration):
+        await next_item(lines)
+
+
+async def test_completed_init_container_ends_the_stream(fake_api, connections, fast_retries):
+    p = pod(containers=("app",))
+    p["spec"]["initContainers"] = [{"name": "migrate"}]
+    p["status"]["initContainerStatuses"] = [
+        {"name": "migrate", "restartCount": 0, "state": {"running": {}}}
+    ]
+    fake_api.pods[("demo", "crasher")] = p
+    async with aclosing(make(connections, container="migrate", follow=True).lines()) as lines:
+        await fake_api.follow_lines.put("migrated")
+        assert (await next_item(lines))["text"] == "migrated"
+        p["status"]["initContainerStatuses"][0]["state"] = {"terminated": {"exitCode": 0}}
+        fake_api.pods[("demo", "crasher")] = p  # the pod runs on; this container is done
+        await fake_api.follow_lines.put(None)
+        await end_of(lines)
+
+
+@pytest.mark.parametrize(("policy", "exit_code"), [("Never", 1), ("OnFailure", 0)])
+async def test_container_that_will_not_restart_ends_the_stream(
+    fake_api, connections, fast_retries, policy, exit_code
+):
+    p = pod(containers=("app", "sidecar"))
+    p["spec"]["restartPolicy"] = policy
+    fake_api.pods[("demo", "crasher")] = p
+    async with aclosing(make(connections, follow=True).lines()) as lines:
+        await fake_api.follow_lines.put("bye")
+        await next_item(lines)
+        p["status"]["containerStatuses"][0]["state"] = {"terminated": {"exitCode": exit_code}}
+        fake_api.pods[("demo", "crasher")] = p  # phase still Running: the sidecar runs on
+        await fake_api.follow_lines.put(None)
+        await end_of(lines)
+
+
+async def test_pod_recreated_under_the_same_name_is_replaced(fake_api, connections):
+    fake_api.pods[("demo", "crasher")] = pod()
+    async with aclosing(make(connections, follow=True).lines()) as lines:
+        await fake_api.follow_lines.put("old pod")
+        await next_item(lines)
+        replacement = pod()
+        replacement["metadata"]["uid"] = "u-crasher-2"
+        fake_api.pods[("demo", "crasher")] = replacement
+        await fake_api.follow_lines.put(None)
+        assert await next_item(lines) == {"marker": "Pod replaced"}
+        await end_of(lines)

@@ -1,7 +1,8 @@
 """A tiny Kubernetes API over real HTTP, shared by every test that needs one.
 
 Nothing is mocked inside kubernetes_asyncio: the code under test talks to a real aiohttp server
-on 127.0.0.1. Tests seed `pods`, `events`, `logs` and `follow_lines` and read back `requests`.
+on 127.0.0.1. Tests seed `pods`, `events`, `logs` and `follow_lines` (None ends a followed stream, CUT
+breaks it) and read back `requests`.
 
 Exec is not served (it needs a SPDY/WebSocket upgrade); it is covered elsewhere.
 """
@@ -21,6 +22,9 @@ from omnikrux.kube.source import KubeResourceSource
 from omnikrux.resources.kinds import KINDS
 
 TOKEN = "fake-api-token"
+
+# Put CUT on `follow_lines` to break a followed stream's connection mid-stream (a transient error).
+CUT = "<cut the connection>"
 
 # Seeded log lines are plain strings; line i is stamped LOG_EPOCH + i seconds, which is what
 # `timestamps` prints and `sinceTime` compares against. Followed lines are stamped with "now".
@@ -283,6 +287,9 @@ class FakeKubeApi:
             response.enable_chunked_encoding()
             await response.prepare(request)
             while (line := await self.follow_lines.get()) is not None:
+                if line == CUT:  # the connection breaks mid-stream (no final chunk)
+                    request.transport.abort()
+                    return response
                 await response.write(render(datetime.now(UTC), line))
             await response.write_eof()
             return response

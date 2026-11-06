@@ -14,7 +14,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
-from omnikrux.logs.api import QUEUE_LIMIT, LineBuffer, logs, send_batches
+from omnikrux.logs.api import MAX_SELECTOR_PODS, QUEUE_LIMIT, LineBuffer, logs, send_batches
 from omnikrux.main import create_app
 from tests.fakekube import kubeconfig_for
 from tests.logs.test_stream import pod
@@ -295,7 +295,122 @@ async def test_download_errors_are_plain(http, fake_api):
     r = await client.get(
         f"/api/clusters/{cluster_id}/pods/demo/crasher/logs/download", params={"previous": "true"}
     )
-    assert r.status_code == 502
+    assert r.status_code == 400  # Kubernetes said no: the request can't be served as asked
     assert r.json()["detail"].startswith('No previous run of container "app"')
     r = await client.get("/api/clusters/nope/pods/demo/crasher/logs/download")
     assert r.status_code == 404 and r.json()["detail"] == "Unknown cluster"
+
+
+async def test_selector_caps_at_20_running_newest_first(app, fake_api):
+    app_, cluster_id = app
+    assert MAX_SELECTOR_PODS == 20
+    many = {"app": "many"}
+    for i in range(22):  # running, created at minute i: the 20 newest are 2..21
+        p = pod(f"run-{i:02d}", labels=many)
+        p["metadata"]["creationTimestamp"] = f"2026-11-07T10:{i:02d}:00Z"
+        fake_api.pods[("demo", p["metadata"]["name"])] = p
+    for i in range(3):  # newer, but not running
+        p = pod(f"wait-{i}", labels=many, phase="Pending")
+        p["metadata"]["creationTimestamp"] = f"2026-11-07T11:0{i}:00Z"
+        fake_api.pods[("demo", p["metadata"]["name"])] = p
+    for name in [n for _, n in fake_api.pods]:
+        fake_api.logs[("demo", name, "app", False)] = [f"{name} hi"]
+
+    ws = await run(app_, cluster_id, selector="app=many", follow=False)
+
+    items = ws.lines()
+    assert items[0] == {"marker": "Showing logs from 20 of 25 pods matching app=many"}
+    assert {i["pod"] for i in items[1:]} == {f"run-{i:02d}" for i in range(2, 22)}
+    assert statuses(ws)[-1] == ("ended", None)
+
+
+async def until_lines(ws: FakeWebSocket) -> None:
+    for _ in range(500):
+        if ws.lines():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"no lines arrived: {ws.sent}")
+
+
+async def test_selector_markers_name_their_pod(app, fake_api):
+    app_, cluster_id = app
+    fake_api.pods[("demo", "web-a")] = pod("web-a", labels={"app": "web"})
+    ws = FakeWebSocket(app_)
+    handler = asyncio.create_task(
+        logs(ws, cluster=cluster_id, namespace="demo", selector="app=web")
+    )
+    await fake_api.follow_lines.put("hello")
+    await until_lines(ws)
+    del fake_api.pods[("demo", "web-a")]
+    await fake_api.follow_lines.put(None)
+    await asyncio.wait_for(handler, 5)
+    assert [i.get("marker", i.get("text")) for i in ws.lines()] == ["hello", "web-a: Pod deleted"]
+    assert statuses(ws)[-1] == ("ended", None)
+
+
+async def test_pod_mode_markers_are_not_prefixed(app, fake_api):
+    app_, cluster_id = app
+    fake_api.pods[("demo", "web-a")] = pod("web-a")
+    ws = FakeWebSocket(app_)
+    handler = asyncio.create_task(logs(ws, cluster=cluster_id, namespace="demo", pod="web-a"))
+    await fake_api.follow_lines.put("hello")
+    await until_lines(ws)
+    del fake_api.pods[("demo", "web-a")]
+    await fake_api.follow_lines.put(None)
+    await asyncio.wait_for(handler, 5)
+    assert ws.lines()[-1] == {"marker": "Pod deleted"}
+
+
+class GatedWebSocket(FakeWebSocket):
+    """The first `dropped` send waits for `gate`: lines keep arriving (and being dropped)."""
+
+    def __init__(self):
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.at_gate = asyncio.Event()
+
+    async def send_text(self, text):
+        if json.loads(text)["type"] == "dropped" and not self.at_gate.is_set():
+            self.at_gate.set()
+            await self.gate.wait()
+        await super().send_text(text)
+
+
+async def test_dropped_count_sits_right_before_the_lines_after_the_gap():
+    buffer, ws = LineBuffer(limit=10), GatedWebSocket()
+    sender = asyncio.create_task(send_batches(ws, buffer))
+    for i in range(15):  # 0..4 dropped
+        buffer.put({"text": str(i)})
+    await asyncio.wait_for(ws.at_gate.wait(), 2)
+    for i in range(15, 30):  # sent while the client is stuck: 15..19 dropped
+        buffer.put({"text": str(i)})
+    ws.gate.set()
+    buffer.finish()
+    await asyncio.wait_for(sender, 2)
+
+    expected = 0  # each batch starts where the previous ended plus what was announced dropped
+    for msg in ws.sent:
+        if msg["type"] == "dropped":
+            expected += msg["count"]
+        else:
+            assert int(msg["lines"][0]["text"]) == expected
+            expected = int(msg["lines"][-1]["text"]) + 1
+    assert expected == 30
+
+
+def test_markers_are_never_dropped():
+    buffer = LineBuffer(limit=3)
+
+    async def fill():
+        buffer.put({"text": "a"})
+        buffer.put({"marker": "Container restarted at t, restart 1"})
+        for text in "bcde":
+            buffer.put({"text": text})
+
+    asyncio.run(fill())
+    assert buffer.take(10) == [
+        {"marker": "Container restarted at t, restart 1"},
+        {"text": "d"},
+        {"text": "e"},
+    ]
+    assert buffer.dropped == 3
