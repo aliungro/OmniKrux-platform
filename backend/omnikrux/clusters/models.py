@@ -1,0 +1,44 @@
+import uuid
+from datetime import UTC, datetime
+from enum import StrEnum
+
+from sqlalchemy import DateTime, LargeBinary, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+
+from omnikrux.db import Base
+
+
+class Provider(StrEnum):
+    AKS = "aks"
+    EKS = "eks"
+    GKE = "gke"
+    OKE = "oke"
+    KIND = "kind"
+    ONPREM = "onprem"
+
+
+class Environment(StrEnum):
+    PRODUCTION = "production"
+    DEVELOPMENT = "development"
+    UNKNOWN = "unknown"
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class ClusterRecord(Base):
+    __tablename__ = "clusters"
+    __table_args__ = (UniqueConstraint("source", "context_name", "server"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
+    name: Mapped[str] = mapped_column(String)
+    source: Mapped[str] = mapped_column(String)
+    context_name: Mapped[str] = mapped_column(String)
+    server: Mapped[str] = mapped_column(String)
+    provider: Mapped[str] = mapped_column(String)
+    region: Mapped[str | None] = mapped_column(String, nullable=True)
+    environment: Mapped[str] = mapped_column(String)
+    kubeconfig_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
