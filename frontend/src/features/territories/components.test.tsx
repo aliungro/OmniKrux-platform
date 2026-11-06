@@ -67,8 +67,10 @@ describe("cluster band copy", () => {
     const { rerender } = render(<ClusterBand t={terr()} onRetry={() => {}} />);
     expect(screen.getByText("No pods")).toBeTruthy();
     expect(screen.queryByText("No pods match")).toBeNull();
-    rerender(<ClusterBand t={terr({ total: 5 })} onRetry={() => {}} />);
-    expect(screen.getByText("No pods match")).toBeTruthy();
+    rerender(<ClusterBand t={terr({ total: 5, failing: 1 })} onRetry={() => {}} />);
+    // R12: replaces the counts rather than sitting beside them
+    expect(screen.getByTestId("band-summary").textContent).toBe("No pods match");
+    expect(screen.queryByText(/5 pods/)).toBeNull();
   });
   it.each([["syncing"], ["unknown"]])("%s shows Connecting…", (state) => {
     render(<ClusterBand t={terr({ state })} onRetry={() => {}} />);

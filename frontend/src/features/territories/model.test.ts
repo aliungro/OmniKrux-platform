@@ -54,6 +54,18 @@ describe("territories model details", () => {
     const [t] = buildTerritories([cl], w, { status: "all", text: "" }, now);
     expect([t.state, t.message, t.rows]).toEqual(["error", "boom", []]);
   });
+  it.each([["error", "Can't reach this cluster: timeout"], ["syncing", null]] as const)(
+    "%s territory hides previously received rows and counts", (st, message) => {
+      const w = applyMessage(state(), { type: "cluster_status", cluster_id: "c1", state: st, message });
+      const [t] = buildTerritories([cl], w, { status: "all", text: "" }, now);
+      expect([t.state, t.message]).toEqual([st, message]);
+      expect(t.rows).toEqual([]);
+      expect([t.total, t.failing, t.pending]).toEqual([0, 0, 0]);
+    });
+  it("ready territory shows its rows", () => {
+    const w = applyMessage(state(), { type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    expect(buildTerritories([cl], w, { status: "all", text: "" }, now)[0].rows).toHaveLength(3);
+  });
   it.each([
     ["2026-11-06T15:59:15", "45s"],
     ["2026-11-06T15:48:00", "12m"],

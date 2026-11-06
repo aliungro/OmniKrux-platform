@@ -1,7 +1,7 @@
 /* Sets --c to the provider colour; badges, bands and row stripes read it. */
-.aks { --c: var(--aks); --c-ink: var(--ink); }
-.eks { --c: var(--eks); --c-ink: var(--bg); }
-.gke { --c: var(--gke); --c-ink: var(--bg); }
-.oke { --c: var(--oke); --c-ink: var(--ink); }
-.kind { --c: var(--kind); --c-ink: var(--bg); }
-.onprem { --c: var(--onprem); --c-ink: var(--bg); }
+.aks { --c: var(--aks); }
+.eks { --c: var(--eks); }
+.gke { --c: var(--gke); }
+.oke { --c: var(--oke); }
+.kind { --c: var(--kind); }
+.onprem { --c: var(--onprem); }

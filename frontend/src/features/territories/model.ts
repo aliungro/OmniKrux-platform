@@ -79,7 +79,11 @@ function sortRows(rows: ResourceRow[]): ResourceRow[] {
 export function buildTerritories(clusters: Cluster[], w: WatchState, f: Filters, now: Date): Territory[] {
   return clusters.map((cluster) => {
     const live = w.clusters[cluster.id];
-    const all = Array.from(w.rows[cluster.id]?.values() ?? []);
+    const state = live ? live.state : cluster.state;
+    // Rows kept from before an error or a reconnect are not live: never show them as current.
+    // ("unknown" only means no status frame yet; any rows present came from a fresh snapshot.)
+    const stale = state === "error" || state === "syncing";
+    const all = stale ? [] : Array.from(w.rows[cluster.id]?.values() ?? []);
     let failing = 0;
     let pending = 0;
     for (const row of all) {
@@ -88,7 +92,7 @@ export function buildTerritories(clusters: Cluster[], w: WatchState, f: Filters,
     }
     return {
       cluster,
-      state: live ? live.state : cluster.state,
+      state,
       message: live ? live.message : cluster.message,
       rows: sortRows(all.filter((row) => matchesFilter(row, f, now))),
       total: all.length,

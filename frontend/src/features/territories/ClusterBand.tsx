@@ -24,14 +24,12 @@ function Summary({ t }: { t: Territory }) {
   }
   if (t.state !== "ready") return <span className={s.sum}>Connecting…</span>;
   if (t.total === 0) return <span className={s.sum} data-testid="band-summary">No pods</span>;
+  if (t.rows.length === 0) return <span className={s.sum} data-testid="band-summary">No pods match</span>;
   return (
-    <>
-      <span className={s.sum} data-testid="band-summary">
-        {pods(t.total)},{" "}
-        {t.failing > 0 ? <span className={s.failing}>{t.failing} failing</span> : "all healthy"}
-      </span>
-      {t.rows.length === 0 && <span className={s.muted}>No pods match</span>}
-    </>
+    <span className={s.sum} data-testid="band-summary">
+      {pods(t.total)},{" "}
+      {t.failing > 0 ? <span className={s.failing}>{t.failing} failing</span> : "all healthy"}
+    </span>
   );
 }
 

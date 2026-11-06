@@ -92,11 +92,6 @@
   font-weight: 600;
 }
 
-.muted {
-  flex: none;
-  color: var(--ink-3);
-}
-
 .error {
   min-width: 0;
   margin-left: 18px;
