@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from tests.clusters.test_kubeconfig import kc
@@ -93,3 +95,49 @@ async def test_delete_removes_the_cluster(registry):
 async def test_delete_unknown_is_keyerror(registry):
     with pytest.raises(KeyError):
         await registry.delete("nope")
+
+
+async def test_upload_of_a_known_context_on_another_server_conflicts(registry):
+    from omnikrux.clusters.registry import ClusterConflict
+
+    [original] = await registry.upsert_from_kubeconfig(
+        kc([("lab", "https://lab-a:6443", None)]), rewrite_loopback=False, source="upload"
+    )
+    with pytest.raises(ClusterConflict) as caught:
+        await registry.upsert_from_kubeconfig(
+            kc([("other", "https://other:6443", None), ("lab", "https://lab-b:6443", None)]),
+            rewrite_loopback=False,
+            source="upload",
+        )
+    assert isinstance(caught.value, ValueError)
+    assert str(caught.value) == (
+        "A cluster called lab was already uploaded for https://lab-a:6443."
+        " Delete it first to replace it."
+    )
+    # The whole upload is rejected: nothing from it is stored, the original is untouched.
+    assert [(c.id, c.server) for c in await registry.list()] == [
+        (original.id, "https://lab-a:6443")
+    ]
+
+
+async def test_upload_of_a_known_context_on_the_same_server_updates_in_place(registry):
+    text = kc([("lab", "https://lab-a:6443", None)])
+    [first] = await registry.upsert_from_kubeconfig(text, rewrite_loopback=False, source="upload")
+    [second] = await registry.upsert_from_kubeconfig(
+        text.replace("token: t", "token: t2"), rewrite_loopback=False, source="upload"
+    )
+    assert second.id == first.id and len(await registry.list()) == 1
+    assert (await registry.get_kubeconfig(first.id))["users"][0]["user"]["token"] == "t2"
+
+
+async def test_reconcile_logs_the_removed_context_names(registry, caplog):
+    await registry.upsert_from_kubeconfig(
+        kc([("kept", "https://k", None), ("gone", "https://g", None)]),
+        rewrite_loopback=False,
+        source="file",
+    )
+    with caplog.at_level(logging.WARNING, logger="omnikrux.clusters.registry"):
+        await registry.reconcile_files({"kept"})
+    [warning] = [r for r in caplog.records if r.name == "omnikrux.clusters.registry"]
+    assert warning.levelno == logging.WARNING and "gone" in warning.getMessage()
+    assert "kept" not in warning.getMessage()

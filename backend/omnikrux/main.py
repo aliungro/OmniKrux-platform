@@ -1,12 +1,17 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from omnikrux.clusters.api import router as clusters_router
-from omnikrux.clusters.kubeconfig import read_kubeconfig_files
+from omnikrux.clusters.kubeconfig import (
+    ParsedContext,
+    parse_kubeconfig_file,
+    read_kubeconfig_files,
+)
 from omnikrux.clusters.registry import SOURCE_FILE, ClusterRegistry
 from omnikrux.config import Settings, get_settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
@@ -25,8 +30,10 @@ async def _import_kubeconfig_files(settings: Settings, registry: ClusterRegistry
     """Import every configured kubeconfig file, then drop file clusters whose context is gone.
 
     Removal only happens when every configured file was read and parsed: a missing mount, an
-    unreadable or a broken file must never wipe clusters."""
+    unreadable or a broken file must never wipe clusters. Kubeconfig problems never stop
+    startup."""
     seen: set[str] = set()
+    defined_in: dict[str, Path] = {}  # context name -> the file that defined it first
     complete = bool(settings.kubeconfig_paths)
     for path in settings.kubeconfig_paths:
         try:
@@ -44,35 +51,69 @@ async def _import_kubeconfig_files(settings: Settings, registry: ClusterRegistry
         if not texts:  # nothing at this path (for example no kubeconfig mounted)
             complete = False
         for text in texts:
-            try:
-                infos = await registry.upsert_from_kubeconfig(
-                    text, rewrite_loopback=settings.loopback_rewrite, source=SOURCE_FILE
-                )
-            except ValueError as exc:  # our own plain message, free of kubeconfig contents
+            names = await _import_file(path, text, settings, registry, defined_in)
+            if names is None:
                 complete = False
-                error_type = getattr(exc, "error_type", None)
-                log.warning(
-                    "Skipping kubeconfig %s: %s%s",
-                    path,
-                    exc,
-                    f" ({error_type})" if error_type else "",
-                )
-            except Exception as exc:  # noqa: BLE001 (one file must never stop startup; logged by type)
-                complete = False
-                log.warning(
-                    "Skipping kubeconfig %s: it could not be imported (%s)",
-                    path,
-                    type(exc).__name__,
-                )
             else:
-                seen.update(info.context_name for info in infos)
-    if complete:
-        removed = await registry.reconcile_files(seen)
-        if removed:
-            log.info(
-                "Removed %d cluster(s) whose context is no longer in the kubeconfig files",
-                len(removed),
+                seen |= names
+    if not complete:
+        return
+    try:
+        await registry.reconcile_files(seen)  # logs what it removed
+    except Exception as exc:  # noqa: BLE001 (logged by type; the clusters simply stay)
+        log.warning(
+            "Could not remove clusters that left the kubeconfig files (%s); keeping them",
+            type(exc).__name__,
+        )
+
+
+async def _import_file(
+    path: Path,
+    text: str,
+    settings: Settings,
+    registry: ClusterRegistry,
+    defined_in: dict[str, Path],
+) -> set[str] | None:
+    """Import one file's contexts; the context names it accounts for, or None if it failed.
+
+    A context an earlier file already defines is ignored with a warning (the first file wins,
+    as with kubectl), but still counts as seen."""
+    try:
+        parsed = parse_kubeconfig_file(text, rewrite_loopback=settings.loopback_rewrite)
+        if parsed.declared and not parsed.contexts:
+            log.warning(
+                "Skipping kubeconfig %s: none of its %d contexts could be read",
+                path,
+                parsed.declared,
             )
+            return None
+        fresh: dict[str, ParsedContext] = {}
+        for ctx in parsed.contexts:
+            name = ctx.context_name
+            first = path if name in fresh else defined_in.get(name)
+            if first is not None:
+                log.warning(
+                    "Ignoring context %r in %s: %s defines it first (the first file wins)",
+                    name,
+                    path,
+                    first,
+                )
+                continue
+            fresh[name] = ctx
+        await registry.upsert_contexts(list(fresh.values()), source=SOURCE_FILE)
+    except ValueError as exc:  # our own plain message, free of kubeconfig contents
+        error_type = getattr(exc, "error_type", None)
+        log.warning(
+            "Skipping kubeconfig %s: %s%s", path, exc, f" ({error_type})" if error_type else ""
+        )
+        return None
+    except Exception as exc:  # noqa: BLE001 (one file must never stop startup; logged by type)
+        log.warning(
+            "Skipping kubeconfig %s: it could not be imported (%s)", path, type(exc).__name__
+        )
+        return None
+    defined_in.update(dict.fromkeys(fresh, path))
+    return {ctx.context_name for ctx in parsed.contexts}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

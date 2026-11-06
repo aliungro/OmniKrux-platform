@@ -62,6 +62,10 @@ The container runs as uid 10001, but `~/.kube/config` is normally mode 0600 and 
   docker run --rm -p 127.0.0.1:8080:8080 --add-host=host.docker.internal:host-gateway --user "$(id -u):$(id -g)" -v ~/.kube:/kube:ro -v ~/.omnikrux-data:/data omnikrux:dev
   ```
 
+### Upgrading from Plan 1
+
+Clusters imported through the API are treated as coming from your kubeconfig file; if their context isn't in the mounted file they are removed on first start — upload them again.
+
 ## Local development cluster
 
 `bash scripts/dev-kind.sh` creates a kind cluster (`omnikrux-dev`) with demo workloads in the `demo` namespace.

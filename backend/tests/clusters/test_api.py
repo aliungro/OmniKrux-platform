@@ -186,3 +186,40 @@ def test_uploaded_cluster_survives_restart_without_it_in_files(tmp_path):
     with TestClient(create_app(settings)) as client:
         names = [c["name"] for c in client.get("/api/clusters").json()]
     assert names == ["eks-prod", "kind-omnikrux-dev"]
+
+
+def test_upload_conflict_is_409_and_keeps_the_original(app_with_kubeconfig):
+    from tests.clusters.test_kubeconfig import kc
+
+    client, _ = app_with_kubeconfig
+    first = client.post(
+        "/api/clusters/kubeconfig", json={"kubeconfig": kc([("lab", "https://lab-a:6443", None)])}
+    ).json()
+    r = client.post(
+        "/api/clusters/kubeconfig",
+        json={
+            "kubeconfig": kc(
+                [("eks-prod", "https://x.eks.amazonaws.com", None), ("lab", "https://lab-b", None)]
+            )
+        },
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "A cluster called lab was already uploaded for https://lab-a:6443."
+        " Delete it first to replace it."
+    )
+    clusters = {c["name"]: c for c in client.get("/api/clusters").json()}
+    assert sorted(clusters) == ["kind-omnikrux-dev", "lab"]
+    assert clusters["lab"]["id"] == first[0]["id"]
+    assert clusters["lab"]["server"] == "https://lab-a:6443"
+
+
+def test_upload_on_the_same_server_updates_in_place(app_with_kubeconfig):
+    from tests.clusters.test_kubeconfig import kc
+
+    client, _ = app_with_kubeconfig
+    body = {"kubeconfig": kc([("lab", "https://lab-a:6443", None)])}
+    [first] = client.post("/api/clusters/kubeconfig", json=body).json()
+    r = client.post("/api/clusters/kubeconfig", json=body)
+    assert r.status_code == 200 and r.json()[0]["id"] == first["id"]
+    assert [c["name"] for c in client.get("/api/clusters").json()] == ["kind-omnikrux-dev", "lab"]
