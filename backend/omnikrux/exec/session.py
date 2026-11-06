@@ -9,6 +9,7 @@ session needs. `ExecBridge` relays between the browser and any `ExecChannel`.
 
 import asyncio
 import codecs
+import contextlib
 import json
 import logging
 from contextlib import AsyncExitStack
@@ -17,7 +18,7 @@ from typing import Protocol, Self
 import aiohttp
 from kubernetes_asyncio.client import CoreV1Api
 from kubernetes_asyncio.client.exceptions import ApiException
-from starlette.websockets import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketDisconnected
 
 from omnikrux.kube.connections import ClusterConnections
 
@@ -27,6 +28,8 @@ STDIN, STDOUT, STDERR, STATUS, RESIZE = range(5)
 PROTOCOL = "v4.channel.k8s.io"
 CONNECT_SECONDS = 30  # for the exec handshake
 MAX_TERMINAL_SIDE = 10_000  # columns or rows; anything larger is not a terminal
+# The browser has gone: a send or close finds the socket closed.
+BROWSER_GONE = (WebSocketDisconnect, WebSocketDisconnected)
 
 
 class ExecChannel(Protocol):
@@ -159,6 +162,7 @@ class ExecBridge:
     async def run(self, websocket: WebSocket) -> None:
         """Relay until either side ends. The channel is always closed. If the shell ended, the
         browser gets `exit` (or `error` if the stream broke) and the socket is closed; if the
+        browser's input couldn't be passed on, it gets `error` and the socket is closed; if the
         browser left, nothing more is sent."""
         to_shell = asyncio.create_task(self._from_browser(websocket))
         to_browser = asyncio.create_task(self._to_browser(websocket))
@@ -172,15 +176,25 @@ class ExecBridge:
                 await asyncio.wait(tasks)  # never raises the tasks' exceptions or swallows ours
         finally:
             await self._channel.close()
-        for task in tasks:
-            if (
-                not task.cancelled()
-                and (exc := task.exception())
-                and not isinstance(exc, WebSocketDisconnect)
-            ):
-                log.warning("exec socket failed", exc_info=exc)
-        if to_browser.done() and not to_browser.cancelled() and to_browser.exception() is None:
-            await websocket.close(code=to_browser.result())
+        failed = {
+            task: exc
+            for task in tasks
+            if not task.cancelled()
+            and (exc := task.exception())
+            and not isinstance(exc, BROWSER_GONE)
+        }
+        for exc in failed.values():
+            log.warning("exec socket failed", exc_info=exc)
+        with contextlib.suppress(*BROWSER_GONE):  # the browser may leave at this very moment
+            if to_browser.done() and not to_browser.cancelled() and not to_browser.exception():
+                await websocket.close(code=to_browser.result())  # the shell ended
+            elif to_shell in failed:
+                message = (
+                    "The console couldn't pass your typing to the shell "
+                    f"({type(failed[to_shell]).__name__}). Reconnect to start a new shell."
+                )
+                await websocket.send_text(json.dumps({"type": "error", "message": message}))
+                await websocket.close(code=1011)
 
     async def _from_browser(self, websocket: WebSocket) -> None:
         """Keystrokes and resizes into the channel until the browser goes away. Messages that
@@ -193,7 +207,8 @@ class ExecBridge:
             if msg is None:
                 continue
             if msg.get("type") == "stdin" and isinstance(msg.get("data"), str):
-                await self._channel.send_stdin(msg["data"].encode())
+                # "replace": a lone surrogate (broken pasted text) is valid JSON, not valid UTF-8
+                await self._channel.send_stdin(msg["data"].encode("utf-8", "replace"))
             elif msg.get("type") == "resize" and _side(msg.get("cols")) and _side(msg.get("rows")):
                 await self._channel.resize(msg["cols"], msg["rows"])
 
@@ -210,21 +225,24 @@ class ExecBridge:
             if text:
                 await websocket.send_text(json.dumps({"type": kinds[channel], "data": text}))
 
-        try:
-            while (frame := await self._channel.read()) is not None:
-                channel, data = frame
-                if channel in decoders:
-                    await send(channel, decoders[channel].decode(data))
-                elif channel == STATUS:
-                    status = data
-        except Exception as exc:  # noqa: BLE001 (the stream broke; said in words, logged by type)
-            log.info("exec stream broke (%s)", type(exc).__name__)
-            message = (
-                f"The connection to the shell broke ({type(exc).__name__}). "
-                "Reconnect to start a new shell."
-            )
-            await websocket.send_text(json.dumps({"type": "error", "message": message}))
-            return 1011
+        while True:
+            try:
+                frame = await self._channel.read()
+            except Exception as exc:  # noqa: BLE001 (the stream broke; said in words, logged by type)
+                log.info("exec stream broke (%s)", type(exc).__name__)
+                message = (
+                    f"The connection to the shell broke ({type(exc).__name__}). "
+                    "Reconnect to start a new shell."
+                )
+                await websocket.send_text(json.dumps({"type": "error", "message": message}))
+                return 1011
+            if frame is None:
+                break
+            channel, data = frame
+            if channel in decoders:
+                await send(channel, decoders[channel].decode(data))
+            elif channel == STATUS:
+                status = data
         for channel, decoder in decoders.items():  # a character cut off at the very end
             await send(channel, decoder.decode(b"", final=True))
         code, message = exit_from_status(status)

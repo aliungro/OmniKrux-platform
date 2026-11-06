@@ -1,5 +1,6 @@
 """WS /api/exec: an interactive shell in a pod's container."""
 
+import contextlib
 import json
 import logging
 from contextlib import AsyncExitStack
@@ -8,10 +9,17 @@ from typing import Annotated
 from fastapi import APIRouter, Query, WebSocket
 from kubernetes_asyncio.client import CoreV1Api
 
-from omnikrux.exec.session import ExecBridge, KubeExecChannel
+from omnikrux.exec.session import BROWSER_GONE, ExecBridge, KubeExecChannel
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.kube.http import read_json
-from omnikrux.logs.stream import KUBE_ERRORS, REQUEST_TIMEOUT, pod_missing_message
+from omnikrux.logs.stream import (
+    KUBE_ERRORS,
+    REQUEST_TIMEOUT,
+    any_container_names,
+    container_names,
+    container_status,
+    pod_missing_message,
+)
 from omnikrux.web_security import is_cross_origin
 
 log = logging.getLogger(__name__)
@@ -20,9 +28,6 @@ router = APIRouter()
 
 # bash when the image has it, else sh.
 DEFAULT_COMMAND = ["/bin/sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"]
-
-_SPECS = ("initContainers", "containers", "ephemeralContainers")
-_STATUSES = ("initContainerStatuses", "containerStatuses", "ephemeralContainerStatuses")
 
 
 class ExecRefused(Exception):
@@ -45,17 +50,14 @@ def _state_words(state: dict) -> str:
 def running_container(found: dict, pod: str, container: str | None) -> str:
     """The container to open the shell in: `container`, or the pod's first one. ExecRefused
     when it isn't in the pod or isn't running."""
-    spec = found.get("spec") or {}
     if container is None:
-        regular = spec.get("containers") or []
+        regular = container_names(found)
         if not regular:
             raise ExecRefused(f"Pod {pod} has no containers.")
-        container = regular[0].get("name", "")
-    elif container not in [c.get("name") for field in _SPECS for c in spec.get(field) or []]:
+        container = regular[0]
+    elif container not in any_container_names(found):
         raise ExecRefused(f"Container {container} isn't in pod {pod}.")
-    status = found.get("status") or {}
-    entries = [e for field in _STATUSES for e in status.get(field) or []]
-    state = next((e.get("state") or {} for e in entries if e.get("name") == container), {})
+    state = container_status(found, container).get("state") or {}
     if "running" not in state:
         raise ExecRefused(
             f"Can't open a shell: container {container} isn't running ({_state_words(state)}). "
@@ -89,8 +91,9 @@ async def _check_pod(
 
 
 async def _fail(websocket: WebSocket, message: str, code: int, reason: str | None = None) -> None:
-    await websocket.send_text(json.dumps({"type": "error", "message": message}))
-    await websocket.close(code=code, reason=reason)
+    with contextlib.suppress(*BROWSER_GONE):  # the browser may already have left
+        await websocket.send_text(json.dumps({"type": "error", "message": message}))
+        await websocket.close(code=code, reason=reason)
 
 
 @router.websocket("/api/exec")

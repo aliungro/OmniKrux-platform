@@ -3,6 +3,10 @@ import shutil
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.stream import WsApiClient
 
+# Ping every WebSocket stream (exec) this often: proxies and load balancers in front of managed
+# API servers drop idle connections, and a missing pong ends the stream as an error.
+WS_HEARTBEAT_SECONDS = 30
+
 
 class ClusterUnavailable(Exception):
     def __init__(self, message: str):
@@ -38,4 +42,6 @@ async def make_api_client(kubeconfig: dict) -> client.ApiClient:
 
 
 async def make_ws_api_client(kubeconfig: dict) -> WsApiClient:
-    return WsApiClient(configuration=await build_configuration(kubeconfig))
+    return WsApiClient(
+        configuration=await build_configuration(kubeconfig), heartbeat=WS_HEARTBEAT_SECONDS
+    )

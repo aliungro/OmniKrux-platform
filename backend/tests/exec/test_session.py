@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import logging
 
 import pytest
+from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from omnikrux.exec.session import ExecBridge
 
@@ -192,4 +194,74 @@ async def test_broken_channel_is_an_error_1011():
     assert error["message"].startswith("The connection to the shell broke")
     assert "Traceback" not in error["message"]
     assert ws.closed == (1011, None)
+    assert channel.closed
+
+
+async def test_broken_pasted_text_is_forwarded_with_replacement():
+    """A lone surrogate is valid JSON (what JSON.stringify gives for broken pasted text)."""
+    channel, ws = FakeExecChannel(), BrowserSocket()
+    bridge = asyncio.create_task(run(channel, ws))
+    ws.inbox.put_nowait({"type": "websocket.receive", "text": '{"type":"stdin","data":"a\ud800b"}'})
+    await asyncio.wait_for(channel.got_input.wait(), 5)
+    channel.finish({"metadata": {}, "status": "Success"})
+    await bridge
+
+    assert channel.stdin == [b"a?b"]
+    assert ws.sent == [{"type": "exit", "code": 0, "message": None}]
+
+
+class RefusingChannel(FakeExecChannel):
+    async def send_stdin(self, data: bytes) -> None:
+        raise RuntimeError("stdin refused")
+
+
+async def test_failed_browser_input_is_an_error_1011():
+    channel, ws = RefusingChannel(), BrowserSocket()
+    ws.type({"type": "stdin", "data": "ls\r"})
+
+    await run(channel, ws)
+
+    [error] = ws.sent
+    assert error["type"] == "error"
+    assert error["message"] == (
+        "The console couldn't pass your typing to the shell (RuntimeError). "
+        "Reconnect to start a new shell."
+    )
+    assert ws.closed == (1011, None)
+    assert channel.closed
+
+
+class LeavingSocket(BrowserSocket):
+    """A browser that is gone by the time the bridge writes to it."""
+
+    async def send_text(self, text: str) -> None:
+        raise WebSocketDisconnect(1006)
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        raise WebSocketDisconnected('Cannot call "send" once a close message has been sent.')
+
+
+async def test_browser_gone_while_writing_is_quiet(caplog):
+    channel, ws = FakeExecChannel(), LeavingSocket()
+    channel.emit(1, b"$ ")
+
+    with caplog.at_level(logging.INFO, logger="omnikrux.exec.session"):
+        await run(channel, ws)
+
+    assert channel.closed
+    assert caplog.records == []  # not a broken stream, not a failure: the browser left
+
+
+async def test_browser_gone_at_the_end_is_quiet():
+    channel, ws = FakeExecChannel(), BrowserSocket()
+
+    async def gone(code: int = 1000, reason: str | None = None) -> None:
+        raise WebSocketDisconnected('Cannot call "send" once a close message has been sent.')
+
+    ws.close = gone
+    channel.finish({"metadata": {}, "status": "Success"})
+
+    await run(channel, ws)  # does not raise
+
+    assert ws.sent == [{"type": "exit", "code": 0, "message": None}]
     assert channel.closed

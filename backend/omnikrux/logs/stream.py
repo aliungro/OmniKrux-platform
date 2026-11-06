@@ -149,7 +149,8 @@ def any_container_names(pod: dict) -> list[str]:
     return [c.get("name", "") for field in fields for c in spec.get(field) or []]
 
 
-def _container_status(pod: dict, container: str) -> dict:
+def container_status(pod: dict, container: str) -> dict:
+    """The container's entry in the pod's status (init, regular or ephemeral); {} if none yet."""
     status = pod.get("status") or {}
     fields = ("initContainerStatuses", "containerStatuses", "ephemeralContainerStatuses")
     for field in fields:
@@ -284,7 +285,7 @@ class LogStream:
         if container is None:
             raise LogStreamError(f"Pod {self._namespace}/{self._pod} has no containers.")
         uid = (pod.get("metadata") or {}).get("uid")
-        restarts = _container_status(pod, container).get("restartCount", 0)
+        restarts = container_status(pod, container).get("restartCount", 0)
         since, tail = self._since_time, self._tail_lines
         position = ResumePoint()
         skip = position.repeats()  # nothing sent yet: nothing to skip
@@ -346,7 +347,7 @@ class LogStream:
                 except KUBE_ERRORS as exc:
                     failures, error = failures + 1, exc
                     continue
-                status = _container_status(pod, container)
+                status = container_status(pod, container)
                 state = status.get("state") or {}
                 count = status.get("restartCount", 0)
                 if (pod.get("metadata") or {}).get("uid") != uid or count < restarts:
