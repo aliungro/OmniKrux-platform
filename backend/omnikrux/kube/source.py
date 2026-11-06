@@ -1,17 +1,20 @@
+from __future__ import annotations
+
 import json
 import logging
 from collections.abc import AsyncIterator
 
 from kubernetes_asyncio.client import ApiClient
-from kubernetes_asyncio.client.rest import ApiException
 from kubernetes_asyncio.dynamic import DynamicClient
 
+from omnikrux.kube.client import ClusterUnavailable
 from omnikrux.resources.kinds import KindSpec
 from omnikrux.watch.source import Expired, ResourceSource, WatchEvent
 
 logger = logging.getLogger(__name__)
 
 LIST_PAGE_SIZE = 500
+LIST_ATTEMPTS = 3  # full restarts when a continue token expires mid-paging
 WATCH_TIMEOUT_SECONDS = 300
 # (connect, read) client-side timeouts: a silent connection fails instead of hanging.
 LIST_REQUEST_TIMEOUT = (30, 120)
@@ -38,6 +41,16 @@ class KubeResourceSource(ResourceSource):
         self._latest_rv: str | None = None
 
     async def list(self) -> tuple[list[dict], str]:
+        for attempt in range(1, LIST_ATTEMPTS + 1):
+            try:
+                return await self._list_once()
+            except Expired as exc:  # the continue token expired: start over
+                if attempt == LIST_ATTEMPTS:
+                    raise RuntimeError(f"Kubernetes API returned 410: {exc}") from exc
+                logger.debug("list of %s expired mid-paging, restarting", self._spec.plural)
+        raise AssertionError("unreachable")
+
+    async def _list_once(self) -> tuple[list[dict], str]:
         dynamic, resource = await self._resolve()
         items: list[dict] = []
         token = None
@@ -50,6 +63,7 @@ class KubeResourceSource(ResourceSource):
                 serialize=False,
                 _request_timeout=LIST_REQUEST_TIMEOUT,
             )
+            await self._raise_for_status(resp, "list")
             try:
                 body = await resp.json()
             finally:
@@ -67,21 +81,17 @@ class KubeResourceSource(ResourceSource):
         start = resource_version
         if resource_version == self._handed_out_rv and self._latest_rv:
             start = self._latest_rv  # a bookmark moved past the caller's rv with no events between
-        try:
-            resp = await dynamic.request(
-                "get",
-                resource.path(),
-                watch=True,
-                resource_version=start,
-                timeout_seconds=WATCH_TIMEOUT_SECONDS,
-                query_params=[("allowWatchBookmarks", "true")],
-                serialize=False,
-                _request_timeout=WATCH_REQUEST_TIMEOUT,
-            )
-        except ApiException as exc:
-            if exc.status == 410:
-                raise Expired(str(exc.reason)) from exc
-            raise
+        resp = await dynamic.request(
+            "get",
+            resource.path(),
+            watch=True,
+            resource_version=start,
+            timeout_seconds=WATCH_TIMEOUT_SECONDS,
+            query_params=[("allowWatchBookmarks", "true")],
+            serialize=False,
+            _request_timeout=WATCH_REQUEST_TIMEOUT,
+        )
+        await self._raise_for_status(resp, "watch")
         try:
             buffer = b""
             async for chunk in resp.content.iter_any():
@@ -114,6 +124,23 @@ class KubeResourceSource(ResourceSource):
             self._dynamic = dynamic
         return self._dynamic, self._resource
 
+    async def _raise_for_status(self, resp, verb: str) -> None:
+        """Raise for a non-2xx response (the dynamic client returns them instead of raising)."""
+        status = resp.status
+        if 200 <= status < 300:
+            return
+        try:
+            message = _status_message(await resp.read()) or resp.reason or str(status)
+        finally:
+            resp.release()
+        if status == 410:
+            raise Expired(message)
+        if status == 401:
+            raise ClusterUnavailable(f"The cluster rejected the console's credentials: {message}")
+        if status == 403:
+            raise ClusterUnavailable(f"Not allowed to {verb} {self._spec.plural}: {message}")
+        raise RuntimeError(f"Kubernetes API returned {status}: {message}")
+
     def _event(self, line: bytes) -> WatchEvent | None:
         """Translate one watch line; None for blank lines, bookmarks and unknown types."""
         if not line.strip():
@@ -139,3 +166,13 @@ class KubeResourceSource(ResourceSource):
         if rv:
             self._handed_out_rv = self._latest_rv = rv
         return WatchEvent(kind, obj)
+
+
+def _status_message(body: bytes) -> str | None:
+    """The `message` of a Kubernetes Status body; None when the body isn't one (e.g. HTML)."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    message = data.get("message") if isinstance(data, dict) else None
+    return message if isinstance(message, str) and message else None

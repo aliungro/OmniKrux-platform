@@ -2,9 +2,9 @@ import json
 from typing import ClassVar
 
 import pytest
-from kubernetes_asyncio.client.rest import ApiException
 
 from omnikrux.kube import source as source_mod
+from omnikrux.kube.client import ClusterUnavailable
 from omnikrux.kube.source import KubeResourceSource
 from omnikrux.resources.kinds import KINDS
 from omnikrux.watch.source import Expired, WatchEvent
@@ -20,13 +20,19 @@ class FakeContent:
 
 
 class FakeResponse:
-    def __init__(self, body=None, chunks=()):
+    def __init__(self, body=None, chunks=(), status=200, reason="OK", raw=None):
         self._body = body
+        self._raw = raw if raw is not None else json.dumps(body).encode()
         self.content = FakeContent(list(chunks))
+        self.status = status
+        self.reason = reason
         self.closed = False
 
     async def json(self):
         return self._body
+
+    async def read(self):
+        return self._raw
 
     def release(self):
         self.closed = True
@@ -160,10 +166,82 @@ async def test_error_event_410_raises_expired(dyn):
     assert resp.closed
 
 
-async def test_http_410_raises_expired(dyn):
-    dyn.script = [ApiException(status=410, reason="Gone")]
+def status(code, reason, message):
+    body = {"kind": "Status", "apiVersion": "v1", "status": "Failure", "code": code, "reason": reason, "message": message}
+    return FakeResponse(body, status=code, reason=reason)
+
+
+async def test_http_410_on_watch_raises_expired(dyn):
+    resp = status(410, "Gone", "too old resource version: 1 (5)")
+    dyn.script = [resp]
+    with pytest.raises(Expired, match="too old resource version"):
+        await collect(KubeResourceSource(FakeApi(), KINDS["pods"]).watch("1"))
+    assert resp.closed
+
+
+async def test_bare_status_line_in_watch_stream_raises_expired(dyn):
+    gone = {"kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 410, "message": "too old resource version"}
+    dyn.script = [FakeResponse(chunks=[lines(gone)])]
     with pytest.raises(Expired):
         await collect(KubeResourceSource(FakeApi(), KINDS["pods"]).watch("1"))
+
+
+async def test_forbidden_list_raises_instead_of_returning_nothing(dyn):
+    resp = status(403, "Forbidden", 'pods is forbidden: User "x" cannot list resource "pods"')
+    dyn.script = [resp]
+    with pytest.raises(ClusterUnavailable) as info:
+        await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
+    assert info.value.message == 'Not allowed to list pods: pods is forbidden: User "x" cannot list resource "pods"'
+    assert resp.closed
+
+
+async def test_forbidden_watch_raises_cluster_unavailable(dyn):
+    dyn.script = [status(403, "Forbidden", "nope")]
+    with pytest.raises(ClusterUnavailable, match="^Not allowed to watch pods: nope$"):
+        await collect(KubeResourceSource(FakeApi(), KINDS["pods"]).watch("1"))
+
+
+async def test_unauthorized_list_raises_credentials_message(dyn):
+    dyn.script = [status(401, "Unauthorized", "Unauthorized")]
+    with pytest.raises(ClusterUnavailable) as info:
+        await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
+    assert info.value.message == "The cluster rejected the console's credentials: Unauthorized"
+
+
+async def test_server_error_on_list_raises_with_status_message(dyn):
+    dyn.script = [status(503, "ServiceUnavailable", "etcd is down")]
+    with pytest.raises(RuntimeError, match="^Kubernetes API returned 503: etcd is down$"):
+        await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
+
+
+async def test_non_json_error_body_gives_a_clean_message(dyn):
+    resp = FakeResponse(status=502, reason="Bad Gateway", raw=b"<html><body>upstream gone</body></html>")
+    dyn.script = [resp]
+    with pytest.raises(RuntimeError) as info:
+        await collect(KubeResourceSource(FakeApi(), KINDS["pods"]).watch("1"))
+    assert str(info.value) == "Kubernetes API returned 502: Bad Gateway"
+    assert resp.closed
+
+
+async def test_expired_continue_token_restarts_the_list(dyn):
+    dyn.script = [
+        FakeResponse({"metadata": {"resourceVersion": "10", "continue": "tok"}, "items": [pod("a", "5")]}),
+        status(410, "Expired", "continue token too old"),
+        FakeResponse({"metadata": {"resourceVersion": "20", "continue": "tok2"}, "items": [pod("a", "5")]}),
+        FakeResponse({"metadata": {"resourceVersion": "20"}, "items": [pod("b", "6")]}),
+    ]
+    items, rv = await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
+    assert items == [pod("a", "5"), pod("b", "6")] and rv == "20"
+    assert [r["_continue"] for _, _, r in dyn.instances[0].requests] == [None, "tok", None, "tok2"]
+
+
+async def test_list_gives_up_after_repeated_expiry(dyn):
+    page = {"metadata": {"resourceVersion": "10", "continue": "tok"}, "items": [pod("a", "5")]}
+    dyn.script = [FakeResponse(page), status(410, "Expired", "continue token too old")] * 3
+    with pytest.raises(RuntimeError, match="^Kubernetes API returned 410: continue token too old$") as info:
+        await KubeResourceSource(FakeApi(), KINDS["pods"]).list()
+    assert not isinstance(info.value, Expired)
+    assert len(dyn.instances[0].requests) == 6
 
 
 async def test_other_error_event_raises_with_status_message(dyn):

@@ -13,15 +13,26 @@ from omnikrux.resources.kinds import KINDS
 pytestmark = pytest.mark.kind
 
 CONTEXT = "kind-omnikrux-dev"
-FIXTURES = Path(__file__).resolve().parents[3] / "scripts" / "fixtures" / "workloads.yaml"
+REPO = Path(__file__).resolve().parents[3]
+FIXTURES = REPO / "scripts" / "fixtures" / "workloads.yaml"
+
+
+def find_kind() -> str | None:
+    """kind on PATH, else the repo's pinned copy in .tools/ (where scripts/dev-kind.sh finds it)."""
+    if found := shutil.which("kind"):
+        return found
+    for candidate in (REPO / ".tools" / "kind.exe", REPO / ".tools" / "kind"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 @pytest.fixture
 async def api():
-    if shutil.which("kind") is None:
+    if (kind := find_kind()) is None:
         pytest.skip("kind is not installed")
     text = await asyncio.to_thread(
-        subprocess.run, ["kind", "get", "kubeconfig", "--name", "omnikrux-dev"], check=False, capture_output=True, text=True
+        subprocess.run, [kind, "get", "kubeconfig", "--name", "omnikrux-dev"], check=False, capture_output=True, text=True
     )
     if text.returncode != 0:
         pytest.skip("kind cluster omnikrux-dev not running (scripts/dev-kind.sh)")
