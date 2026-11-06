@@ -15,6 +15,7 @@ from omnikrux.resources.kinds import KindSpec
 from omnikrux.security.secrets import SecretBox
 from omnikrux.watch.api import router as watch_router
 from omnikrux.watch.hub import WatchHub
+from omnikrux.web import mount_spa
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    if settings.static_dir is not None and settings.static_dir.is_dir():
+        mount_spa(app, settings.static_dir)  # last: must not shadow /api/*
 
     return app
 
