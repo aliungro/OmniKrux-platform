@@ -15,6 +15,7 @@ class ClusterOut(BaseModel):
     name: str
     context_name: str
     server: str
+    original_server: str | None  # the kubeconfig's address when `server` was rewritten, else null
     provider: Provider
     region: str | None
     environment: Environment

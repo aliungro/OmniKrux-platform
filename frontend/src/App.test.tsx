@@ -8,7 +8,7 @@ import { Console } from "./App";
 const watch = vi.hoisted(() => ({ state: null as WatchState | null }));
 vi.mock("./api/useWatch", () => ({ useWatch: () => watch.state }));
 
-const cluster = { id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443", provider: "kind", region: null, environment: "development", state: "ready", message: null };
+const cluster = { id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443", original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null };
 const pod = (uid: string, status: string, cls: string) => ({ uid, cluster_id: "c1", kind: "Pod", namespace: "default", name: uid, created_at: null, columns: { status, status_class: cls, node: "n1", last_restart_at: null } });
 
 function json(body: unknown, status = 200) {

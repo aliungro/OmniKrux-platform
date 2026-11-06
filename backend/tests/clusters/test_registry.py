@@ -24,3 +24,14 @@ async def test_get_unknown_raises_key_error(registry):
         await registry.get("nope")
     with pytest.raises(KeyError):
         await registry.get_kubeconfig("nope")
+
+
+async def test_original_server_is_stored_and_follows_reimport(registry):
+    text = kc([("kind-dev", "https://127.0.0.1:6443", None)])
+    [info] = await registry.upsert_from_kubeconfig(text, rewrite_loopback=True)
+    assert info.server == "https://host.docker.internal:6443"
+    assert info.original_server == "https://127.0.0.1:6443"
+    assert (await registry.list())[0].original_server == "https://127.0.0.1:6443"
+    assert (await registry.get(info.id)).original_server == "https://127.0.0.1:6443"
+    [plain] = await registry.upsert_from_kubeconfig(kc([("lab", "https://k8s.lab:6443", None)]), rewrite_loopback=True)
+    assert plain.original_server is None

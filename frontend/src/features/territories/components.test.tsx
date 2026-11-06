@@ -41,7 +41,7 @@ describe("components", () => {
   });
 });
 
-const cluster = (over = {}) => ({ id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://weu.azmk8s.io:443", provider: "aks", region: null, environment: "production", state: "ready", message: null, ...over }) as any;
+const cluster = (over = {}) => ({ id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://weu.azmk8s.io:443", original_server: null, provider: "aks", region: null, environment: "production", state: "ready", message: null, ...over }) as any;
 const terr = (over = {}) => ({ cluster: cluster(), state: "ready", message: null, rows: [], total: 0, failing: 0, pending: 0, ...over }) as any;
 const pod = (over = {}) => ({ uid: "u1", cluster_id: "c1", kind: "Pod", namespace: "payments", name: "payments-api-1", created_at: null, columns: { status: "CrashLoopBackOff", status_class: "bad", ready: "0/2", restarts: 14, node: null, last_restart_at: null }, ...over }) as any;
 
@@ -52,6 +52,16 @@ describe("cluster band copy", () => {
     expect(screen.getByText("weu.azmk8s.io")).toBeTruthy();
     expect(screen.getByText("Production")).toBeTruthy();
     expect(screen.getByTestId("band-summary").textContent).toBe("48 pods, 1 failing");
+  });
+  it("says when the cluster address was rewritten", () => {
+    const { rerender } = render(<ClusterBand t={terr({ cluster: cluster({ server: "https://host.docker.internal:6443", original_server: "https://127.0.0.1:6443" }) })} onRetry={() => {}} />);
+    expect(screen.getByText("via host.docker.internal:6443")).toBeTruthy();
+    const note = screen.getByTestId("band-rewrite");
+    expect(note.textContent).toBe("(kubeconfig: 127.0.0.1:6443)");
+    expect(note.getAttribute("title")).toContain("127.0.0.1:6443");
+    rerender(<ClusterBand t={terr({ cluster: cluster({ original_server: null }) })} onRetry={() => {}} />);
+    expect(screen.queryByTestId("band-rewrite")).toBeNull();
+    expect(screen.getByText("weu.azmk8s.io")).toBeTruthy();
   });
   it("all healthy, development tag", () => {
     render(<ClusterBand t={terr({ cluster: cluster({ environment: "development" }), rows: [pod()], total: 52 })} onRetry={() => {}} />);

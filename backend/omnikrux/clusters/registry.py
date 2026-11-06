@@ -18,6 +18,7 @@ class ClusterInfo:
     name: str
     context_name: str
     server: str
+    original_server: str | None
     provider: Provider
     region: str | None
     environment: Environment
@@ -29,6 +30,7 @@ def _info(row: ClusterRecord) -> ClusterInfo:
         name=row.name,
         context_name=row.context_name,
         server=row.server,
+        original_server=row.original_server,
         provider=Provider(row.provider),
         region=row.region,
         environment=Environment(row.environment),
@@ -61,6 +63,7 @@ class ClusterRegistry:
                         source=SOURCE,
                         context_name=ctx.context_name,
                         server=ctx.server,
+                        original_server=ctx.original_server,
                         provider=ctx.provider.value,
                         region=None,
                         environment=ctx.environment.value,
@@ -69,6 +72,7 @@ class ClusterRegistry:
                     session.add(row)
                 else:
                     row.kubeconfig_encrypted = blob
+                    row.original_server = ctx.original_server
                     row.provider = ctx.provider.value
                     row.environment = ctx.environment.value
                 await session.flush()

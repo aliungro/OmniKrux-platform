@@ -8,6 +8,8 @@ export interface Cluster {
   name: string;
   context_name: string;
   server: string;
+  /** The kubeconfig's own address when the console rewrote `server` (e.g. 127.0.0.1 → host.docker.internal). */
+  original_server: string | null;
   provider: Provider;
   region: string | null;
   environment: Environment;

@@ -123,3 +123,11 @@ def test_read_kubeconfig_files_skips_missing(tmp_path):
     f = tmp_path / "config"
     f.write_text("hello")
     assert read_kubeconfig_files([tmp_path / "nope", f]) == ["hello"]
+
+
+def test_original_server_kept_only_when_rewritten():
+    text = kc([("kind-dev", "https://127.0.0.1:6443", None), ("aks", "https://x.azmk8s.io:443", None)])
+    rewritten, remote = parse_kubeconfig(text, rewrite_loopback=True)
+    assert (rewritten.server, rewritten.original_server) == ("https://host.docker.internal:6443", "https://127.0.0.1:6443")
+    assert remote.original_server is None
+    assert parse_kubeconfig(text, rewrite_loopback=False)[0].original_server is None

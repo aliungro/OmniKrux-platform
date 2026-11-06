@@ -81,3 +81,22 @@ def test_loopback_rewrite_follows_the_setting_not_in_container(tmp_path):
     with TestClient(create_app(settings)) as client:
         r = client.post("/api/clusters/kubeconfig", json={"kubeconfig": path.read_text(encoding="utf-8")})
         assert r.json()[0]["server"] == "https://host.docker.internal:6443"
+
+
+def test_api_reports_the_original_server_only_when_rewritten(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from omnikrux.config import Settings
+    from omnikrux.main import create_app
+    from tests.clusters.test_kubeconfig import kc
+
+    path = tmp_path / "config"
+    path.write_text(kc([("kind-omnikrux-dev", "https://127.0.0.1:6443", None)]), encoding="utf-8")
+    with TestClient(create_app(Settings(data_dir=tmp_path, kubeconfig=str(path), rewrite_loopback=True))) as client:
+        [kind] = client.get("/api/clusters").json()
+        assert kind["server"] == "https://host.docker.internal:6443"
+        assert kind["original_server"] == "https://127.0.0.1:6443"
+        [eks] = client.post(
+            "/api/clusters/kubeconfig", json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])}
+        ).json()
+        assert eks["original_server"] is None

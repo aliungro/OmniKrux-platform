@@ -57,7 +57,7 @@ describe("FilterBar details", () => {
   });
 });
 
-const cluster = (over = {}) => ({ id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://x", provider: "aks", region: null, environment: "production", state: "ready", message: null, ...over }) as any;
+const cluster = (over = {}) => ({ id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://x", original_server: null, provider: "aks", region: null, environment: "production", state: "ready", message: null, ...over }) as any;
 
 describe("TopBar", () => {
   it("shows the wordmark and one scope token per cluster with failing counts", () => {

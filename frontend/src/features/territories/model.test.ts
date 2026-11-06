@@ -4,7 +4,7 @@ import { buildTerritories, countFilters, flatten, formatAge, matchesFilter, podC
 import { applyMessage, emptyWatchState } from "../../api/watchState";
 const now = new Date("2026-11-06T16:00:00");
 const r = (uid: string, status: string, cls: string, extra = {}) => ({ uid, cluster_id: "c1", kind: "Pod", namespace: "payments", name: uid, created_at: "", columns: { status, status_class: cls, node: "n1", ...extra } });
-const cl = { id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://x", provider: "aks", region: null, environment: "production", state: "unknown", message: null } as const;
+const cl = { id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://x", original_server: null, provider: "aks", region: null, environment: "production", state: "unknown", message: null } as const;
 const state = () => applyMessage(emptyWatchState(), { type: "snapshot", cluster_id: "c1", part: 0, last: true,
   rows: [r("ok-1", "Running", "ok"), r("crash", "CrashLoopBackOff", "bad", { last_restart_at: "2026-11-06T14:04:14" }), r("wait", "Pending", "warn")] });
 

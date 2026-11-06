@@ -48,13 +48,25 @@ export function ClusterBand({
 }) {
   const { cluster } = t;
   const provider = knownProvider(cluster.provider);
-  const loc = [cluster.region, serverHost(cluster.server)].filter(Boolean).join(" · ");
+  const host = serverHost(cluster.server);
+  // Spec §11: say so when the console reaches the cluster at another address than the kubeconfig's.
+  const original = cluster.original_server ? serverHost(cluster.original_server) : null;
+  const loc = [cluster.region, original && host ? `via ${host}` : host].filter(Boolean).join(" · ");
   return (
     <div role="row" aria-rowindex={rowIndex} className={`${s.band} ${pc[provider]}${t.rows.length === 0 ? ` ${s.alone}` : ""}`} tabIndex={-1}>
       <div role="rowheader" aria-colspan={COLUMN_COUNT} className={s.cell}>
         <ProviderBadge provider={provider} large />
         <b className={s.name}>{cluster.name}</b>
         {loc && <span className={s.loc} title={loc}>{loc}</span>}
+        {original && (
+          <span
+            className={s.loc}
+            data-testid="band-rewrite"
+            title={`Your kubeconfig says ${original}, which inside the console's container is the container itself, so the console connects via ${host} instead.`}
+          >
+            (kubeconfig: {original})
+          </span>
+        )}
         {cluster.environment === "production" && <span className={`${s.env} ${s.prod}`}>Production</span>}
         {cluster.environment === "development" && <span className={`${s.env} ${s.dev}`}>Development</span>}
         <Summary t={t} />

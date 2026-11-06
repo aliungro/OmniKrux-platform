@@ -58,6 +58,7 @@ def _cluster(cluster_id: str) -> ClusterInfo:
         name=cluster_id,
         context_name=cluster_id,
         server=f"https://{cluster_id}.example:6443",
+        original_server=None,
         provider=Provider.KIND,
         region=None,
         environment=Environment.DEVELOPMENT,

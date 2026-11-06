@@ -19,6 +19,7 @@ class ParsedContext:
     environment: Environment
     exec_command: str | None
     standalone: dict
+    original_server: str | None = None  # the kubeconfig's own address, when `server` was rewritten
 
 
 def _basename(command: str | None) -> str:
@@ -90,6 +91,7 @@ def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext
         user = users.get(ctx.get("user"))
         if cluster is None or user is None:
             continue
+        original = cluster.get("server", "")
         if rewrite_loopback:
             cluster = to_docker_host(cluster)
         server = cluster.get("server", "")
@@ -104,7 +106,17 @@ def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext
             "users": [{"name": ctx["user"], "user": user}],
             "contexts": [{"name": name, "context": ctx}],
         })
-        out.append(ParsedContext(name, server, provider, guess_environment(name, provider), exec_command, standalone))
+        out.append(
+            ParsedContext(
+                name,
+                server,
+                provider,
+                guess_environment(name, provider),
+                exec_command,
+                standalone,
+                original_server=original if original != server else None,
+            )
+        )
     return out
 
 

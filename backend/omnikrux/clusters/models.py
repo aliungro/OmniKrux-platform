@@ -36,6 +36,7 @@ class ClusterRecord(Base):
     source: Mapped[str] = mapped_column(String)
     context_name: Mapped[str] = mapped_column(String)
     server: Mapped[str] = mapped_column(String)
+    original_server: Mapped[str | None] = mapped_column(String, nullable=True)  # set when `server` was rewritten
     provider: Mapped[str] = mapped_column(String)
     region: Mapped[str | None] = mapped_column(String, nullable=True)
     environment: Mapped[str] = mapped_column(String)
