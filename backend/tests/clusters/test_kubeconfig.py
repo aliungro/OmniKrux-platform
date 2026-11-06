@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 import yaml
 
@@ -131,3 +133,40 @@ def test_original_server_kept_only_when_rewritten():
     assert (rewritten.server, rewritten.original_server) == ("https://host.docker.internal:6443", "https://127.0.0.1:6443")
     assert remote.original_server is None
     assert parse_kubeconfig(text, rewrite_loopback=False)[0].original_server is None
+
+
+def test_scalar_names_are_coerced_to_strings():
+    text = """
+apiVersion: v1
+kind: Config
+clusters:
+- name: 2024
+  cluster: {server: "https://k8s.lab:6443"}
+users:
+- name: 7
+  user: {exec: {command: 42, apiVersion: client.authentication.k8s.io/v1beta1}}
+contexts:
+- name: 2024
+  context: {cluster: 2024, user: 7}
+"""
+    [ctx] = parse_kubeconfig(text, rewrite_loopback=False)
+    assert ctx.context_name == "2024" and ctx.exec_command == "42"
+    sa = ctx.standalone
+    assert sa["current-context"] == "2024" and sa["contexts"][0]["name"] == "2024"
+    assert sa["contexts"][0]["context"] == {"cluster": "2024", "user": "7"}
+    assert sa["clusters"][0]["name"] == "2024" and sa["users"][0]["name"] == "7"
+
+
+def test_non_scalar_names_are_skipped():
+    doc = yaml.safe_load(kc([("good", "https://good:6443", None), ("other", "https://other:6443", None)]))
+    doc["contexts"][1]["name"] = ["not", "a", "name"]
+    assert [c.context_name for c in parse_kubeconfig(yaml.safe_dump(doc), rewrite_loopback=False)] == ["good"]
+
+
+def test_one_broken_context_does_not_drop_the_others(caplog):
+    text = kc([("kind-bad", "https://127.0.0.1:64x3", None), ("kind-good", "https://127.0.0.1:6443", None)])
+    with caplog.at_level(logging.WARNING, logger="omnikrux.clusters.kubeconfig"):
+        out = parse_kubeconfig(text, rewrite_loopback=True)
+    assert [c.context_name for c in out] == ["kind-good"]
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert "kind-bad" in warning and "64x3" not in warning

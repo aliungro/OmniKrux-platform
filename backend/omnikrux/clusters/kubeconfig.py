@@ -1,4 +1,5 @@
 import copy
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -6,6 +7,8 @@ from urllib.parse import urlsplit, urlunsplit
 import yaml
 
 from omnikrux.clusters.models import Environment, Provider
+
+log = logging.getLogger(__name__)
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 DOCKER_HOST = "host.docker.internal"
@@ -68,11 +71,26 @@ def to_docker_host(cluster: dict) -> dict:
     return out
 
 
-def _by_name(items: list, key: str) -> dict:
-    return {i["name"]: i[key] for i in items if isinstance(i, dict) and "name" in i and isinstance(i.get(key), dict)}
+def _name(value: object) -> str | None:
+    """A kubeconfig name as text: YAML reads `2024` as an int. None for lists, maps and nulls."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int | float):  # bool included: `yes` is a valid if odd name
+        return str(value)
+    return None
+
+
+def _by_name(items: object, key: str) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and (name := _name(item.get("name"))) is not None and isinstance(item.get(key), dict):
+            out[name] = item[key]
+    return out
 
 
 def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext]:
+    """One `ParsedContext` per usable context. A context that can't be read is skipped with a
+    warning naming it, so one bad entry never drops the rest of the file."""
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -80,44 +98,60 @@ def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext
     if not isinstance(doc, dict) or not isinstance(doc.get("contexts"), list):
         raise ValueError("Not a kubeconfig: missing 'contexts' list")  # noqa: TRY004
 
-    clusters = _by_name(doc.get("clusters") or [], "cluster")
-    users = _by_name(doc.get("users") or [], "user")
+    clusters = _by_name(doc.get("clusters"), "cluster")
+    users = _by_name(doc.get("users"), "user")
     out: list[ParsedContext] = []
     for entry in doc["contexts"]:
-        if not isinstance(entry, dict) or not isinstance(entry.get("context"), dict) or "name" not in entry:
+        if not isinstance(entry, dict) or not isinstance(entry.get("context"), dict):
             continue
-        name, ctx = entry["name"], entry["context"]
-        cluster = clusters.get(ctx.get("cluster"))
-        user = users.get(ctx.get("user"))
-        if cluster is None or user is None:
+        if (name := _name(entry.get("name"))) is None:
             continue
-        original = cluster.get("server", "")
-        if rewrite_loopback:
-            cluster = to_docker_host(cluster)
-        server = cluster.get("server", "")
-        exec_cfg = user.get("exec")
-        exec_command = exec_cfg.get("command") if isinstance(exec_cfg, dict) else None
-        provider = detect_provider(name, server, exec_command)
-        standalone = copy.deepcopy({
-            "apiVersion": "v1",
-            "kind": "Config",
-            "current-context": name,
-            "clusters": [{"name": ctx["cluster"], "cluster": cluster}],
-            "users": [{"name": ctx["user"], "user": user}],
-            "contexts": [{"name": name, "context": ctx}],
-        })
-        out.append(
-            ParsedContext(
-                name,
-                server,
-                provider,
-                guess_environment(name, provider),
-                exec_command,
-                standalone,
-                original_server=original if original != server else None,
-            )
-        )
+        try:
+            parsed = _parse_context(name, entry["context"], clusters, users, rewrite_loopback=rewrite_loopback)
+        except Exception as exc:  # noqa: BLE001 (logged below by type only)
+            # The type only: messages can quote kubeconfig values.
+            log.warning("Skipping kubeconfig context %r: it could not be read (%s)", name, type(exc).__name__)
+            continue
+        if parsed is not None:
+            out.append(parsed)
     return out
+
+
+def _parse_context(
+    name: str, ctx: dict, clusters: dict[str, dict], users: dict[str, dict], *, rewrite_loopback: bool
+) -> ParsedContext | None:
+    cluster_name, user_name = _name(ctx.get("cluster")), _name(ctx.get("user"))
+    cluster = clusters.get(cluster_name) if cluster_name is not None else None
+    user = users.get(user_name) if user_name is not None else None
+    if cluster is None or user is None:
+        return None
+    original = cluster.get("server", "")
+    if rewrite_loopback:
+        cluster = to_docker_host(cluster)
+    server = cluster.get("server", "")
+    user = copy.deepcopy(user)
+    exec_cfg = user.get("exec")
+    exec_command = _name(exec_cfg.get("command")) if isinstance(exec_cfg, dict) else None
+    if exec_command is not None:
+        exec_cfg["command"] = exec_command
+    provider = detect_provider(name, server, exec_command)
+    standalone = copy.deepcopy({
+        "apiVersion": "v1",
+        "kind": "Config",
+        "current-context": name,
+        "clusters": [{"name": cluster_name, "cluster": cluster}],
+        "users": [{"name": user_name, "user": user}],
+        "contexts": [{"name": name, "context": {**ctx, "cluster": cluster_name, "user": user_name}}],
+    })
+    return ParsedContext(
+        name,
+        server,
+        provider,
+        guess_environment(name, provider),
+        exec_command,
+        standalone,
+        original_server=original if original != server else None,
+    )
 
 
 def read_kubeconfig_files(paths: list[Path]) -> list[str]:
