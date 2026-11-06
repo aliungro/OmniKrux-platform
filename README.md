@@ -23,6 +23,8 @@ Open http://localhost:8080.
 
 Host port 8080 already in use? Pick another host port, for example `-p 8090:8080`, and open http://localhost:8090.
 
+Omnikrux answers only to requests addressed to `localhost`, `127.0.0.1`, `[::1]` or `*.localhost`. To reach it under another name, set `-e OMNIKRUX_ALLOWED_HOSTS=omnikrux.example,localhost` (comma-separated; `*` turns the check off).
+
 The kubeconfig is read from `/kube/config` inside the container. Cluster state is kept in the `omnikrux-data` volume, so restarts keep the same clusters.
 
 ### Linux: kubeconfig permissions

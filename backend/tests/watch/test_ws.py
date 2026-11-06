@@ -28,6 +28,28 @@ def test_ws_unknown_kind_closes_4404(app_with_fake_sources):
     assert e.value.code == 4404 and e.value.reason == "Unknown kind"
 
 
+def test_ws_from_another_origin_is_rejected(app_with_fake_sources):
+    hub = app_with_fake_sources.app.state.hub
+    with (
+        pytest.raises(WebSocketDisconnect) as e,
+        app_with_fake_sources.websocket_connect("/api/watch?kind=pods", headers={"origin": "http://evil.example"}) as ws,
+    ):
+        ws.receive_json()
+    assert e.value.code == 4403
+    assert hub._subscriptions == set() and hub._caches == {}
+
+
+@pytest.mark.parametrize("origin", ["http://testserver", "http://TESTSERVER"])
+def test_ws_from_the_same_origin_is_accepted(app_with_fake_sources, origin):
+    with app_with_fake_sources.websocket_connect("/api/watch?kind=pods", headers={"origin": origin}) as ws:
+        assert ws.receive_json()["type"] == "cluster_status"
+
+
+def test_ws_without_origin_is_accepted(app_with_fake_sources):  # non-browser clients send none
+    with app_with_fake_sources.websocket_connect("/api/watch?kind=pods") as ws:
+        assert ws.receive_json()["type"] == "cluster_status"
+
+
 def test_ws_disconnect_closes_the_subscription(app_with_fake_sources):
     client = app_with_fake_sources
     hub = client.app.state.hub
@@ -43,6 +65,7 @@ class FakeWebSocket:
 
     def __init__(self, hub):
         self.app = SimpleNamespace(state=SimpleNamespace(hub=hub))
+        self.headers = {}
         self.gone = asyncio.Event()
 
     async def accept(self): ...

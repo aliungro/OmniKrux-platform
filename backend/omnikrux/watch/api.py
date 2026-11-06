@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
@@ -12,8 +13,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _cross_origin(websocket: WebSocket) -> bool:
+    """True when a browser opened this socket from another site (Origin host:port != Host).
+
+    Browsers don't apply the same-origin policy to WebSockets, so any page could otherwise read
+    every cluster's pods. Clients that send no Origin (CLI tools, tests) are not browsers.
+    """
+    origin = websocket.headers.get("origin")
+    if origin is None:
+        return False
+    host = (websocket.headers.get("host") or "").lower()
+    return not host or urlsplit(origin).netloc.lower() != host
+
+
 @router.websocket("/api/watch")
 async def watch(websocket: WebSocket, kind: str) -> None:
+    if _cross_origin(websocket):
+        await websocket.close(code=4403, reason="Cross-origin request refused")  # before accept: HTTP 403
+        return
     await websocket.accept()
     try:
         sub = await websocket.app.state.hub.subscribe(kind)

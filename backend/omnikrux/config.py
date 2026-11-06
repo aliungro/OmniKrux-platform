@@ -1,8 +1,13 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Host headers the console answers to (DNS-rebinding guard). "*.localhost" allows any subdomain.
+DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "[::1]", "*.localhost")
 
 
 class Settings(BaseSettings):
@@ -14,6 +19,15 @@ class Settings(BaseSettings):
     in_container: bool = False
     kubeconfig: str | None = None
     static_dir: Path | None = None
+    # OMNIKRUX_ALLOWED_HOSTS: comma-separated; "*" turns the Host check off.
+    allowed_hosts: Annotated[list[str], NoDecode] = list(DEFAULT_ALLOWED_HOSTS)
+
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [h.strip() for h in value.split(",") if h.strip()]
+        return value
 
     @property
     def db_url(self) -> str:

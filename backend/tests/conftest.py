@@ -6,13 +6,19 @@ from fastapi.testclient import TestClient
 
 from omnikrux.clusters.models import Environment, Provider
 from omnikrux.clusters.registry import ClusterInfo, ClusterRegistry
-from omnikrux.config import Settings
+from omnikrux.config import DEFAULT_ALLOWED_HOSTS, Settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.main import create_app
 from omnikrux.security.secrets import SecretBox
 from omnikrux.watch.hub import WatchHub
 from tests.clusters.test_kubeconfig import kc
 from tests.watch.fakes import FakeSource
+
+
+@pytest.fixture(autouse=True)
+def allow_testserver_host(monkeypatch):
+    """Starlette's TestClient sends `Host: testserver`; allow it next to the real defaults."""
+    monkeypatch.setenv("OMNIKRUX_ALLOWED_HOSTS", ",".join([*DEFAULT_ALLOWED_HOSTS, "testserver"]))
 
 
 @pytest.fixture

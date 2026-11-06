@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from omnikrux.clusters.api import router as clusters_router
 from omnikrux.clusters.kubeconfig import read_kubeconfig_files
@@ -65,6 +66,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Omnikrux", lifespan=lifespan)
     app.state.settings = settings
+    # No login yet: only answer to the hosts the user reaches us by, so a DNS-rebinding page can't.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts, www_redirect=False)
     app.include_router(clusters_router)
     app.include_router(watch_router)
 
