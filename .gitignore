@@ -1,0 +1,8 @@
+.superpowers/
+.omnikrux-data/
+.tools/
+__pycache__/
+.venv/
+node_modules/
+frontend/dist/
+backend/omnikrux/static/
