@@ -35,6 +35,7 @@ asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = ["kind: needs a running kind cluster"]
+# Temporary: drop once starlette stops triggering the httpx deprecation warning.
 filterwarnings = [
     "ignore:Using `httpx` with:Warning",
 ]

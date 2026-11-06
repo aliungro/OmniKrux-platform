@@ -1,12 +1,11 @@
-from typing import Any
-
 from fastapi import FastAPI
 
+from omnikrux.config import Settings, get_settings
 
-def create_app(settings: Any | None = None) -> FastAPI:
-    # `settings` becomes a typed Settings object in Task 2.
+
+def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Omnikrux")
-    app.state.settings = settings
+    app.state.settings = settings if settings is not None else get_settings()
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
