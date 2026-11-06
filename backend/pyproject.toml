@@ -34,6 +34,7 @@ packages = ["omnikrux"]
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 markers = ["kind: needs a running kind cluster"]
 # Temporary: drop once starlette stops triggering the httpx deprecation warning.
 filterwarnings = [
