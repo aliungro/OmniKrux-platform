@@ -142,9 +142,12 @@ def default_resources() -> list[FakeResource]:
             short_names=("crd", "crds"),
         ),
         R("example.omnikrux.dev", "v1", "widgets", "Widget", True, short_names=("wd",)),
+        R(METRICS_GROUP, "v1beta1", "pods", "PodMetrics", True, ("get", "list")),
+        R(METRICS_GROUP, "v1beta1", "nodes", "NodeMetrics", False, ("get", "list")),
     ]
 
 
+METRICS_GROUP = "metrics.k8s.io"
 CRDS_KEY = "customresourcedefinitions.apiextensions.k8s.io"
 WIDGET_CRD = {
     "apiVersion": "apiextensions.k8s.io/v1",
@@ -177,6 +180,29 @@ EVENTS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/events$")
 API_PATH = re.compile(
     r"^/(?:api/(?P<core>v1)|apis/(?P<group>[^/]+)/(?P<version>[^/]+))(?P<rest>/.*)?$"
 )
+
+
+METRICS_PREFIX = f"/apis/{METRICS_GROUP}/v1beta1"
+
+
+def _metric_item(kind: str, namespace: str, name: str, metric: dict) -> dict:
+    meta = {"name": name, **({"namespace": namespace} if namespace else {})}
+    return {
+        "kind": kind,
+        "apiVersion": f"{METRICS_GROUP}/v1beta1",
+        "metadata": meta,
+        "window": "30s",
+        **metric,
+    }
+
+
+def _metric_list(kind: str, entries: list[tuple[str, str, dict]]) -> dict:
+    return {
+        "kind": kind,
+        "apiVersion": f"{METRICS_GROUP}/v1beta1",
+        "metadata": {},
+        "items": [_metric_item(kind[:-4], ns, name, m) for ns, name, m in entries],
+    }
 
 
 def _flag(query, name: str) -> bool:
@@ -241,6 +267,15 @@ class FakeKubeApi:
         self.broken_groups: set[str] = set()
         self.hanging_groups: set[str] = set()
         self.forbidden_kinds: set[str] = set()
+        # metrics-server: ok; missing (the group is not served: absent from discovery, 404);
+        # unavailable (the aggregated API answers 503, also in discovery).
+        self.metrics_mode = "ok"
+        # (namespace, pod) -> {"timestamp", "window", "containers": [{"name", "usage"}]}
+        self.pod_metrics: dict[tuple[str, str], dict] = {}
+        # node name -> {"timestamp", "window", "usage": {"cpu", "memory"}}
+        self.node_metrics: dict[str, dict] = {}
+        # Seconds a metrics answer takes (a slow metrics-server).
+        self.metrics_delay = 0.0
         # kind key -> (namespace, name) -> object, e.g. objects["deployments.apps"][("demo", "web")]
         self.objects: dict[str, dict[tuple[str, str], dict]] = ObjectStore()
         self.objects[CRDS_KEY][("", WIDGET_CRD["metadata"]["name"])] = WIDGET_CRD
@@ -318,6 +353,8 @@ class FakeKubeApi:
                 return await self._delete_pod(request, key)
             if method == "POST" and sub == "/eviction":
                 return await self._evict(request, key)
+        if method == "GET" and path.startswith(METRICS_PREFIX):
+            return await self._metrics(path)
         if method == "GET" and (match := API_PATH.match(path)):
             return await self._get(request, match)
         if method in ("PUT", "PATCH") and (match := API_PATH.match(path)):
@@ -326,11 +363,50 @@ class FakeKubeApi:
             return await self._delete(request, match)
         return not_found()
 
+    async def _metrics(self, path: str) -> web.Response:
+        """The metrics.k8s.io API: discovery, lists and single reads, per `metrics_mode`."""
+        if self.metrics_mode == "missing":
+            return not_found("the server could not find the requested resource")
+        if self.metrics_mode == "unavailable":
+            return web.json_response(
+                status_body(503, "ServiceUnavailable", UNAVAILABLE), status=503
+            )
+        if self.metrics_delay:
+            await asyncio.sleep(self.metrics_delay)
+        parts = [p for p in path[len(METRICS_PREFIX) :].split("/") if p]
+        if not parts:
+            return self._resource_list(METRICS_GROUP, "v1beta1")
+        if parts[0] == "nodes":
+            if len(parts) == 1:
+                return web.json_response(
+                    _metric_list(
+                        "NodeMetricsList", [("", n, m) for n, m in self.node_metrics.items()]
+                    )
+                )
+            node = self.node_metrics.get(parts[1])
+            if node is None:
+                return not_found(f'nodemetrics.metrics.k8s.io "{parts[1]}" not found')
+            return web.json_response(_metric_item("NodeMetrics", "", parts[1], node))
+        ns = None
+        if parts[0] == "namespaces" and len(parts) >= 3:
+            ns, parts = parts[1], parts[2:]
+        if parts[0] != "pods":
+            return not_found()
+        if len(parts) == 1:
+            items = [(n, name, m) for (n, name), m in self.pod_metrics.items() if ns in (None, n)]
+            return web.json_response(_metric_list("PodMetricsList", items))
+        pod = self.pod_metrics.get((ns or "", parts[1]))
+        if pod is None:
+            return not_found(f'podmetrics.metrics.k8s.io "{parts[1]}" not found')
+        return web.json_response(_metric_item("PodMetrics", ns or "", parts[1], pod))
+
     # --- discovery and generic reads ----------------------------------------------------
 
     def _group_list(self) -> dict:
         versions: dict[str, list[str]] = {}
         for res in self.resources:
+            if res.group == METRICS_GROUP and self.metrics_mode == "missing":
+                continue
             if res.group and res.version not in versions.setdefault(res.group, []):
                 versions[res.group].append(res.version)
         return {

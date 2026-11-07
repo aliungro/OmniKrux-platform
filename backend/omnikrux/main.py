@@ -24,6 +24,8 @@ from omnikrux.exec.api import router as exec_router
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.kube.source import KubeResourceSource
 from omnikrux.logs.api import router as logs_router
+from omnikrux.metrics.api import router as metrics_router
+from omnikrux.metrics.cache import MetricsCache
 from omnikrux.resources.api import router as resources_router
 from omnikrux.resources.catalog import KindCatalog
 from omnikrux.resources.kinds_api import router as kinds_router
@@ -171,6 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.catalog = catalog
         app.state.hub = hub
         app.state.audit = audit
+        metrics = app.state.metrics = MetricsCache(connections)
         app.state.plans = PlanStore()
         jobs = app.state.jobs = JobRunner(audit)
         try:
@@ -180,6 +183,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await jobs.close()  # first: a stopped drain still writes its audit record
             await hub.close()
+            await metrics.close()
             await catalog.close()
             await engine.dispose()
 
@@ -200,6 +204,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(exec_router)
     app.include_router(audit_router)
     app.include_router(actions_router)
+    app.include_router(metrics_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
