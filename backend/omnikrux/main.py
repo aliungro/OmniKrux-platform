@@ -25,6 +25,7 @@ from omnikrux.security.secrets import SecretBox
 from omnikrux.watch.api import router as watch_router
 from omnikrux.watch.hub import WatchHub
 from omnikrux.web import mount_spa
+from omnikrux.web_security import CrossOriginWriteGuard
 
 log = logging.getLogger(__name__)
 
@@ -152,6 +153,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Omnikrux", lifespan=lifespan)
     app.state.settings = settings
+    # No login yet, so no session cookie to check either: refuse writes that another site's
+    # page sends (it could otherwise start a node shell or delete a cluster).
+    app.add_middleware(CrossOriginWriteGuard)
     # No login yet: only answer to the hosts the user reaches us by, so a DNS-rebinding page can't.
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts, www_redirect=False

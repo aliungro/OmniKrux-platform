@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, WebSocket
 from kubernetes_asyncio.client import CoreV1Api
 
-from omnikrux.exec.debug import delete_pod, finish_even_if_cancelled, is_node_shell
+from omnikrux.exec.debug import NSENTER, delete_pod, finish_even_if_cancelled, is_node_shell
 from omnikrux.exec.session import BROWSER_GONE, ExecBridge, KubeExecChannel
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.kube.http import read_json
@@ -133,14 +133,14 @@ async def exec_shell(
     cleanup_pod: bool = False,
 ) -> None:
     """`cleanup_pod`: delete the pod when the session ends, however it ends (node-shell pods
-    only)."""
+    only). Without `command`, a node-shell pod gets a shell on the node (`NSENTER`), any other
+    pod `DEFAULT_COMMAND`."""
     if is_cross_origin(websocket):
         await websocket.close(code=4403, reason="Cross-origin request refused")  # HTTP 403
         return
     await websocket.accept()
     container = container or None
-    command = command or DEFAULT_COMMAND
-    if not namespace or not pod or not all(command):
+    if not namespace or not pod or (command is not None and not all(command)):
         await _fail(websocket, "Choose a namespace and a pod (and no empty command words).", 1008)
         return
     connections: ClusterConnections = websocket.app.state.connections
@@ -159,6 +159,7 @@ async def exec_shell(
         )
         await _fail(websocket, message, 1008)
         return
+    command = command or (NSENTER if is_node_shell(found) else DEFAULT_COMMAND)
     try:
         await _session(websocket, connections, cluster, namespace, pod, found, container, command)
     finally:

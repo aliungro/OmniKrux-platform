@@ -79,9 +79,12 @@ def reads_of(fake_api, path: str) -> int:
 async def test_debug_patch_body_and_returns_name(api, fake_api):
     fake_api.pods[("demo", "web-a")] = pod("web-a")
 
-    name = await add_debug_container(api, "demo", "web-a", target="app", image="busybox:1.36")
+    name, target = await add_debug_container(
+        api, "demo", "web-a", target="app", image="busybox:1.36"
+    )
 
     assert re.fullmatch(r"debug-[a-z0-9]{5}", name)
+    assert target == "app"  # running, so kept
     assert fake_api.patches == [
         {
             "spec": {
@@ -98,8 +101,8 @@ async def test_debug_patch_body_and_returns_name(api, fake_api):
             }
         }
     ]
-    # it waited: the container was still being created on the first read, running on the second
-    assert reads_of(fake_api, "/api/v1/namespaces/demo/pods/web-a") == 2
+    # one read to check the target; then it waited: still being created, then running
+    assert reads_of(fake_api, "/api/v1/namespaces/demo/pods/web-a") == 3
     [status] = fake_api.pods[("demo", "web-a")]["status"]["ephemeralContainerStatuses"]
     assert status["name"] == name and "running" in status["state"]
 
@@ -107,13 +110,36 @@ async def test_debug_patch_body_and_returns_name(api, fake_api):
 async def test_debug_without_target_and_names_differ(api, fake_api):
     fake_api.pods[("demo", "web-a")] = pod("web-a")
 
-    first = await add_debug_container(api, "demo", "web-a", target=None, image="busybox:1.36")
-    second = await add_debug_container(api, "demo", "web-a", target=None, image="busybox:1.36")
+    first, t1 = await add_debug_container(api, "demo", "web-a", target=None, image="busybox:1.36")
+    second, t2 = await add_debug_container(api, "demo", "web-a", target="", image="busybox:1.36")
 
-    assert first != second
+    assert first != second and t1 is t2 is None
     added = [p["spec"]["ephemeralContainers"][0] for p in fake_api.patches]
     assert [c["name"] for c in added] == [first, second]
     assert all("targetContainerName" not in c for c in added)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"waiting": {"reason": "CrashLoopBackOff"}},
+        {"terminated": {"reason": "Error", "exitCode": 1}},
+        {},
+    ],
+)
+async def test_debug_target_not_running_is_dropped(api, fake_api, state):
+    # The kubelet can't start a container that targets one which isn't running
+    # ("invalid target container ... is not running"), so the target is left out.
+    fake_api.pods[("demo", "crasher")] = pod("crasher", state=state, restarts=5)
+
+    name, target = await add_debug_container(
+        api, "demo", "crasher", target="app", image="busybox:1.36"
+    )
+
+    assert target is None
+    [patch] = fake_api.patches
+    [added] = patch["spec"]["ephemeralContainers"]
+    assert added["name"] == name and "targetContainerName" not in added
 
 
 async def test_debug_timeout_plain_message(api, fake_api):
@@ -242,10 +268,23 @@ async def test_debug_route_returns_container(http, fake_api):
 
     assert r.status_code == 200
     name = r.json()["container"]
+    assert r.json() == {"container": name, "target": "app"}
     [patch] = fake_api.patches
     [added] = patch["spec"]["ephemeralContainers"]
     assert added["name"] == name and added["targetContainerName"] == "app"
     assert added["image"] == "registry.local/toolbox:2"  # OMNIKRUX_DEBUG_IMAGE
+
+
+async def test_debug_route_says_when_target_was_dropped(http, fake_api):
+    client, cluster_id = http
+    fake_api.pods[("demo", "crasher")] = pod("crasher", state={"waiting": {"reason": "Error"}})
+
+    r = await client.post(
+        f"/api/clusters/{cluster_id}/pods/demo/crasher/debug", json={"target": "app"}
+    )
+
+    assert r.status_code == 200
+    assert r.json() == {"container": r.json()["container"], "target": None}
 
 
 async def test_debug_route_errors_are_plain(http, fake_api, monkeypatch):
@@ -394,3 +433,66 @@ async def test_labelled_pod_kept_without_cleanup_flag(app, fake_api, fake_channe
 
     assert ws.sent == [{"type": "exit", "code": 0, "message": None}]
     assert fake_api.deleted == []
+
+
+# --- node-shell default command -------------------------------------------------------------
+
+
+async def test_node_shell_exec_defaults_to_nsenter(app, fake_api):
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+    ws = BrowserSocket(app[0])
+    handler = start_shell(app, ws, "omnikrux-node-shell-abcde")
+    ws.type({"type": "stdin", "data": "exit 0"})
+    await handler
+
+    [call] = fake_api.execs
+    assert (call["container"], call["command"]) == ("shell", NSENTER)
+
+
+async def test_node_shell_explicit_command_wins(app, fake_api):
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+    ws = BrowserSocket(app[0])
+    handler = start_shell(app, ws, "omnikrux-node-shell-abcde", command=["sh"])
+    ws.type({"type": "stdin", "data": "exit 0"})
+    await handler
+
+    [call] = fake_api.execs
+    assert call["command"] == ["sh"]
+
+
+async def test_other_pods_keep_default_command(app, fake_api):
+    fake_api.pods[("default", "web-a")] = node_shell("web-a", labels={"app": "web"})
+    ws = BrowserSocket(app[0])
+    handler = start_shell(app, ws, "web-a")
+    ws.type({"type": "stdin", "data": "exit 0"})
+    await handler
+
+    [call] = fake_api.execs
+    assert call["command"] == exec_api.DEFAULT_COMMAND
+
+
+# --- cross-origin writes --------------------------------------------------------------------
+
+
+async def test_cross_origin_node_shell_refused(http, fake_api):
+    client, cluster_id = http
+
+    r = await client.post(
+        f"/api/clusters/{cluster_id}/nodes/worker-1/shell",
+        headers={"origin": "http://evil.example"},
+    )
+
+    assert r.status_code == 403
+    assert r.json() == {"detail": "Cross-origin request refused"}
+    assert fake_api.created == []
+
+
+@pytest.mark.parametrize("origin", [None, "http://testserver"])
+async def test_same_origin_or_no_origin_node_shell_proceeds(http, fake_api, origin):
+    client, cluster_id = http
+    headers = {"origin": origin} if origin else {}
+
+    r = await client.post(f"/api/clusters/{cluster_id}/nodes/worker-1/shell", headers=headers)
+
+    assert r.status_code == 200
+    assert len(fake_api.created) == 1

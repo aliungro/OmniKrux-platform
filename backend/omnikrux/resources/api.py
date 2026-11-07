@@ -91,17 +91,24 @@ class DebugRequest(BaseModel):
     target: str | None = None  # the container whose processes the debug container sees
 
 
+class DebugOut(BaseModel):
+    container: str
+    # The container whose processes it sees; None when none was asked for, or when the one
+    # asked for wasn't running (then it isn't attached to that container's processes).
+    target: str | None
+
+
 @router.post("/pods/{namespace}/{name}/debug")
 async def debug_container(
     cluster_id: str, namespace: str, name: str, body: DebugRequest, request: Request
-) -> dict[str, str]:
+) -> DebugOut:
     image = request.app.state.settings.debug_image
 
-    async def run(api: ApiClient) -> dict[str, str]:
-        target = body.target or None
-        return {
-            "container": await add_debug_container(api, namespace, name, target=target, image=image)
-        }
+    async def run(api: ApiClient) -> DebugOut:
+        container, target = await add_debug_container(
+            api, namespace, name, target=body.target, image=image
+        )
+        return DebugOut(container=container, target=target)
 
     return await _call(request, cluster_id, f"add a debug container to pod {namespace}/{name}", run)
 

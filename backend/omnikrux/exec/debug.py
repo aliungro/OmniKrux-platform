@@ -15,7 +15,12 @@ from kubernetes_asyncio.client import ApiClient, CoreV1Api
 from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.kube.http import read_json
-from omnikrux.logs.stream import FINISHED_PHASES, container_status, state_words
+from omnikrux.logs.stream import (
+    FINISHED_PHASES,
+    container_names,
+    container_status,
+    state_words,
+)
 
 log = logging.getLogger(__name__)
 
@@ -88,13 +93,24 @@ async def add_debug_container(
     target: str | None,
     image: str,
     timeout: float | None = None,
-) -> str:
-    """Add an ephemeral `sh` container to the pod (sharing `target`'s process namespace when
-    given), wait until it runs and return its name. It can't be removed again."""
+) -> tuple[str, str | None]:
+    """Add an ephemeral `sh` container to the pod, wait until it runs and return (its name, the
+    target used). It can't be removed again.
+
+    With `target` it shares that container's process namespace, but only if the target is
+    running: the kubelet can't start a container that targets a stopped one ("invalid target
+    container ... is not running") and the pod would only ever say ContainerCreating. So a
+    stopped target is dropped, and the returned target is None."""
     name = f"debug-{_suffix()}"
     container = {"name": name, "image": image, "command": ["sh"], "stdin": True, "tty": True}
     if target:
-        container["targetContainerName"] = target
+        found = await _read_pod(api, ns, pod)
+        running = "running" in (container_status(found, target).get("state") or {})
+        if running or target not in container_names(found):  # the API server names a bad one
+            container["targetContainerName"] = target
+        else:
+            target = None
+    target = target or None
     # A strategic merge patch merges by name, so only the new container is sent (as kubectl
     # does); a JSON merge patch would replace the list.
     await read_json(
@@ -108,7 +124,7 @@ async def add_debug_container(
         )
     )
     await _wait_running(api, ns, pod, name, "debug container", _timeout(timeout))
-    return name
+    return name, target
 
 
 def node_shell_pod(name: str, node: str, image: str) -> dict:
