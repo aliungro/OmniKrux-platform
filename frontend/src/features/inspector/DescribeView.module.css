@@ -1,0 +1,288 @@
+/* Three columns, as in the mockup: pod facts, containers, events. */
+.desc {
+  display: grid;
+  grid-template-columns: 265px minmax(0, 1fr) 290px;
+}
+
+.col {
+  container-type: inline-size;
+  min-width: 0;
+  padding: 14px 16px 16px 18px;
+  border-right: 1px solid var(--rule);
+}
+
+.col:last-child {
+  border-right: 0;
+}
+
+.h {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.none {
+  margin: 0;
+  color: var(--ink-3);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Key/value list. */
+.kv {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+}
+
+.kv dt {
+  color: var(--ink-3);
+}
+
+/* Values wrap rather than hide: an owner or a probe is worth reading in full. */
+.kv dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: break-word;
+}
+
+/* Conditions: ✓ for True, ✕ for False, ? for Unknown. */
+.conds,
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conds {
+  gap: 6px;
+}
+
+.cond {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  color: var(--ink-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mark {
+  font-weight: 700;
+  color: var(--ok);
+}
+
+.cond[data-status="False"] {
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+}
+
+.cond[data-status="False"] .mark {
+  color: var(--bad);
+}
+
+.cond[data-status="Unknown"] .mark {
+  color: var(--warn);
+}
+
+/* Labels and annotations as mono tags. */
+.tags {
+  gap: 5px;
+}
+
+.tag {
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--surf-2);
+  color: var(--ink-2);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.more {
+  margin-top: 10px;
+  color: var(--ink-3);
+}
+
+.more summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.more summary:hover {
+  color: var(--ink-2);
+}
+
+.long {
+  width: 100%;
+}
+
+/* Container cards. */
+.ctr {
+  margin-bottom: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.ctrHead {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 0;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctrHead:hover {
+  background: color-mix(in srgb, var(--surf-2) 60%, var(--surf));
+}
+
+.ctrHead:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* Folded: header only, on the inspector's own background. */
+.mini .ctrHead {
+  background: transparent;
+}
+
+.mini .ctrHead:hover {
+  background: color-mix(in srgb, var(--surf) 60%, transparent);
+}
+
+.ctrName {
+  flex: none;
+  font-weight: 700;
+}
+
+.kindTag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--surf-2);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.img {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+
+.ctrState {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.ctrBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  border-top: 1px solid var(--rule);
+}
+
+.ctrKv {
+  grid-template-columns: 88px minmax(0, 1fr);
+  padding: 10px 12px;
+}
+
+.ctrKv + .ctrKv {
+  border-left: 1px solid var(--rule);
+}
+
+/* A narrow window: the card's two lists stack instead of squeezing their values. */
+@container (max-width: 520px) {
+  .ctrBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ctrKv + .ctrKv {
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+  }
+}
+
+/* A limit the container ran into, or a non-zero exit. */
+.over {
+  color: var(--bad);
+  font-weight: 700;
+}
+
+.wide {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.sub {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.envs,
+.mounts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.env {
+  display: grid;
+  grid-template-columns: minmax(80px, 38%) minmax(0, 1fr);
+  gap: 10px;
+}
+
+/* Names, values and sources wrap: a cut-off Secret reference is no use. */
+.env > span,
+.mounts li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.envName {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.envValue {
+  color: var(--ink-2);
+}
+
+.envSource {
+  color: var(--focus);
+}
+
+.mounts li {
+  color: var(--ink-2);
+}

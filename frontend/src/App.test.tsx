@@ -72,7 +72,7 @@ describe("Console wiring", () => {
     expect(screen.getByRole("tab").textContent).toBe("Pods3");
     expect(screen.getByRole("button", { name: "Failing 1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Pending 1" })).toBeTruthy();
-    expect(screen.getByRole("table", { name: "Pods by cluster" })).toBeTruthy();
+    expect(screen.getByRole("grid", { name: "Pods by cluster" })).toBeTruthy();
   });
   it("scope token uses the watch state over the cluster list", async () => {
     watch.state = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "error", message: "Can't reach this cluster: timeout" });

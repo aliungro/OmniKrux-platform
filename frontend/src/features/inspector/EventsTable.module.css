@@ -1,0 +1,76 @@
+.ev {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ev td {
+  padding: 6px 8px 6px 0;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
+}
+
+.ev tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Type marker: a warn-coloured square for Warning, a quiet dot for Normal. */
+.ty {
+  width: 18px;
+}
+
+.ty i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 2px;
+}
+
+.wa .ty i {
+  background: var(--warn);
+}
+
+.no .ty i {
+  background: var(--ink-3);
+  border-radius: 50%;
+}
+
+.rs {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.x {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ms {
+  color: var(--ink-2);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ev td.ag {
+  padding-right: 0;
+  color: var(--ink-3);
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.none,
+.error {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.none {
+  color: var(--ink-3);
+}
+
+.error {
+  color: color-mix(in srgb, var(--warn) 70%, var(--ink));
+}

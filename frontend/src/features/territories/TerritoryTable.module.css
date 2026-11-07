@@ -17,8 +17,11 @@
   background: var(--bg);
 }
 
+/* Lines up with the rows through PodRow's `.grid` (applied in TerritoryTable.tsx).
+   Fixed height: the virtualizer offsets the body by it (HEADER_HEIGHT in TerritoryTable.tsx). */
 .cols {
-  composes: grid from "./PodRow.module.css";
+  box-sizing: border-box;
+  height: 30px;
   padding: 8px 14px 6px 18px;
   color: var(--ink-3);
   font-size: 12px;
@@ -34,4 +37,18 @@
   top: 0;
   left: 0;
   width: 100%;
+}
+
+/* The open inspector continues its territory card: same side edges, a rule above. */
+.inspRow {
+  box-sizing: border-box;
+  border: 1px solid var(--rule);
+  border-bottom: 0;
+  overflow: hidden;
+}
+
+/* When the inspected row is the cluster's last, the inspector closes the card. */
+.inspRow.last {
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0 0 12px 12px;
 }

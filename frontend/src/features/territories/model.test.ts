@@ -26,6 +26,13 @@ describe("territories model", () => {
     const flat = flatten(buildTerritories([cl], state(), { status: "all", text: "" }, now));
     expect(flat.map(x => x.type)).toEqual(["band", "row", "row", "row"]);
   });
+  it("flatten puts the inspector right after the inspected row, in its own cluster only", () => {
+    const ts = buildTerritories([cl], state(), { status: "all", text: "" }, now);
+    const flat = flatten(ts, { clusterId: "c1", uid: "wait" });
+    expect(flat.map(x => x.type)).toEqual(["band", "row", "row", "inspector", "row"]);
+    expect(flat[3].type === "inspector" && flat[3].row.uid).toBe("wait");
+    expect(flatten(ts, { clusterId: "other", uid: "wait" }).map(x => x.type)).not.toContain("inspector");
+  });
 });
 
 describe("territories model details", () => {
