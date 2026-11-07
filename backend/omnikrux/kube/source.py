@@ -6,11 +6,11 @@ import logging
 from collections.abc import AsyncIterator
 
 from kubernetes_asyncio.client import ApiClient
-from kubernetes_asyncio.client.exceptions import ApiException
-from kubernetes_asyncio.dynamic import DynamicClient
 
 from omnikrux.kube.client import ClusterUnavailable
+from omnikrux.kube.http import status_message
 from omnikrux.resources.kinds import KindSpec
+from omnikrux.resources.rows import ResourceRow
 from omnikrux.watch.source import Expired, ResourceSource, WatchEvent
 
 logger = logging.getLogger(__name__)
@@ -21,14 +21,15 @@ WATCH_TIMEOUT_SECONDS = 300
 # (connect, read) client-side timeouts: a silent connection fails instead of hanging.
 LIST_REQUEST_TIMEOUT = (30, 120)
 WATCH_REQUEST_TIMEOUT = (30, WATCH_TIMEOUT_SECONDS + 60)
-# Upper bound for the API probe plus discovery; the dynamic client's own requests have no timeout.
-DISCOVERY_TIMEOUT_SECONDS = 30
+# Upper bound for the API probe that runs before a source's first request.
+PROBE_TIMEOUT_SECONDS = 30
 
 EVENT_TYPES = ("ADDED", "MODIFIED", "DELETED")
 
 
 class KubeResourceSource(ResourceSource):
-    """`ResourceSource` for one kind on one cluster, across all namespaces.
+    """`ResourceSource` for one kind on one cluster, across all namespaces (and only the objects
+    matching the spec's label selector, if it has one).
 
     Owns `api`: `aclose()` closes it. Objects are plain JSON dicts as the API returns them.
     """
@@ -38,13 +39,12 @@ class KubeResourceSource(ResourceSource):
         api: ApiClient,
         spec: KindSpec,
         *,
-        discovery_timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+        probe_timeout: float = PROBE_TIMEOUT_SECONDS,
     ):
         self._api = api
         self._spec = spec
-        self._discovery_timeout = discovery_timeout
-        self._dynamic = None
-        self._resource = None
+        self._probe_timeout = probe_timeout
+        self._probed = False
         self._closed = False
         # The newest resourceVersion this source has handed to its caller (list or event),
         # and the newest it has seen at all (including bookmarks, which emit nothing).
@@ -62,21 +62,17 @@ class KubeResourceSource(ResourceSource):
         raise AssertionError("unreachable")
 
     async def _list_once(self) -> tuple[list[dict], str]:
-        dynamic, resource = await self._resolve()
+        await self._ensure_probed()
         items: list[dict] = []
         token = None
         while True:
-            resp = await dynamic.request(
-                "get",
-                resource.path(),
-                limit=LIST_PAGE_SIZE,
-                _continue=token,
-                serialize=False,
-                _request_timeout=LIST_REQUEST_TIMEOUT,
-            )
+            params: list[tuple[str, object]] = [("limit", LIST_PAGE_SIZE)]
+            if token:
+                params.append(("continue", token))
+            resp = await self._get(params, LIST_REQUEST_TIMEOUT)
             await self._raise_for_status(resp, f"list {self._spec.plural}")
             try:
-                body = await resp.json()
+                body = json.loads(await resp.read())
             finally:
                 resp.release()
             items.extend(body.get("items") or [])
@@ -88,19 +84,18 @@ class KubeResourceSource(ResourceSource):
                 return items, rv
 
     async def watch(self, resource_version: str) -> AsyncIterator[WatchEvent]:
-        dynamic, resource = await self._resolve()
+        await self._ensure_probed()
         start = resource_version
         if resource_version == self._handed_out_rv and self._latest_rv:
             start = self._latest_rv  # a bookmark moved past the caller's rv with no events between
-        resp = await dynamic.request(
-            "get",
-            resource.path(),
-            watch=True,
-            resource_version=start,
-            timeout_seconds=WATCH_TIMEOUT_SECONDS,
-            query_params=[("allowWatchBookmarks", "true")],
-            serialize=False,
-            _request_timeout=WATCH_REQUEST_TIMEOUT,
+        resp = await self._get(
+            [
+                ("watch", "true"),
+                ("resourceVersion", start),
+                ("timeoutSeconds", WATCH_TIMEOUT_SECONDS),
+                ("allowWatchBookmarks", "true"),
+            ],
+            WATCH_REQUEST_TIMEOUT,
         )
         await self._raise_for_status(resp, f"watch {self._spec.plural}")
         try:
@@ -116,44 +111,43 @@ class KubeResourceSource(ResourceSource):
         finally:
             resp.close()
 
+    def to_row(self, obj: dict, cluster_id: str) -> ResourceRow:
+        return self._spec.to_row(obj, cluster_id)
+
     async def aclose(self) -> None:
         if not self._closed:
             self._closed = True
             await self._api.close()
 
-    async def _resolve(self):
-        if self._resource is None:
-            try:
-                async with asyncio.timeout(self._discovery_timeout):
-                    await self._probe()
-                    dynamic = await DynamicClient(self._api)
-                    spec = self._spec
-                    resource = await dynamic.resources.get(
-                        prefix="apis" if spec.group else "api",
-                        group=spec.group or None,
-                        api_version=spec.version,
-                        kind=spec.kind,
-                        name=spec.plural,
-                    )
-            except TimeoutError as exc:
-                raise ClusterUnavailable(
-                    f"The cluster API did not respond within {self._discovery_timeout:g} s"
-                ) from exc
-            except ApiException as exc:
-                detail = " ".join(str(x) for x in (exc.status, exc.reason) if x) or "no details"
-                raise ClusterUnavailable(f"The cluster's API discovery failed: {detail}") from exc
-            except TypeError as exc:  # discovery read a Status (or other) body as a resource list
-                raise ClusterUnavailable(
-                    "The cluster's API discovery failed: it answered with something unexpected"
-                ) from exc
-            self._dynamic, self._resource = dynamic, resource
-        return self._dynamic, self._resource
+    async def _get(self, params: list[tuple[str, object]], timeout: tuple[int, int]):
+        """GET the spec's collection (raw: the caller checks the status and releases it)."""
+        if self._spec.label_selector:
+            params = [*params, ("labelSelector", self._spec.label_selector)]
+        return await self._api.call_api(
+            self._spec.list_path(),
+            "GET",
+            query_params=params,
+            header_params={"Accept": "application/json"},
+            auth_settings=["BearerToken"],
+            _preload_content=False,
+            _return_http_data_only=True,
+            _request_timeout=timeout,
+        )
+
+    async def _ensure_probed(self) -> None:
+        if self._probed:
+            return
+        try:
+            async with asyncio.timeout(self._probe_timeout):
+                await self._probe()
+        except TimeoutError as exc:
+            raise ClusterUnavailable(
+                f"The cluster API did not respond within {self._probe_timeout:g} s"
+            ) from exc
+        self._probed = True
 
     async def _probe(self) -> None:
-        """GET /api with a timeout, so a refusal gets a plain message before discovery runs.
-
-        Discovery itself reads error bodies as data (a 401 there surfaces as a TypeError).
-        """
+        """GET /api, so a silent or refusing API gets a plain message before the first list."""
         resp = await self._api.call_api(
             "/api",
             "GET",
@@ -167,12 +161,12 @@ class KubeResourceSource(ResourceSource):
         resp.release()
 
     async def _raise_for_status(self, resp, action: str) -> None:
-        """Raise for a non-2xx response (the dynamic client returns them instead of raising)."""
+        """Raise for a non-2xx response (raw calls return them instead of raising)."""
         status = resp.status
         if 200 <= status < 300:
             return
         try:
-            message = _status_message(await resp.read()) or resp.reason or str(status)
+            message = status_message(await resp.read()) or resp.reason or str(status)
         finally:
             resp.release()
         if status == 410:
@@ -208,13 +202,3 @@ class KubeResourceSource(ResourceSource):
         if rv:
             self._handed_out_rv = self._latest_rv = rv
         return WatchEvent(kind, obj)
-
-
-def _status_message(body: bytes) -> str | None:
-    """The `message` of a Kubernetes Status body; None when the body isn't one (e.g. HTML)."""
-    try:
-        data = json.loads(body)
-    except ValueError:
-        return None
-    message = data.get("message") if isinstance(data, dict) else None
-    return message if isinstance(message, str) and message else None

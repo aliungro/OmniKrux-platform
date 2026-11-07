@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+from omnikrux.resources.rows import ResourceRow, pod_row
 from omnikrux.watch.source import WatchEvent
 
 
@@ -20,10 +21,12 @@ class FakeSource:
     ``list()`` pops the next ``(items, rv)``. ``watch()`` pops the next entry: a list
     yields its events and then ends normally; an exception instance is raised; a ``Hold``
     waits first. Once a script is used up, ``list()`` and ``watch()`` block forever.
-    ``watch_times`` records the loop time at which each watch started.
+    ``watch_times`` records the loop time at which each watch started. Rows are built with
+    ``to_row`` (pods by default).
     """
 
-    def __init__(self, lists=(), watches=(), factory_errors=()):
+    def __init__(self, lists=(), watches=(), factory_errors=(), to_row=pod_row):
+        self._to_row = to_row
         self.lists = list(lists)
         self.watches = list(watches)
         self.factory_errors = list(factory_errors)
@@ -35,6 +38,9 @@ class FakeSource:
         if self.factory_errors:
             raise self.factory_errors.pop(0)
         return self
+
+    def to_row(self, obj: dict, cluster_id: str) -> ResourceRow:
+        return self._to_row(obj, cluster_id)
 
     async def list(self) -> tuple[list[dict], str]:
         if not self.lists:

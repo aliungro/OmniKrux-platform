@@ -5,24 +5,29 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
 from omnikrux.kube.client import ClusterUnavailable
-from omnikrux.resources.rows import ResourceRow
+from omnikrux.resources.catalog import KindNotServed
 from omnikrux.watch.source import Expired, ResourceSource, WatchEvent
 
 logger = logging.getLogger(__name__)
 
-State = Literal["syncing", "ready", "error"]
+State = Literal["syncing", "ready", "error", "absent"]
 
 SNAPSHOT_PART_SIZE = 500
+# How often to ask again whether a cluster that doesn't serve the kind serves it now.
+ABSENT_RECHECK_SECONDS = 300
 
 
 class WatchCache:
-    """List+watch one kind on one cluster and fan snapshots and deltas out to subscribers."""
+    """List+watch one kind on one cluster and fan snapshots and deltas out to subscribers.
+
+    When the factory raises `KindNotServed`, the cache is `absent` (with that message and no
+    rows) and asks again every `ABSENT_RECHECK_SECONDS`, or at once on `retry_now`.
+    """
 
     def __init__(
         self,
         cluster_id: str,
         source_factory: Callable[[], Awaitable[ResourceSource]],
-        to_row: Callable[[dict, str], ResourceRow],
         *,
         backoff: Sequence[float] = (1, 2, 5, 10, 30),
         stable_seconds: float = 30,
@@ -32,7 +37,6 @@ class WatchCache:
         up for `stable_seconds`. Watches restart at most once per `min_watch_interval` seconds."""
         self.cluster_id = cluster_id
         self._source_factory = source_factory
-        self._to_row = to_row
         self._backoff = tuple(backoff)
         self._stable_seconds = stable_seconds
         self._min_watch_interval = min_watch_interval
@@ -83,10 +87,21 @@ class WatchCache:
             self._stable = False
             try:
                 # While retrying, keep the last failure's reason visible (with Retry in the UI).
-                self._set_state(
-                    "syncing", None if last_error is None else f"Retrying — {last_error}"
-                )
-                source = self._source = await self._source_factory()
+                # An absent kind stays absent while it is asked again.
+                syncing = None if last_error is None else f"Retrying — {last_error}"
+                if self.state != "absent":
+                    self._set_state("syncing", syncing)
+                try:
+                    source = self._source = await self._source_factory()
+                except KindNotServed as exc:
+                    self._retry.clear()
+                    self.rows = {}
+                    self._set_state("absent", exc.message)
+                    step, last_error = 0, None
+                    await self._wait_backoff(ABSENT_RECHECK_SECONDS)
+                    continue
+                if self.state == "absent":
+                    self._set_state("syncing", None)
                 rv = await self._relist(source)
                 last_start: float | None = None
                 while True:
@@ -121,7 +136,7 @@ class WatchCache:
         items, rv = await source.list()
         rows = {}
         for obj in items:
-            if (row := self._row(obj)) is not None:
+            if (row := self._row(source, obj)) is not None:
                 rows[row["uid"]] = row
         self.rows = rows
         self._set_state("ready", None)
@@ -140,7 +155,7 @@ class WatchCache:
             async for event in events:
                 self._stable = True
                 rv = ((event.object.get("metadata") or {}).get("resourceVersion")) or rv
-                self._apply(event)
+                self._apply(source, event)
         finally:
             if asyncio.get_running_loop().time() - started >= self._stable_seconds:
                 self._stable = True
@@ -149,13 +164,13 @@ class WatchCache:
                 await aclose()
         return rv
 
-    def _apply(self, event: WatchEvent) -> None:
+    def _apply(self, source: ResourceSource, event: WatchEvent) -> None:
         if event.type == "DELETED":
             uid = (event.object.get("metadata") or {}).get("uid", "")
             self.rows.pop(uid, None)
             self._broadcast({"type": "delete", "cluster_id": self.cluster_id, "uid": uid})
             return
-        if (row := self._row(event.object)) is not None:
+        if (row := self._row(source, event.object)) is not None:
             self.rows[row["uid"]] = row
             self._broadcast({"type": "upsert", "cluster_id": self.cluster_id, "row": row})
 
@@ -177,9 +192,9 @@ class WatchCache:
 
     # --- helpers --------------------------------------------------------------
 
-    def _row(self, obj: dict) -> dict | None:
+    def _row(self, source: ResourceSource, obj: dict) -> dict | None:
         try:
-            return self._to_row(obj, self.cluster_id).model_dump(mode="json")
+            return source.to_row(obj, self.cluster_id).model_dump(mode="json")
         except Exception:
             md = (obj.get("metadata") or {}) if isinstance(obj, dict) else {}
             logger.warning(

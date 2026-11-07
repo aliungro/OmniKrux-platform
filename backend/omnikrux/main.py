@@ -20,7 +20,8 @@ from omnikrux.kube.connections import ClusterConnections
 from omnikrux.kube.source import KubeResourceSource
 from omnikrux.logs.api import router as logs_router
 from omnikrux.resources.api import router as resources_router
-from omnikrux.resources.kinds import KindSpec
+from omnikrux.resources.catalog import KindCatalog
+from omnikrux.resources.kinds_api import router as kinds_router
 from omnikrux.security.secrets import SecretBox
 from omnikrux.watch.api import router as watch_router
 from omnikrux.watch.hub import WatchHub
@@ -132,16 +133,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         registry = ClusterRegistry(sessionmaker, SecretBox.from_settings(settings))
 
         connections = ClusterConnections(registry)
+        catalog = KindCatalog(connections, registry)
 
-        async def source_for(cluster_id: str, spec: KindSpec) -> KubeResourceSource:
+        async def source_for(cluster_id: str, kind_key: str) -> KubeResourceSource:
+            spec = await catalog.spec(cluster_id, kind_key)  # KindNotServed: the cache says so
             api = await connections.open_api(cluster_id)
             return KubeResourceSource(api, spec)  # owns `api` and closes it
 
-        hub = WatchHub(registry, source_for)
+        async def on_forget(cluster_id: str) -> None:
+            catalog.forget(cluster_id)
+
+        hub = WatchHub(registry, source_for, on_forget=on_forget)
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.registry = registry
         app.state.connections = connections
+        app.state.catalog = catalog
         app.state.hub = hub
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
@@ -163,6 +170,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(clusters_router)
     app.include_router(watch_router)
     app.include_router(resources_router)
+    app.include_router(kinds_router)
     app.include_router(logs_router)
     app.include_router(exec_router)
 

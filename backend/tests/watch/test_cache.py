@@ -25,7 +25,7 @@ async def test_snapshot_then_deltas():
         lists=[([p("a")], "1")],
         watches=[[WatchEvent("ADDED", p("b")), WatchEvent("DELETED", p("a"))]],
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 5)
@@ -43,7 +43,7 @@ async def test_snapshot_then_deltas():
 
 async def test_expired_watch_relists_and_drops_ghosts():
     src = FakeSource(lists=[([p("a"), p("b")], "1"), ([p("b")], "9")], watches=[Expired(), []])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 4)
@@ -64,7 +64,7 @@ async def test_source_failure_sets_error_and_retries():
         lists=[([p("a")], "1")],
         watches=[[]],
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 4)
@@ -80,7 +80,7 @@ async def test_source_failure_sets_error_and_retries():
 
 async def test_snapshot_is_chunked_at_500():
     src = FakeSource(lists=[([p(str(i)) for i in range(1201)], "1")], watches=[[]])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     await cache.start()
     msgs = [m for m in await drain(q, 5) if m["type"] == "snapshot"]
@@ -94,7 +94,7 @@ async def test_snapshot_is_chunked_at_500():
 
 async def test_late_subscriber_gets_status_and_full_snapshot():
     src = FakeSource(lists=[([p("a")], "1")], watches=[[]])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     await cache.start()
     await asyncio.sleep(0.05)
     msgs = await drain(cache.subscribe(), 2)
@@ -114,7 +114,7 @@ async def test_initial_status_is_syncing_and_messages_are_json_ready():
     src = FakeSource(
         lists=[([p("a")], "1")], watches=[[WatchEvent("MODIFIED", p("a", name="renamed"))]]
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     assert (cache.state, cache.message) == ("syncing", None)
     q = cache.subscribe()
     await cache.start()
@@ -135,7 +135,7 @@ async def test_initial_status_is_syncing_and_messages_are_json_ready():
 
 async def test_empty_cluster_sends_one_empty_last_part():
     src = FakeSource(lists=[([], "1")], watches=[[]])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 3)
@@ -145,7 +145,7 @@ async def test_empty_cluster_sends_one_empty_last_part():
 
 async def test_expired_relist_keeps_ready_without_status_message():
     src = FakeSource(lists=[([p("a")], "1"), ([p("b")], "9")], watches=[Expired(), []])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,), min_watch_interval=0)
+    cache = WatchCache("cl", src.factory, backoff=(0,), min_watch_interval=0)
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 4)
@@ -160,7 +160,7 @@ async def test_watch_resumes_from_latest_resource_version():
     b = p("b")
     b["metadata"]["resourceVersion"] = "7"
     src = FakeSource(lists=[([p("a")], "1")], watches=[[WatchEvent("ADDED", b)], []])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,), min_watch_interval=0)
+    cache = WatchCache("cl", src.factory, backoff=(0,), min_watch_interval=0)
     q = cache.subscribe()
     await cache.start()
     await drain(q, 4)
@@ -177,7 +177,7 @@ async def test_generic_error_message_and_backoff_resets_after_a_watch_delivers_a
         lists=[([p("a")], "1"), ([p("a")], "2")],
         watches=[[WatchEvent("ADDED", p("b"))], RuntimeError("connection reset")],
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60), min_watch_interval=0)
+    cache = WatchCache("cl", src.factory, backoff=(0, 60), min_watch_interval=0)
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 10)
@@ -202,7 +202,7 @@ async def test_retry_keeps_the_last_error_visible_until_the_next_outcome():
             ClusterUnavailable("The cluster rejected the console's credentials: Unauthorized")
         ]
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60))
+    cache = WatchCache("cl", src.factory, backoff=(0, 60))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 3)
@@ -225,7 +225,7 @@ async def test_backoff_keeps_growing_when_list_works_but_watch_fails_at_once():
         lists=[([p("a")], "1"), ([p("a")], "2"), ([p("a")], "3")],
         watches=[RuntimeError("watch forbidden"), RuntimeError("watch forbidden")],
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60), min_watch_interval=0)
+    cache = WatchCache("cl", src.factory, backoff=(0, 60), min_watch_interval=0)
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 8)
@@ -251,7 +251,7 @@ async def test_backoff_resets_after_the_watch_stayed_up_long_enough():
         watches=[Hold(0.1, RuntimeError("connection reset"))],
     )
     cache = WatchCache(
-        "cl", src.factory, pod_row, backoff=(0, 60), stable_seconds=0.05, min_watch_interval=0
+        "cl", src.factory, backoff=(0, 60), stable_seconds=0.05, min_watch_interval=0
     )
     q = cache.subscribe()
     await cache.start()
@@ -263,7 +263,7 @@ async def test_backoff_resets_after_the_watch_stayed_up_long_enough():
 
 async def test_watches_that_end_at_once_are_restarted_no_faster_than_the_minimum_interval():
     src = FakeSource(lists=[([p("a")], "1")], watches=[[], [], []])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,), min_watch_interval=0.2)
+    cache = WatchCache("cl", src.factory, backoff=(0,), min_watch_interval=0.2)
     await cache.start()
     await asyncio.sleep(0.5)
     await cache.stop()
@@ -277,7 +277,7 @@ async def test_backoff_steps_and_retry_now_skips_the_wait():
         lists=[([p("a")], "1")],
         watches=[[]],
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0, 60))
+    cache = WatchCache("cl", src.factory, backoff=(0, 60))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 4)
@@ -299,8 +299,9 @@ async def test_bad_object_is_skipped_and_logged(caplog):
     src = FakeSource(
         lists=[([p("a"), p("bad")], "1")],
         watches=[[WatchEvent("ADDED", p("bad")), WatchEvent("ADDED", p("b"))]],
+        to_row=to_row,
     )
-    cache = WatchCache("cl", src.factory, to_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     with caplog.at_level(logging.WARNING, logger="omnikrux.watch.cache"):
         await cache.start()
@@ -314,7 +315,7 @@ async def test_bad_object_is_skipped_and_logged(caplog):
 
 async def test_unsubscribe_stops_delivery():
     src = FakeSource(lists=[([p("a")], "1")], watches=[[]])
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     cache.unsubscribe(q)
     await cache.start()
@@ -324,7 +325,7 @@ async def test_unsubscribe_stops_delivery():
 
 
 async def test_stop_before_start_and_twice_is_safe():
-    cache = WatchCache("cl", FakeSource().factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", FakeSource().factory, backoff=(0,))
     await cache.stop()
     await cache.start()
     await cache.stop()
@@ -349,7 +350,7 @@ async def test_discarded_sources_are_closed_on_retry_and_stop():
     src = ClosingSource(
         lists=[([p("a")], "1"), ([p("a")], "2")], watches=[RuntimeError("connection reset")]
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     await cache.start()
     msgs = await drain(q, 7)
@@ -373,7 +374,7 @@ async def test_source_aclose_errors_are_swallowed(caplog):
         watches=[RuntimeError("connection reset")],
         aclose_error=RuntimeError("close failed"),
     )
-    cache = WatchCache("cl", src.factory, pod_row, backoff=(0,))
+    cache = WatchCache("cl", src.factory, backoff=(0,))
     q = cache.subscribe()
     with caplog.at_level(logging.DEBUG, logger="omnikrux.watch.cache"):
         await cache.start()
@@ -382,3 +383,66 @@ async def test_source_aclose_errors_are_swallowed(caplog):
     assert cache.state == "ready" and src.acloses == 2
     closes = [r for r in caplog.records if "close failed" in str(r.exc_info and r.exc_info[1])]
     assert [r.levelno for r in closes] == [logging.DEBUG, logging.DEBUG]
+
+
+async def test_absent_kind_sets_absent_state_with_message(monkeypatch):
+    from omnikrux.resources.catalog import KindNotServed
+    from omnikrux.watch import cache as cache_mod
+
+    monkeypatch.setattr(cache_mod, "ABSENT_RECHECK_SECONDS", 60)
+    key = "widgets.example.omnikrux.dev"
+    src = FakeSource(
+        factory_errors=[KindNotServed(key), KindNotServed(key)],
+        lists=[([p("a")], "1")],
+        watches=[[]],
+    )
+    cache = WatchCache("cl", src.factory, backoff=(0,))
+    q = cache.subscribe()
+    await cache.start()
+    msgs = await drain(q, 2)
+    assert msgs[1] == {
+        "type": "cluster_status",
+        "cluster_id": "cl",
+        "state": "absent",
+        "message": f"This cluster doesn't serve {key}.",
+    }
+    assert cache.rows == {}
+    await assert_quiet(q)  # waits ABSENT_RECHECK_SECONDS, not the error backoff
+    await cache.retry_now()  # asks again: still absent, and says nothing new
+    await assert_quiet(q)
+    assert cache.state == "absent"
+    late = cache.subscribe()  # a late subscriber reads absent, with no snapshot
+    assert [m["state"] for m in await drain(late, 1)] == ["absent"]
+    await assert_quiet(late)
+    await cache.retry_now()  # now served (the CRD was installed)
+    msgs = await drain(q, 3)
+    assert [(m["type"], m.get("state")) for m in msgs] == [
+        ("cluster_status", "syncing"),
+        ("cluster_status", "ready"),
+        ("snapshot", None),
+    ]
+    await cache.stop()
+
+
+async def test_rows_come_from_the_current_sources_to_row():
+    from omnikrux.resources.rows import ResourceRow
+
+    def widget_row(obj, cluster_id):
+        md = obj["metadata"]
+        return ResourceRow(
+            uid=md["uid"],
+            cluster_id=cluster_id,
+            kind="Widget",
+            namespace=None,
+            name=md["name"],
+            created_at=None,
+            columns={},
+        )
+
+    src = FakeSource(lists=[([p("a")], "1")], watches=[[]], to_row=widget_row)
+    cache = WatchCache("cl", src.factory, backoff=(0,))
+    q = cache.subscribe()
+    await cache.start()
+    msgs = await drain(q, 3)
+    assert [r["kind"] for r in msgs[2]["rows"]] == ["Widget"]
+    await cache.stop()

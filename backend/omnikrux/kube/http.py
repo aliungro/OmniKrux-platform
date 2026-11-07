@@ -22,3 +22,13 @@ async def read_json(call: Awaitable) -> dict:
         exc.body = body.decode("utf-8", "replace")
         raise exc
     return json.loads(body)
+
+
+def status_message(body: bytes) -> str | None:
+    """The `message` of a Kubernetes Status body; None when the body isn't one (e.g. HTML)."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    message = data.get("message") if isinstance(data, dict) else None
+    return message if isinstance(message, str) and message else None

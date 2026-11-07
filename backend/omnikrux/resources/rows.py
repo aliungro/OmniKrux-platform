@@ -24,9 +24,10 @@ class ResourceRow(BaseModel):
     name: str
     created_at: datetime | None
     columns: dict[str, Any]
+    labels: dict[str, str] = {}
 
 
-def _parse_ts(value: str) -> datetime:
+def parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
 
 
@@ -80,14 +81,14 @@ def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
         for cs in containers
         if (f := (((cs.get("lastState") or {}).get("terminated")) or {}).get("finishedAt"))
     ]
-    last_restart = max(finished, key=_parse_ts) if finished else None
+    last_restart = max(finished, key=parse_ts) if finished else None
     return ResourceRow(
         uid=md.get("uid", ""),
         cluster_id=cluster_id,
         kind="Pod",
         namespace=md.get("namespace"),
         name=md.get("name", ""),
-        created_at=_parse_ts(md["creationTimestamp"]) if md.get("creationTimestamp") else None,
+        created_at=parse_ts(md["creationTimestamp"]) if md.get("creationTimestamp") else None,
         columns={
             "status": label,
             "status_class": status_class,
@@ -97,4 +98,5 @@ def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
             "last_restart_at": last_restart,
             "resource_version": md.get("resourceVersion"),
         },
+        labels=md.get("labels") or {},
     )

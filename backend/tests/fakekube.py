@@ -1,8 +1,16 @@
 """A tiny Kubernetes API over real HTTP, shared by every test that needs one.
 
 Nothing is mocked inside kubernetes_asyncio: the code under test talks to a real aiohttp server
-on 127.0.0.1. Tests seed `pods`, `events`, `workloads`, `logs` and `follow_lines` (None ends a
+on 127.0.0.1. Tests seed `pods`, `objects`, `events`, `logs` and `follow_lines` (None ends a
 followed stream, CUT breaks it) and read back `requests`.
+
+Discovery (`/api/v1`, `/apis`, `/apis/{group}/{version}`) is generated from `resources`; a group in
+`broken_groups` answers 503 there, as an aggregated API whose backend is down does. Every served
+kind can be listed (cluster-wide or in a namespace, with an equality `labelSelector` and a
+`fieldSelector` on `metadata.name` or `spec.nodeName`), read one by one and watched (each object
+ADDED, then the watch stays open until `release`). Objects live in `objects[kind_key]`, keyed by
+(namespace, name), "" for the namespace of a cluster-scoped object; `pods` is `objects["pods"]` and
+`events` is a list of its own.
 
 Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`.
 
@@ -15,7 +23,8 @@ import asyncio
 import copy
 import json
 import re
-import tempfile
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -58,30 +67,88 @@ def not_found(message: str = "not found") -> web.Response:
 
 POD = {"metadata": {"name": "web-1", "namespace": "demo", "uid": "u1", "resourceVersion": "41"}}
 
-ROUTES = {
-    "/version": {"major": "1", "minor": "31", "gitVersion": "v1.31.0"},
-    "/api": {"kind": "APIVersions", "versions": ["v1"]},
-    "/apis": {"kind": "APIGroupList", "apiVersion": "v1", "groups": []},
-    "/api/v1": {
-        "kind": "APIResourceList",
-        "groupVersion": "v1",
-        "resources": [
+VERSION = {"major": "1", "minor": "31", "gitVersion": "v1.31.0"}
+
+
+@dataclass(frozen=True)
+class FakeResource:
+    group: str
+    version: str
+    plural: str
+    kind: str
+    namespaced: bool
+    verbs: tuple[str, ...] = ("create", "delete", "get", "list", "patch", "update", "watch")
+    short_names: tuple[str, ...] = ()
+
+    @property
+    def key(self) -> str:
+        return f"{self.plural}.{self.group}" if self.group else self.plural
+
+
+def default_resources() -> list[FakeResource]:
+    """What a small real cluster serves, plus one CRD and a few things discovery must skip."""
+    R = FakeResource
+    return [
+        R("", "v1", "pods", "Pod", True, short_names=("po",)),
+        R("", "v1", "pods/log", "Pod", True, ("get",)),
+        R("", "v1", "pods/exec", "PodExecOptions", True, ("create", "get")),
+        R("", "v1", "bindings", "Binding", True, ("create",)),
+        R("", "v1", "nodes", "Node", False, short_names=("no",)),
+        R("", "v1", "events", "Event", True, short_names=("ev",)),
+        R("", "v1", "namespaces", "Namespace", False, short_names=("ns",)),
+        R("", "v1", "services", "Service", True, short_names=("svc",)),
+        R("", "v1", "configmaps", "ConfigMap", True, short_names=("cm",)),
+        R("", "v1", "secrets", "Secret", True),
+        R("apps", "v1", "deployments", "Deployment", True, short_names=("deploy",)),
+        R("apps", "v1", "deployments/scale", "Scale", True, ("get", "patch", "update")),
+        R("apps", "v1", "replicasets", "ReplicaSet", True, short_names=("rs",)),
+        R("apps", "v1", "statefulsets", "StatefulSet", True, short_names=("sts",)),
+        R("apps", "v1", "daemonsets", "DaemonSet", True, short_names=("ds",)),
+        R("batch", "v1", "jobs", "Job", True),
+        R("batch", "v1", "cronjobs", "CronJob", True, short_names=("cj",)),
+        R(
+            "apiextensions.k8s.io",
+            "v1",
+            "customresourcedefinitions",
+            "CustomResourceDefinition",
+            False,
+            short_names=("crd", "crds"),
+        ),
+        R("example.omnikrux.dev", "v1", "widgets", "Widget", True, short_names=("wd",)),
+    ]
+
+
+CRDS_KEY = "customresourcedefinitions.apiextensions.k8s.io"
+WIDGET_CRD = {
+    "apiVersion": "apiextensions.k8s.io/v1",
+    "kind": "CustomResourceDefinition",
+    "metadata": {"name": "widgets.example.omnikrux.dev", "uid": "u-crd-widgets"},
+    "spec": {
+        "group": "example.omnikrux.dev",
+        "names": {"plural": "widgets", "singular": "widget", "kind": "Widget"},
+        "scope": "Namespaced",
+        "versions": [
             {
-                "name": "pods",
-                "singularName": "pod",
-                "namespaced": True,
-                "kind": "Pod",
-                "verbs": ["get", "list", "watch"],
+                "name": "v1",
+                "served": True,
+                "storage": True,
+                "additionalPrinterColumns": [
+                    {"name": "Size", "type": "integer", "jsonPath": ".spec.size"},
+                    {"name": "Age", "type": "date", "jsonPath": ".metadata.creationTimestamp"},
+                ],
             }
         ],
     },
 }
 
+UNAVAILABLE = "the server is currently unable to handle the request"
+
 POD_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods/(?P<name>[^/]+)(?P<sub>/[a-z]+)?$")
 PODS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods$")
 EVENTS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/events$")
-WORKLOAD_ROUTE = re.compile(
-    r"^/apis/(?:apps|batch)/v1/namespaces/(?P<ns>[^/]+)/(?P<plural>[a-z]+)/(?P<name>[^/]+)$"
+# /api/v1/... or /apis/{group}/{version}/...: the group, the version and the rest of the path.
+API_PATH = re.compile(
+    r"^/(?:api/(?P<core>v1)|apis/(?P<group>[^/]+)/(?P<version>[^/]+))(?P<rest>/.*)?$"
 )
 
 
@@ -91,10 +158,18 @@ def _flag(query, name: str) -> bool:
 
 
 class PodStore(dict):
-    """Pods by (namespace, name); stored copies, so seeding a shared constant is safe."""
+    """Objects by (namespace, name); stored copies, so seeding a shared constant is safe."""
 
     def __setitem__(self, key, value) -> None:
         super().__setitem__(key, copy.deepcopy(value))
+
+
+class ObjectStore(dict):
+    """A `PodStore` per kind key, created on first use."""
+
+    def __missing__(self, key: str) -> PodStore:
+        store = self[key] = PodStore()
+        return store
 
 
 def bad_request(message: str) -> web.Response:
@@ -117,11 +192,12 @@ class FakeKubeApi:
     """A tiny Kubernetes API: `mode` picks how it answers.
 
     ok: everything works; unauthorized: 401 everywhere; hang: never answers until `release`;
-    apis_unauthorized: everything works except `/apis`, which answers 401;
+    apis_unexpected: everything works except `/apis`, which answers 200 with an HTML page;
     forbidden: 403 everywhere, with FORBIDDEN as the Status message;
     events_forbidden: listing events answers 403 (EVENTS_FORBIDDEN), everything else works;
     watch_forbidden: a pod watch answers 403; instant_close: a pod watch ends after its event.
-    A pod watch in `ok` mode stays open until `release` is set.
+    A pod watch in `ok` mode stays open until `release` is set. A kind key in `forbidden_kinds`
+    answers 403 to every list, watch and read of that kind.
     """
 
     def __init__(self) -> None:
@@ -131,11 +207,15 @@ class FakeKubeApi:
         self.auth: set[str | None] = set()
         self.release = asyncio.Event()
         self.url = ""
-        self.pods: dict[tuple[str, str], dict] = PodStore()
+        self.resources: list[FakeResource] = default_resources()
+        self.broken_groups: set[str] = set()
+        self.forbidden_kinds: set[str] = set()
+        # kind key -> (namespace, name) -> object, e.g. objects["deployments.apps"][("demo", "web")]
+        self.objects: dict[str, dict[tuple[str, str], dict]] = ObjectStore()
+        self.objects[CRDS_KEY][("", WIDGET_CRD["metadata"]["name"])] = WIDGET_CRD
+        self.pods: dict[tuple[str, str], dict] = self.objects["pods"]
         self.pods[("demo", "web-1")] = POD
         self.events: list[dict] = []
-        # (plural, namespace, name) -> object, e.g. ("replicasets", "demo", "web-7c9")
-        self.workloads: dict[tuple[str, str, str], dict] = {}
         self.logs: dict[tuple[str, str, str, bool], list[str]] = {}
         self.follow_lines: asyncio.Queue[str | None] = asyncio.Queue()
         self.execs: list[dict] = []
@@ -157,47 +237,33 @@ class FakeKubeApi:
             await self.release.wait()
         if self.mode == "forbidden":
             return web.json_response(status_body(403, "Forbidden", FORBIDDEN), status=403)
-        if self.mode == "unauthorized" or (
-            self.mode == "apis_unauthorized" and request.path == "/apis"
-        ):
+        if self.mode == "unauthorized":
             return web.json_response(status_body(401, "Unauthorized", "Unauthorized"), status=401)
+        if self.mode == "apis_unexpected" and request.path == "/apis":
+            return web.Response(text="<html><body>Sign in</body></html>", content_type="text/html")
         return await self._route(request)
 
     async def _route(self, request: web.Request) -> web.StreamResponse:
         method, path = request.method, request.path
         if method == "GET":
-            if path == "/api/v1/pods":
-                if _flag(request.query, "watch"):
-                    return await self._watch(request)
-                return web.json_response(
-                    {
-                        "kind": "PodList",
-                        "apiVersion": "v1",
-                        "metadata": {"resourceVersion": "42"},
-                        "items": list(self.pods.values()),
-                    }
-                )
-            if (body := ROUTES.get(path)) is not None:
-                return web.json_response(body)
+            if path == "/version":
+                return web.json_response(VERSION)
+            if path == "/api":
+                return web.json_response({"kind": "APIVersions", "versions": ["v1"]})
+            if path == "/apis":
+                return web.json_response(self._group_list())
             if match := EVENTS_ROUTE.match(path):
                 if self.mode == "events_forbidden":
                     body = status_body(403, "Forbidden", EVENTS_FORBIDDEN)
                     return web.json_response(body, status=403)
                 return self._events(request, match["ns"])
-            if match := WORKLOAD_ROUTE.match(path):
-                found = self.workloads.get((match["plural"], match["ns"], match["name"]))
-                return not_found() if found is None else web.json_response(found)
         if match := PODS_ROUTE.match(path):
             if method == "POST":
                 return await self._create_pod(request, match["ns"])
-            if method == "GET":
-                return self._list_pods(request, match["ns"])
             if method == "DELETE":
                 return self._delete_pods(request, match["ns"])
         if match := POD_ROUTE.match(path):
             key, sub = (match["ns"], match["name"]), match["sub"]
-            if method == "GET" and sub is None:
-                return self._pod_or_404(key)
             if method == "GET" and sub == "/log":
                 return await self._log(request, key)
             if method == "GET" and sub == "/exec":
@@ -206,7 +272,127 @@ class FakeKubeApi:
                 return await self._patch_ephemeral(request, key)
             if method == "DELETE" and sub is None:
                 return self._delete_pod(key)
+        if method == "GET" and (match := API_PATH.match(path)):
+            return await self._get(request, match)
         return not_found()
+
+    # --- discovery and generic reads ----------------------------------------------------
+
+    def _group_list(self) -> dict:
+        versions: dict[str, list[str]] = {}
+        for res in self.resources:
+            if res.group and res.version not in versions.setdefault(res.group, []):
+                versions[res.group].append(res.version)
+        return {
+            "kind": "APIGroupList",
+            "apiVersion": "v1",
+            "groups": [
+                {
+                    "name": group,
+                    "versions": [{"groupVersion": f"{group}/{v}", "version": v} for v in vs],
+                    "preferredVersion": {"groupVersion": f"{group}/{vs[0]}", "version": vs[0]},
+                }
+                for group, vs in versions.items()
+            ],
+        }
+
+    def _resource_list(self, group: str, version: str) -> web.Response:
+        served = [r for r in self.resources if (r.group, r.version) == (group, version)]
+        if not served:
+            return not_found()
+        return web.json_response(
+            {
+                "kind": "APIResourceList",
+                "apiVersion": "v1",
+                "groupVersion": f"{group}/{version}" if group else version,
+                "resources": [
+                    {
+                        "name": r.plural,
+                        "singularName": "",
+                        "namespaced": r.namespaced,
+                        "kind": r.kind,
+                        "verbs": list(r.verbs),
+                        **({"shortNames": list(r.short_names)} if r.short_names else {}),
+                    }
+                    for r in served
+                ],
+            }
+        )
+
+    async def _get(self, request: web.Request, match: re.Match) -> web.StreamResponse:
+        """Discovery, then list, watch or read any served kind."""
+        group, version = match["group"] or "", match["core"] or match["version"]
+        if group in self.broken_groups:
+            return web.json_response(
+                status_body(503, "ServiceUnavailable", UNAVAILABLE), status=503
+            )
+        parts = [part for part in (match["rest"] or "").split("/") if part]
+        if not parts:
+            return self._resource_list(group, version)
+        ns = None
+        if len(parts) >= 3 and parts[0] == "namespaces":
+            ns, parts = parts[1], parts[2:]
+        res = next(
+            (
+                r
+                for r in self.resources
+                if (r.group, r.version, r.plural) == (group, version, parts[0])
+            ),
+            None,
+        )
+        if res is None or len(parts) > 2 or (ns is not None and not res.namespaced):
+            return not_found()
+        if res.key in self.forbidden_kinds:
+            message = f'{res.plural} is forbidden: User "fake" cannot list resource "{res.plural}"'
+            return web.json_response(status_body(403, "Forbidden", message), status=403)
+        if len(parts) == 2:
+            key = (ns or "", parts[1])
+            if res.key == "pods":
+                return self._pod_or_404(key)
+            obj = self.objects[res.key].get(key)
+            if obj is None:
+                return not_found(f'{res.plural} "{parts[1]}" not found')
+            return web.json_response(obj)
+        if _flag(request.query, "watch"):
+            if res.key == "pods" and ns is None:
+                return await self._watch(request)  # the pod watch keeps its modes
+            return await self._watch_any(request, res, ns)
+        selected = self._selected(request, res.key, ns)
+        if isinstance(selected, web.Response):
+            return selected
+        return web.json_response(
+            {
+                "kind": f"{res.kind}List",
+                "apiVersion": f"{group}/{version}" if group else version,
+                "metadata": {"resourceVersion": "42"},
+                "items": [obj for _, obj in selected],
+            }
+        )
+
+    def _items(self, kind_key: str) -> list[tuple[tuple[str, str], dict]]:
+        if kind_key == "events":
+            items = []
+            for event in self.events:
+                md = event.get("metadata") or {}
+                items.append(((md.get("namespace") or "", md.get("name") or ""), event))
+            return items
+        return list(self.objects[kind_key].items())
+
+    async def _watch_any(
+        self, request: web.Request, res: FakeResource, ns: str | None
+    ) -> web.StreamResponse:
+        selected = self._selected(request, res.key, ns)
+        if isinstance(selected, web.Response):
+            return selected
+        response = web.StreamResponse(headers={"Content-Type": "application/json"})
+        response.enable_chunked_encoding()
+        await response.prepare(request)
+        for _, obj in selected:
+            await response.write(json.dumps({"type": "ADDED", "object": obj}).encode() + b"\n")
+        if self.mode != "instant_close":
+            await self.release.wait()
+        await response.write_eof()
+        return response
 
     def _pod_or_404(self, key: tuple[str, str]) -> web.Response:
         pod = self.pods.get(key)
@@ -228,37 +414,43 @@ class FakeKubeApi:
             if field == "containerStatuses" and "running" in state:
                 status["phase"] = "Running"
 
-    def _selected(self, request: web.Request, ns: str) -> list[tuple[tuple[str, str], dict]]:
-        """Pods in `ns` matching an equality `labelSelector` (`k=v,k2=v2`) and a
-        `fieldSelector` of `metadata.name=...`."""
+    def _selected(
+        self, request: web.Request, kind_key: str, ns: str | None
+    ) -> list[tuple[tuple[str, str], dict]] | web.Response:
+        """Objects of `kind_key` in `ns` (None: every namespace) matching an equality
+        `labelSelector` (`k=v,k2=v2`) and a `fieldSelector` on `metadata.name`,
+        `metadata.namespace` or `spec.nodeName`; a 400 for any other field."""
 
         def terms(name: str) -> list[list[str]]:
             return [t.partition("=")[::2] for t in request.query.get(name, "").split(",") if t]
 
-        labels = terms("labelSelector")
-        names = [v for k, v in terms("fieldSelector") if k == "metadata.name"]
-        return [
-            (key, pod)
-            for key, pod in self.pods.items()
-            if key[0] == ns
-            and all((pod.get("metadata", {}).get("labels") or {}).get(k) == v for k, v in labels)
-            and all(key[1] == name for name in names)
-        ]
+        def field(key: tuple[str, str], obj: dict, name: str) -> str | None:
+            if name == "metadata.name":
+                return key[1]
+            if name == "metadata.namespace":
+                return key[0]
+            return (obj.get("spec") or {}).get("nodeName")
 
-    def _list_pods(self, request: web.Request, ns: str) -> web.Response:
-        return web.json_response(
-            {
-                "kind": "PodList",
-                "apiVersion": "v1",
-                "metadata": {"resourceVersion": "42"},
-                "items": [pod for _, pod in self._selected(request, ns)],
-            }
-        )
+        labels = terms("labelSelector")
+        fields = terms("fieldSelector")
+        for name, _ in fields:
+            if name not in ("metadata.name", "metadata.namespace", "spec.nodeName"):
+                return bad_request(f'field label not supported: "{name}"')
+        return [
+            (key, obj)
+            for key, obj in self._items(kind_key)
+            if (ns is None or key[0] == ns)
+            and all((obj.get("metadata", {}).get("labels") or {}).get(k) == v for k, v in labels)
+            and all(field(key, obj, k) == v for k, v in fields)
+        ]
 
     def _delete_pods(self, request: web.Request, ns: str) -> web.Response:
         """DELETE on the collection: every selected pod; none selected is fine (an empty list)."""
+        selected = self._selected(request, "pods", ns)
+        if isinstance(selected, web.Response):
+            return selected
         items = []
-        for key, pod in self._selected(request, ns):
+        for key, pod in selected:
             self.pods.pop(key)
             self._starting.pop(key, None)
             self.deleted.append(key)
@@ -446,10 +638,9 @@ class FakeKubeApi:
         return response
 
 
-@pytest.fixture
-async def fake_api(tmp_path, monkeypatch):
-    # The dynamic client caches discovery in the temp dir, keyed by host: keep runs independent.
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+@asynccontextmanager
+async def serve_fake_api():
+    """A `FakeKubeApi` served on 127.0.0.1 for the duration of the block."""
     server = FakeKubeApi()
     app = web.Application()
     app.router.add_route("*", "/{tail:.*}", server.handle)
@@ -464,6 +655,12 @@ async def fake_api(tmp_path, monkeypatch):
     finally:
         server.release.set()
         await runner.cleanup()
+
+
+@pytest.fixture
+async def fake_api():
+    async with serve_fake_api() as server:
+        yield server
 
 
 def kubeconfig_for(server: FakeKubeApi) -> dict:

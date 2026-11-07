@@ -156,7 +156,7 @@ async def test_describe_hung_cluster_times_out_plainly(client, fake_api, monkeyp
 
 async def test_describe_owner_selector_from_the_owning_workload(client, fake_api):
     http, cluster_id = client
-    fake_api.workloads[("replicasets", "demo", "crasher-7c9")] = {
+    fake_api.objects["replicasets.apps"][("demo", "crasher-7c9")] = {
         "metadata": {"name": "crasher-7c9", "namespace": "demo"},
         "spec": {"selector": {"matchLabels": {"app": "crasher", "pod-template-hash": "7c9"}}},
     }
@@ -200,7 +200,7 @@ async def test_describe_survives_an_unreadable_owner(client, fake_api):
     r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/describe")
     assert r.status_code == 200
     assert r.json()["pod"]["owner"]["selector"] is None
-    fake_api.workloads[("replicasets", "demo", "crasher-7c9")] = {
+    fake_api.objects["replicasets.apps"][("demo", "crasher-7c9")] = {
         "spec": {"selector": {"matchExpressions": [{"key": "app", "operator": "Exists"}]}}
     }
     r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/describe")

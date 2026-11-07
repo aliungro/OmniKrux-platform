@@ -232,3 +232,107 @@ async def test_log_refuses_text_plain_alone_like_the_real_api(fake_api):
             assert resp.status == 406
         async with session.get(url, headers={"Accept": "text/plain, application/json"}) as resp:
             assert resp.status == 200 and await resp.text() == "hi\n"
+
+
+WIDGET = {
+    "apiVersion": "example.omnikrux.dev/v1",
+    "kind": "Widget",
+    "metadata": {"name": "w1", "namespace": "demo", "uid": "u-w1", "labels": {"app": "web"}},
+    "spec": {"size": 3},
+}
+
+
+async def test_generic_objects_list_get_watch(fake_api):
+    widgets = fake_api.objects["widgets.example.omnikrux.dev"]
+    widgets[("demo", "w1")] = WIDGET
+    widgets[("other", "w2")] = {**WIDGET, "metadata": {"name": "w2", "namespace": "other"}}
+    fake_api.objects["nodes"][("", "n1")] = {"metadata": {"name": "n1"}}
+    fake_api.pods[("demo", "on-n1")] = {
+        "metadata": {"name": "on-n1", "namespace": "demo"},
+        "spec": {"nodeName": "n1"},
+    }
+
+    def names(text):
+        return sorted(o["metadata"]["name"] for o in json.loads(text)["items"])
+
+    base = "/apis/example.omnikrux.dev/v1"
+    status, text = await get(fake_api, f"{base}/widgets")
+    assert status == 200 and names(text) == ["w1", "w2"]
+    assert json.loads(text)["metadata"]["resourceVersion"] == "42"
+    _, text = await get(fake_api, f"{base}/namespaces/demo/widgets")
+    assert names(text) == ["w1"]
+    _, text = await get(fake_api, f"{base}/widgets", labelSelector="app=web")
+    assert names(text) == ["w1"]
+    _, text = await get(fake_api, f"{base}/widgets", fieldSelector="metadata.name=w2")
+    assert names(text) == ["w2"]
+    _, text = await get(fake_api, "/api/v1/pods", fieldSelector="spec.nodeName=n1")
+    assert names(text) == ["on-n1"]
+    status, text = await get(fake_api, f"{base}/namespaces/demo/widgets/w1")
+    assert status == 200 and json.loads(text)["spec"] == {"size": 3}
+    status, _ = await get(fake_api, f"{base}/namespaces/demo/widgets/nope")
+    assert status == 404
+    status, text = await get(fake_api, "/api/v1/nodes/n1")  # cluster-scoped
+    assert status == 200 and json.loads(text)["metadata"]["name"] == "n1"
+    status, _ = await get(fake_api, "/apis/example.omnikrux.dev/v1/gadgets")
+    assert status == 404
+
+    fake_api.forbidden_kinds.add("widgets.example.omnikrux.dev")
+    status, text = await get(fake_api, f"{base}/widgets")
+    assert status == 403 and "forbidden" in json.loads(text)["message"]
+    fake_api.forbidden_kinds.clear()
+
+    async def watch():
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"{fake_api.url}{base}/widgets", params={"watch": "true"}) as resp,
+        ):
+            return resp.status, [json.loads(line) async for line in resp.content]
+
+    task = asyncio.create_task(watch())
+    await asyncio.sleep(0.2)
+    assert not task.done()  # stays open until released
+    fake_api.release.set()
+    status, events = await asyncio.wait_for(task, 5)
+    assert status == 200
+    assert sorted((e["type"], e["object"]["metadata"]["name"]) for e in events) == [
+        ("ADDED", "w1"),
+        ("ADDED", "w2"),
+    ]
+
+
+async def test_discovery_generated_from_resources(fake_api):
+    from tests.fakekube import FakeResource
+
+    fake_api.resources.append(
+        FakeResource("example.omnikrux.dev", "v2", "gadgets", "Gadget", False)
+    )
+    _, text = await get(fake_api, "/api/v1")
+    core = json.loads(text)
+    assert core["groupVersion"] == "v1"
+    pods = next(r for r in core["resources"] if r["name"] == "pods")
+    assert pods["kind"] == "Pod" and pods["namespaced"] is True
+    assert {"list", "watch"} <= set(pods["verbs"]) and pods["shortNames"] == ["po"]
+    assert "pods/log" in {r["name"] for r in core["resources"]}
+
+    _, text = await get(fake_api, "/apis")
+    groups = {g["name"]: g for g in json.loads(text)["groups"]}
+    assert {"apps", "batch", "apiextensions.k8s.io", "example.omnikrux.dev"} <= set(groups)
+    example = groups["example.omnikrux.dev"]
+    assert example["preferredVersion"] == {
+        "groupVersion": "example.omnikrux.dev/v1",
+        "version": "v1",
+    }
+    assert [v["version"] for v in example["versions"]] == ["v1", "v2"]
+
+    _, text = await get(fake_api, "/apis/example.omnikrux.dev/v2")
+    assert [r["name"] for r in json.loads(text)["resources"]] == ["gadgets"]
+
+    _, text = await get(fake_api, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions")
+    [crd] = json.loads(text)["items"]
+    assert crd["spec"]["names"]["plural"] == "widgets"
+
+    fake_api.broken_groups.add("example.omnikrux.dev")
+    status, text = await get(fake_api, "/apis/example.omnikrux.dev/v1")
+    assert status == 503 and json.loads(text)["code"] == 503
+    status, _ = await get(fake_api, "/apis/apps/v1")
+    assert status == 200
