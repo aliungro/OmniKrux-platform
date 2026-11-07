@@ -1,6 +1,6 @@
 // frontend/src/features/territories/selection.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
@@ -108,6 +108,55 @@ describe("selection", () => {
     fireEvent.keyDown(podRow("pod-1"), { key: "ArrowUp" });
     fireEvent.keyDown(podRow("pod-0"), { key: "ArrowUp" });
     expect(document.activeElement).toBe(podRow("pod-0"));
+  });
+
+  it("arrow keys with the inspector open keep the selected row in view", async () => {
+    // A viewport shorter than the inspector, so scrolling to the inspector would hide the row.
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);
+    // jsdom has no scroll height, which would clamp every scroll to 0.
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(5000);
+    const scrollTo = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", { value: scrollTo, configurable: true, writable: true });
+    try {
+      renderTable(5);
+      fireEvent.keyDown(podRow("pod-0"), { key: "Enter" });
+      fireEvent.keyDown(podRow("pod-0"), { key: "ArrowDown" });
+      // The virtualizer settles a scroll over the next few animation frames.
+      await act(() => new Promise((done) => setTimeout(done, 100)));
+
+      const r = podRow("pod-1");
+      expect(r.getAttribute("aria-selected")).toBe("true");
+      expect(r.getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(r);
+      // The inspector moved with the selection: row, its inspector, then the next row.
+      const all = screen.getAllByRole("row");
+      const at = all.indexOf(r);
+      expect(all[at + 1].contains(inspector())).toBe(true);
+      expect(inspector()!.getAttribute("aria-label")).toBe("Details for pod-1");
+      expect(all[at + 2]).toBe(podRow("pod-2"));
+      // pod-1's top is 52 (band) + 36 (pod-0) = 88px into the body; any scroll must leave it below the header.
+      for (const [opts] of scrollTo.mock.calls) expect(opts.top).toBeLessThanOrEqual(88);
+    } finally {
+      delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+    }
+  });
+
+  it("closes the inspector when its row goes away", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (n: number) => (
+      <QueryClientProvider client={client}>
+        <TerritoryTable territories={[territory(rows(n))]} onRetry={() => {}} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(3));
+    fireEvent.keyDown(podRow("pod-2"), { key: "Enter" });
+    expect(inspector()).toBeTruthy();
+    rerender(ui(2));
+    expect(inspector()).toBeNull();
+    // It stays closed when the pod comes back.
+    rerender(ui(3));
+    expect(inspector()).toBeNull();
   });
 
   it("l and s on the selected row open logs and shell", () => {

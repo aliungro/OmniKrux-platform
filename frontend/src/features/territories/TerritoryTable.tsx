@@ -41,6 +41,11 @@ export function TerritoryTable({
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Set when the keyboard moved the selection; the row takes focus once it has rendered. */
   const focusPending = useRef(false);
+  /**
+   * Set when the keyboard moved the selection; the row is scrolled into view after the items are
+   * rebuilt. Not before: an open inspector moves with the selection, which shifts every index after it.
+   */
+  const scrollPending = useRef(false);
 
   const estimateSize = useCallback((i: number) => {
     const t = items[i].type;
@@ -102,7 +107,7 @@ export function TerritoryTable({
         if (next?.type !== "row") return;
         select(next.row);
         focusPending.current = true;
-        virtualizer.scrollToIndex(i, { align: "auto" });
+        scrollPending.current = true;
         return;
       }
       case "Enter":
@@ -127,9 +132,22 @@ export function TerritoryTable({
     }
   };
 
-  // Move focus to the selected row once the virtualizer has rendered it.
+  // Bring the selected row into view, then focus it once the virtualizer has rendered it.
   useLayoutEffect(() => {
-    if (!focusPending.current || selectedKey === null) return;
+    if (selectedKey === null) return;
+    const at = indexByKey.get(selectedKey);
+    if (at === undefined) {
+      // The pod was deleted or filtered out: nothing left to inspect, scroll to or focus.
+      focusPending.current = false;
+      scrollPending.current = false;
+      if (open) setOpen(false);
+      return;
+    }
+    if (scrollPending.current) {
+      scrollPending.current = false;
+      virtualizer.scrollToIndex(at, { align: "auto" });
+    }
+    if (!focusPending.current) return;
     const el = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])
       .find((n) => n.dataset.rowKey === selectedKey);
     if (!el) return;
