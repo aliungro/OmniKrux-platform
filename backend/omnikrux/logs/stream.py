@@ -13,24 +13,28 @@ from datetime import UTC, datetime
 from typing import TypedDict
 
 import aiohttp
-from kubernetes_asyncio.client import ApiClient, CoreV1Api
+from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
-from omnikrux.kube.http import read_json
+from omnikrux.kube.http import KUBE_ERRORS
+from omnikrux.kube.pods import (
+    FINISHED_PHASES,
+    SLOW_REQUEST_TIMEOUT,
+    container_names,
+    container_status,
+    pod_missing_message,
+    read_pod,
+    will_restart,
+)
 
-# (connect, read) for a request that ends by itself; a followed log may stay quiet for hours, so
-# it only gets a connect timeout.
-REQUEST_TIMEOUT = (30, 120)
+# A followed log may stay quiet for hours, so it only gets a connect timeout.
 FOLLOW_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=30)
 MAX_LINE_BYTES = 1 << 20  # a longer line is cut into pieces of this size
 MAX_FAILURES = 5  # consecutive failed reopens before a followed stream gives up
 IMMEDIATE_SECONDS = 1.0  # a reopened stream that ends sooner than this, empty, failed
 RETRY_DELAY = 1.0  # seconds before reopening after a failure
 POLL_INTERVAL = 2.0  # seconds between pod reads while a stopped container waits to restart
-FINISHED_PHASES = ("Succeeded", "Failed")  # the pod's containers will not run again
-
-KUBE_ERRORS = (ApiException, aiohttp.ClientError, TimeoutError)
 
 
 class LogLine(TypedDict):
@@ -138,59 +142,6 @@ class ResumePoint:
         return skip
 
 
-def container_names(pod: dict) -> list[str]:
-    return [c.get("name", "") for c in (pod.get("spec") or {}).get("containers") or []]
-
-
-def any_container_names(pod: dict) -> list[str]:
-    """Every container whose logs can be read: init, regular and ephemeral."""
-    spec = pod.get("spec") or {}
-    fields = ("initContainers", "containers", "ephemeralContainers")
-    return [c.get("name", "") for field in fields for c in spec.get(field) or []]
-
-
-def container_status(pod: dict, container: str) -> dict:
-    """The container's entry in the pod's status (init, regular or ephemeral); {} if none yet."""
-    status = pod.get("status") or {}
-    fields = ("initContainerStatuses", "containerStatuses", "ephemeralContainerStatuses")
-    for field in fields:
-        for entry in status.get(field) or []:
-            if entry.get("name") == container:
-                return entry
-    return {}
-
-
-def state_words(state: dict) -> str:
-    """How a container that isn't running is doing, in a word or two (Kubernetes' reason)."""
-    if "waiting" in state:
-        return (state["waiting"] or {}).get("reason") or "waiting"
-    if "terminated" in state:
-        return (state["terminated"] or {}).get("reason") or "terminated"
-    return "not started"
-
-
-def will_restart(pod: dict, container: str, terminated: dict) -> bool:
-    """Whether the kubelet starts this terminated container again."""
-    spec = pod.get("spec") or {}
-    if any(c.get("name") == container for c in spec.get("ephemeralContainers") or []):
-        return False
-    exit_code = terminated.get("exitCode")
-    for init in spec.get("initContainers") or []:
-        if init.get("name") == container:
-            if init.get("restartPolicy") == "Always":  # a sidecar: restarted like the pod's
-                break
-            if exit_code == 0:  # a completed init container never runs again
-                return False
-    policy = spec.get("restartPolicy", "Always")
-    return policy == "Always" or (policy == "OnFailure" and exit_code != 0)
-
-
-def pod_missing_message(namespace: str, pod: str) -> str:
-    return (
-        f"Pod {namespace}/{pod} not found. It may have been deleted; pick it again from the list."
-    )
-
-
 async def open_log(
     api: ApiClient,
     namespace: str,
@@ -222,7 +173,7 @@ async def open_log(
         header_params={"Accept": "text/plain, application/json"},
         auth_settings=["BearerToken"],
         _preload_content=False,
-        _request_timeout=FOLLOW_TIMEOUT if follow else REQUEST_TIMEOUT,
+        _request_timeout=FOLLOW_TIMEOUT if follow else SLOW_REQUEST_TIMEOUT,
     )
     if not 200 <= resp.status < 300:
         try:
@@ -286,7 +237,7 @@ class LogStream:
     async def _run(self, api: ApiClient) -> AsyncIterator[LogLine | Marker]:
         loop = asyncio.get_running_loop()
         try:
-            pod = await self._read_pod(api)
+            pod = await read_pod(api, self._namespace, self._pod, timeout=SLOW_REQUEST_TIMEOUT)
         except KUBE_ERRORS as exc:
             raise LogStreamError(self._message(exc, self._container or "")) from exc
         names = container_names(pod)
@@ -349,7 +300,9 @@ class LogStream:
                 if failures:
                     await asyncio.sleep(RETRY_DELAY)
                 try:
-                    pod = await self._read_pod(api)
+                    pod = await read_pod(
+                        api, self._namespace, self._pod, timeout=SLOW_REQUEST_TIMEOUT
+                    )
                 except ApiException as exc:
                     if exc.status == 404:
                         yield Marker(marker="Pod deleted")
@@ -387,13 +340,6 @@ class LogStream:
                 if "terminated" in state and not will_restart(pod, container, state["terminated"]):
                     return
                 await asyncio.sleep(POLL_INTERVAL)  # stopped; wait for the kubelet to restart it
-
-    async def _read_pod(self, api: ApiClient) -> dict:
-        return await read_json(
-            CoreV1Api(api).read_namespaced_pod(
-                self._pod, self._namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
-            )
-        )
 
     async def _open(
         self, api: ApiClient, container: str, since: str | None, tail: int | None

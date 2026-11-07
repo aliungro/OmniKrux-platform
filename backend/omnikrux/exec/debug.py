@@ -14,10 +14,12 @@ from collections.abc import Awaitable
 from kubernetes_asyncio.client import ApiClient, CoreV1Api
 
 from omnikrux.kube.http import read_json
-from omnikrux.logs.stream import (
+from omnikrux.kube.pods import (
     FINISHED_PHASES,
+    REQUEST_TIMEOUT,
     container_names,
     container_status,
+    read_pod,
     state_words,
 )
 
@@ -25,7 +27,6 @@ log = logging.getLogger(__name__)
 
 START_SECONDS = 60  # how long a new container may take to start
 POLL_SECONDS = 0.5  # between reads of the pod while it starts
-REQUEST_TIMEOUT = 15  # seconds per Kubernetes call
 
 NODE_SHELL_NAMESPACE = "default"
 NODE_SHELL_CONTAINER = "shell"
@@ -53,14 +54,6 @@ def is_node_shell(pod: dict) -> bool:
     return ((pod.get("metadata") or {}).get("labels") or {}).get(NODE_SHELL_LABEL) == "true"
 
 
-async def _read_pod(api: ApiClient, namespace: str, name: str) -> dict:
-    return await read_json(
-        CoreV1Api(api).read_namespaced_pod(
-            name, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
-        )
-    )
-
-
 async def _wait_running(
     api: ApiClient, namespace: str, pod: str, container: str, what: str, timeout: float
 ) -> None:
@@ -68,7 +61,7 @@ async def _wait_running(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
-        found = await _read_pod(api, namespace, pod)
+        found = await read_pod(api, namespace, pod, timeout=REQUEST_TIMEOUT)
         state = container_status(found, container).get("state") or {}
         if "running" in state:
             return
@@ -103,7 +96,7 @@ async def add_debug_container(
     name = f"debug-{_suffix()}"
     container = {"name": name, "image": image, "command": ["sh"], "stdin": True, "tty": True}
     if target:
-        found = await _read_pod(api, ns, pod)
+        found = await read_pod(api, ns, pod, timeout=REQUEST_TIMEOUT)
         running = "running" in (container_status(found, target).get("state") or {})
         if running or target not in container_names(found):  # the API server names a bad one
             container["targetContainerName"] = target

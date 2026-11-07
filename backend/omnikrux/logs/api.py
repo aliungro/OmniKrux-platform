@@ -14,16 +14,18 @@ from kubernetes_asyncio.client.exceptions import ApiException
 from starlette.websockets import WebSocketDisconnect
 
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
-from omnikrux.kube.http import read_json
+from omnikrux.kube.http import KUBE_ERRORS, read_json
+from omnikrux.kube.pods import (
+    SLOW_REQUEST_TIMEOUT,
+    any_container_names,
+    container_names,
+    read_pod,
+)
 from omnikrux.logs.stream import (
-    KUBE_ERRORS,
-    REQUEST_TIMEOUT,
     LogLine,
     LogStream,
     LogStreamError,
     Marker,
-    any_container_names,
-    container_names,
     log_error_message,
     open_log,
 )
@@ -147,11 +149,7 @@ async def _pod_target(
     api: ApiClient, namespace: str, pod: str, container: str | None
 ) -> tuple[str, str]:
     try:
-        found = await read_json(
-            CoreV1Api(api).read_namespaced_pod(
-                pod, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
-            )
-        )
+        found = await read_pod(api, namespace, pod, timeout=SLOW_REQUEST_TIMEOUT)
     except KUBE_ERRORS as exc:
         raise LogStreamError(
             log_error_message(exc, namespace, pod, container or "", False)
@@ -180,7 +178,7 @@ async def _selector_targets(
                 namespace,
                 label_selector=selector,
                 _preload_content=False,
-                _request_timeout=REQUEST_TIMEOUT,
+                _request_timeout=SLOW_REQUEST_TIMEOUT,
             )
         )
     except KUBE_ERRORS as exc:
@@ -365,11 +363,7 @@ async def download(
         raise HTTPException(status_code=502, detail=detail) from exc
     try:
         if not container:
-            pod = await read_json(
-                CoreV1Api(api).read_namespaced_pod(
-                    name, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
-                )
-            )
+            pod = await read_pod(api, namespace, name, timeout=SLOW_REQUEST_TIMEOUT)
             names = container_names(pod)
             if not names:
                 raise HTTPException(

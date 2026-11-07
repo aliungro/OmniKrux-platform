@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { applyMessages, emptyWatchState, resetForReconnect, type WatchState } from "./watchState";
 import type { WatchMessage } from "./types";
+import { wsUrl } from "./ws";
 
 const DELAYS_MS = [1000, 2000, 5000, 10000];
 /** Without requestAnimationFrame, batch over roughly one frame. */
@@ -20,8 +21,7 @@ export interface WatchOptions {
 }
 
 export function watchUrl(kind: string): string {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/watch?kind=${encodeURIComponent(kind)}`;
+  return wsUrl("/api/watch", new URLSearchParams({ kind }));
 }
 
 /** Runs `cb` on the next animation frame (or after ~16 ms), and at the latest after 1 s. Returns a cancel. */

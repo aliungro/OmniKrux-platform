@@ -15,13 +15,12 @@ from pydantic import BaseModel
 from omnikrux.exec.debug import DebugError, add_debug_container, create_node_shell_pod
 from omnikrux.kube.connections import kube_error_message
 from omnikrux.kube.http import read_json
+from omnikrux.kube.pods import REQUEST_TIMEOUT, read_pod
 from omnikrux.resources.describe import OwnerRef, PodDescribe, describe_pod
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/clusters/{cluster_id}")
-
-REQUEST_TIMEOUT = 15  # seconds per Kubernetes call: a hung cluster gets a plain answer
 
 
 async def _call[T](
@@ -45,14 +44,6 @@ async def _call[T](
         except Exception as exc:  # never a traceback or raw body to the browser
             log.warning("Could not %s (%s)", action, type(exc).__name__)
             raise HTTPException(status_code=502, detail=kube_error_message(exc, action)) from exc
-
-
-async def _read_pod(api: ApiClient, namespace: str, name: str) -> dict:
-    return await read_json(
-        CoreV1Api(api).read_namespaced_pod(
-            name, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
-        )
-    )
 
 
 # The workloads that own pods through a label selector, and how to read each one.
@@ -106,7 +97,7 @@ async def describe(cluster_id: str, namespace: str, name: str, request: Request)
         return None
 
     async def run(api: ApiClient) -> PodDescribe:
-        pod = await _read_pod(api, namespace, name)
+        pod = await read_pod(api, namespace, name, timeout=REQUEST_TIMEOUT)
         uid = (pod.get("metadata") or {}).get("uid", "")
         owner = describe_pod(pod, []).pod.owner
         events, selector = await asyncio.gather(
@@ -128,7 +119,7 @@ async def describe(cluster_id: str, namespace: str, name: str, request: Request)
 @router.get("/pods/{namespace}/{name}/yaml")
 async def pod_yaml(cluster_id: str, namespace: str, name: str, request: Request) -> dict[str, str]:
     async def run(api: ApiClient) -> dict[str, str]:
-        pod = await _read_pod(api, namespace, name)
+        pod = await read_pod(api, namespace, name, timeout=REQUEST_TIMEOUT)
         (pod.get("metadata") or {}).pop("managedFields", None)
         return {"yaml": yaml.safe_dump(pod, sort_keys=False)}
 

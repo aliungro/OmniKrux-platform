@@ -1,3 +1,12 @@
+/**
+ * Plain words for a failed request: the server's own `detail` verbatim, or, when nothing answered
+ * (fetch rejects with a TypeError), what to check. `tryAgain` names the way to try again.
+ */
+export function failure(err: unknown, tryAgain = "try again"): string {
+  if (err instanceof TypeError) return `Can't reach the console's server. Check that it's running, then ${tryAgain}.`;
+  return err instanceof Error ? err.message : String(err);
+}
+
 async function fail(res: Response): Promise<never> {
   let detail: string | undefined;
   try {

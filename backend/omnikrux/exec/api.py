@@ -7,7 +7,6 @@ from contextlib import AsyncExitStack
 from typing import Annotated
 
 from fastapi import APIRouter, Query, WebSocket
-from kubernetes_asyncio.client import CoreV1Api
 
 from omnikrux.exec.debug import (
     NSENTER,
@@ -17,14 +16,14 @@ from omnikrux.exec.debug import (
 )
 from omnikrux.exec.session import BROWSER_GONE, ExecBridge, KubeExecChannel
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
-from omnikrux.kube.http import read_json
-from omnikrux.logs.stream import (
-    KUBE_ERRORS,
-    REQUEST_TIMEOUT,
+from omnikrux.kube.http import KUBE_ERRORS
+from omnikrux.kube.pods import (
+    SLOW_REQUEST_TIMEOUT,
     any_container_names,
     container_names,
     container_status,
     pod_missing_message,
+    read_pod,
     state_words,
 )
 from omnikrux.web_security import is_cross_origin
@@ -76,11 +75,7 @@ async def _read_pod(
         except Exception as exc:  # e.g. a missing exec plugin, said in words
             raise ExecRefused(kube_error_message(exc, "connect to the cluster")) from exc
         try:
-            return await read_json(
-                CoreV1Api(api).read_namespaced_pod(
-                    pod, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
-                )
-            )
+            return await read_pod(api, namespace, pod, timeout=SLOW_REQUEST_TIMEOUT)
         except KUBE_ERRORS as exc:
             if getattr(exc, "status", None) == 404:
                 raise ExecRefused(pod_missing_message(namespace, pod)) from exc

@@ -1,5 +1,6 @@
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import { failure } from "../../api/http";
 import type { OwnerRef, Provider, ResourceRow } from "../../api/types";
 import { textColumn } from "../territories/model";
 import { DescribeView } from "./DescribeView";
@@ -14,19 +15,12 @@ import s from "./Inspector.module.css";
 const TABS = ["Describe", "YAML", "Events"] as const;
 type Tab = (typeof TABS)[number];
 
-/** Plain words for a failure; the backend's own `detail` comes through verbatim. */
-function failure(err: Error): string {
-  // fetch rejects with a TypeError when the request never got an answer.
-  if (err instanceof TypeError) return "Can't reach the console's server. Check that it's running, then retry.";
-  return err.message;
-}
-
 function Loaded<T>({ q, children }: { q: UseQueryResult<T>; children: (data: T) => ReactNode }) {
   if (q.data !== undefined && !q.isError) return <>{children(q.data)}</>;
   if (q.isError) {
     return (
       <div className={s.state} role="alert">
-        <span className={s.err}>{failure(q.error)}</span>
+        <span className={s.err}>{failure(q.error, "retry")}</span>
         <button type="button" className={s.btn} onClick={() => void q.refetch()} disabled={q.isFetching}>
           Retry
         </button>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ExecMessage } from "../../api/types";
+import { canRetryAfterClose, refusalWords, wsUrl } from "../../api/ws";
 
 export interface ExecTarget {
   cluster: string;
@@ -31,23 +32,12 @@ export interface ExecState {
   reconnect: () => void;
 }
 
-/** Closes that mean trying again won't help, even after the server's own error message. */
-const NO_RETRY = new Set([1008, 4403]);
-
-/** Closes that come without a message: what to tell the user. */
-const REFUSED: Record<number, string> = {
-  1008: "The console turned down this shell request. Open the shell again from the pod.",
-  4403: "The console refused the connection from this page. Open the console from its own address.",
-  4404: "Unknown cluster. It may have been removed from the kubeconfig; pick it again from the list.",
-};
-
 /** No `command`: the server picks bash or sh, or a shell on the node for a node-shell pod. */
 export function execUrl(t: ExecTarget): string {
   const q = new URLSearchParams({ cluster: t.cluster, namespace: t.namespace, pod: t.pod });
   if (t.container) q.set("container", t.container);
   if (t.cleanupPod) q.set("cleanup_pod", "true");
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/exec?${q.toString()}`;
+  return wsUrl("/api/exec", q);
 }
 
 /** What the pane shows; the rest of `ExecState` is the calls. */
@@ -127,11 +117,12 @@ export function useExec(target: ExecTarget, onOutput: (data: string) => void): E
         openRef.current = false;
         if (finished) {
           // The server said why; its close code says whether trying again can help.
-          if (NO_RETRY.has(ev.code)) setState((s) => (s.status === "error" ? { ...s, canRetry: false } : s));
+          if (!canRetryAfterClose(ev.code)) setState((s) => (s.status === "error" ? { ...s, canRetry: false } : s));
           return;
         }
-        if (Object.hasOwn(REFUSED, ev.code)) {
-          setState(shown("error", REFUSED[ev.code], { canRetry: !NO_RETRY.has(ev.code) }));
+        const refused = refusalWords(ev.code, "shell");
+        if (refused !== null) {
+          setState(shown("error", refused, { canRetry: canRetryAfterClose(ev.code) }));
           return;
         }
         setState(shown("disconnected"));

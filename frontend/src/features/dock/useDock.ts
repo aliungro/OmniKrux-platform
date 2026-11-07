@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useReducer, useRef, useState, type Dispatch } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { postJson } from "../../api/http";
+import { failure, postJson } from "../../api/http";
 import type { Cluster, DebugContainer, NodeShellPod, OwnerRef, PodDescribe, ResourceRow } from "../../api/types";
 import { describeQuery, podPath } from "../inspector/useDescribe";
 import { textColumn } from "../territories/model";
@@ -45,12 +45,6 @@ export interface DockApi {
   ask: Ask | null;
   confirm: () => void;
   cancel: () => void;
-}
-
-/** Plain words for a failed request (fetch rejects with a TypeError when nothing answered). */
-function failure(err: unknown): string {
-  if (err instanceof TypeError) return "Can't reach the console's server. Check that it's running, then try again.";
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** Every container whose logs can be read, init first, as the pod lists them. */

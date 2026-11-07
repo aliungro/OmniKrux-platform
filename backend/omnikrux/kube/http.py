@@ -3,7 +3,11 @@
 import json
 from collections.abc import Awaitable
 
+import aiohttp
 from kubernetes_asyncio.client.exceptions import ApiException
+
+# What a Kubernetes call can raise for the cluster's (or the network's) reasons.
+KUBE_ERRORS = (ApiException, aiohttp.ClientError, TimeoutError)
 
 
 async def read_json(call: Awaitable) -> dict:

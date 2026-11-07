@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { scheduleFrame } from "../../api/useWatch";
 import type { LogLine, LogMessage } from "../../api/types";
+import { canRetryAfterClose, refusalWords, wsUrl } from "../../api/ws";
 import { LogBuffer, isMarker, type LogEntry } from "./logBuffer";
 import { compareTs, formatTs, tsKey, type TsKey } from "./logTime";
 
@@ -37,16 +38,6 @@ const LOST_RECONNECTING = "Lost the connection to the log stream. Reconnectingâ€
 const LOST_FOR_GOOD =
   "Lost the connection to the console's server before the log was complete. Check that it's running, then open the logs again.";
 
-/** Closes that mean trying again won't help. */
-const NO_RETRY = new Set([1008, 4403]);
-
-/** Closes that come without a status message: what to tell the user. */
-const REFUSED: Record<number, string> = {
-  1008: "The console turned down this log request. Open the logs again from the pod.",
-  4403: "The console refused the connection from this page. Open the console from its own address.",
-  4404: "Unknown cluster. It may have been removed from the kubeconfig; pick it again from the list.",
-};
-
 export function logsUrl(p: LogStreamParams, sinceTime: string | null): string {
   const q = new URLSearchParams({ cluster: p.cluster, namespace: p.namespace });
   if (p.pod) q.set("pod", p.pod);
@@ -55,8 +46,7 @@ export function logsUrl(p: LogStreamParams, sinceTime: string | null): string {
   q.set("previous", String(p.previous));
   q.set("follow", String(p.follow));
   if (sinceTime !== null) q.set("since_time", sinceTime);
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/logs?${q.toString()}`;
+  return wsUrl("/api/logs", q);
 }
 
 export function gapMarker(from: string, to: string): string {
@@ -225,8 +215,9 @@ export function useLogStream(params: LogStreamParams): LogStreamState {
         if (disposed) return;
         socket = null;
         if (finished) return;
-        if (Object.hasOwn(REFUSED, ev.code)) {
-          setStatus("error", REFUSED[ev.code], !NO_RETRY.has(ev.code));
+        const refused = refusalWords(ev.code, "log");
+        if (refused !== null) {
+          setStatus("error", refused, canRetryAfterClose(ev.code));
           return;
         }
         if (!follow) {
