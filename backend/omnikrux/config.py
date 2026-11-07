@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     rewrite_loopback: bool | None = None
     kubeconfig: str | None = None
     static_dir: Path | None = None
+    # OMNIKRUX_DEBUG_IMAGE: the image for debug containers and node shells.
+    debug_image: str = "busybox:1.36"
     # OMNIKRUX_ALLOWED_HOSTS: comma-separated; "*" turns the Host check off.
     allowed_hosts: Annotated[list[str], NoDecode] = list(DEFAULT_ALLOWED_HOSTS)
 

@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { WatchMessage } from "./types";
-import { applyMessage, emptyWatchState, resetForReconnect } from "./watchState";
+import { applyMessage, applyMessages, emptyWatchState, resetForReconnect, type WatchState } from "./watchState";
 const row = (uid: string) => ({ uid, cluster_id: "c", kind: "Pod", namespace: "n", name: uid, created_at: "", columns: {} });
 const snap = (uids: string[], part = 0, last = true) => ({ type: "snapshot", cluster_id: "c", rows: uids.map(row), part, last } as const);
 
@@ -61,5 +61,104 @@ describe("applyMessage", () => {
     expect(s.pending.c).toHaveLength(1);
     s = resetForReconnect(s);
     expect(s.pending).toEqual({});
+  });
+});
+
+describe("cluster_removed", () => {
+  it("cluster_removed drops rows and status", () => {
+    let s = applyMessage(emptyWatchState(), snap(["a"]));
+    s = applyMessage(s, { type: "cluster_status", cluster_id: "c", state: "ready", message: null });
+    s = applyMessage(s, { type: "snapshot", cluster_id: "c", rows: [row("p")], part: 0, last: false });
+    s = applyMessage(s, { type: "cluster_status", cluster_id: "d", state: "ready", message: null });
+    const next = applyMessage(s, { type: "cluster_removed", cluster_id: "c" });
+    expect(next.rows.c).toBeUndefined();
+    expect(next.clusters.c).toBeUndefined();
+    expect(next.pending.c).toBeUndefined();
+    expect("c" in next.rows || "c" in next.clusters || "c" in next.pending).toBe(false);
+    expect(next.clusters.d).toBe(s.clusters.d);
+    expect(s.rows.c.size).toBe(1);
+  });
+  it("removing a cluster the state never saw returns the same state", () => {
+    const s = applyMessage(emptyWatchState(), snap(["a"]));
+    expect(applyMessage(s, { type: "cluster_removed", cluster_id: "zzz" })).toBe(s);
+  });
+});
+
+describe("applyMessages", () => {
+  const RealMap = Map;
+  afterEach(() => vi.unstubAllGlobals());
+
+  const deepFreeze = (s: WatchState) => {
+    Object.freeze(s.clusters);
+    Object.freeze(s.rows);
+    Object.freeze(s.pending);
+    for (const a of Object.values(s.pending)) Object.freeze(a);
+    return Object.freeze(s);
+  };
+
+  it("applyMessages copies a cluster map once per batch", () => {
+    const base = applyMessage(applyMessage(emptyWatchState(), snap(["a"])), {
+      type: "snapshot", cluster_id: "d", rows: [{ ...row("z"), cluster_id: "d" }], part: 0, last: true,
+    });
+    const ups: WatchMessage[] = Array.from({ length: 1000 }, (_, i) => ({ type: "upsert", cluster_id: "c", row: row(`u${i}`) }));
+    let created = 0;
+    class CountingMap<K, V> extends RealMap<K, V> {
+      constructor(entries?: Iterable<readonly [K, V]> | null) {
+        super(entries);
+        created++;
+      }
+    }
+    vi.stubGlobal("Map", CountingMap);
+    const next = applyMessages(base, ups);
+    vi.unstubAllGlobals();
+    expect(created).toBe(1);
+    expect(next.rows.c.size).toBe(1001);
+    expect(base.rows.c.size).toBe(1);
+    expect(next.rows.d).toBe(base.rows.d);
+  });
+
+  it("gives the same result as applying the messages one by one, without mutating inputs", () => {
+    let base = applyMessage(emptyWatchState(), snap(["a", "b"]));
+    base = applyMessage(base, { type: "snapshot", cluster_id: "e", rows: [{ ...row("e0"), cluster_id: "e" }], part: 0, last: false });
+    base = applyMessage(base, { type: "cluster_status", cluster_id: "gone", state: "ready", message: null });
+    deepFreeze(base);
+    const ms: WatchMessage[] = [
+      { type: "upsert", cluster_id: "c", row: row("x") },
+      { type: "delete", cluster_id: "c", uid: "a" },
+      { type: "snapshot", cluster_id: "e", rows: [{ ...row("e1"), cluster_id: "e" }], part: 1, last: false },
+      { type: "snapshot", cluster_id: "e", rows: [{ ...row("e2"), cluster_id: "e" }], part: 2, last: true },
+      { type: "upsert", cluster_id: "e", row: { ...row("e3"), cluster_id: "e" } },
+      { type: "snapshot", cluster_id: "f", rows: [row("stale")], part: 0, last: false },
+      { type: "snapshot", cluster_id: "f", rows: [row("f0")], part: 0, last: false },
+      { type: "snapshot", cluster_id: "f", rows: [row("f1")], part: 1, last: true },
+      { type: "cluster_status", cluster_id: "c", state: "ready", message: null },
+      { type: "cluster_removed", cluster_id: "gone" },
+      { type: "ping" } as unknown as WatchMessage,
+    ];
+    for (const m of ms) Object.freeze(m);
+    const one = ms.reduce(applyMessage, base);
+    const batch = applyMessages(base, ms);
+    const view = (s: WatchState) => ({
+      clusters: s.clusters,
+      rows: Object.fromEntries(Object.entries(s.rows).map(([k, v]) => [k, [...v.keys()]])),
+      pending: s.pending,
+    });
+    expect(view(batch)).toEqual(view(one));
+    expect([...batch.rows.e.keys()]).toEqual(["e0", "e1", "e2", "e3"]);
+    expect([...batch.rows.f.keys()]).toEqual(["f0", "f1"]);
+    expect([...base.rows.c.keys()]).toEqual(["a", "b"]);
+    expect(base.pending.e).toHaveLength(1);
+  });
+
+  it("an empty or no-op batch returns the same state object", () => {
+    const s = applyMessage(emptyWatchState(), snap(["a"]));
+    expect(applyMessages(s, [])).toBe(s);
+    expect(applyMessages(s, [{ type: "delete", cluster_id: "c", uid: "nope" }])).toBe(s);
+  });
+
+  it("a repeated identical status keeps the cluster's status object", () => {
+    const s = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c", state: "ready", message: null });
+    const next = applyMessage(s, { type: "cluster_status", cluster_id: "c", state: "ready", message: null });
+    expect(next).toBe(s);
   });
 });

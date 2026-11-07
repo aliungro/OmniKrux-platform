@@ -1,0 +1,233 @@
+// frontend/src/features/inspector/inspector.test.tsx
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import type { ContainerInfo, PodDescribe, ResourceRow } from "../../api/types";
+import { DescribeView } from "./DescribeView";
+import { EventsTable } from "./EventsTable";
+import { Inspector } from "./Inspector";
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+const json = (body: unknown, status = 200) =>
+  Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
+
+const container = (over: Partial<ContainerInfo> = {}): ContainerInfo => ({
+  name: "payments-api",
+  image: "acmeprod.azurecr.io/payments-api:2.4.1",
+  state: "Waiting: CrashLoopBackOff",
+  state_class: "bad",
+  ready: false,
+  restarts: 14,
+  last_state: "Terminated: OOMKilled (exit 137)",
+  last_finished_at: "2026-11-07T14:04:14Z",
+  requests: { cpu: "100m", memory: "128Mi" },
+  limits: { cpu: "500m", memory: "256Mi" },
+  limit_hit: ["memory"],
+  ports: ["8080/TCP"],
+  probes: { liveness: "GET :8080/healthz every 10s" },
+  env: [],
+  mounts: [],
+  ...over,
+});
+
+export const describeBody = (over: Partial<PodDescribe> = {}): PodDescribe => ({
+  pod: {
+    name: "payments-api-1",
+    namespace: "payments",
+    status: "CrashLoopBackOff",
+    status_class: "bad",
+    node: "aks-np1-03",
+    pod_ip: "10.244.3.17",
+    host_ip: "10.0.0.4",
+    qos: "Burstable",
+    service_account: "payments-api",
+    owner: { kind: "ReplicaSet", name: "payments-api-7f9c4", selector: "app=payments-api,pod-template-hash=7f9c4" },
+    started_at: "2026-11-07T14:02:00Z",
+    resource_version: "1",
+  },
+  containers: [container()],
+  init_containers: [],
+  ephemeral_containers: [],
+  conditions: [
+    { type: "PodScheduled", status: "True", reason: null, message: null },
+    { type: "Ready", status: "False", reason: "ContainersNotReady", message: "containers with unready status: [payments-api]" },
+  ],
+  labels: { app: "payments-api" },
+  annotations: {},
+  events: [],
+  events_error: null,
+  ...over,
+});
+
+const row = (rv = "1"): ResourceRow => ({
+  uid: "u1",
+  cluster_id: "c1",
+  kind: "Pod",
+  namespace: "payments",
+  name: "payments-api-1",
+  created_at: null,
+  columns: { status: "CrashLoopBackOff", status_class: "bad", resource_version: rv },
+});
+
+function wrap(ui: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const out = render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return {
+    ...out,
+    rerender: (next: ReactNode) => out.rerender(<QueryClientProvider client={client}>{next}</QueryClientProvider>),
+  };
+}
+
+describe("describe view", () => {
+  it("describe shows OOMKilled last state in bad style", () => {
+    render(<DescribeView data={describeBody()} />);
+    const last = screen.getByText("Terminated: OOMKilled (exit 137)");
+    expect(last.getAttribute("data-tone")).toBe("bad");
+    // The memory limit the container ran into is highlighted; the CPU limit is not.
+    expect(screen.getByText("256Mi").getAttribute("data-tone")).toBe("bad");
+    expect(screen.getByText("500m").getAttribute("data-tone")).toBeNull();
+  });
+
+  it("a clean exit is not shown as bad", () => {
+    render(<DescribeView data={describeBody({ containers: [container({ last_state: "Terminated: Completed (exit 0)", limit_hit: [] })] })} />);
+    expect(screen.getByText("Terminated: Completed (exit 0)").getAttribute("data-tone")).toBeNull();
+  });
+
+  it("a failed exit without a reason from Kubernetes is still shown as bad", () => {
+    render(<DescribeView data={describeBody({ containers: [container({ last_state: "Terminated (exit 2)", limit_hit: [] })] })} />);
+    expect(screen.getByText("Terminated (exit 2)").getAttribute("data-tone")).toBe("bad");
+  });
+
+  it("secret env shows source but no value", () => {
+    const env = [
+      { name: "DB_PASSWORD", value: null, source: "Secret payments-db key password" },
+      { name: "LOG_LEVEL", value: "info", source: null },
+    ];
+    render(<DescribeView data={describeBody({ containers: [container({ env })] })} />);
+    const secret = screen.getByTestId("env-DB_PASSWORD");
+    expect(secret.textContent).toContain("Secret payments-db key password");
+    expect(within(secret).queryByTestId("env-value")).toBeNull();
+    expect(within(screen.getByTestId("env-LOG_LEVEL")).getByTestId("env-value").textContent).toBe("info");
+  });
+
+  it("marks init and ephemeral containers", () => {
+    render(
+      <DescribeView
+        data={describeBody({
+          init_containers: [container({ name: "migrate", state: "Terminated: Completed (exit 0)", state_class: "done" })],
+          ephemeral_containers: [container({ name: "debugger-x1", state: "Running", state_class: "ok" })],
+        })}
+      />,
+    );
+    expect(within(screen.getByTestId("ctr-migrate")).getByText("Init")).toBeTruthy();
+    expect(within(screen.getByTestId("ctr-debugger-x1")).getByText("Ephemeral")).toBeTruthy();
+  });
+
+  it("shows conditions as true and false chips and labels as tags", () => {
+    render(<DescribeView data={describeBody()} />);
+    const conds = within(screen.getByRole("list", { name: "Conditions" }));
+    expect(conds.getByText("Pod scheduled").getAttribute("data-status")).toBe("True");
+    expect(conds.getByText("Ready").getAttribute("data-status")).toBe("False");
+    expect(screen.getByText("app=payments-api")).toBeTruthy();
+  });
+});
+
+describe("events", () => {
+  it("events show grouped count ×58", () => {
+    render(
+      <EventsTable
+        events={[
+          { type: "Warning", reason: "BackOff", message: "Back-off restarting failed container", count: 58, last_seen: null },
+          { type: "Normal", reason: "Pulled", message: "Image already present", count: 1, last_seen: null },
+        ]}
+        error={null}
+      />,
+    );
+    expect(screen.getByText("×58")).toBeTruthy();
+    expect(screen.getByText("Back-off restarting failed container")).toBeTruthy();
+    // A single event shows no count.
+    expect(screen.queryByText("×1")).toBeNull();
+  });
+
+  it("an events error is shown plainly instead of an empty list", () => {
+    render(<EventsTable events={[]} error="Couldn't list events for this pod: forbidden" />);
+    expect(screen.getByText("Couldn't list events for this pod: forbidden")).toBeTruthy();
+    expect(screen.queryByText("No events")).toBeNull();
+  });
+
+  it("no events says so", () => {
+    render(<EventsTable events={[]} error={null} />);
+    expect(screen.getByText("No events")).toBeTruthy();
+  });
+});
+
+describe("inspector", () => {
+  it("refetches when resource_version changes", async () => {
+    const fetch = vi.fn((_url: string) => json(describeBody()));
+    vi.stubGlobal("fetch", fetch);
+    const { rerender } = wrap(<Inspector row={row("1")} provider="aks" />);
+    await screen.findByText("aks-np1-03");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe("/api/clusters/c1/pods/payments/payments-api-1/describe");
+    rerender(<Inspector row={row("2")} provider="aks" />);
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    // The earlier answer stays on screen while the new one loads.
+    expect(screen.queryByText("Loading details…")).toBeNull();
+  });
+
+  it("shows loading first", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    wrap(<Inspector row={row()} provider="aks" />);
+    expect(await screen.findByText("Loading details…")).toBeTruthy();
+  });
+
+  it("error shows detail and retry", async () => {
+    const detail = "Pod payments/payments-api-1 no longer exists. It may have been deleted or replaced.";
+    const fetch = vi.fn()
+      .mockImplementationOnce(() => json({ detail }, 404))
+      .mockImplementation(() => json(describeBody()));
+    vi.stubGlobal("fetch", fetch);
+    wrap(<Inspector row={row()} provider="aks" />);
+    expect(await screen.findByText(detail)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("aks-np1-03");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("yaml tab shows the manifest with line numbers", async () => {
+    const fetch = vi.fn((url: string) =>
+      url.endsWith("/yaml") ? json({ yaml: "apiVersion: v1\nkind: Pod\n" }) : json(describeBody()),
+    );
+    vi.stubGlobal("fetch", fetch);
+    wrap(<Inspector row={row()} provider="aks" />);
+    fireEvent.click(screen.getByRole("tab", { name: "YAML" }));
+    const pre = await screen.findByTestId("yaml");
+    expect(pre.tagName).toBe("PRE");
+    expect(pre.textContent).toContain("kind: Pod");
+    expect(within(pre).getByText("2")).toBeTruthy();
+    expect(fetch.mock.calls.some(([u]) => u === "/api/clusters/c1/pods/payments/payments-api-1/yaml")).toBe(true);
+  });
+
+  it("events tab shows the events table", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(describeBody({ events_error: "Couldn't list events: forbidden" }))));
+    wrap(<Inspector row={row()} provider="aks" />);
+    fireEvent.click(screen.getByRole("tab", { name: "Events" }));
+    expect(await screen.findByText("Couldn't list events: forbidden")).toBeTruthy();
+  });
+
+  it("logs and shell buttons call their props", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(describeBody())));
+    const onOpenLogs = vi.fn();
+    const onOpenShell = vi.fn();
+    wrap(<Inspector row={row()} provider="aks" onOpenLogs={onOpenLogs} onOpenShell={onOpenShell} />);
+    fireEvent.click(screen.getByRole("button", { name: /Logs/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Shell/ }));
+    expect(onOpenLogs).toHaveBeenCalledWith(row());
+    expect(onOpenShell).toHaveBeenCalledWith(row());
+  });
+});

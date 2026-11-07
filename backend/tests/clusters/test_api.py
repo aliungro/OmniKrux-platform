@@ -43,12 +43,20 @@ def test_unparseable_file_is_skipped_at_startup(tmp_path, caplog):
 class StubHub:
     def __init__(self):
         self.retried: list[str] = []
+        self.forgotten: list[str] = []
+        self.changed = 0
 
     def status(self, cluster_id):
         return ("error", "Can't reach this cluster: boom")
 
     async def retry(self, cluster_id):
         self.retried.append(cluster_id)
+
+    async def forget(self, cluster_id):
+        self.forgotten.append(cluster_id)
+
+    async def clusters_changed(self):
+        self.changed += 1
 
     async def close(self):
         pass
@@ -155,3 +163,97 @@ def test_invalid_yaml_file_at_startup_logs_no_contents(tmp_path, caplog):
     assert SECRET not in caplog.text
     [warning] = [r.getMessage() for r in caplog.records if r.name == "omnikrux.main"]
     assert str(bad) in warning and "ScannerError" in warning and "line 6, column 30" in warning
+
+
+def test_delete_cluster_204_then_404(app_with_kubeconfig):
+    client, _ = app_with_kubeconfig
+    cluster_id = client.get("/api/clusters").json()[0]["id"]
+    r = client.delete(f"/api/clusters/{cluster_id}")
+    assert r.status_code == 204 and r.content == b""
+    assert client.get("/api/clusters").json() == []
+    r = client.delete(f"/api/clusters/{cluster_id}")
+    assert r.status_code == 404 and r.json()["detail"] == "Unknown cluster"
+
+
+def test_delete_cluster_forgets_it_in_the_hub(app_with_kubeconfig):
+    client, _ = app_with_kubeconfig
+    client.app.state.hub = hub = StubHub()
+    cluster_id = client.get("/api/clusters").json()[0]["id"]
+    assert client.delete(f"/api/clusters/{cluster_id}").status_code == 204
+    assert hub.forgotten == [cluster_id]
+    assert client.delete(f"/api/clusters/{cluster_id}").status_code == 404
+    assert hub.forgotten == [cluster_id]
+
+
+def test_import_tells_the_hub_clusters_changed(app_with_kubeconfig):
+    from tests.clusters.test_kubeconfig import kc
+
+    client, _ = app_with_kubeconfig
+    client.app.state.hub = hub = StubHub()
+    r = client.post(
+        "/api/clusters/kubeconfig",
+        json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])},
+    )
+    assert r.status_code == 200 and hub.changed == 1
+    assert (
+        client.post("/api/clusters/kubeconfig", json={"kubeconfig": "::: nope"}).status_code == 422
+    )
+    assert hub.changed == 1
+
+
+def test_uploaded_cluster_survives_restart_without_it_in_files(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from omnikrux.config import Settings
+    from omnikrux.main import create_app
+    from tests.clusters.test_kubeconfig import kc
+
+    path = tmp_path / "config"
+    path.write_text(kc([("kind-omnikrux-dev", "https://127.0.0.1:6443", None)]), encoding="utf-8")
+    settings = Settings(data_dir=tmp_path, kubeconfig=str(path))
+    with TestClient(create_app(settings)) as client:
+        r = client.post(
+            "/api/clusters/kubeconfig",
+            json={"kubeconfig": kc([("eks-prod", "https://x.eks.amazonaws.com", None)])},
+        )
+        assert r.status_code == 200
+    with TestClient(create_app(settings)) as client:
+        names = [c["name"] for c in client.get("/api/clusters").json()]
+    assert names == ["eks-prod", "kind-omnikrux-dev"]
+
+
+def test_upload_conflict_is_409_and_keeps_the_original(app_with_kubeconfig):
+    from tests.clusters.test_kubeconfig import kc
+
+    client, _ = app_with_kubeconfig
+    first = client.post(
+        "/api/clusters/kubeconfig", json={"kubeconfig": kc([("lab", "https://lab-a:6443", None)])}
+    ).json()
+    r = client.post(
+        "/api/clusters/kubeconfig",
+        json={
+            "kubeconfig": kc(
+                [("eks-prod", "https://x.eks.amazonaws.com", None), ("lab", "https://lab-b", None)]
+            )
+        },
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "A cluster called lab was already uploaded for https://lab-a:6443."
+        " Delete it first to replace it."
+    )
+    clusters = {c["name"]: c for c in client.get("/api/clusters").json()}
+    assert sorted(clusters) == ["kind-omnikrux-dev", "lab"]
+    assert clusters["lab"]["id"] == first[0]["id"]
+    assert clusters["lab"]["server"] == "https://lab-a:6443"
+
+
+def test_upload_on_the_same_server_updates_in_place(app_with_kubeconfig):
+    from tests.clusters.test_kubeconfig import kc
+
+    client, _ = app_with_kubeconfig
+    body = {"kubeconfig": kc([("lab", "https://lab-a:6443", None)])}
+    [first] = client.post("/api/clusters/kubeconfig", json=body).json()
+    r = client.post("/api/clusters/kubeconfig", json=body)
+    assert r.status_code == 200 and r.json()[0]["id"] == first["id"]
+    assert [c["name"] for c in client.get("/api/clusters").json()] == ["kind-omnikrux-dev", "lab"]

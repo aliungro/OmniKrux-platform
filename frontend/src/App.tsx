@@ -1,10 +1,14 @@
 import { useCallback, useMemo, useState } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { retryCluster, useClusters } from "./api/useClusters";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "./api/useClusters";
 import { useWatch } from "./api/useWatch";
+import type { OwnerRef, ResourceRow } from "./api/types";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
+import { ShortcutBar } from "./features/chrome/ShortcutBar";
 import { TopBar } from "./features/chrome/TopBar";
+import { Dock } from "./features/dock/Dock";
+import { useDock } from "./features/dock/useDock";
 import { buildTerritories, countFilters, podCount, type Filters } from "./features/territories/model";
 import { TerritoryTable } from "./features/territories/TerritoryTable";
 import { useNow } from "./hooks/useNow";
@@ -18,12 +22,20 @@ function isNoFilter(f: Filters): boolean {
 
 /** The whole console page; expects a QueryClientProvider above it. */
 export function Console() {
+  const queryClient = useQueryClient();
   const clusters = useClusters();
-  const watch = useWatch("pods");
+  const list = clusters.data;
+  const { refetch } = clusters;
+  const knownClusterIds = useMemo(() => (list ? new Set(list.map((c) => c.id)) : undefined), [list]);
+  // The watch names clusters the moment the backend adds or drops them; reload the list then.
+  const watch = useWatch("pods", {
+    knownClusterIds,
+    onUnknownCluster: () => void refetch(),
+    onClusterRemoved: () => void queryClient.invalidateQueries({ queryKey: CLUSTERS_QUERY_KEY }),
+  });
   const now = useNow(60_000);
   const [filters, setFilters] = useState<Filters>(NO_FILTER);
 
-  const list = clusters.data;
   // Unfiltered territories drive the scope tokens and every count, so counts never shrink as you filter.
   const all = useMemo(() => buildTerritories(list ?? [], watch, NO_FILTER, now), [list, watch, now]);
   const shown = useMemo(
@@ -31,6 +43,16 @@ export function Console() {
     [all, list, watch, filters, now],
   );
   const counts = useMemo(() => countFilters(all, now), [all, now]);
+
+  const dock = useDock(list ?? []);
+  const { openPod, openOwnerLogs, askNodeShell } = dock;
+  const onOpenLogs = useCallback(
+    (row: ResourceRow, previous?: boolean) => openPod(row, "logs", { previous }),
+    [openPod],
+  );
+  const onOpenShell = useCallback((row: ResourceRow) => openPod(row, "shell"), [openPod]);
+  const onNodeShell = useCallback((row: ResourceRow, node: string) => askNodeShell(row.cluster_id, node), [askNodeShell]);
+  const onOwnerLogs = useCallback((row: ResourceRow, owner: OwnerRef) => openOwnerLogs(row, owner), [openOwnerLogs]);
 
   const onRetry = useCallback((id: string) => {
     // The watch reports the cluster's new state; a failed request leaves its band in error.
@@ -59,16 +81,28 @@ export function Console() {
         <KindTabs active="pods" counts={{ pods: podCount(all) }} />
         <FilterBar value={filters} onChange={setFilters} counts={counts} />
         <main className={s.main}>
-          <TerritoryTable territories={shown} onRetry={onRetry} />
+          <TerritoryTable
+            territories={shown}
+            onRetry={onRetry}
+            onOpenLogs={onOpenLogs}
+            onOpenShell={onOpenShell}
+            onNodeShell={onNodeShell}
+            onOwnerLogs={onOwnerLogs}
+          />
         </main>
       </>
     );
   }
+  const hasTable = list !== undefined && list.length > 0;
 
+  // The dock sits outside the switch above, so its sessions (and their shells) outlive a moment
+  // with no clusters, e.g. the last one removed.
   return (
     <div className={s.app}>
       <TopBar clusters={all} />
       {body}
+      {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
+      {hasTable && <ShortcutBar />}
     </div>
   );
 }

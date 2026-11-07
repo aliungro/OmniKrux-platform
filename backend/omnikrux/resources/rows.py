@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 StatusClass = Literal["ok", "warn", "bad", "done"]
 
-_BAD_WAITING = {
+BAD_WAITING = {
     "CrashLoopBackOff",
     "ImagePullBackOff",
     "ErrImagePull",
@@ -48,7 +48,7 @@ def pod_status(pod: dict) -> tuple[str, StatusClass]:
     for cs in containers:
         reason = ((cs.get("state") or {}).get("waiting") or {}).get("reason")
         if reason:
-            return reason, "bad" if reason in _BAD_WAITING else "warn"
+            return reason, "bad" if reason in BAD_WAITING else "warn"
 
     phase = status.get("phase")
     if phase != "Succeeded":
@@ -95,5 +95,6 @@ def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
             "restarts": sum((cs.get("restartCount") or 0) for cs in containers),
             "node": (pod.get("spec") or {}).get("nodeName"),
             "last_restart_at": last_restart,
+            "resource_version": md.get("resourceVersion"),
         },
     )

@@ -18,7 +18,14 @@ export interface Territory {
 
 export type FlatItem =
   | { type: "band"; t: Territory }
-  | { type: "row"; row: ResourceRow; provider: Provider };
+  | { type: "row"; row: ResourceRow; provider: Provider }
+  | { type: "inspector"; row: ResourceRow; provider: Provider };
+
+/** A pod row's identity across clusters; uids are only unique within one cluster. */
+export interface RowRef {
+  clusterId: string;
+  uid: string;
+}
 
 /** A string column, or null when the backend sent nothing usable. */
 export function textColumn(row: ResourceRow, key: string): string | null {
@@ -76,29 +83,70 @@ function sortRows(rows: ResourceRow[]): ResourceRow[] {
     .map((x) => x.row);
 }
 
+type LiveStatus = WatchState["clusters"][string] | undefined;
+
+function buildTerritory(
+  cluster: Cluster,
+  live: LiveStatus,
+  rows: Map<string, ResourceRow> | undefined,
+  f: Filters,
+  now: Date,
+): Territory {
+  const all = rows ? Array.from(rows.values()) : [];
+  let failing = 0;
+  let pending = 0;
+  for (const row of all) {
+    if (isFailing(row)) failing++;
+    if (isPending(row)) pending++;
+  }
+  return {
+    cluster,
+    state: live ? live.state : cluster.state,
+    message: live ? live.message : cluster.message,
+    rows: sortRows(all.filter((row) => matchesFilter(row, f, now))),
+    total: all.length,
+    failing,
+    pending,
+  };
+}
+
+interface CacheEntry {
+  cluster: Cluster;
+  live: LiveStatus;
+  minute: number;
+  territory: Territory;
+}
+
+/**
+ * Territories by the row Map they were built from (or by the cluster, when it shows no rows),
+ * then by filter. A watch update copies only the Maps it touches, so every other cluster hits.
+ */
+const cache = new WeakMap<object, Map<string, CacheEntry>>();
+/** Distinct filters remembered per row Map; typing a search adds one per keystroke. */
+const MAX_FILTERS_PER_ROWS = 8;
+
 export function buildTerritories(clusters: Cluster[], w: WatchState, f: Filters, now: Date): Territory[] {
+  // Filters only read `now` for its local day, which can't change within a minute.
+  const minute = Math.floor(now.getTime() / 60_000);
+  const filterKey = `${f.status}\u0000${f.text.trim().toLowerCase()}`;
   return clusters.map((cluster) => {
-    const live = w.clusters[cluster.id];
+    const live: LiveStatus = Object.hasOwn(w.clusters, cluster.id) ? w.clusters[cluster.id] : undefined;
     const state = live ? live.state : cluster.state;
     // Rows kept from before an error or a reconnect are not live: never show them as current.
     // ("unknown" only means no status frame yet; any rows present came from a fresh snapshot.)
     const stale = state === "error" || state === "syncing";
-    const all = stale ? [] : Array.from(w.rows[cluster.id]?.values() ?? []);
-    let failing = 0;
-    let pending = 0;
-    for (const row of all) {
-      if (isFailing(row)) failing++;
-      if (isPending(row)) pending++;
-    }
-    return {
-      cluster,
-      state,
-      message: live ? live.message : cluster.message,
-      rows: sortRows(all.filter((row) => matchesFilter(row, f, now))),
-      total: all.length,
-      failing,
-      pending,
-    };
+    const rows = stale || !Object.hasOwn(w.rows, cluster.id) ? undefined : w.rows[cluster.id];
+
+    const owner: object = rows ?? cluster;
+    let byFilter = cache.get(owner);
+    if (!byFilter) cache.set(owner, (byFilter = new Map()));
+    const hit = byFilter.get(filterKey);
+    if (hit && hit.cluster === cluster && hit.live === live && hit.minute === minute) return hit.territory;
+
+    const territory = buildTerritory(cluster, live, rows, f, now);
+    if (!hit && byFilter.size >= MAX_FILTERS_PER_ROWS) byFilter.clear();
+    byFilter.set(filterKey, { cluster, live, minute, territory });
+    return territory;
   });
 }
 
@@ -126,11 +174,17 @@ export function podCount(ts: Territory[]): number | null {
   return ready.length === 0 ? null : ready.reduce((n, t) => n + t.total, 0);
 }
 
-export function flatten(ts: Territory[]): FlatItem[] {
+/** Bands and rows in display order, with the inspector right after the `inspect` row when it's shown. */
+export function flatten(ts: Territory[], inspect: RowRef | null = null): FlatItem[] {
   const out: FlatItem[] = [];
   for (const t of ts) {
+    const provider = t.cluster.provider;
     out.push({ type: "band", t });
-    for (const row of t.rows) out.push({ type: "row", row, provider: t.cluster.provider });
+    const here = inspect !== null && inspect.clusterId === t.cluster.id;
+    for (const row of t.rows) {
+      out.push({ type: "row", row, provider });
+      if (here && row.uid === inspect.uid) out.push({ type: "inspector", row, provider });
+    }
   }
   return out;
 }

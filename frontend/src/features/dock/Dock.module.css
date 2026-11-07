@@ -1,0 +1,90 @@
+/* The dock under the table (Territories mockup): a grip, the session strip, then the panes. */
+.dock {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--rule);
+  background: #100e18;
+}
+
+/* Nothing open: one quiet line instead of a tall empty box, so the table keeps the room. */
+.empty {
+  height: auto;
+}
+
+.hint {
+  margin: 0;
+  padding: 10px 16px;
+  color: var(--ink-3);
+}
+
+.grip {
+  flex: none;
+  height: 8px;
+  display: grid;
+  place-items: center;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.grip::after {
+  content: "";
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--rule);
+}
+
+.grip:hover::after,
+.grip:focus-visible::after {
+  background: var(--ink-3);
+}
+
+.grip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Side by side: logs on the left, the shell on the right, as in the mockup. */
+.split {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+}
+
+.panel {
+  min-width: 0;
+  min-height: 0;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.split .logs {
+  order: 0;
+  border-right: 1px solid var(--rule);
+}
+
+.split .shell {
+  order: 1;
+}
+
+/* Below tablet width the two panes stack. */
+@media (max-width: 760px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .split .logs {
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+}

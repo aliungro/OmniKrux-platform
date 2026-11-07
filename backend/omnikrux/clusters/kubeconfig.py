@@ -34,6 +34,12 @@ class ParsedContext:
     original_server: str | None = None  # the kubeconfig's own address, when `server` was rewritten
 
 
+@dataclass(frozen=True)
+class ParsedKubeconfig:
+    contexts: list[ParsedContext]  # the usable ones
+    declared: int  # entries in the file's `contexts` list, usable or not
+
+
 def _basename(command: str | None) -> str:
     if not command:
         return ""
@@ -104,6 +110,11 @@ def _by_name(items: object, key: str) -> dict[str, dict]:
 def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext]:
     """One `ParsedContext` per usable context. A context that can't be read is skipped with a
     warning naming it, so one bad entry never drops the rest of the file."""
+    return parse_kubeconfig_file(text, rewrite_loopback=rewrite_loopback).contexts
+
+
+def parse_kubeconfig_file(text: str, *, rewrite_loopback: bool) -> ParsedKubeconfig:
+    """`parse_kubeconfig`, plus how many contexts the file declared."""
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -138,7 +149,7 @@ def parse_kubeconfig(text: str, *, rewrite_loopback: bool) -> list[ParsedContext
             continue
         if parsed is not None:
             out.append(parsed)
-    return out
+    return ParsedKubeconfig(out, declared=len(doc["contexts"]))
 
 
 def _parse_context(

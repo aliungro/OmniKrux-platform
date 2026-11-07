@@ -29,7 +29,11 @@ def _now() -> datetime:
 
 class ClusterRecord(Base):
     __tablename__ = "clusters"
-    __table_args__ = (UniqueConstraint("source", "context_name", "server"),)
+    # Identity is where the cluster came from plus its context name, not its address: a kind
+    # cluster re-created on a new port is the same cluster.
+    __table_args__ = (
+        UniqueConstraint("source", "context_name", name="uq_clusters_source_context_name"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
     name: Mapped[str] = mapped_column(String)

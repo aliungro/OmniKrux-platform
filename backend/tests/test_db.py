@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import inspect
 
 from omnikrux.db import init_db, make_engine
@@ -80,3 +81,81 @@ async def test_upgrade_from_0001_keeps_rows_and_adds_original_server(tmp_setting
         row = (await conn.execute(text("SELECT name, original_server FROM clusters"))).one()
     await engine.dispose()
     assert tuple(row) == ("kind", None)
+
+
+def _migrate(conn, direction, rev):
+    from alembic import command
+    from alembic.config import Config
+
+    from omnikrux.db import MIGRATIONS_DIR
+
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.attributes["connection"] = conn
+    getattr(command, direction)(config, rev)
+
+
+def _row(cluster_id, source, context, server, updated_at):
+    from sqlalchemy import text
+
+    return text(
+        "INSERT INTO clusters (id, name, source, context_name, server, original_server, provider,"
+        " region, environment, kubeconfig_encrypted, created_at, updated_at) VALUES"
+        f" ('{cluster_id}', '{context}', '{source}', '{context}', '{server}', NULL, 'kind', NULL,"
+        f" 'development', x'00', '2026-01-01', '{updated_at}')"
+    )
+
+
+async def test_migration_0003_collapses_duplicates(tmp_settings):
+    from sqlalchemy import text
+
+    engine = make_engine(tmp_settings.db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(_migrate, "upgrade", "0002")
+        for stmt in (
+            _row("old", "kubeconfig", "kind-dev", "https://h:41001", "2026-01-01 10:00:00"),
+            _row("new", "kubeconfig", "kind-dev", "https://h:52002", "2026-01-02 10:00:00"),
+            _row("other", "kubeconfig", "lab", "https://lab:6443", "2026-01-01 09:00:00"),
+        ):
+            await conn.execute(stmt)
+    await init_db(engine)
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(text("SELECT id, source, server FROM clusters ORDER BY id"))
+        ).all()
+    await engine.dispose()
+    assert [tuple(r) for r in rows] == [
+        ("new", "file", "https://h:52002"),
+        ("other", "file", "https://lab:6443"),
+    ]
+
+
+async def test_migration_0003_downgrade_restores_old_identity(tmp_settings):
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    engine = make_engine(tmp_settings.db_url)
+    await init_db(engine)
+    async with engine.begin() as conn:
+        await conn.execute(_row("f", "file", "kind-dev", "https://h:1", "2026-01-01 10:00:00"))
+        await conn.execute(_row("g", "file", "lab", "https://lab:6443", "2026-01-01 10:00:00"))
+        # Same context and server as "f", newer: the two collapse under the old identity.
+        await conn.execute(_row("x", "upload", "kind-dev", "https://h:1", "2026-01-02 11:00:00"))
+    async with engine.begin() as conn:
+        await conn.run_sync(_migrate, "downgrade", "0002")
+    async with engine.connect() as conn:
+        rows = (await conn.execute(text("SELECT id, source FROM clusters ORDER BY id"))).all()
+    assert [tuple(r) for r in rows] == [("g", "kubeconfig"), ("x", "kubeconfig")]
+    # The old identity includes the server again: a second address for the same context is allowed.
+    async with engine.begin() as conn:
+        await conn.execute(_row("p", "kubeconfig", "kind-dev", "https://h:3", "2026-01-03"))
+    with pytest.raises(IntegrityError):
+        async with engine.begin() as conn:
+            await conn.execute(_row("q", "kubeconfig", "kind-dev", "https://h:3", "2026-01-03"))
+    async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM clusters WHERE id = 'p'"))
+    await init_db(engine)  # and back up again
+    async with engine.connect() as conn:
+        rows = (await conn.execute(text("SELECT id, source FROM clusters ORDER BY id"))).all()
+    await engine.dispose()
+    assert [tuple(r) for r in rows] == [("g", "file"), ("x", "file")]

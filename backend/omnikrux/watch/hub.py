@@ -36,15 +36,34 @@ class Subscription:
     Messages are shared with other subscribers: treat them as read-only.
     """
 
-    def __init__(self, hub: "WatchHub", queues: dict[Key, asyncio.Queue[dict]]):
+    def __init__(
+        self,
+        hub: "WatchHub",
+        kind_key: str,
+        queues: dict[Key, asyncio.Queue[dict]],
+        *,
+        scope_all: bool = False,
+    ):
         self._hub = hub
-        self._queues = queues
+        self.kind_key = kind_key
+        self.scope_all = scope_all  # follows clusters added to and removed from the registry
+        self._queues: dict[Key, asyncio.Queue[dict]] = {}
+        self._tasks: dict[Key, asyncio.Task] = {}
         self._out: asyncio.Queue = asyncio.Queue()
         self._closed = False
-        self._tasks = [
-            asyncio.create_task(self._forward(q), name=f"watch-sub:{cid}/{kind}")
-            for (cid, kind), q in queues.items()
-        ]
+        for key, q in queues.items():
+            self._attach(key, q)
+
+    def _attach(self, key: Key, q: asyncio.Queue[dict]) -> None:
+        cid, kind = key
+        self._queues[key] = q
+        self._tasks[key] = asyncio.create_task(self._forward(q), name=f"watch-sub:{cid}/{kind}")
+
+    def _detach(self, key: Key) -> tuple[asyncio.Queue[dict], asyncio.Task]:
+        """Stop forwarding `key`'s queue; the caller unsubscribes it and awaits the task."""
+        task = self._tasks.pop(key)
+        task.cancel()
+        return self._queues.pop(key), task
 
     async def _forward(self, q: asyncio.Queue[dict]) -> None:
         while True:
@@ -67,11 +86,12 @@ class Subscription:
             return
         # Release synchronously first, so a cancellation of the caller can't skip it.
         self._closed = True
-        for task in self._tasks:
+        tasks = list(self._tasks.values())
+        for task in tasks:
             task.cancel()
         self._out.put_nowait(_CLOSED)
         self._hub._release(self, self._queues)
-        await _wait_all(self._tasks)
+        await _wait_all(tasks)
 
 
 class WatchHub:
@@ -88,22 +108,61 @@ class WatchHub:
         self._refs: dict[Key, int] = {}
         self._evictions: dict[Key, asyncio.Task] = {}
         self._subscriptions: set[Subscription] = set()
+        # Serializes reading the registry with attaching to or forgetting its clusters, so a
+        # subscription never misses a cluster added (or keeps one removed) while it was listing.
+        self._lock = asyncio.Lock()
 
     async def subscribe(self, kind_key: str, cluster_ids: list[str] | None = None) -> Subscription:
+        """Stream `kind_key` from `cluster_ids`, or from every registered cluster (now and
+        later: see `clusters_changed`)."""
         spec = KINDS[kind_key]
-        if cluster_ids is None:
-            cluster_ids = [c.id for c in await self._registry.list()]
-        # No awaits from here until every cache is registered: concurrent subscribes and
-        # pending evictions see a consistent view of the caches and their ref counts.
-        queues: dict[Key, asyncio.Queue[dict]] = {}
-        for cid in dict.fromkeys(cluster_ids):
-            key = (cid, kind_key)
-            queues[key] = self._acquire(key, spec).subscribe()
-        sub = Subscription(self, queues)
-        self._subscriptions.add(sub)
-        for key in queues:
-            await self._caches[key].start()
+        async with self._lock:
+            scope_all = cluster_ids is None
+            if cluster_ids is None:
+                cluster_ids = [c.id for c in await self._registry.list()]
+            # No awaits from here until every cache is registered: concurrent subscribes and
+            # pending evictions see a consistent view of the caches and their ref counts.
+            queues: dict[Key, asyncio.Queue[dict]] = {}
+            for cid in dict.fromkeys(cluster_ids):
+                key = (cid, kind_key)
+                queues[key] = self._acquire(key, spec).subscribe()
+            sub = Subscription(self, kind_key, queues, scope_all=scope_all)
+            self._subscriptions.add(sub)
+            for key in queues:
+                await self._caches[key].start()
         return sub
+
+    async def clusters_changed(self) -> None:
+        """Follow the registry: attach new clusters to all-cluster subscriptions and forget
+        clusters that are gone."""
+        async with self._lock:
+            current = [c.id for c in await self._registry.list()]
+            # No awaits until every new queue is attached (see `subscribe`).
+            started: list[WatchCache] = []
+            for sub in list(self._subscriptions):
+                if sub._closed or not sub.scope_all:
+                    continue
+                spec = KINDS[sub.kind_key]
+                for cid in current:
+                    key = (cid, sub.kind_key)
+                    if key not in sub._queues:
+                        cache = self._acquire(key, spec)
+                        sub._attach(key, cache.subscribe())
+                        started.append(cache)
+            for cache in started:
+                await cache.start()
+            known = {cid for cid, _ in self._caches}
+            for sub in self._subscriptions:
+                known.update(cid for cid, _ in sub._queues)
+            for cid in known.difference(current):
+                await self._forget(cid)
+
+    async def forget(self, cluster_id: str) -> None:
+        """Stop and drop every cache of a removed cluster and tell its subscribers.
+
+        A no-op for a cluster the hub isn't watching."""
+        async with self._lock:
+            await self._forget(cluster_id)
 
     def status(self, cluster_id: str) -> tuple[str, str | None]:
         caches = [c for (cid, _), c in self._caches.items() if cid == cluster_id]
@@ -129,6 +188,32 @@ class WatchHub:
             await cache.stop()
 
     # --- internals ------------------------------------------------------------
+
+    async def _forget(self, cluster_id: str) -> None:
+        # Detach and drop everything synchronously, then wait for the stopped tasks.
+        tasks: list[asyncio.Task] = []
+        for sub in list(self._subscriptions):
+            keys = [key for key in sub._queues if key[0] == cluster_id]
+            if sub._closed or not keys:
+                continue
+            for key in keys:
+                q, task = sub._detach(key)
+                tasks.append(task)
+                if (cache := self._caches.get(key)) is not None:
+                    cache.unsubscribe(q)
+            sub._out.put_nowait({"type": "cluster_removed", "cluster_id": cluster_id})
+        caches: list[WatchCache] = []
+        for key in [key for key in self._caches if key[0] == cluster_id]:
+            if (pending := self._evictions.pop(key, None)) is not None:
+                pending.cancel()
+                tasks.append(pending)
+            self._refs.pop(key, None)
+            caches.append(self._caches.pop(key))
+        if caches:
+            logger.debug("forgetting the watches of removed cluster %s", cluster_id)
+        await _wait_all(tasks)
+        for cache in caches:
+            await cache.stop()
 
     def _acquire(self, key: Key, spec: KindSpec) -> WatchCache:
         if (pending := self._evictions.pop(key, None)) is not None:

@@ -10,45 +10,94 @@ export function emptyWatchState(): WatchState {
   return { clusters: {}, rows: {}, pending: {} };
 }
 
-function without<T>(rec: Record<string, T>, key: string): Record<string, T> {
-  const rest = { ...rec };
-  delete rest[key];
-  return rest;
+export function applyMessage(s: WatchState, m: WatchMessage): WatchState {
+  return applyMessages(s, [m]);
 }
 
-export function applyMessage(s: WatchState, m: WatchMessage): WatchState {
-  const id = m.cluster_id;
-  switch (m.type) {
-    case "cluster_status":
-      return {
-        ...s,
-        clusters: { ...s.clusters, [id]: { state: m.state, message: m.message } },
-      };
-    case "snapshot": {
-      const buffered = m.part === 0 ? [] : (s.pending[id] ?? []);
-      const all = [...buffered, ...m.rows];
-      if (!m.last) return { ...s, pending: { ...s.pending, [id]: all } };
-      return {
-        ...s,
-        rows: { ...s.rows, [id]: new Map(all.map((r) => [r.uid, r])) },
-        pending: without(s.pending, id),
-      };
+/**
+ * Applies a batch of messages in order. Pure: neither `s` nor the messages are mutated, and
+ * clusters the batch does not touch keep their objects. Each touched cluster's row Map (and
+ * snapshot buffer) is copied at most once per batch, then written in place.
+ */
+export function applyMessages(s: WatchState, ms: readonly WatchMessage[]): WatchState {
+  let { clusters, rows, pending } = s;
+  let changed = false;
+  // Records and per-cluster containers created by this batch, so safe to write in place.
+  let ownClusters = false;
+  let ownRows = false;
+  let ownPending = false;
+  const ownMaps = new Set<string>();
+  const ownParts = new Set<string>();
+
+  const clustersW = () => {
+    if (!ownClusters) clusters = { ...clusters };
+    ownClusters = changed = true;
+    return clusters;
+  };
+  const rowsW = () => {
+    if (!ownRows) rows = { ...rows };
+    ownRows = changed = true;
+    return rows;
+  };
+  const pendingW = () => {
+    if (!ownPending) pending = { ...pending };
+    ownPending = changed = true;
+    return pending;
+  };
+  const mapW = (id: string) => {
+    if (ownMaps.has(id)) return rows[id];
+    const next = new Map(Object.hasOwn(rows, id) ? rows[id] : []);
+    rowsW()[id] = next;
+    ownMaps.add(id);
+    return next;
+  };
+
+  for (const m of ms) {
+    const id = m.cluster_id;
+    switch (m.type) {
+      case "cluster_status": {
+        const prev = Object.hasOwn(clusters, id) ? clusters[id] : undefined;
+        if (prev && prev.state === m.state && prev.message === m.message) break;
+        clustersW()[id] = { state: m.state, message: m.message };
+        break;
+      }
+      case "snapshot": {
+        // A new part 0 discards any parts buffered from an earlier, unfinished snapshot.
+        const buffered = m.part !== 0 && Object.hasOwn(pending, id) ? pending[id] : undefined;
+        if (m.last) {
+          const next = new Map<string, ResourceRow>();
+          for (const r of buffered ?? []) next.set(r.uid, r);
+          for (const r of m.rows) next.set(r.uid, r);
+          rowsW()[id] = next;
+          ownMaps.add(id);
+          if (Object.hasOwn(pending, id)) delete pendingW()[id];
+          ownParts.delete(id);
+        } else if (buffered && ownParts.has(id)) {
+          for (const r of m.rows) buffered.push(r);
+        } else {
+          pendingW()[id] = buffered ? [...buffered, ...m.rows] : [...m.rows];
+          ownParts.add(id);
+        }
+        break;
+      }
+      case "upsert":
+        mapW(id).set(m.row.uid, m.row);
+        break;
+      case "delete":
+        if (Object.hasOwn(rows, id) && rows[id].has(m.uid)) mapW(id).delete(m.uid);
+        break;
+      case "cluster_removed":
+        if (Object.hasOwn(clusters, id)) delete clustersW()[id];
+        if (Object.hasOwn(rows, id)) delete rowsW()[id];
+        if (Object.hasOwn(pending, id)) delete pendingW()[id];
+        ownMaps.delete(id);
+        ownParts.delete(id);
+        break;
+      default:
+        break;
     }
-    case "upsert": {
-      const next = new Map(s.rows[id] ?? []);
-      next.set(m.row.uid, m.row);
-      return { ...s, rows: { ...s.rows, [id]: next } };
-    }
-    case "delete": {
-      const prev = s.rows[id];
-      if (!prev || !prev.has(m.uid)) return s;
-      const next = new Map(prev);
-      next.delete(m.uid);
-      return { ...s, rows: { ...s.rows, [id]: next } };
-    }
-    default:
-      return s;
   }
+  return changed ? { clusters, rows, pending } : s;
 }
 
 export function resetForReconnect(s: WatchState): WatchState {

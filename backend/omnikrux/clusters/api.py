@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from omnikrux.clusters.models import Environment, Provider
-from omnikrux.clusters.registry import ClusterInfo
+from omnikrux.clusters.registry import SOURCE_UPLOAD, ClusterConflict, ClusterInfo
 
 router = APIRouter(prefix="/api/clusters")
 
@@ -46,13 +46,25 @@ async def retry_cluster(cluster_id: str, request: Request) -> None:
     await request.app.state.hub.retry(cluster_id)
 
 
+@router.delete("/{cluster_id}", status_code=204)
+async def delete_cluster(cluster_id: str, request: Request) -> None:
+    try:
+        await request.app.state.registry.delete(cluster_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown cluster") from exc
+    await request.app.state.hub.forget(cluster_id)  # open watch sockets drop it
+
+
 @router.post("/kubeconfig")
 async def import_kubeconfig(body: KubeconfigIn, request: Request) -> list[ClusterOut]:
     settings = request.app.state.settings
     try:
         infos = await request.app.state.registry.upsert_from_kubeconfig(
-            body.kubeconfig, rewrite_loopback=settings.loopback_rewrite
+            body.kubeconfig, rewrite_loopback=settings.loopback_rewrite, source=SOURCE_UPLOAD
         )
+    except ClusterConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await request.app.state.hub.clusters_changed()  # open watch sockets pick up new clusters
     return [_out(c, request) for c in infos]

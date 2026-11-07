@@ -12,6 +12,7 @@ from omnikrux.main import create_app
 from omnikrux.security.secrets import SecretBox
 from omnikrux.watch.hub import WatchHub
 from tests.clusters.test_kubeconfig import kc
+from tests.fakekube import fake_api  # noqa: F401  (shared fixture)
 from tests.watch.fakes import FakeSource
 
 
