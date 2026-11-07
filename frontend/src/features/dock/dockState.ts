@@ -148,7 +148,8 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
     }
     case "focus": {
       const s = state.sessions.find((x) => x.id === action.id);
-      return s ? focusOn(state, s) : state;
+      if (!s || (state.focused === s.id && state.last[s.kind] === s.id)) return state;
+      return focusOn(state, s);
     }
     case "replace": {
       const at = state.sessions.findIndex((s) => s.id === action.id);

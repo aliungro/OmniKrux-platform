@@ -326,6 +326,22 @@ describe("Dock", () => {
       await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
       expect(selected().textContent).toContain("omnikrux-node-shell-a1b2c");
     });
+
+    it("focusing inside the selected pane cancels a pending open's focus", async () => {
+      renderDock();
+      await openShell(shell("x"));
+      await openShell(shell("y", { cluster: eks, namespace: "cache", pod: "redis-0", container: "redis" }));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "shell")); // slow describe, from the table
+      // Back into Y's terminal, which is already the selected tab: keys go there again.
+      fireEvent.focusIn(shown()[0]);
+      expect(selected().textContent).toContain("redis-0");
+
+      await act(async () => slowAnswer());
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(3));
+      expect(selected().textContent).toContain("redis-0");
+      expect(shown()).toHaveLength(1);
+      expect(shown()[0].textContent).toContain("eks-staging / cache / redis-0");
+    });
   });
 
   it("cancel can't be used while the request runs, and a restart whose tab closed still opens", async () => {
