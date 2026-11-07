@@ -103,6 +103,11 @@ class JobRunner:
         self._jobs: dict[str, Job] = {}
         self._closed = False
 
+    @property
+    def closed(self) -> bool:
+        """Whether `close` was called: no job can start any more."""
+        return self._closed
+
     def start(
         self,
         action: str,

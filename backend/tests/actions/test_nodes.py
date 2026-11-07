@@ -416,6 +416,79 @@ async def test_drain_evicts_only_the_reviewed_pods(env):
     assert current["state"] == "succeeded" and current["done"] == 2
     assert ("demo", "web-2") in fake.pods and ("demo", "web-3") in fake.pods
     assert sorted(r["pod"][1] for r in fake.eviction_requests) == ["web-1", "web-2"]
+    # The outcome tells evicted from already gone, and names what it left alone.
+    assert current["message"] == (
+        "Drained worker: 1 pods evicted. 1 pods were already gone. "
+        "2 pods on worker weren't in the review and stay: demo/web-2, demo/web-3. "
+        "worker stays cordoned."
+    )
+
+
+async def test_drain_retries_an_eviction_conflict_that_isnt_a_new_pod(env):
+    """A 409 that isn't the uid precondition (the API server's own write conflict) is retried,
+    never counted as evicted."""
+    fake = env.fakes["dev-a"]
+    seed(env, pod("web-1"))
+    fake.evictions[("demo", "web-1")] = [409, 201]
+
+    started = await start_drain(env)
+    current = await wait_job(env, started["job_id"], finished)
+
+    assert current["state"] == "succeeded"
+    assert current["message"] == "Drained worker: 1 pods evicted. worker stays cordoned."
+    assert len(fake.eviction_requests) == 2 and ("demo", "web-1") not in fake.pods
+
+
+async def test_drain_timeout_names_why_pods_couldnt_be_checked(env):
+    fake = env.fakes["dev-a"]
+    seed(env, pod("slow-1"))
+    fake.linger.add(("demo", "slow-1"))
+
+    started = await start_drain(env, {"timeout_s": 1})
+    await wait_job(env, started["job_id"], lambda j: fake.deleted)
+    fake.forbidden_kinds.add("pods")  # reading the pod is refused from now on
+    current = await wait_job(env, started["job_id"], finished)
+
+    assert current["state"] == "failed"
+    message = current["message"]
+    assert message.startswith(
+        "Drain stopped after 1 s: Omnikrux couldn't check that 1 pods left worker (demo/slow-1): "
+        "Not allowed to read pod demo/slow-1: pods is forbidden"
+    )
+    assert message.endswith(" worker stays cordoned.")
+
+
+async def test_drain_says_the_node_stays_cordoned_when_the_job_cant_start(env, monkeypatch):
+    seed(env, pod("web-1"))
+    jobs = env.app.state.jobs
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("the job runner is closed")
+
+    monkeypatch.setattr(jobs, "start", refuse)
+    r = await plan_node(env, "drain")
+    r = await apply(env, r.json()["plan_id"], {"confirm_text": "worker"})
+
+    assert r.status_code == 503
+    assert r.json() == {
+        "detail": "The drain couldn't start: the console is stopping. worker stays cordoned; "
+        "uncordon it, or drain it again once the console is back."
+    }
+    assert live_node(env)["spec"]["unschedulable"] is True
+    [record] = await records(env)
+    assert (record.outcome, record.message) == ("failed", r.json()["detail"])
+
+    # A runner that is already closed: refused before the node is cordoned.
+    monkeypatch.undo()
+    seed(env, pod("web-1"))
+    await jobs.close()
+    r = await plan_node(env, "drain")
+    r = await apply(env, r.json()["plan_id"], {"confirm_text": "worker"})
+    assert r.status_code == 503
+    assert r.json() == {
+        "detail": "Drains can't run right now: the console is stopping. Try again once it's back."
+    }
+    assert "unschedulable" not in live_node(env)["spec"]
 
 
 async def test_drain_retries_pdb_429_then_succeeds(env):

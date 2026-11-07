@@ -7,7 +7,7 @@ followed stream, CUT breaks it) and read back `requests`.
 Discovery (`/api/v1`, `/apis`, `/apis/{group}/{version}`) is generated from `resources`; a group in
 `broken_groups` answers 503 there, as an aggregated API whose backend is down does, and one in
 `hanging_groups` doesn't answer at all until `release`. Every served
-kind can be listed (cluster-wide or in a namespace, with an equality `labelSelector` and a
+kind can be listed (cluster-wide or in a namespace, with a `labelSelector` and a
 `fieldSelector` on `metadata.name` or `spec.nodeName`), read one by one and watched (each object
 ADDED, then the watch stays open until `release`). Objects live in `objects[kind_key]`, keyed by
 (namespace, name), "" for the namespace of a cluster-scoped object; `pods` is `objects["pods"]` and
@@ -23,8 +23,9 @@ DeleteOptions `preconditions.uid` (and `resourceVersion`) with the API server's 
 A pod can be evicted (`POST .../pods/{name}/eviction`, recorded in `eviction_requests`): each
 eviction of a pod takes the next status of `evictions[(ns, name)]` (the last one sticks; none:
 201). 201 deletes the pod, honouring `deleteOptions.preconditions.uid`; 429 is the API server's
-PodDisruptionBudget refusal. A deleted or evicted pod in `linger` stays, with a
-`deletionTimestamp`, until the test removes it (a pod still terminating).
+PodDisruptionBudget refusal; 409 its "the object has been modified" conflict. A deleted or
+evicted pod in `linger` stays, with a `deletionTimestamp`, until the test removes it (a pod still
+terminating).
 
 Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`.
 
@@ -523,8 +524,9 @@ class FakeKubeApi:
     def _selected(
         self, request: web.Request, kind_key: str, ns: str | None
     ) -> list[tuple[tuple[str, str], dict]] | web.Response:
-        """Objects of `kind_key` in `ns` (None: every namespace) matching an equality
-        `labelSelector` (`k=v,k2=v2`) and a `fieldSelector` on `metadata.name`,
+        """Objects of `kind_key` in `ns` (None: every namespace) matching a `labelSelector`
+        (`k=v`, `k!=v`, `k in (a,b)`, `k notin (a,b)`, `k`, `!k`; see `_label_matches`) and a
+        `fieldSelector` on `metadata.name`,
         `metadata.namespace`, `spec.nodeName` or (events) `involvedObject.uid`; a 400 for any
         other field."""
 
@@ -540,7 +542,7 @@ class FakeKubeApi:
                 return (obj.get("involvedObject") or {}).get("uid")
             return (obj.get("spec") or {}).get("nodeName")
 
-        labels = terms("labelSelector")
+        labels = _label_terms(request.query.get("labelSelector", ""))
         fields = terms("fieldSelector")
         supported = ("metadata.name", "metadata.namespace", "spec.nodeName", "involvedObject.uid")
         for name, _ in fields:
@@ -550,7 +552,7 @@ class FakeKubeApi:
             (key, obj)
             for key, obj in self._items(kind_key)
             if (ns is None or key[0] == ns)
-            and all((obj.get("metadata", {}).get("labels") or {}).get(k) == v for k, v in labels)
+            and all(_label_matches(t, obj.get("metadata", {}).get("labels") or {}) for t in labels)
             and all(field(key, obj, k) == v for k, v in fields)
         ]
 
@@ -683,6 +685,8 @@ class FakeKubeApi:
         status = script.pop(0) if len(script) > 1 else script[0]
         if status == 429:
             return web.json_response(_pdb_refusal(key[1]), status=429)
+        if status == 409:  # the API server's own write conflict, not a precondition
+            return _conflict("pods", key[1])
         if status != 201:
             failure = status_body(status, "InternalError", f"eviction of {key[1]} failed")
             return web.json_response(failure, status=status)
@@ -804,6 +808,40 @@ class FakeKubeApi:
             await self.release.wait()
         await response.write_eof()
         return response
+
+
+_SET_TERM = re.compile(r"^(?P<key>\S+)\s+(?P<op>in|notin)\s+\((?P<values>[^)]*)\)$")
+
+
+def _label_terms(text: str) -> list[str]:
+    """A label selector's terms: split at the commas outside `(...)`."""
+    terms, depth, start = [], 0, 0
+    for i, char in enumerate(text):
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if char == "," and depth == 0:
+            terms.append(text[start:i])
+            start = i + 1
+    terms.append(text[start:])
+    return [t.strip() for t in terms if t.strip()]
+
+
+def _label_matches(term: str, labels: dict) -> bool:
+    """One label selector term, as the API server reads it."""
+    if match := _SET_TERM.match(term):
+        values = {v.strip() for v in match["values"].split(",")}
+        key = match["key"]
+        if match["op"] == "in":
+            return key in labels and labels[key] in values
+        return key not in labels or labels[key] not in values
+    if term.startswith("!"):
+        return term[1:] not in labels
+    if "!=" in term:
+        key, value = term.split("!=", 1)
+        return labels.get(key) != value
+    if "=" in term:
+        key, value = term.split("=", 1)
+        return labels.get(key) == value.removeprefix("=")
+    return term in labels
 
 
 async def _body(request: web.Request) -> dict:
