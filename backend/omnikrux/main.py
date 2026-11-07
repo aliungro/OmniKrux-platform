@@ -26,6 +26,8 @@ from omnikrux.kube.source import KubeResourceSource
 from omnikrux.logs.api import router as logs_router
 from omnikrux.metrics.api import router as metrics_router
 from omnikrux.metrics.cache import MetricsCache
+from omnikrux.portforward.api import router as portforward_router
+from omnikrux.portforward.manager import PortForwardManager
 from omnikrux.resources.api import router as resources_router
 from omnikrux.resources.catalog import KindCatalog
 from omnikrux.resources.kinds_api import router as kinds_router
@@ -144,6 +146,10 @@ async def _mark_interrupted(audit: AuditLog) -> None:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings if settings is not None else get_settings()
+    try:
+        forward_ports = settings.forward_ports
+    except ValueError as exc:  # said in plain words, without a traceback
+        raise SystemExit(f"Omnikrux can't start: {exc}") from None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -160,11 +166,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api = await connections.open_api(cluster_id)
             return KubeResourceSource(api, spec)  # owns `api` and closes it
 
+        audit = AuditLog(sessionmaker, registry)
+        forwards = PortForwardManager(
+            connections, registry, audit, ports=forward_ports, bind=settings.forward_bind
+        )
+
         async def on_forget(cluster_id: str) -> None:
             catalog.forget(cluster_id)
+            await forwards.stop_cluster(cluster_id)
 
         hub = WatchHub(registry, source_for, on_forget=on_forget)
-        audit = AuditLog(sessionmaker, registry)
         await _mark_interrupted(audit)
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
@@ -176,12 +187,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         metrics = app.state.metrics = MetricsCache(connections)
         app.state.plans = PlanStore()
         jobs = app.state.jobs = JobRunner(audit)
+        app.state.forwards = forwards
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
             yield
         finally:
             await jobs.close()  # first: a stopped drain still writes its audit record
+            await forwards.close()  # likewise: every forward's record is finished
             await hub.close()
             await metrics.close()
             await catalog.close()
@@ -205,6 +218,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(audit_router)
     app.include_router(actions_router)
     app.include_router(metrics_router)
+    app.include_router(portforward_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

@@ -27,7 +27,9 @@ PodDisruptionBudget refusal; 409 its "the object has been modified" conflict. A 
 evicted pod in `linger` stays, with a `deletionTimestamp`, until the test removes it (a pod still
 terminating).
 
-Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`.
+Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`. Port-forward
+is served over WebSocket too, as the kubelet does, with an echo server behind every port: see
+`_portforward`.
 
 Creating a pod (recorded in `created`) or adding an ephemeral container (recorded in `patches`)
 starts its containers: each read of the pod moves a new container one step through
@@ -288,6 +290,13 @@ class FakeKubeApi:
         self.exec_resizes: list[dict] = []
         # A Status the exec sends at once, then ends: a command that couldn't start (no shell).
         self.exec_status: dict | None = None
+        # Every port-forward stream: namespace, pod, ports and the protocol asked for.
+        self.forwards: list[dict] = []
+        # How many port-forward streams are open right now.
+        self.forwards_open = 0
+        # Text the port-forward's error channel carries at once, ending the stream (what the
+        # kubelet sends when nothing listens on the port, say).
+        self.forward_fail: str | None = None
         self.start_states: list[dict] = [{"waiting": {"reason": "ContainerCreating"}}, STARTED]
         self.created: list[dict] = []
         self.patches: list[dict] = []
@@ -347,6 +356,8 @@ class FakeKubeApi:
                 return await self._log(request, key)
             if method == "GET" and sub == "/exec":
                 return await self._exec(request, key)
+            if method == "GET" and sub == "/portforward":
+                return await self._portforward(request, key)
             if method == "PATCH" and sub == "/ephemeralcontainers":
                 return await self._patch_ephemeral(request, key)
             if method == "DELETE" and sub is None:
@@ -871,6 +882,45 @@ class FakeKubeApi:
             else:
                 await ws.send_bytes(bytes([1]) + data)
         return ws
+
+    async def _portforward(self, request: web.Request, key: tuple[str, str]) -> web.StreamResponse:
+        """Port-forward over WebSocket, framed as the kubelet does: port i gets a data channel
+        (2i) and an error channel (2i+1), and each opens with the port number (2 bytes, little
+        endian). What arrives on a data channel comes back on it (an echo server in the pod).
+        With `forward_fail` set, the error channel carries that text and the stream ends. Each
+        stream is recorded in `forwards`; `forwards_open` counts the ones still open."""
+        if key not in self.pods:
+            return not_found(f'pods "{key[1]}" not found')
+        ports = [int(p) for value in request.query.getall("ports", []) for p in value.split(",")]
+        self.forwards.append(
+            {
+                "namespace": key[0],
+                "pod": key[1],
+                "ports": ports,
+                "protocol": request.headers.get("Sec-WebSocket-Protocol"),
+            }
+        )
+        ws = web.WebSocketResponse(protocols=("v4.channel.k8s.io", "portforward.k8s.io"))
+        await ws.prepare(request)
+        self.forwards_open += 1
+        try:
+            for i, port in enumerate(ports):
+                prefix = port.to_bytes(2, "little")
+                await ws.send_bytes(bytes([2 * i]) + prefix)
+                await ws.send_bytes(bytes([2 * i + 1]) + prefix)
+            if self.forward_fail is not None:
+                await ws.send_bytes(bytes([1]) + self.forward_fail.encode())
+                await ws.close()
+                return ws
+            async for msg in ws:
+                if msg.type != web.WSMsgType.BINARY or not msg.data:
+                    continue
+                channel, data = msg.data[0], msg.data[1:]
+                if channel % 2 == 0 and data:
+                    await ws.send_bytes(bytes([channel]) + data)
+            return ws
+        finally:
+            self.forwards_open -= 1
 
     async def _watch(self, request: web.Request) -> web.StreamResponse:
         if self.mode == "watch_forbidden":
