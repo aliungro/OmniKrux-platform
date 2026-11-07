@@ -184,4 +184,22 @@ describe("Console dock wiring", () => {
     await waitFor(() => expect(sessions()).toHaveLength(2));
     expect(FakeWebSocket.last.params.get("previous")).toBe("true");
   });
+
+  it("the dock and its sessions stay when the last cluster goes", async () => {
+    let clusters = [cluster];
+    vi.stubGlobal("fetch", vi.fn((url: string) => json(url.endsWith("/describe") ? describeBody : clusters)));
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    row.focus();
+    fireEvent.keyDown(row, { key: "l" });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const ws = FakeWebSocket.last;
+
+    clusters = [];
+    watch.opts?.onClusterRemoved?.("c1");
+    expect(await screen.findByText("No clusters yet. Mount your kubeconfig at /kube/config and restart the console.")).toBeTruthy();
+    expect(within(screen.getByRole("tablist", { name: "Sessions" })).getAllByRole("tab")).toHaveLength(1);
+    expect(ws.closedByClient).toBe(false);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
 });

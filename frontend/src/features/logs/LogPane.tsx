@@ -39,6 +39,11 @@ function downloadUrl(session: LogSession, container: string | null, previous: bo
   return `/api/clusters/${cluster}/pods/${ns}/${pod}/logs/download?${q.toString()}`;
 }
 
+/** Inside an xterm.js terminal (a shell pane), whose keys all belong to the shell. */
+function inTerminal(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(".xterm") !== null;
+}
+
 function isTyping(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && target.closest("input, select, textarea, [contenteditable='true']") !== null;
 }
@@ -125,9 +130,19 @@ function Rail({ matches, firstSeq, total, currentSeq }: {
   );
 }
 
-function StatusLine({ status, message, previous }: { status: LogStreamStatus; message: string | null; previous: boolean }) {
+function StatusLine({ status, message, previous, retry }: {
+  status: LogStreamStatus;
+  message: string | null;
+  previous: boolean;
+  retry: (() => void) | null;
+}) {
   if (status === "error") {
-    return <div className={`${s.foot} ${s.footBad}`} role="alert">{message ?? "The log stream failed."}</div>;
+    return (
+      <div className={`${s.foot} ${s.footBad}`} role="alert">
+        <span>{message ?? "The log stream failed."}</span>
+        {retry && <button type="button" className={s.retry} onClick={retry}>Try again</button>}
+      </div>
+    );
   }
   if (status === "reconnecting") {
     return <div className={`${s.foot} ${s.footWarn}`} role="status">{message}</div>;
@@ -167,7 +182,7 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [currentSeq, setCurrentSeq] = useState<number | null>(null);
 
-  const { buffer, status, message } = useLogStream({
+  const { buffer, status, message, retry } = useLogStream({
     cluster: session.clusterId,
     namespace: session.namespace,
     pod: session.pod,
@@ -185,6 +200,15 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const lastTop = useRef(0);
+  /**
+   * Set while the view was moved for the reader (to a search match): a scroll that lands at the
+   * bottom then is the clamp, not the reader, and mustn't turn follow back on. Cleared as soon as
+   * the reader scrolls themselves (wheel, touch, pointer or keys on the log).
+   */
+  const moved = useRef(false);
+  const readerScrolls = () => {
+    moved.current = false;
+  };
 
   const getItemKey = useCallback((i: number) => buffer.get(i)?.seq ?? -1 - i, [buffer]);
   const estimateSize = useCallback(
@@ -229,12 +253,13 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
     if (!el) return;
     const top = el.scrollTop;
     const atBottom = top + el.clientHeight >= el.scrollHeight - BOTTOM_SLACK;
-    if (atBottom) setFollow(true);
+    if (atBottom && !moved.current) setFollow(true);
     else if (top < lastTop.current - 1) setFollow(false); // the reader scrolled up
     lastTop.current = top;
   };
 
   const jumpToLive = () => {
+    moved.current = false;
     setFollow(true);
     toBottom();
   };
@@ -250,13 +275,16 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
     const seq = matches[stepMatch(matches, from, dir)];
     setCurrentSeq(seq);
     setFollow(false);
+    moved.current = true;
     virtualizer.scrollToIndex(seq - firstSeq, { align: "center" });
   };
 
-  // Ctrl F (Cmd F) searches this log instead of the page.
+  // Ctrl F (Cmd F) searches this log instead of the page; inside a terminal it's the shell's key
+  // (readline's forward-char), even with this pane on screen beside it.
   useEffect(() => {
     if (!active) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
+      if (inTerminal(e.target)) return;
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         searchRef.current?.focus();
@@ -410,6 +438,10 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
           tabIndex={0}
           className={`${s.logs}${wrap ? ` ${s.wrapped}` : ""}`}
           onScroll={onScroll}
+          onWheel={readerScrolls}
+          onTouchStart={readerScrolls}
+          onPointerDown={readerScrolls}
+          onKeyDown={readerScrolls}
         >
           <div className={s.body} style={{ height: virtualizer.getTotalSize() }}>
             {body}
@@ -424,7 +456,7 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
         )}
       </div>
 
-      <StatusLine status={status} message={message} previous={previous} />
+      <StatusLine status={status} message={message} previous={previous} retry={retry} />
     </section>
   );
 }

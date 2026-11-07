@@ -5,6 +5,7 @@ import type { Cluster, DebugContainer, NodeShellPod, OwnerRef, PodDescribe, Reso
 import { describeQuery, podPath } from "../inspector/useDescribe";
 import { textColumn } from "../territories/model";
 import { dockReducer, initialDockState, type DockAction, type DockState, type Session, type SessionKind } from "./dockState";
+import { prefetchShellPane } from "./lazyShell";
 
 export const DEBUG_CONFIRM =
   "Ephemeral debug containers can't be removed. This one stays in the pod until the pod is deleted.";
@@ -30,6 +31,7 @@ export interface Ask {
 
 export interface DockApi {
   state: DockState;
+  /** A focus or close through here is your choice: no open still on its way takes focus after it. */
   dispatch: Dispatch<DockAction>;
   /** Logs (optionally the previous run) or a shell for a pod row. */
   openPod: (row: ResourceRow, kind: SessionKind, opts?: { previous?: boolean }) => void;
@@ -70,15 +72,21 @@ function logsContainer(d: PodDescribe): string | null {
 
 /** The dock's sessions, and the flows that open them (some ask first, then call the server). */
 export function useDock(clusters: Cluster[]): DockApi {
-  const [state, dispatch] = useReducer(dockReducer, undefined, initialDockState);
+  const [state, dispatchNow] = useReducer(dockReducer, undefined, initialDockState);
   const [ask, setAsk] = useState<Ask | null>(null);
   const queryClient = useQueryClient();
   const nextId = useRef(0);
   /**
-   * The newest open request. Opens wait for the pod's describe, so they can finish out of order;
-   * only the newest takes focus, or a slow one would pull your keystrokes to another pod (or cluster).
+   * The newest open request, or focus choice of yours. Opens wait for the pod's describe (or the
+   * server), so they can finish out of order; one takes focus only if nothing newer happened
+   * meanwhile (another open, a confirmed node shell or debug container, a tab you clicked or
+   * closed), or a slow one would pull your keystrokes to another pod (or cluster).
    */
   const latestOpen = useRef(0);
+  const dispatch = useCallback((action: DockAction) => {
+    if (action.type === "focus" || action.type === "close") latestOpen.current += 1;
+    dispatchNow(action);
+  }, []);
   const newId = useCallback(() => `s${++nextId.current}`, []);
   const clustersRef = useRef(clusters);
   clustersRef.current = clusters;
@@ -116,7 +124,7 @@ export function useDock(clusters: Cluster[]): DockApi {
         dispatch({ type: "open", session, focus: request === latestOpen.current });
       });
     },
-    [containersOf, newId],
+    [containersOf, newId, dispatch],
   );
 
   const openOwnerLogs = useCallback(
@@ -143,7 +151,7 @@ export function useDock(clusters: Cluster[]): DockApi {
         });
       });
     },
-    [containersOf, newId],
+    [containersOf, newId, dispatch],
   );
 
   /** Shows the question; `act` runs on yes, and its failure stays in the dialog in plain words. */
@@ -162,6 +170,8 @@ export function useDock(clusters: Cluster[]): DockApi {
         where: `${cluster.name} / ${node}`,
       },
       async () => {
+        const request = ++latestOpen.current;
+        await prefetchShellPane(); // before the pod exists: a terminal that can't load stops here
         const out = await postJson<NodeShellPod>(
           `/api/clusters/${encodeURIComponent(cluster.id)}/nodes/${encodeURIComponent(node)}/shell`,
         );
@@ -176,7 +186,8 @@ export function useDock(clusters: Cluster[]): DockApi {
           cleanupPod: true,
           node,
         };
-        dispatch(replacing ? { type: "replace", id: replacing, session } : { type: "open", session });
+        const focus = request === latestOpen.current;
+        dispatch(replacing ? { type: "replace", id: replacing, session, focus } : { type: "open", session, focus });
       },
     );
   };
@@ -197,11 +208,14 @@ export function useDock(clusters: Cluster[]): DockApi {
         where: `${s.cluster.name} / ${s.namespace} / ${s.pod}`,
       },
       async () => {
+        const request = ++latestOpen.current;
+        await prefetchShellPane(); // before the container exists, as it can't be removed
         const out = await postJson<DebugContainer>(`${podPath(s.cluster.id, s.namespace, s.pod)}/debug`, {
           target: s.container,
         });
         dispatch({
           type: "open",
+          focus: request === latestOpen.current,
           session: {
             id: newId(),
             kind: "shell",

@@ -275,6 +275,59 @@ describe("Dock", () => {
     expect(pane.textContent).toContain("eks-staging / payments / api-b");
   });
 
+  describe("a late open never moves focus past a newer choice of yours", () => {
+    const rowOf = (cluster_id: string, name: string): ResourceRow => ({
+      uid: name, cluster_id, kind: "Pod", namespace: "payments", name, created_at: null,
+      columns: { status: "Running", status_class: "ok", resource_version: "1" },
+    });
+    const describeBody = (name: string) => ({
+      pod: { name, namespace: "payments", status: "Running", status_class: "ok", node: "n1", pod_ip: null, host_ip: null,
+        qos: null, service_account: null, owner: null, started_at: null, resource_version: "1" },
+      containers: [{ name: "app", state: "Running", state_class: "ok" }],
+      init_containers: [], ephemeral_containers: [], conditions: [], labels: {}, annotations: {}, events: [], events_error: null,
+    });
+    let slowAnswer!: () => void;
+    beforeEach(() => {
+      vi.stubGlobal("fetch", vi.fn((url: string) => {
+        if (url.endsWith("/describe")) {
+          // The describe of api-a (cluster aks) answers slowly.
+          return new Promise<Response>((resolve) => {
+            slowAnswer = () => void json(describeBody("api-a")).then(resolve);
+          });
+        }
+        return json({ namespace: "default", pod: "omnikrux-node-shell-a1b2c", container: "shell" });
+      }));
+    });
+    const selected = () => screen.getAllByRole("tab").find((t) => t.getAttribute("aria-selected") === "true")!;
+
+    it("a tab you click keeps the focus", async () => {
+      renderDock();
+      await openShell(shell("x"));
+      await openShell(shell("y", { cluster: eks, namespace: "cache", pod: "redis-0", container: "redis" }));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      fireEvent.click(screen.getAllByRole("tab")[0]); // back to x, and typing there
+      expect(selected().textContent).toContain("payments-api-xk2pq");
+
+      await act(async () => slowAnswer());
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(3));
+      expect(selected().textContent).toContain("payments-api-xk2pq");
+      expect(shown()[0].textContent).toContain("aks-prod-weu / payments / payments-api-xk2pq");
+    });
+
+    it("a node shell you confirmed keeps the focus", async () => {
+      renderDock();
+      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      fireEvent.click(screen.getByRole("button", { name: "node shell" }));
+      fireEvent.click(screen.getByRole("button", { name: "Start node shell" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      expect(selected().textContent).toContain("omnikrux-node-shell-a1b2c");
+
+      await act(async () => slowAnswer());
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      expect(selected().textContent).toContain("omnikrux-node-shell-a1b2c");
+    });
+  });
+
   it("cancel can't be used while the request runs, and a restart whose tab closed still opens", async () => {
     let answer!: (r: Response) => void;
     const fetch = vi.fn()
@@ -297,6 +350,7 @@ describe("Dock", () => {
     expect(screen.getByRole("alertdialog")).toBeTruthy();
 
     // The old tab goes away meanwhile; the new pod still gets its session (and so its cleanup).
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2)); // once the terminal's code is in
     const old = dock.state.sessions[0].id;
     act(() => dock.dispatch({ type: "close", id: old }));
     await act(async () => answer(new Response(JSON.stringify({ namespace: "default", pod: "omnikrux-node-shell-d3e4f", container: "shell" }), { status: 200, headers: { "content-type": "application/json" } })));

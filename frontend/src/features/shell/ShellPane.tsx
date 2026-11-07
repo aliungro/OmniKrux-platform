@@ -65,7 +65,8 @@ export function isNotRunning(message: string | null): boolean {
  * An interactive shell for one session. The header and the 2px top border always name and colour
  * the session's own cluster, so you can see where your keystrokes go.
  * `active`: whether the terminal takes keyboard focus (the dock passes it for the focused tab).
- * `onStartDebug`: shown as a button when the container isn't running; the dock starts the debug container.
+ * `onStartDebug`: shown as a button when the container isn't running, or the shell can't run in it (no
+ * shell in the image); the dock starts the debug container.
  * `onRestart`: replaces Start again / Reconnect; a node shell needs a new node-shell pod, since the
  * server deleted the old one when its session ended.
  * `note`: a standing line under the terminal, e.g. what a debug container is attached to.
@@ -189,7 +190,11 @@ export function ShellPane({
           <span>
             {`Session ended${exec.exitCode === null ? "" : ` (exit ${exec.exitCode})`}`}
             {exec.message ? ` ${exec.message}` : ""}
+            {exec.cannotRun && onStartDebug ? " A debug container brings its own shell." : ""}
           </span>
+          {exec.cannotRun && onStartDebug && (
+            <button type="button" className={s.btn} onClick={onStartDebug}>Start a debug container</button>
+          )}
           <button type="button" className={s.btn} onClick={fresh}>Start again</button>
         </div>
       )}
@@ -204,6 +209,9 @@ export function ShellPane({
           <span>{exec.message ?? "The shell failed."}</span>
           {isNotRunning(exec.message) && onStartDebug && (
             <button type="button" className={s.btn} onClick={onStartDebug}>Start a debug container</button>
+          )}
+          {exec.canRetry && (
+            <button type="button" className={s.btn} onClick={fresh}>Reconnect</button>
           )}
         </div>
       )}

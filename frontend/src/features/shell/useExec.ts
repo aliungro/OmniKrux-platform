@@ -19,6 +19,10 @@ export interface ExecState {
   message: string | null;
   /** The shell's exit code once `status` is "exited"; null when the server didn't know it. */
   exitCode: number | null;
+  /** Exited because the command couldn't start in the container (no shell there, say). */
+  cannotRun: boolean;
+  /** Whether a new session could help after an error; false for a refusal. */
+  canRetry: boolean;
   /** Sends keystrokes. Dropped unless the session is open. */
   send: (data: string) => void;
   /** Tells the remote terminal its size. Held until the session opens, then sent. */
@@ -27,7 +31,10 @@ export interface ExecState {
   reconnect: () => void;
 }
 
-/** Closes that come without a message, and mean trying again won't help. */
+/** Closes that mean trying again won't help, even after the server's own error message. */
+const NO_RETRY = new Set([1008, 4403]);
+
+/** Closes that come without a message: what to tell the user. */
 const REFUSED: Record<number, string> = {
   1008: "The console turned down this shell request. Open the shell again from the pod.",
   4403: "The console refused the connection from this page. Open the console from its own address.",
@@ -43,17 +50,25 @@ export function execUrl(t: ExecTarget): string {
   return `${proto}//${window.location.host}/api/exec?${q.toString()}`;
 }
 
+/** What the pane shows; the rest of `ExecState` is the calls. */
+type Shown = Pick<ExecState, "status" | "message" | "exitCode" | "cannotRun" | "canRetry">;
+
+const shown = (status: ExecStatus, message: string | null = null, more: Partial<Shown> = {}): Shown => ({
+  status,
+  message,
+  exitCode: null,
+  cannotRun: false,
+  canRetry: true,
+  ...more,
+});
+
 /**
  * One shell session over `WS /api/exec`. Output goes straight to `onOutput` (the terminal), never
  * through React state. A close the server didn't explain is "disconnected": the hook never
  * reconnects by itself, since a new connection is a new shell.
  */
 export function useExec(target: ExecTarget, onOutput: (data: string) => void): ExecState {
-  const [state, setState] = useState<{ status: ExecStatus; message: string | null; exitCode: number | null }>({
-    status: "connecting",
-    message: null,
-    exitCode: null,
-  });
+  const [state, setState] = useState<Shown>(() => shown("connecting"));
   const [generation, setGeneration] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const openRef = useRef(false);
@@ -66,7 +81,7 @@ export function useExec(target: ExecTarget, onOutput: (data: string) => void): E
     let disposed = false;
     let finished = false;
     openRef.current = false;
-    setState({ status: "connecting", message: null, exitCode: null });
+    setState(shown("connecting"));
     let ws: WebSocket | null = null;
     const connect = () => {
       const socket = new WebSocket(execUrl({ cluster, namespace, pod, container, cleanupPod }));
@@ -98,24 +113,28 @@ export function useExec(target: ExecTarget, onOutput: (data: string) => void): E
           case "exit":
             finished = true;
             openRef.current = false;
-            setState({ status: "exited", message: msg.message, exitCode: msg.code });
+            setState(shown("exited", msg.message, { exitCode: msg.code, cannotRun: msg.cannot_run === true }));
             break;
           case "error":
             finished = true;
             openRef.current = false;
-            setState({ status: "error", message: msg.message, exitCode: null });
+            setState(shown("error", msg.message));
             break;
         }
       };
       socket.onclose = (ev: CloseEvent) => {
         if (disposed) return;
         openRef.current = false;
-        if (finished) return;
-        if (Object.hasOwn(REFUSED, ev.code)) {
-          setState({ status: "error", message: REFUSED[ev.code], exitCode: null });
+        if (finished) {
+          // The server said why; its close code says whether trying again can help.
+          if (NO_RETRY.has(ev.code)) setState((s) => (s.status === "error" ? { ...s, canRetry: false } : s));
           return;
         }
-        setState({ status: "disconnected", message: null, exitCode: null });
+        if (Object.hasOwn(REFUSED, ev.code)) {
+          setState(shown("error", REFUSED[ev.code], { canRetry: !NO_RETRY.has(ev.code) }));
+          return;
+        }
+        setState(shown("disconnected"));
       };
     };
     // A node shell's pod is deleted when its socket closes, so a mount that's undone at once

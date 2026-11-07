@@ -179,8 +179,11 @@ export interface LogSession {
 /** What the server sends on `WS /api/exec` (the browser sends `stdin` and `resize` frames). */
 export type ExecMessage =
   | { type: "stdout" | "stderr"; data: string }
-  /** The shell ended; the server closes the socket after this. `code` is null when unknown. */
-  | { type: "exit"; code: number | null; message: string | null }
+  /**
+   * The shell ended; the server closes the socket after this. `code` is null when unknown.
+   * `cannot_run`: the command couldn't start in the container (no shell there, say).
+   */
+  | { type: "exit"; code: number | null; message: string | null; cannot_run?: boolean }
   /** The shell couldn't be opened or broke; the server closes the socket after this. */
   | { type: "error"; message: string };
 

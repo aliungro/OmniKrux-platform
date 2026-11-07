@@ -98,6 +98,11 @@ describe("describe view", () => {
     expect(screen.getByText("Terminated: Completed (exit 0)").getAttribute("data-tone")).toBeNull();
   });
 
+  it("a failed exit without a reason from Kubernetes is still shown as bad", () => {
+    render(<DescribeView data={describeBody({ containers: [container({ last_state: "Terminated (exit 2)", limit_hit: [] })] })} />);
+    expect(screen.getByText("Terminated (exit 2)").getAttribute("data-tone")).toBe("bad");
+  });
+
   it("secret env shows source but no value", () => {
     const env = [
       { name: "DB_PASSWORD", value: null, source: "Secret payments-db key password" },

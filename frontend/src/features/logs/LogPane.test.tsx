@@ -190,6 +190,60 @@ describe("LogPane", () => {
       FakeWebSocket.last.emit({ type: "status", state: "error", message });
       FakeWebSocket.last.drop(1011);
     });
-    expect(screen.getByRole("alert").textContent).toBe(message);
+    expect(screen.getByRole("alert").textContent).toBe(`${message}Try again`);
+  });
+
+  it("an error offers Try again, which reopens the stream", async () => {
+    render(<LogPane session={session()} />);
+    const message = "Lost the log stream after 5 attempts: Can't reach the cluster.";
+    act(() => {
+      FakeWebSocket.last.emit({ type: "status", state: "error", message });
+      FakeWebSocket.last.drop(1011);
+    });
+    expect(screen.getByRole("alert").textContent).toContain(message);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a match in the last screenful stays in view on a live log", async () => {
+    render(<LogPane session={session()} />);
+    send(Array.from({ length: 1000 }, (_, i) => line(i, i === 995 ? "panic: just now" : `line ${i}`)));
+    await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+    const scroll = fakeScroll(logArea(), 20_000);
+    const follow = screen.getByRole("button", { name: "Follow" });
+    const search = screen.getByRole("searchbox", { name: "Search logs" });
+    fireEvent.change(search, { target: { value: "panic" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(follow.getAttribute("aria-pressed")).toBe("false");
+
+    // Centering a match near the end clamps the scroll to the bottom: that's not the reader.
+    scroll.scrollTo(19_400);
+    expect(follow.getAttribute("aria-pressed")).toBe("false");
+    send([line(1000)]);
+    expect(scroll.top).toBe(19_400);
+
+    // The reader scrolling down to the bottom themselves does turn follow back on.
+    fireEvent.wheel(logArea(), { deltaY: 100 });
+    scroll.scrollTo(19_400);
+    expect(follow.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("Ctrl F inside a shell stays with the shell", () => {
+    render(<LogPane session={session()} />);
+    const term = document.createElement("div");
+    term.className = "xterm";
+    const input = document.createElement("textarea");
+    term.appendChild(input);
+    document.body.appendChild(term);
+    try {
+      input.focus();
+      const event = new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      input.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(input);
+    } finally {
+      term.remove();
+    }
   });
 });

@@ -111,6 +111,21 @@ describe("dockReducer", () => {
     expect(s.focused).toBe("n3");
   });
 
+  it("a replace without focus takes the old tab's place and leaves the focused one alone", () => {
+    let s = run(
+      start(),
+      { type: "open", session: session("n1", { kind: "shell", pod: "node-shell-1", cleanupPod: true, node: "w1" }) },
+      { type: "open", session: session("l") },
+    );
+    s = dockReducer(s, { type: "replace", id: "n1", focus: false, session: session("n2", { kind: "shell", pod: "node-shell-2", cleanupPod: true, node: "w1" }) });
+    expect(s.sessions.map((x) => x.id)).toEqual(["n2", "l"]);
+    expect(s).toMatchObject({ focused: "l", last: { logs: "l", shell: "n2" } });
+    // Still on the old tab: its replacement is where you are, so it takes the focus.
+    s = dockReducer(s, { type: "focus", id: "n2" });
+    s = dockReducer(s, { type: "replace", id: "n2", focus: false, session: session("n3", { kind: "shell", pod: "node-shell-3", cleanupPod: true, node: "w1" }) });
+    expect(s.focused).toBe("n3");
+  });
+
   it("an open without focus adds the tab and leaves the focused one alone", () => {
     let s = run(start(), { type: "open", session: session("a") });
     s = dockReducer(s, { type: "open", session: session("b", { kind: "shell" }), focus: false });

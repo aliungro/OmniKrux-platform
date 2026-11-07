@@ -180,6 +180,72 @@ describe("ShellPane", () => {
     expect(screen.queryByRole("button", { name: "Start a debug container" })).toBeNull();
   });
 
+  it("an error offers Reconnect, as its words say", () => {
+    render(<ShellPane session={session()} />);
+    const { ws } = open();
+    const msg = "The connection to the shell broke (ClientConnectionResetError). Reconnect to start a new shell.";
+    act(() => ws.emit({ type: "error", message: msg }));
+    act(() => ws.drop(1011));
+    expect(screen.getByRole("alert").textContent).toContain(msg);
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeTerminal.last.resets).toBe(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a node shell's error starts again with a new pod", async () => {
+    const onRestart = vi.fn();
+    render(<ShellPane session={session({ cleanupPod: true })} onRestart={onRestart} />);
+    await act(async () => {});
+    const { ws } = open();
+    act(() => ws.emit({ type: "error", message: "The connection to the shell broke (TimeoutError). Reconnect to start a new shell." }));
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("the not-running error offers both a debug container and Reconnect", () => {
+    render(<ShellPane session={session()} onStartDebug={() => {}} />);
+    act(() => FakeWebSocket.last.emit({
+      type: "error",
+      message: "Can't open a shell: container payments-api isn't running (CrashLoopBackOff). Start a debug container to look inside the pod.",
+    }));
+    act(() => FakeWebSocket.last.drop(1011));
+    expect(screen.getByRole("button", { name: "Start a debug container" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+  });
+
+  it.each([1008, 4403])("a refusal (close %i) offers no Reconnect, since trying again can't help", (code) => {
+    render(<ShellPane session={session()} />);
+    act(() => FakeWebSocket.last.emit({ type: "error", message: "Refused." }));
+    act(() => FakeWebSocket.last.drop(code));
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+  });
+
+  it("a shell that can't run in the container says why and offers a debug container", () => {
+    const onStartDebug = vi.fn();
+    render(<ShellPane session={session()} onStartDebug={onStartDebug} />);
+    const { ws } = open();
+    const msg =
+      'The command couldn\'t run in the container (exit 126: it can\'t be executed): OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or directory';
+    act(() => ws.emit({ type: "exit", code: 126, message: msg, cannot_run: true }));
+    act(() => ws.drop(1000));
+    const note = screen.getByRole("status");
+    expect(note.textContent).toContain(msg);
+    expect(note.textContent).toContain("A debug container brings its own shell.");
+    fireEvent.click(screen.getByRole("button", { name: "Start a debug container" }));
+    expect(onStartDebug).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Start again" })).toBeTruthy();
+  });
+
+  it("an ordinary exit offers no debug container", () => {
+    render(<ShellPane session={session()} onStartDebug={() => {}} />);
+    const { ws } = open();
+    act(() => ws.emit({ type: "exit", code: 127, message: null, cannot_run: false }));
+    expect(screen.queryByRole("button", { name: "Start a debug container" })).toBeNull();
+  });
+
   it("disposes the terminal and closes the socket on unmount", () => {
     const { unmount } = render(<ShellPane session={session()} />);
     const ws = FakeWebSocket.last;

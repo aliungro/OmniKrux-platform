@@ -173,6 +173,47 @@ describe("useLogStream", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
+  it("retry after an error keeps the lines and resumes from the last stamp", () => {
+    const { result } = open();
+    const ws1 = FakeWebSocket.last;
+    act(() => {
+      ws1.emit({ type: "lines", lines: [line("2026-11-07T14:04:12Z", "a"), line("2026-11-07T14:04:13Z", "b")] });
+      ws1.emit({ type: "status", state: "error", message: "Lost the log stream after 5 attempts: timed out." });
+      ws1.drop(1011);
+    });
+    expect(result.current.status).toBe("error");
+    expect(result.current.retry).not.toBeNull();
+
+    act(() => result.current.retry?.());
+    const ws2 = FakeWebSocket.last;
+    expect(ws2).not.toBe(ws1);
+    expect(ws2.params.get("since_time")).toBe("2026-11-07T14:04:13Z");
+    expect(result.current.status).toBe("connecting");
+    act(() => {
+      ws2.emit({ type: "status", state: "streaming", message: null });
+      ws2.emit({ type: "lines", lines: [line("2026-11-07T14:04:13Z", "b"), line("2026-11-07T14:04:30Z", "c")] });
+    });
+    expect(shown(result.current.buffer)).toEqual([
+      "a",
+      "b",
+      "[Reconnected — lines between 14:04:13.000 and 14:04:30.000 may be missing]",
+      "c",
+    ]);
+  });
+
+  it.each([1008, 4403])("a refusal (close %i) can't be retried", (code) => {
+    const { result } = open();
+    act(() => FakeWebSocket.last.drop(code));
+    expect(result.current.status).toBe("error");
+    expect(result.current.retry).toBeNull();
+  });
+
+  it("nothing to retry while the stream is fine", () => {
+    const { result } = open();
+    act(() => FakeWebSocket.last.emit({ type: "status", state: "streaming", message: null }));
+    expect(result.current.retry).toBeNull();
+  });
+
   it("an unexpected close without follow is an error, not a reconnect", () => {
     const { result } = open({ ...base, previous: true, follow: false });
     act(() => FakeWebSocket.last.drop(1006));

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { LogPane } from "../logs/LogPane";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -11,12 +11,10 @@ import {
   visibleSessions,
   type Session,
 } from "./dockState";
+import { LazyShellPane } from "./lazyShell";
 import { SessionTabs, panelId, tabId } from "./SessionTabs";
 import type { DockApi } from "./useDock";
 import s from "./Dock.module.css";
-
-// The terminal is most of the page's code; it loads with the first shell, not with the page.
-const ShellPane = lazy(() => import("../shell/ShellPane").then((m) => ({ default: m.ShellPane })));
 
 export const EMPTY_DOCK = "Open logs (l) or a shell (s) from a pod";
 const STEP = 24; // pixels per arrow key on the grip
@@ -158,16 +156,14 @@ export function Dock({ dock }: { dock: DockApi }) {
             {x.kind === "logs" ? (
               <LogPane key={x.id} session={toLogSession(x)} active={x.id === activeLogs} />
             ) : (
-              <Suspense fallback={<p className={s.hint} role="status">Loading the terminal…</p>}>
-                <ShellPane
-                  key={x.id}
-                  session={toShellSession(x)}
-                  active={x.id === state.focused}
-                  onStartDebug={x.debug || x.node ? undefined : () => dock.askDebug(x)}
-                  onRestart={x.node ? () => dock.askRestart(x) : undefined}
-                  note={shellNote(x)}
-                />
-              </Suspense>
+              <LazyShellPane
+                key={x.id}
+                session={toShellSession(x)}
+                active={x.id === state.focused}
+                onStartDebug={x.debug || x.node ? undefined : () => dock.askDebug(x)}
+                onRestart={x.node ? () => dock.askRestart(x) : undefined}
+                note={shellNote(x)}
+              />
             )}
           </div>
         ))}

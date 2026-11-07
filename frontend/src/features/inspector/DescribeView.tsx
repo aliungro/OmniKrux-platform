@@ -24,7 +24,8 @@ function conditionLabel(type: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** The backend writes terminated states as "Terminated: <reason> (exit <code>)". */
+/** The backend writes terminated states as "Terminated: <reason> (exit <code>)", or without the
+ * reason when Kubernetes gives none: "Terminated (exit <code>)". */
 function failedTermination(state: string | null): boolean {
   if (!state?.startsWith("Terminated")) return false;
   const code = /\(exit (-?\d+)\)/.exec(state);

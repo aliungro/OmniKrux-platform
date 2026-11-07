@@ -49,8 +49,9 @@ export type DockAction =
   /**
    * Puts a new session where an old one was (a node shell started again makes a new pod). If the
    * old tab has closed meanwhile, the session is added instead: its pod needs a session to be cleaned up.
+   * `focus: false` as for "open", unless the old tab is still the focused one.
    */
-  | { type: "replace"; id: string; session: Session }
+  | { type: "replace"; id: string; session: Session; focus?: boolean }
   | { type: "toggleLayout" }
   | { type: "resize"; height: number; viewport: number };
 
@@ -151,13 +152,13 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
     }
     case "replace": {
       const at = state.sessions.findIndex((s) => s.id === action.id);
-      if (at < 0) return dockReducer(state, { type: "open", session: action.session });
+      if (at < 0) return dockReducer(state, { type: "open", session: action.session, focus: action.focus });
       const sessions = state.sessions.slice();
       sessions[at] = action.session;
       const last = { ...state.last };
-      for (const k of ["logs", "shell"] as const) if (last[k] === action.id) last[k] = null;
-      const next = { ...state, sessions, last, focused: state.focused === action.id ? null : state.focused };
-      return focusOn(next, action.session);
+      for (const k of ["logs", "shell"] as const) if (last[k] === action.id) last[k] = action.session.id;
+      const next = { ...state, sessions, last };
+      return action.focus === false && state.focused !== action.id ? next : focusOn(next, action.session);
     }
     case "toggleLayout":
       return { ...state, layout: state.layout === "single" ? "split" : "single" };

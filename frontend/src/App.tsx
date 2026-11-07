@@ -90,16 +90,19 @@ export function Console() {
             onOwnerLogs={onOwnerLogs}
           />
         </main>
-        <Dock dock={dock} />
-        <ShortcutBar />
       </>
     );
   }
+  const hasTable = list !== undefined && list.length > 0;
 
+  // The dock sits outside the switch above, so its sessions (and their shells) outlive a moment
+  // with no clusters, e.g. the last one removed.
   return (
     <div className={s.app}>
       <TopBar clusters={all} />
       {body}
+      {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
+      {hasTable && <ShortcutBar />}
     </div>
   );
 }

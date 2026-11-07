@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { scheduleFrame } from "../../api/useWatch";
 import type { LogLine, LogMessage } from "../../api/types";
 import { LogBuffer, isMarker, type LogEntry } from "./logBuffer";
@@ -26,13 +26,21 @@ export interface LogStreamState {
   status: LogStreamStatus;
   /** The server's words for an error (or an ended stream), or ours for a lost connection. */
   message: string | null;
+  /**
+   * After an error that trying again could help: reopens the stream, keeping the lines shown and
+   * resuming from the last stamp (the gap is marked). Null otherwise.
+   */
+  retry: (() => void) | null;
 }
 
 const LOST_RECONNECTING = "Lost the connection to the log stream. Reconnecting…";
 const LOST_FOR_GOOD =
   "Lost the connection to the console's server before the log was complete. Check that it's running, then open the logs again.";
 
-/** Closes that come without a status message, and mean trying again won't help. */
+/** Closes that mean trying again won't help. */
+const NO_RETRY = new Set([1008, 4403]);
+
+/** Closes that come without a status message: what to tell the user. */
 const REFUSED: Record<number, string> = {
   1008: "The console turned down this log request. Open the logs again from the pod.",
   4403: "The console refused the connection from this page. Open the console from its own address.",
@@ -118,31 +126,40 @@ class ResumePoints {
  * Streams a pod's (or a selector's) log into a `LogBuffer` and re-renders at most once a frame.
  * While following, an unexpected close reconnects after 1, 2, 5, then every 10 s, resuming
  * from the last stamp shown and marking the gap. An ended stream, a server error, or a refused
- * connection stays closed.
+ * connection stays closed; after an error (not a refusal) `retry` reopens it the same way.
  */
 export function useLogStream(params: LogStreamParams): LogStreamState {
   const [buffer] = useState(() => new LogBuffer());
   const [, setVersion] = useState(0);
-  const [state, setState] = useState<{ status: LogStreamStatus; message: string | null }>({
+  const [state, setState] = useState<{ status: LogStreamStatus; message: string | null; retryable: boolean }>({
     status: "connecting",
     message: null,
+    retryable: false,
   });
+  const [retries, setRetries] = useState(0);
+  /** Where the stream got to, kept across retries of the same stream (new parameters start over). */
+  const resumeRef = useRef<{ key: string; points: ResumePoints } | null>(null);
   const { cluster, namespace, pod, selector, container, previous, follow } = params;
 
   useEffect(() => {
     const p: LogStreamParams = { cluster, namespace, pod, selector, container, previous, follow };
+    const key = JSON.stringify(p);
+    const again = resumeRef.current?.key === key; // a retry: keep the lines and resume
+    if (!again) resumeRef.current = { key, points: new ResumePoints() };
+    const resume = resumeRef.current!.points;
     let disposed = false;
     let socket: WebSocket | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let cancelFrame: (() => void) | null = null;
     let attempt = 0;
-    const resume = new ResumePoints();
     let skip: ((line: LogLine) => boolean) | null = null;
     /** Set on reconnect: the stamp the gap starts at, until the first new line says where it ends. */
     let gapFrom: string | null = null;
 
-    const setStatus = (status: LogStreamStatus, message: string | null) =>
-      setState((s) => (s.status === status && s.message === message ? s : { status, message }));
+    const setStatus = (status: LogStreamStatus, message: string | null, retryable = status === "error") =>
+      setState((s) =>
+        s.status === status && s.message === message && s.retryable === retryable ? s : { status, message, retryable },
+      );
     const changed = () => {
       cancelFrame ??= scheduleFrame(() => {
         cancelFrame = null;
@@ -209,7 +226,7 @@ export function useLogStream(params: LogStreamParams): LogStreamState {
         socket = null;
         if (finished) return;
         if (Object.hasOwn(REFUSED, ev.code)) {
-          setStatus("error", REFUSED[ev.code]);
+          setStatus("error", REFUSED[ev.code], !NO_RETRY.has(ev.code));
           return;
         }
         if (!follow) {
@@ -226,8 +243,10 @@ export function useLogStream(params: LogStreamParams): LogStreamState {
       };
     };
 
-    buffer.clear();
-    setVersion(buffer.version);
+    if (!again) {
+      buffer.clear();
+      setVersion(buffer.version);
+    }
     setStatus("connecting", null);
     connect();
 
@@ -241,7 +260,9 @@ export function useLogStream(params: LogStreamParams): LogStreamState {
         socket.close();
       }
     };
-  }, [buffer, cluster, namespace, pod, selector, container, previous, follow]);
+  }, [buffer, cluster, namespace, pod, selector, container, previous, follow, retries]);
 
-  return { buffer, status: state.status, message: state.message };
+  const retry = useCallback(() => setRetries((n) => n + 1), []);
+  const canRetry = state.status === "error" && state.retryable;
+  return { buffer, status: state.status, message: state.message, retry: canRetry ? retry : null };
 }
