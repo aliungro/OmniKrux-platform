@@ -1,9 +1,18 @@
-import { keepPreviousData, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { keepPreviousData, queryOptions, useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { getJson } from "../../api/http";
 import type { PodDescribe, PodYaml } from "../../api/types";
 
-function podPath(clusterId: string, ns: string, name: string): string {
+export function podPath(clusterId: string, ns: string, name: string): string {
   return `/api/clusters/${encodeURIComponent(clusterId)}/pods/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`;
+}
+
+/** The describe query, shared by the inspector and the dock (which reads the pod's containers). */
+export function describeQuery(clusterId: string, ns: string, name: string, resourceVersion: string) {
+  return queryOptions({
+    queryKey: ["describe", clusterId, ns, name, resourceVersion],
+    queryFn: () => getJson<PodDescribe>(`${podPath(clusterId, ns, name)}/describe`),
+    retry: false,
+  });
 }
 
 /**
@@ -17,12 +26,7 @@ export function useDescribe(
   name: string,
   resourceVersion: string,
 ): UseQueryResult<PodDescribe> {
-  return useQuery({
-    queryKey: ["describe", clusterId, ns, name, resourceVersion],
-    queryFn: () => getJson<PodDescribe>(`${podPath(clusterId, ns, name)}/describe`),
-    placeholderData: keepPreviousData,
-    retry: false,
-  });
+  return useQuery({ ...describeQuery(clusterId, ns, name, resourceVersion), placeholderData: keepPreviousData });
 }
 
 /** The pod's manifest as YAML; only fetched while the YAML tab is open. */

@@ -67,62 +67,72 @@ export function useExec(target: ExecTarget, onOutput: (data: string) => void): E
     let finished = false;
     openRef.current = false;
     setState({ status: "connecting", message: null, exitCode: null });
-    const ws = new WebSocket(execUrl({ cluster, namespace, pod, container, cleanupPod }));
-    socketRef.current = ws;
+    let ws: WebSocket | null = null;
+    const connect = () => {
+      const socket = new WebSocket(execUrl({ cluster, namespace, pod, container, cleanupPod }));
+      ws = socket;
+      socketRef.current = socket;
 
-    ws.onopen = () => {
-      if (disposed) return;
-      openRef.current = true;
-      setState((s) => (s.status === "connecting" ? { ...s, status: "open" } : s));
-      const size = sizeRef.current;
-      if (size) ws.send(JSON.stringify({ type: "resize", ...size }));
+      socket.onopen = () => {
+        if (disposed) return;
+        openRef.current = true;
+        setState((s) => (s.status === "connecting" ? { ...s, status: "open" } : s));
+        const size = sizeRef.current;
+        if (size) socket.send(JSON.stringify({ type: "resize", ...size }));
+      };
+      socket.onmessage = (ev: MessageEvent) => {
+        if (disposed) return;
+        let msg: ExecMessage;
+        try {
+          msg = JSON.parse(ev.data as string) as ExecMessage;
+          if (msg === null || typeof msg !== "object") throw new Error("not an object");
+        } catch {
+          console.warn("useExec: ignoring malformed frame");
+          return;
+        }
+        switch (msg.type) {
+          case "stdout":
+          case "stderr":
+            outputRef.current(msg.data);
+            break;
+          case "exit":
+            finished = true;
+            openRef.current = false;
+            setState({ status: "exited", message: msg.message, exitCode: msg.code });
+            break;
+          case "error":
+            finished = true;
+            openRef.current = false;
+            setState({ status: "error", message: msg.message, exitCode: null });
+            break;
+        }
+      };
+      socket.onclose = (ev: CloseEvent) => {
+        if (disposed) return;
+        openRef.current = false;
+        if (finished) return;
+        if (Object.hasOwn(REFUSED, ev.code)) {
+          setState({ status: "error", message: REFUSED[ev.code], exitCode: null });
+          return;
+        }
+        setState({ status: "disconnected", message: null, exitCode: null });
+      };
     };
-    ws.onmessage = (ev: MessageEvent) => {
-      if (disposed) return;
-      let msg: ExecMessage;
-      try {
-        msg = JSON.parse(ev.data as string) as ExecMessage;
-        if (msg === null || typeof msg !== "object") throw new Error("not an object");
-      } catch {
-        console.warn("useExec: ignoring malformed frame");
-        return;
-      }
-      switch (msg.type) {
-        case "stdout":
-        case "stderr":
-          outputRef.current(msg.data);
-          break;
-        case "exit":
-          finished = true;
-          openRef.current = false;
-          setState({ status: "exited", message: msg.message, exitCode: msg.code });
-          break;
-        case "error":
-          finished = true;
-          openRef.current = false;
-          setState({ status: "error", message: msg.message, exitCode: null });
-          break;
-      }
-    };
-    ws.onclose = (ev: CloseEvent) => {
-      if (disposed) return;
-      openRef.current = false;
-      if (finished) return;
-      if (Object.hasOwn(REFUSED, ev.code)) {
-        setState({ status: "error", message: REFUSED[ev.code], exitCode: null });
-        return;
-      }
-      setState({ status: "disconnected", message: null, exitCode: null });
-    };
+    // A node shell's pod is deleted when its socket closes, so a mount that's undone at once
+    // (React StrictMode in development) must not connect: wait until this commit has settled.
+    if (cleanupPod) queueMicrotask(() => !disposed && connect());
+    else connect();
 
     return () => {
       disposed = true;
       openRef.current = false;
-      ws.onopen = null;
-      ws.onmessage = null;
-      ws.onclose = null;
-      if (socketRef.current === ws) socketRef.current = null;
-      ws.close();
+      const socket = ws as WebSocket | null;
+      if (!socket) return;
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onclose = null;
+      if (socketRef.current === socket) socketRef.current = null;
+      socket.close();
     };
   }, [cluster, namespace, pod, container, cleanupPod, generation]);
 

@@ -17,8 +17,9 @@ const fake = vi.hoisted(() => {
     constructor(public options: Record<string, unknown>) {
       FakeTerminal.last = this;
     }
+    opened = 0;
     loadAddon() {}
-    open() {}
+    open() { this.opened += 1; }
     focus() { this.focused += 1; }
     write(d: string) { this.written.push(d); }
     reset() { this.resets += 1; }
@@ -130,6 +131,35 @@ describe("ShellPane", () => {
     expect(screen.getByText("Session ended (exit 130)")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start again" }));
     expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("opens the terminal only once Geist Mono has loaded, so cells get its width", async () => {
+    let loaded!: () => void;
+    const load = vi.fn(() => new Promise<void>((r) => { loaded = r; }));
+    Object.defineProperty(document, "fonts", { configurable: true, value: { check: () => false, load } });
+    try {
+      render(<ShellPane session={session()} />);
+      expect(load).toHaveBeenCalledWith('12.5px "Geist Mono"');
+      expect(FakeTerminal.last.opened).toBe(0);
+      const focusedBefore = FakeTerminal.last.focused;
+      await act(async () => loaded());
+      expect(FakeTerminal.last.opened).toBe(1);
+      expect(FakeTerminal.last.focused).toBe(focusedBefore + 1); // the active pane takes focus once it's open
+    } finally {
+      delete (document as { fonts?: unknown }).fonts;
+    }
+  });
+
+  it("onRestart replaces start again and reconnect (a node shell needs a new pod)", async () => {
+    const onRestart = vi.fn();
+    render(<ShellPane session={session({ cleanupPod: true })} onRestart={onRestart} note="Node shell on aks-np1-03." />);
+    expect(screen.getByText("Node shell on aks-np1-03.")).toBeTruthy();
+    await act(async () => {}); // a node shell connects once the mount has settled
+    const { ws } = open();
+    act(() => ws.drop(1006));
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1); // the deleted pod is never reconnected to
   });
 
   it("not-running error offers debug container", () => {

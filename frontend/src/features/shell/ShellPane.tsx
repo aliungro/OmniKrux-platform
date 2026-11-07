@@ -33,6 +33,29 @@ const THEME = {
   brightWhite: "#ECEAF4",
 };
 
+const FONT_FAMILY = '"Geist Mono", ui-monospace, Consolas, monospace';
+const FONT_SIZE = 12.5;
+
+/** Runs `open` once Geist Mono can be drawn (at once if it already can, or there's no font API). */
+function whenFontReady(open: () => void): () => void {
+  const fonts = typeof document === "undefined" ? undefined : document.fonts;
+  const spec = `${FONT_SIZE}px "Geist Mono"`;
+  if (!fonts || fonts.check(spec)) {
+    open();
+    return () => {};
+  }
+  let live = true;
+  fonts
+    .load(spec)
+    .catch(() => []) // can't load it: open with the fallback font rather than not at all
+    .then(() => {
+      if (live) open();
+    });
+  return () => {
+    live = false;
+  };
+}
+
 /** The server's refusal for a container that isn't running (see backend `running_container`). */
 export function isNotRunning(message: string | null): boolean {
   return message !== null && message.startsWith("Can't open a shell:") && message.includes("isn't running");
@@ -43,15 +66,22 @@ export function isNotRunning(message: string | null): boolean {
  * the session's own cluster, so you can see where your keystrokes go.
  * `active`: whether the terminal takes keyboard focus (the dock passes it for the focused tab).
  * `onStartDebug`: shown as a button when the container isn't running; the dock starts the debug container.
+ * `onRestart`: replaces Start again / Reconnect; a node shell needs a new node-shell pod, since the
+ * server deleted the old one when its session ended.
+ * `note`: a standing line under the terminal, e.g. what a debug container is attached to.
  */
 export function ShellPane({
   session,
   active = true,
   onStartDebug,
+  onRestart,
+  note,
 }: {
   session: ShellSession;
   active?: boolean;
   onStartDebug?: () => void;
+  onRestart?: () => void;
+  note?: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -68,12 +98,15 @@ export function ShellPane({
   );
   const { send, resize, reconnect } = exec;
 
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const term = new Terminal({
-      fontFamily: '"Geist Mono", ui-monospace, Consolas, monospace',
-      fontSize: 12.5,
+      fontFamily: FONT_FAMILY,
+      fontSize: FONT_SIZE,
       lineHeight: 1.45,
       cursorBlink: true,
       scrollback: 5000,
@@ -81,8 +114,7 @@ export function ShellPane({
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.open(host);
-    termRef.current = term;
+    termRef.current = term; // output written before the terminal opens is kept and shown
 
     const refit = () => {
       try {
@@ -91,17 +123,25 @@ export function ShellPane({
         // Not laid out yet (hidden tab); the next resize fits it.
       }
     };
-    refit();
-    resize(term.cols, term.rows);
-
     const typed = term.onData((d) => send(d));
     const sized = term.onResize(({ cols, rows }) => resize(cols, rows));
-    const watcher = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(refit);
-    watcher?.observe(host);
-    // Cell size depends on the font; fit again once Geist Mono has loaded.
-    void document.fonts?.ready.then(refit);
+    let watcher: ResizeObserver | null = null;
+
+    // xterm measures its cells once, when it opens: open it after Geist Mono has loaded, or the
+    // cells take the fallback font's width and the text runs past them.
+    const cancelOpen = whenFontReady(() => {
+      term.open(host);
+      refit();
+      resize(term.cols, term.rows);
+      if (activeRef.current) term.focus();
+      if (typeof ResizeObserver !== "undefined") {
+        watcher = new ResizeObserver(refit);
+        watcher.observe(host);
+      }
+    });
 
     return () => {
+      cancelOpen();
       watcher?.disconnect();
       typed.dispose();
       sized.dispose();
@@ -115,6 +155,10 @@ export function ShellPane({
   }, [active]);
 
   const fresh = () => {
+    if (onRestart) {
+      onRestart();
+      return;
+    }
     termRef.current?.reset();
     reconnect();
   };
@@ -137,6 +181,8 @@ export function ShellPane({
       <div className={s.termWrap}>
         <div ref={hostRef} className={`${s.term}${exec.status === "connecting" ? ` ${s.wait}` : ""}`} />
       </div>
+
+      {note && <div className={s.aside}>{note}</div>}
 
       {exec.status === "exited" && (
         <div className={s.note} role="status">

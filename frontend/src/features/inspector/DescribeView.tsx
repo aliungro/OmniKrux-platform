@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import type { Condition, ContainerInfo, EnvVar, PodDescribe } from "../../api/types";
+import type { Condition, ContainerInfo, EnvVar, OwnerRef, PodDescribe } from "../../api/types";
 import { formatAge } from "../territories/model";
 import { Status } from "../territories/Status";
 import { EventsTable } from "./EventsTable";
@@ -43,8 +43,14 @@ function ConditionChip({ c }: { c: Condition }) {
   );
 }
 
-function PodSection({ data, now }: { data: PodDescribe; now: Date }) {
+interface Actions {
+  onNodeShell?: (node: string) => void;
+  onOwnerLogs?: (owner: OwnerRef) => void;
+}
+
+function PodSection({ data, now, onNodeShell, onOwnerLogs }: { data: PodDescribe; now: Date } & Actions) {
   const { pod } = data;
+  const owner = pod.owner;
   const labels = Object.entries(data.labels);
   const annotations = Object.entries(data.annotations);
   return (
@@ -54,7 +60,12 @@ function PodSection({ data, now }: { data: PodDescribe; now: Date }) {
         <dt>Status</dt>
         <dd><Status label={pod.status} cls={pod.status_class} /></dd>
         <dt>Node</dt>
-        <dd title={pod.node ?? undefined}>{pod.node ?? UNKNOWN}</dd>
+        <dd title={pod.node ?? undefined}>
+          <span>{pod.node ?? UNKNOWN}</span>
+          {pod.node && onNodeShell && (
+            <button type="button" className={s.link} onClick={() => onNodeShell(pod.node!)}>Node shell</button>
+          )}
+        </dd>
         <dt>Pod IP</dt>
         <dd className={s.num}>{pod.pod_ip ?? UNKNOWN}</dd>
         <dt>Host IP</dt>
@@ -62,8 +73,13 @@ function PodSection({ data, now }: { data: PodDescribe; now: Date }) {
         <dt>QoS class</dt>
         <dd>{pod.qos ?? UNKNOWN}</dd>
         <dt>Controlled by</dt>
-        <dd title={pod.owner ? `${pod.owner.kind} ${pod.owner.name}` : undefined}>
-          {pod.owner ? `${pod.owner.kind} ${pod.owner.name}` : "Nothing (a bare pod)"}
+        <dd title={owner ? `${owner.kind} ${owner.name}` : undefined}>
+          <span>{owner ? `${owner.kind} ${owner.name}` : "Nothing (a bare pod)"}</span>
+          {owner?.selector && onOwnerLogs && (
+            <button type="button" className={s.link} title={`Logs of every pod matching ${owner.selector}`} onClick={() => onOwnerLogs(owner)}>
+              All pods' logs
+            </button>
+          )}
         </dd>
         <dt>Service account</dt>
         <dd>{pod.service_account ?? UNKNOWN}</dd>
@@ -197,8 +213,11 @@ function ContainerCard({ c, kind, now }: { c: ContainerInfo; kind: ContainerKind
   );
 }
 
-/** The Describe tab: pod, containers and events side by side, as in the Territories mockup. */
-export function DescribeView({ data }: { data: PodDescribe }) {
+/**
+ * The Describe tab: pod, containers and events side by side, as in the Territories mockup.
+ * `onNodeShell` / `onOwnerLogs` add "Node shell" by the node and "All pods' logs" by the owner.
+ */
+export function DescribeView({ data, onNodeShell, onOwnerLogs }: { data: PodDescribe } & Actions) {
   const now = new Date();
   const containers: [ContainerInfo, ContainerKind][] = [
     ...data.init_containers.map((c): [ContainerInfo, ContainerKind] => [c, "init"]),
@@ -207,7 +226,7 @@ export function DescribeView({ data }: { data: PodDescribe }) {
   ];
   return (
     <div className={s.desc}>
-      <PodSection data={data} now={now} />
+      <PodSection data={data} now={now} onNodeShell={onNodeShell} onOwnerLogs={onOwnerLogs} />
       <section className={s.col} aria-label="Containers">
         <h5 className={s.h}>Containers</h5>
         {containers.length === 0 ? (

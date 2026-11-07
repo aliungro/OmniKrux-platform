@@ -159,13 +159,15 @@ describe("selection", () => {
     expect(inspector()).toBeNull();
   });
 
-  it("l and s on the selected row open logs and shell", () => {
+  it("l, p and s on the selected row open logs, previous logs and shell", () => {
     const onOpenLogs = vi.fn();
     const onOpenShell = vi.fn();
     renderTable(3, { onOpenLogs, onOpenShell });
     fireEvent.keyDown(podRow("pod-2"), { key: "l" });
+    fireEvent.keyDown(podRow("pod-1"), { key: "p" });
     fireEvent.keyDown(podRow("pod-2"), { key: "s" });
-    expect(onOpenLogs).toHaveBeenCalledWith(expect.objectContaining({ uid: "2" }));
+    expect(onOpenLogs).toHaveBeenNthCalledWith(1, expect.objectContaining({ uid: "2" }), false);
+    expect(onOpenLogs).toHaveBeenNthCalledWith(2, expect.objectContaining({ uid: "1" }), true);
     expect(onOpenShell).toHaveBeenCalledWith(expect.objectContaining({ uid: "2" }));
   });
 

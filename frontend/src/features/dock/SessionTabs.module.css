@@ -1,0 +1,158 @@
+/* The dock's session strip, after the Territories mockup: the selected tab sits forward on the
+   pane colour with a 2px inset in its cluster's colour; the others stay quiet. */
+.bar {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.sess {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  max-width: 420px;
+  height: 34px;
+  border-radius: 8px 8px 0 0;
+  color: var(--ink-2);
+}
+
+.sess:hover {
+  color: var(--ink);
+}
+
+.on {
+  background: #17141f;
+  color: var(--ink);
+  box-shadow: inset 0 2px 0 var(--c);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 12px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* A smaller badge, as on the mockup's tabs. */
+.tab > :first-child {
+  height: 17px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+
+.kind {
+  flex: none;
+  font-weight: 600;
+}
+
+.tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surf-2);
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
+.where {
+  display: flex;
+  min-width: 0;
+}
+
+/* The cluster and namespace give way first; the pod keeps its room. */
+.ctx {
+  flex: 0 1 auto;
+  min-width: 3ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-3);
+}
+
+.pod {
+  flex: 0 1 auto;
+  min-width: 6ch;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ctr {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.x {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.x:hover {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+.lay {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 4px 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-3);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lay:hover {
+  color: var(--ink);
+}
+
+.lay[aria-pressed="true"] {
+  border-color: var(--rule);
+  background: var(--surf-2);
+  color: var(--ink);
+}

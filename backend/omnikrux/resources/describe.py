@@ -17,6 +17,9 @@ PROBES = (
 class OwnerRef(BaseModel):
     kind: str
     name: str
+    # The owner's `spec.selector.matchLabels` as "k=v,k2=v2", for "All pods' logs". None for an
+    # owner without one (a Node, say), or when the owner couldn't be read.
+    selector: str | None = None
 
 
 class PodInfo(BaseModel):

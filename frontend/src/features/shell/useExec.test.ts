@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
+import { StrictMode } from "react";
 import { useExec, execUrl } from "./useExec";
 
 beforeEach(() => {
@@ -26,6 +27,16 @@ describe("execUrl", () => {
 });
 
 describe("useExec", () => {
+  it("a node shell never connects from a mount that's undone at once (closing it deletes the pod)", async () => {
+    // StrictMode mounts, unmounts and mounts again: a socket from the first mount would close at
+    // once, and the server deletes a node-shell pod when its session closes.
+    renderHook(() => useExec({ ...target, cleanupPod: true }, () => {}), { wrapper: StrictMode });
+    await act(async () => {});
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.last.closedByClient).toBe(false);
+    expect(FakeWebSocket.last.params.get("cleanup_pod")).toBe("true");
+  });
+
   it("streams output to the subscriber and sends stdin once open", () => {
     const out: string[] = [];
     const { result } = renderHook(() => useExec(target, (d) => out.push(d)));

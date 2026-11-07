@@ -44,6 +44,8 @@ export type WatchMessage =
 export interface OwnerRef {
   kind: string;
   name: string;
+  /** The owner's matchLabels as "k=v,k2=v2", for its pods' logs; null when it has none or couldn't be read. */
+  selector: string | null;
 }
 
 export interface PodInfo {
@@ -112,6 +114,19 @@ export interface PodDescribe {
   events: EventInfo[];
   /** Why `events` is empty when listing them failed (Ruling R7); null when they listed fine. */
   events_error: string | null;
+}
+
+/** `POST …/pods/{ns}/{name}/debug`: `target` is null when the asked-for container wasn't running (Ruling R12). */
+export interface DebugContainer {
+  container: string;
+  target: string | null;
+}
+
+/** `POST …/nodes/{node}/shell`: the node-shell pod to open a shell in. */
+export interface NodeShellPod {
+  namespace: string;
+  pod: string;
+  container: string;
 }
 
 export interface PodYaml {

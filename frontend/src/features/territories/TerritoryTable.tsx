@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { ResourceRow } from "../../api/types";
+import type { OwnerRef, ResourceRow } from "../../api/types";
 import { Inspector } from "../inspector/Inspector";
 import { flatten, type RowRef, type Territory } from "./model";
 import { ClusterBand } from "./ClusterBand";
@@ -21,11 +21,16 @@ export function TerritoryTable({
   onRetry,
   onOpenLogs,
   onOpenShell,
+  onNodeShell,
+  onOwnerLogs,
 }: {
   territories: Territory[];
   onRetry: (clusterId: string) => void;
-  onOpenLogs?: (row: ResourceRow) => void;
+  /** `previous`: the run before the last restart (the `p` key). */
+  onOpenLogs?: (row: ResourceRow, previous?: boolean) => void;
   onOpenShell?: (row: ResourceRow) => void;
+  onNodeShell?: (row: ResourceRow, node: string) => void;
+  onOwnerLogs?: (row: ResourceRow, owner: OwnerRef) => void;
 }) {
   const [selected, setSelected] = useState<RowRef | null>(null);
   const [open, setOpen] = useState(false);
@@ -116,10 +121,11 @@ export function TerritoryTable({
         toggle(it.row);
         return;
       case "l":
+      case "p":
         if (onOpenLogs) {
           e.preventDefault();
           select(it.row);
-          onOpenLogs(it.row);
+          onOpenLogs(it.row, e.key === "p");
         }
         return;
       case "s":
@@ -189,6 +195,8 @@ export function TerritoryTable({
                       provider={it.provider}
                       onOpenLogs={onOpenLogs}
                       onOpenShell={onOpenShell}
+                      onNodeShell={onNodeShell}
+                      onOwnerLogs={onOwnerLogs}
                       onClose={close}
                     />
                   </div>

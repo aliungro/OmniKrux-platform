@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import type { Provider, ResourceRow } from "../../api/types";
+import type { OwnerRef, Provider, ResourceRow } from "../../api/types";
 import { textColumn } from "../territories/model";
 import { DescribeView } from "./DescribeView";
 import { EventsTable } from "./EventsTable";
@@ -41,12 +41,18 @@ export function Inspector({
   provider,
   onOpenLogs,
   onOpenShell,
+  onNodeShell,
+  onOwnerLogs,
   onClose,
 }: {
   row: ResourceRow;
   provider: Provider;
   onOpenLogs?: (row: ResourceRow) => void;
   onOpenShell?: (row: ResourceRow) => void;
+  /** A shell on the pod's node (the dock asks first, then starts a node-shell pod). */
+  onNodeShell?: (row: ResourceRow, node: string) => void;
+  /** Logs of every pod the owner selects. */
+  onOwnerLogs?: (row: ResourceRow, owner: OwnerRef) => void;
   onClose?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("Describe");
@@ -108,7 +114,13 @@ export function Inspector({
         aria-labelledby={`${id}-tab-${TABS.indexOf(tab)}`}
         className={s.panel}
       >
-        {tab === "Describe" && <Loaded q={describe}>{(d) => <DescribeView data={d} />}</Loaded>}
+        {tab === "Describe" && <Loaded q={describe}>{(d) => (
+              <DescribeView
+                data={d}
+                onNodeShell={onNodeShell && ((node) => onNodeShell(row, node))}
+                onOwnerLogs={onOwnerLogs && ((owner) => onOwnerLogs(row, owner))}
+              />
+            )}</Loaded>}
         {tab === "YAML" && <Loaded q={yaml}>{(y) => <YamlView yaml={y} />}</Loaded>}
         {tab === "Events" && (
           <Loaded q={describe}>

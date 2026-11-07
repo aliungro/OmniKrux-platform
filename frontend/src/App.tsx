@@ -2,9 +2,13 @@ import { useCallback, useMemo, useState } from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "./api/useClusters";
 import { useWatch } from "./api/useWatch";
+import type { OwnerRef, ResourceRow } from "./api/types";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
+import { ShortcutBar } from "./features/chrome/ShortcutBar";
 import { TopBar } from "./features/chrome/TopBar";
+import { Dock } from "./features/dock/Dock";
+import { useDock } from "./features/dock/useDock";
 import { buildTerritories, countFilters, podCount, type Filters } from "./features/territories/model";
 import { TerritoryTable } from "./features/territories/TerritoryTable";
 import { useNow } from "./hooks/useNow";
@@ -40,6 +44,16 @@ export function Console() {
   );
   const counts = useMemo(() => countFilters(all, now), [all, now]);
 
+  const dock = useDock(list ?? []);
+  const { openPod, openOwnerLogs, askNodeShell } = dock;
+  const onOpenLogs = useCallback(
+    (row: ResourceRow, previous?: boolean) => openPod(row, "logs", { previous }),
+    [openPod],
+  );
+  const onOpenShell = useCallback((row: ResourceRow) => openPod(row, "shell"), [openPod]);
+  const onNodeShell = useCallback((row: ResourceRow, node: string) => askNodeShell(row.cluster_id, node), [askNodeShell]);
+  const onOwnerLogs = useCallback((row: ResourceRow, owner: OwnerRef) => openOwnerLogs(row, owner), [openOwnerLogs]);
+
   const onRetry = useCallback((id: string) => {
     // The watch reports the cluster's new state; a failed request leaves its band in error.
     retryCluster(id).catch((err: unknown) => console.error(`Retry for cluster ${id} failed:`, err));
@@ -67,8 +81,17 @@ export function Console() {
         <KindTabs active="pods" counts={{ pods: podCount(all) }} />
         <FilterBar value={filters} onChange={setFilters} counts={counts} />
         <main className={s.main}>
-          <TerritoryTable territories={shown} onRetry={onRetry} />
+          <TerritoryTable
+            territories={shown}
+            onRetry={onRetry}
+            onOpenLogs={onOpenLogs}
+            onOpenShell={onOpenShell}
+            onNodeShell={onNodeShell}
+            onOwnerLogs={onOwnerLogs}
+          />
         </main>
+        <Dock dock={dock} />
+        <ShortcutBar />
       </>
     );
   }

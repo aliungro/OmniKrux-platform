@@ -80,7 +80,7 @@ async def test_describe_route_returns_describe(client, fake_api):
     assert r.status_code == 200
     body = r.json()
     assert body["pod"]["name"] == "crasher" and body["pod"]["status"] == "CrashLoopBackOff"
-    assert body["pod"]["owner"] == {"kind": "ReplicaSet", "name": "crasher-7c9"}
+    assert body["pod"]["owner"] == {"kind": "ReplicaSet", "name": "crasher-7c9", "selector": None}
     assert body["pod"]["resource_version"] == "101"
     assert body["containers"][0]["state"] == "Waiting: CrashLoopBackOff"
     assert body["containers"][0]["env"] == [
@@ -152,3 +152,57 @@ async def test_describe_hung_cluster_times_out_plainly(client, fake_api, monkeyp
     assert r.json() == {
         "detail": "The cluster didn't answer while trying to describe pod demo/crasher."
     }
+
+
+async def test_describe_owner_selector_from_the_owning_workload(client, fake_api):
+    http, cluster_id = client
+    fake_api.workloads[("replicasets", "demo", "crasher-7c9")] = {
+        "metadata": {"name": "crasher-7c9", "namespace": "demo"},
+        "spec": {"selector": {"matchLabels": {"app": "crasher", "pod-template-hash": "7c9"}}},
+    }
+    r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/describe")
+    assert r.status_code == 200
+    assert r.json()["pod"]["owner"] == {
+        "kind": "ReplicaSet",
+        "name": "crasher-7c9",
+        "selector": "app=crasher,pod-template-hash=7c9",
+    }
+    assert ("GET", "/apis/apps/v1/namespaces/demo/replicasets/crasher-7c9") in [
+        (m, p) for m, p, _ in fake_api.requests
+    ]
+
+
+async def test_describe_owner_without_selector_is_none(client, fake_api):
+    http, cluster_id = client
+    # A static pod's owner is its Node: there is no workload to read.
+    node_owned = {
+        **CRASHER,
+        "metadata": {
+            **CRASHER["metadata"],
+            "name": "etcd",
+            "ownerReferences": [{"kind": "Node", "name": "kind-control-plane", "controller": True}],
+        },
+    }
+    fake_api.pods[("demo", "etcd")] = node_owned
+    r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/etcd/describe")
+    assert r.status_code == 200
+    assert r.json()["pod"]["owner"] == {
+        "kind": "Node",
+        "name": "kind-control-plane",
+        "selector": None,
+    }
+    assert not [p for _, p, _ in fake_api.requests if p.startswith("/apis/")]
+
+
+async def test_describe_survives_an_unreadable_owner(client, fake_api):
+    http, cluster_id = client
+    # No replicaset seeded: reading the owner answers 404, describe still answers.
+    r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/describe")
+    assert r.status_code == 200
+    assert r.json()["pod"]["owner"]["selector"] is None
+    fake_api.workloads[("replicasets", "demo", "crasher-7c9")] = {
+        "spec": {"selector": {"matchExpressions": [{"key": "app", "operator": "Exists"}]}}
+    }
+    r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/describe")
+    assert r.status_code == 200
+    assert r.json()["pod"]["owner"]["selector"] is None

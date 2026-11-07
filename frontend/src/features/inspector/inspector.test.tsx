@@ -46,7 +46,7 @@ export const describeBody = (over: Partial<PodDescribe> = {}): PodDescribe => ({
     host_ip: "10.0.0.4",
     qos: "Burstable",
     service_account: "payments-api",
-    owner: { kind: "ReplicaSet", name: "payments-api-7f9c4" },
+    owner: { kind: "ReplicaSet", name: "payments-api-7f9c4", selector: "app=payments-api,pod-template-hash=7f9c4" },
     started_at: "2026-11-07T14:02:00Z",
     resource_version: "1",
   },

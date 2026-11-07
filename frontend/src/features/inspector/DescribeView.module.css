@@ -50,6 +50,25 @@
   overflow-wrap: break-word;
 }
 
+/* A quiet action after a value: "Node shell", "All pods' logs". */
+.link {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--focus);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* Conditions: ✓ for True, ✕ for False, ? for Unknown. */
 .conds,
 .tags {

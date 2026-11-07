@@ -1,20 +1,21 @@
 """Per-resource calls for the inspector: describe and YAML for a pod, and the containers a
 shell can be opened into (a debug container in a pod, a node-shell pod on a node)."""
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
-from kubernetes_asyncio.client import ApiClient, CoreV1Api
+from kubernetes_asyncio.client import ApiClient, AppsV1Api, BatchV1Api, CoreV1Api
 from kubernetes_asyncio.client.exceptions import ApiException
 from pydantic import BaseModel
 
 from omnikrux.exec.debug import DebugError, add_debug_container, create_node_shell_pod
 from omnikrux.kube.connections import kube_error_message
 from omnikrux.kube.http import read_json
-from omnikrux.resources.describe import PodDescribe, describe_pod
+from omnikrux.resources.describe import OwnerRef, PodDescribe, describe_pod
 
 log = logging.getLogger(__name__)
 
@@ -54,13 +55,43 @@ async def _read_pod(api: ApiClient, namespace: str, name: str) -> dict:
     )
 
 
+# The workloads that own pods through a label selector, and how to read each one.
+OWNER_READERS: dict[str, Callable[[ApiClient], Callable[..., Awaitable]]] = {
+    "ReplicaSet": lambda api: AppsV1Api(api).read_namespaced_replica_set,
+    "Deployment": lambda api: AppsV1Api(api).read_namespaced_deployment,
+    "StatefulSet": lambda api: AppsV1Api(api).read_namespaced_stateful_set,
+    "DaemonSet": lambda api: AppsV1Api(api).read_namespaced_daemon_set,
+    "Job": lambda api: BatchV1Api(api).read_namespaced_job,
+}
+
+
+async def _owner_selector(api: ApiClient, namespace: str, owner: OwnerRef) -> str | None:
+    """The owner's matchLabels as "k=v,k2=v2"; None when it has none or can't be read."""
+    reader = OWNER_READERS.get(owner.kind)
+    if reader is None:
+        return None
+    try:
+        body = await read_json(
+            reader(api)(
+                owner.name, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 (describe never fails over this)
+        log.info("Could not read %s %s/%s (%s)", owner.kind, namespace, owner.name, exc)
+        return None
+    selector = (body.get("spec") or {}).get("selector") or {}
+    labels = selector.get("matchLabels") or {}
+    # matchExpressions can't be said as k=v; matchLabels alone would select too many pods.
+    if not labels or selector.get("matchExpressions"):
+        return None
+    return ",".join(f"{k}={v}" for k, v in labels.items())
+
+
 @router.get("/pods/{namespace}/{name}/describe")
 async def describe(cluster_id: str, namespace: str, name: str, request: Request) -> PodDescribe:
-    async def run(api: ApiClient) -> PodDescribe:
-        pod = await _read_pod(api, namespace, name)
-        uid = (pod.get("metadata") or {}).get("uid", "")
+    async def events_of(api: ApiClient, uid: str) -> dict | Exception:
         try:
-            events = await read_json(
+            return await read_json(
                 CoreV1Api(api).list_namespaced_event(
                     namespace,
                     field_selector=f"involvedObject.uid={uid}",
@@ -69,10 +100,27 @@ async def describe(cluster_id: str, namespace: str, name: str, request: Request)
                 )
             )
         except Exception as exc:  # noqa: BLE001 (the pod is still worth showing; say why)
+            return exc
+
+    async def no_selector() -> None:
+        return None
+
+    async def run(api: ApiClient) -> PodDescribe:
+        pod = await _read_pod(api, namespace, name)
+        uid = (pod.get("metadata") or {}).get("uid", "")
+        owner = describe_pod(pod, []).pod.owner
+        events, selector = await asyncio.gather(
+            events_of(api, uid),
+            _owner_selector(api, namespace, owner) if owner else no_selector(),
+        )
+        if isinstance(events, Exception):
             out = describe_pod(pod, [])
-            out.events_error = kube_error_message(exc, f"list events for pod {namespace}/{name}")
-            return out
-        return describe_pod(pod, events.get("items") or [])
+            out.events_error = kube_error_message(events, f"list events for pod {namespace}/{name}")
+        else:
+            out = describe_pod(pod, events.get("items") or [])
+        if out.pod.owner:
+            out.pod.owner.selector = selector
+        return out
 
     return await _call(request, cluster_id, f"describe pod {namespace}/{name}", run)
 

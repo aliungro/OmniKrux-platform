@@ -68,6 +68,15 @@
   background: transparent !important;
 }
 
+/* A standing note under the terminal, quieter than a status: what this shell is attached to. */
+.aside {
+  flex: none;
+  padding: 7px 14px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
 /* ---------- status strip: ended, disconnected, refused ---------- */
 .note {
   flex: none;

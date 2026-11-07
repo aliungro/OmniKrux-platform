@@ -1,8 +1,8 @@
 """A tiny Kubernetes API over real HTTP, shared by every test that needs one.
 
 Nothing is mocked inside kubernetes_asyncio: the code under test talks to a real aiohttp server
-on 127.0.0.1. Tests seed `pods`, `events`, `logs` and `follow_lines` (None ends a followed stream, CUT
-breaks it) and read back `requests`.
+on 127.0.0.1. Tests seed `pods`, `events`, `workloads`, `logs` and `follow_lines` (None ends a
+followed stream, CUT breaks it) and read back `requests`.
 
 Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`.
 
@@ -80,6 +80,9 @@ ROUTES = {
 POD_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods/(?P<name>[^/]+)(?P<sub>/[a-z]+)?$")
 PODS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods$")
 EVENTS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/events$")
+WORKLOAD_ROUTE = re.compile(
+    r"^/apis/(?:apps|batch)/v1/namespaces/(?P<ns>[^/]+)/(?P<plural>[a-z]+)/(?P<name>[^/]+)$"
+)
 
 
 def _flag(query, name: str) -> bool:
@@ -131,6 +134,8 @@ class FakeKubeApi:
         self.pods: dict[tuple[str, str], dict] = PodStore()
         self.pods[("demo", "web-1")] = POD
         self.events: list[dict] = []
+        # (plural, namespace, name) -> object, e.g. ("replicasets", "demo", "web-7c9")
+        self.workloads: dict[tuple[str, str, str], dict] = {}
         self.logs: dict[tuple[str, str, str, bool], list[str]] = {}
         self.follow_lines: asyncio.Queue[str | None] = asyncio.Queue()
         self.execs: list[dict] = []
@@ -177,6 +182,9 @@ class FakeKubeApi:
                     body = status_body(403, "Forbidden", EVENTS_FORBIDDEN)
                     return web.json_response(body, status=403)
                 return self._events(request, match["ns"])
+            if match := WORKLOAD_ROUTE.match(path):
+                found = self.workloads.get((match["plural"], match["ns"], match["name"]))
+                return not_found() if found is None else web.json_response(found)
         if match := PODS_ROUTE.match(path):
             if method == "POST":
                 return await self._create_pod(request, match["ns"])
