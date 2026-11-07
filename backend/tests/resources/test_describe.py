@@ -1,6 +1,6 @@
 import json
 
-from omnikrux.resources.describe import describe_pod
+from omnikrux.resources.describe import Link, describe_pod
 
 
 def oom_pod() -> dict:
@@ -262,3 +262,76 @@ def test_terminated_without_reason_invents_none():
     status["state"] = {"terminated": {}}
     [c] = describe_pod(pod, []).containers
     assert c.state == "Terminated"
+
+
+def linked_pod() -> dict:
+    pod = oom_pod()
+    pod["metadata"]["ownerReferences"] = [
+        {"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "oom-5d4f", "controller": True}
+    ]
+    container = pod["spec"]["containers"][0]
+    container["env"] = [
+        {"name": "PLAIN", "value": "x"},
+        {"name": "DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "db", "key": "password"}}},
+        {"name": "MODE", "valueFrom": {"configMapKeyRef": {"name": "settings", "key": "mode"}}},
+        {"name": "POD_IP", "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}},
+    ]
+    container["envFrom"] = [
+        {"secretRef": {"name": "api-keys"}},
+        {"configMapRef": {"name": "common"}},
+    ]
+    pod["spec"]["volumes"] = [
+        {"name": "data", "persistentVolumeClaim": {"claimName": "data-oom"}},
+        {"name": "token", "secret": {"secretName": "token"}},
+        {"name": "conf", "configMap": {"name": "settings"}},
+        {"name": "scratch", "emptyDir": {}},
+    ]
+    return pod
+
+
+def test_pod_describe_links_owner_env_sources_volumes():
+    d = describe_pod(linked_pod(), [])
+
+    assert d.pod.owner.link == Link(kind_key="replicasets.apps", namespace="demo", name="oom-5d4f")
+    assert d.pod.node_link == Link(kind_key="nodes", namespace=None, name="kind-control-plane")
+    assert d.pod.service_account_link == Link(
+        kind_key="serviceaccounts", namespace="demo", name="default"
+    )
+    assert [(e.name, e.value, e.link) for e in d.containers[0].env] == [
+        ("PLAIN", "x", None),
+        ("DB_PASSWORD", None, Link(kind_key="secrets", namespace="demo", name="db")),
+        ("MODE", None, Link(kind_key="configmaps", namespace="demo", name="settings")),
+        ("POD_IP", None, None),
+        ("(all keys)", None, Link(kind_key="secrets", namespace="demo", name="api-keys")),
+        ("(all keys)", None, Link(kind_key="configmaps", namespace="demo", name="common")),
+    ]
+    assert [(v.name, v.type, v.link) for v in d.volumes] == [
+        (
+            "data",
+            "persistentVolumeClaim",
+            Link(kind_key="persistentvolumeclaims", namespace="demo", name="data-oom"),
+        ),
+        ("token", "secret", Link(kind_key="secrets", namespace="demo", name="token")),
+        ("conf", "configMap", Link(kind_key="configmaps", namespace="demo", name="settings")),
+        ("scratch", "emptyDir", None),
+    ]
+
+
+def test_pod_owner_link_cluster_scoped_or_unknown():
+    pod = linked_pod()
+    pod["metadata"]["ownerReferences"] = [
+        {"apiVersion": "v1", "kind": "Node", "name": "kind-worker", "controller": True}
+    ]
+    assert describe_pod(pod, []).pod.owner.link == Link(
+        kind_key="nodes", namespace=None, name="kind-worker"
+    )
+    pod["metadata"]["ownerReferences"] = [
+        {"apiVersion": "example.dev/v1", "kind": "Gizmo", "name": "g", "controller": True}
+    ]
+    owner = describe_pod(pod, []).pod.owner
+    assert (owner.kind, owner.name, owner.link) == ("Gizmo", "g", None)  # no key to go to
+
+    bare = oom_pod()
+    del bare["spec"]["nodeName"], bare["spec"]["serviceAccountName"]
+    d = describe_pod(bare, [])
+    assert (d.pod.node_link, d.pod.service_account_link, d.volumes) == (None, None, [])

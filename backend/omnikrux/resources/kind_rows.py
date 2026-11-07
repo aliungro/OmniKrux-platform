@@ -49,6 +49,15 @@ def _status(row: ResourceRow, label: str, status_class: StatusClass) -> None:
     row.columns["status_class"] = status_class
 
 
+def known_kind_key(api_version: Any, kind: Any) -> str | None:
+    """The kind key of a kind objects commonly point at, from a reference's apiVersion and kind;
+    None for any other kind (a CRD's plural can't be told from its kind)."""
+    if not isinstance(kind, str):
+        return None
+    group = api_version.split("/")[0] if isinstance(api_version, str) and "/" in api_version else ""
+    return _KIND_KEYS.get((group, kind))
+
+
 def object_ref(
     api_version: Any, kind: Any, name: Any, namespace: str | None
 ) -> dict[str, Any] | None:
@@ -56,9 +65,8 @@ def object_ref(
     name) and what to show."""
     if not isinstance(kind, str) or not isinstance(name, str):
         return None
-    group = api_version.split("/")[0] if isinstance(api_version, str) and "/" in api_version else ""
     return {
-        "kind_key": _KIND_KEYS.get((group, kind)),
+        "kind_key": known_kind_key(api_version, kind),
         "namespace": namespace,
         "name": name,
         "label": f"{kind}/{name}",

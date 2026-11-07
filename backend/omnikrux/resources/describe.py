@@ -1,9 +1,12 @@
-"""A pod and its events, turned into what `kubectl describe` shows, minus secret values."""
+"""A pod and its events, turned into what `kubectl describe` shows, minus secret values, with a
+`Link` to each object it points at (owner, node, service account, env sources, volumes)."""
 
 from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
+from omnikrux.resources.kind_rows import known_kind_key
+from omnikrux.resources.kinds import KINDS
 from omnikrux.resources.rows import BAD_WAITING, StatusClass, pod_status
 
 DEFAULT_PROBE_PERIOD = 10
@@ -14,12 +17,44 @@ PROBES = (
 )
 
 
+class Link(BaseModel):
+    """Where a click goes: an object of `kind_key` (None namespace: a cluster-scoped kind)."""
+
+    kind_key: str
+    namespace: str | None
+    name: str
+
+
+def link_to(kind_key: str | None, namespace: str | None, name: object) -> Link | None:
+    """A link to `name` of `kind_key`, in `namespace` unless the kind is cluster-scoped; None
+    when the kind or the name isn't known."""
+    if kind_key is None or not isinstance(name, str) or not name:
+        return None
+    spec = KINDS.get(kind_key)
+    cluster_scoped = spec is not None and not spec.namespaced
+    return Link(kind_key=kind_key, namespace=None if cluster_scoped else namespace, name=name)
+
+
+def owner_link(ref: dict, namespace: str | None) -> Link | None:
+    """The link for an ownerReference or an involvedObject, when Omnikrux can name its kind."""
+    key = known_kind_key(ref.get("apiVersion"), ref.get("kind"))
+    return link_to(key, namespace, ref.get("name"))
+
+
+def controller_of(obj: dict) -> dict | None:
+    """The controlling ownerReference, else the first one."""
+    refs = (obj.get("metadata") or {}).get("ownerReferences") or []
+    owners = [o for o in refs if isinstance(o, dict)]
+    return next((o for o in owners if o.get("controller")), owners[0] if owners else None)
+
+
 class OwnerRef(BaseModel):
     kind: str
     name: str
     # The owner's `spec.selector.matchLabels` as "k=v,k2=v2", for "All pods' logs". None for an
     # owner without one (a Node, say), or when the owner couldn't be read.
     selector: str | None = None
+    link: Link | None = None
 
 
 class PodInfo(BaseModel):
@@ -28,10 +63,12 @@ class PodInfo(BaseModel):
     status: str
     status_class: StatusClass
     node: str | None
+    node_link: Link | None
     pod_ip: str | None
     host_ip: str | None
     qos: str | None
     service_account: str | None
+    service_account_link: Link | None
     owner: OwnerRef | None
     started_at: str | None
     resource_version: str
@@ -41,6 +78,13 @@ class EnvVar(BaseModel):
     name: str
     value: str | None  # always None for anything read from a Secret
     source: str | None
+    link: Link | None = None  # the ConfigMap or Secret it is read from
+
+
+class Volume(BaseModel):
+    name: str
+    type: str  # the volume source's field: "configMap", "secret", "emptyDir", ...
+    link: Link | None  # for configMap, secret and persistentVolumeClaim volumes
 
 
 class ContainerInfo(BaseModel):
@@ -81,6 +125,7 @@ class PodDescribe(BaseModel):
     containers: list[ContainerInfo]
     init_containers: list[ContainerInfo]
     ephemeral_containers: list[ContainerInfo]
+    volumes: list[Volume]
     conditions: list[Condition]
     labels: dict[str, str]
     annotations: dict[str, str]
@@ -88,34 +133,64 @@ class PodDescribe(BaseModel):
     events_error: str | None = None  # why `events` is empty when listing them failed
 
 
+def conditions_of(obj: dict) -> list[Condition]:
+    return [
+        Condition(
+            type=c.get("type") or "",
+            status=c.get("status") or "Unknown",
+            reason=c.get("reason"),
+            message=c.get("message"),
+        )
+        for c in (obj.get("status") or {}).get("conditions") or []
+        if isinstance(c, dict)
+    ]
+
+
 def describe_pod(pod: dict, events: list[dict]) -> PodDescribe:
     md = pod.get("metadata") or {}
     spec = pod.get("spec") or {}
     status = pod.get("status") or {}
+    namespace = md.get("namespace") or ""
     return PodDescribe(
         pod=_pod_info(pod),
-        containers=_containers(spec.get("containers"), status.get("containerStatuses")),
+        containers=_containers(spec.get("containers"), status.get("containerStatuses"), namespace),
         init_containers=_containers(
-            spec.get("initContainers"), status.get("initContainerStatuses")
+            spec.get("initContainers"), status.get("initContainerStatuses"), namespace
         ),
         ephemeral_containers=_containers(
             spec.get("ephemeralContainers"),
             status.get("ephemeralContainerStatuses"),
+            namespace,
             ephemeral=True,
         ),
-        conditions=[
-            Condition(
-                type=c.get("type") or "",
-                status=c.get("status") or "Unknown",
-                reason=c.get("reason"),
-                message=c.get("message"),
-            )
-            for c in status.get("conditions") or []
-        ],
+        volumes=_volumes(spec.get("volumes"), namespace),
+        conditions=conditions_of(pod),
         labels=md.get("labels") or {},
         annotations=md.get("annotations") or {},
-        events=_events(events),
+        events=group_events(events),
     )
+
+
+# A volume source's field -> the kind it points at and the field that names the object.
+VOLUME_LINKS = {
+    "configMap": ("configmaps", "name"),
+    "secret": ("secrets", "secretName"),
+    "persistentVolumeClaim": ("persistentvolumeclaims", "claimName"),
+}
+
+
+def _volumes(volumes: list[dict] | None, namespace: str) -> list[Volume]:
+    out = []
+    for volume in volumes or []:
+        if not isinstance(volume, dict):
+            continue
+        source = next((k for k in volume if k != "name"), "unknown")
+        link = None
+        if source in VOLUME_LINKS and isinstance(volume[source], dict):
+            key, field = VOLUME_LINKS[source]
+            link = link_to(key, namespace, volume[source].get(field))
+        out.append(Volume(name=volume.get("name") or "", type=source, link=link))
+    return out
 
 
 def _pod_info(pod: dict) -> PodInfo:
@@ -123,19 +198,25 @@ def _pod_info(pod: dict) -> PodInfo:
     spec = pod.get("spec") or {}
     status = pod.get("status") or {}
     label, status_class = pod_status(pod)
-    owners = md.get("ownerReferences") or []
-    owner = next((o for o in owners if o.get("controller")), owners[0] if owners else None)
+    owner = controller_of(pod)
+    namespace = md.get("namespace") or ""
     return PodInfo(
         name=md.get("name") or "",
         namespace=md.get("namespace") or "",
         status=label,
         status_class=status_class,
         node=spec.get("nodeName"),
+        node_link=link_to("nodes", None, spec.get("nodeName")),
         pod_ip=status.get("podIP"),
         host_ip=status.get("hostIP"),
         qos=status.get("qosClass"),
         service_account=spec.get("serviceAccountName"),
-        owner=OwnerRef(kind=owner.get("kind") or "", name=owner.get("name") or "")
+        service_account_link=link_to("serviceaccounts", namespace, spec.get("serviceAccountName")),
+        owner=OwnerRef(
+            kind=owner.get("kind") or "",
+            name=owner.get("name") or "",
+            link=owner_link(owner, namespace),
+        )
         if owner
         else None,
         started_at=status.get("startTime"),
@@ -144,13 +225,19 @@ def _pod_info(pod: dict) -> PodInfo:
 
 
 def _containers(
-    specs: list[dict] | None, statuses: list[dict] | None, *, ephemeral: bool = False
+    specs: list[dict] | None,
+    statuses: list[dict] | None,
+    namespace: str,
+    *,
+    ephemeral: bool = False,
 ) -> list[ContainerInfo]:
     by_name = {s.get("name"): s for s in statuses or []}
-    return [_container(c, by_name.get(c.get("name")) or {}, ephemeral) for c in specs or []]
+    return [
+        _container(c, by_name.get(c.get("name")) or {}, namespace, ephemeral) for c in specs or []
+    ]
 
 
-def _container(spec: dict, status: dict, ephemeral: bool) -> ContainerInfo:
+def _container(spec: dict, status: dict, namespace: str, ephemeral: bool) -> ContainerInfo:
     # Ephemeral containers have no probes and never report ready: running is as good as it gets.
     healthy = ephemeral or bool(status.get("ready"))
     state, state_class = _state(status.get("state") or {}, healthy)
@@ -178,7 +265,7 @@ def _container(spec: dict, status: dict, ephemeral: bool) -> ContainerInfo:
         probes={
             kind: _probe(spec[field]) for kind, field in PROBES if isinstance(spec.get(field), dict)
         },
-        env=_env(spec),
+        env=_env(spec, namespace),
         mounts=[
             f"{m.get('mountPath')} from {m.get('name')}{' (ro)' if m.get('readOnly') else ''}"
             for m in spec.get("volumeMounts") or []
@@ -216,7 +303,7 @@ def _probe(probe: dict) -> str:
     return every
 
 
-def _env(spec: dict) -> list[EnvVar]:
+def _env(spec: dict, namespace: str) -> list[EnvVar]:
     out: list[EnvVar] = []
     for e in spec.get("env") or []:
         name = e.get("name") or ""
@@ -225,16 +312,27 @@ def _env(spec: dict) -> list[EnvVar]:
             out.append(EnvVar(name=name, value=e.get("value") or "", source=None))
             continue
         # A reference never carries a value to the browser, whatever else the entry holds.
-        out.append(EnvVar(name=name, value=None, source=_env_source(ref)))
+        source, link = _env_source(ref), _env_link(ref, namespace)
+        out.append(EnvVar(name=name, value=None, source=source, link=link))
     for e in spec.get("envFrom") or []:
         if (secret := e.get("secretRef")) is not None:
             source = f"Secret {secret.get('name')}"
+            link = link_to("secrets", namespace, secret.get("name"))
         elif (config := e.get("configMapRef")) is not None:
             source = f"ConfigMap {config.get('name')}"
+            link = link_to("configmaps", namespace, config.get("name"))
         else:
             continue
-        out.append(EnvVar(name="(all keys)", value=None, source=source))
+        out.append(EnvVar(name="(all keys)", value=None, source=source, link=link))
     return out
+
+
+def _env_link(ref: dict, namespace: str) -> Link | None:
+    if (secret := ref.get("secretKeyRef")) is not None:
+        return link_to("secrets", namespace, secret.get("name"))
+    if (config := ref.get("configMapKeyRef")) is not None:
+        return link_to("configmaps", namespace, config.get("name"))
+    return None
 
 
 def _env_source(ref: dict) -> str | None:
@@ -264,7 +362,7 @@ def _latest(stamps: list[str | None]) -> str | None:
     return max(known, key=_when) if known else None
 
 
-def _events(events: list[dict]) -> list[EventInfo]:
+def group_events(events: list[dict]) -> list[EventInfo]:
     """Group by (type, reason, message), summing counts; Warnings first, then newest first."""
     groups: dict[tuple[str, str, str], EventInfo] = {}
     for ev in events:

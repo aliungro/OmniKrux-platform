@@ -100,6 +100,8 @@ def default_resources() -> list[FakeResource]:
         R("", "v1", "services", "Service", True, short_names=("svc",)),
         R("", "v1", "configmaps", "ConfigMap", True, short_names=("cm",)),
         R("", "v1", "secrets", "Secret", True),
+        R("", "v1", "persistentvolumeclaims", "PersistentVolumeClaim", True, short_names=("pvc",)),
+        R("", "v1", "persistentvolumes", "PersistentVolume", False, short_names=("pv",)),
         R("apps", "v1", "deployments", "Deployment", True, short_names=("deploy",)),
         R("apps", "v1", "deployments/scale", "Scale", True, ("get", "patch", "update")),
         R("apps", "v1", "replicasets", "ReplicaSet", True, short_names=("rs",)),
@@ -107,6 +109,8 @@ def default_resources() -> list[FakeResource]:
         R("apps", "v1", "daemonsets", "DaemonSet", True, short_names=("ds",)),
         R("batch", "v1", "jobs", "Job", True),
         R("batch", "v1", "cronjobs", "CronJob", True, short_names=("cj",)),
+        R("discovery.k8s.io", "v1", "endpointslices", "EndpointSlice", True),
+        R("networking.k8s.io", "v1", "ingresses", "Ingress", True, short_names=("ing",)),
         R(
             "apiextensions.k8s.io",
             "v1",
@@ -353,7 +357,7 @@ class FakeKubeApi:
             key = (ns or "", parts[1])
             if res.key == "pods":
                 return self._pod_or_404(key)
-            obj = self.objects[res.key].get(key)
+            obj = dict(self._items(res.key)).get(key)
             if obj is None:
                 return not_found(f'{res.plural} "{parts[1]}" not found')
             return web.json_response(obj)
@@ -423,7 +427,8 @@ class FakeKubeApi:
     ) -> list[tuple[tuple[str, str], dict]] | web.Response:
         """Objects of `kind_key` in `ns` (None: every namespace) matching an equality
         `labelSelector` (`k=v,k2=v2`) and a `fieldSelector` on `metadata.name`,
-        `metadata.namespace` or `spec.nodeName`; a 400 for any other field."""
+        `metadata.namespace`, `spec.nodeName` or (events) `involvedObject.uid`; a 400 for any
+        other field."""
 
         def terms(name: str) -> list[list[str]]:
             return [t.partition("=")[::2] for t in request.query.get(name, "").split(",") if t]
@@ -433,12 +438,15 @@ class FakeKubeApi:
                 return key[1]
             if name == "metadata.namespace":
                 return key[0]
+            if name == "involvedObject.uid":
+                return (obj.get("involvedObject") or {}).get("uid")
             return (obj.get("spec") or {}).get("nodeName")
 
         labels = terms("labelSelector")
         fields = terms("fieldSelector")
+        supported = ("metadata.name", "metadata.namespace", "spec.nodeName", "involvedObject.uid")
         for name, _ in fields:
-            if name not in ("metadata.name", "metadata.namespace", "spec.nodeName"):
+            if name not in supported:
                 return bad_request(f'field label not supported: "{name}"')
         return [
             (key, obj)

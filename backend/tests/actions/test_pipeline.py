@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from kubernetes_asyncio.client.exceptions import ApiException
 from sqlalchemy import text
 
-from omnikrux.actions import authz, pipeline
+from omnikrux.actions import authz
 from omnikrux.actions.authz import NotAllowed
 from omnikrux.actions.pipeline import (
     ACTIONS,
@@ -23,13 +23,12 @@ from omnikrux.actions.pipeline import (
     Diff,
     Planned,
     PlanStore,
-    diff_text,
-    to_yaml,
 )
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.kube.http import read_json
 from omnikrux.main import create_app
+from omnikrux.resources.yaml_out import DIFF_LIMIT, diff_text, to_yaml
 from omnikrux.web_security import WRITE_METHODS
 from tests.fakekube import FakeKubeApi, kubeconfig_for, serve_fake_api, status_body
 
@@ -246,6 +245,38 @@ async def test_plan_refuses_unknown_action_kind_and_unserved(env, scale, monkeyp
     assert r.status_code == 404
     assert "ghost" in r.json()["detail"] and "{" not in r.json()["detail"]
     assert scale.applies == []
+
+
+async def test_helm_releases_and_secret_edits_refused_centrally(env, monkeypatch):
+    """Whatever handler is registered: helm-releases are read-only, and a Secret's edit would
+    write masked values back, so it is refused before any handler runs."""
+    handler = FakeHandler(kinds=None)
+    for action in ("edit", "delete", "scale"):
+        monkeypatch.setitem(ACTIONS, action, handler)
+    env.fakes["dev-a"].objects["secrets"][("demo", "db")] = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": "db", "namespace": "demo", "uid": "u-db"},
+        "data": {"password": "aHVudGVyMg=="},
+    }
+    for action in ("edit", "delete", "scale"):
+        r = await plan(env, action=action, kind_key="helm-releases", name="db")
+        assert r.status_code == 422, action
+        assert r.json() == {
+            "detail": "Helm releases are read-only in Omnikrux. Use helm to change them."
+        }
+
+    r = await plan(env, action="edit", kind_key="secrets", name="db")
+    assert r.status_code == 422
+    assert r.json() == {
+        "detail": "Secrets can't be edited in Omnikrux: their values never reach the browser. "
+        "Use kubectl to change them."
+    }
+    assert handler.plans == []
+
+    r = await plan(env, action="delete", kind_key="secrets", name="db")  # deleting is fine
+    assert r.status_code == 200
+    assert "aHVudGVyMg==" not in r.text and "•••••• (7 bytes)" in r.json()["diff"]["before"]
 
 
 # --- apply -----------------------------------------------------------------------------
@@ -587,4 +618,4 @@ def test_diff_text_is_unified_and_capped():
     huge = diff_text("", "".join(f"line {n}\n" for n in range(20_000)))
     assert len(huge.encode()) <= 64 * 1024 + 100
     assert huge.endswith("… (diff cut at 64 KB)")
-    assert pipeline.DIFF_LIMIT == 64 * 1024
+    assert DIFF_LIMIT == 64 * 1024

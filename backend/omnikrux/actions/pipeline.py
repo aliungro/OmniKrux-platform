@@ -10,7 +10,6 @@ Kubernetes precondition, so an object that changed since the plan answers with t
 copy instead of being changed."""
 
 import copy
-import difflib
 import json
 import logging
 import re
@@ -23,7 +22,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 
-import yaml
 from fastapi import APIRouter, HTTPException, Request
 from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
@@ -43,15 +41,14 @@ from omnikrux.exec.debug import finish_even_if_cancelled
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.kube.http import KUBE_ERRORS
 from omnikrux.resources.catalog import KindNotServed
-from omnikrux.resources.kinds import KindSpec, is_kind_key
+from omnikrux.resources.kinds import HELM_RELEASES, KindSpec, is_kind_key, namespace_problem
+from omnikrux.resources.yaml_out import diff_text
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 
 PLAN_TTL_SECONDS = 300
-DIFF_LIMIT = 64 * 1024  # bytes of unified diff kept in a plan or an audit record
-DIFF_CUT = "… (diff cut at 64 KB)"
 CONFLICT_STATUS = 409
 
 EXPIRED = "This change expired or was already applied. Review it again."
@@ -60,6 +57,11 @@ TYPE_TO_CONFIRM = "Type {name} to confirm"
 PRODUCTION = "This is a production cluster."
 CANCELLED = "The request stopped before the cluster answered; the change may or may not be made."
 ONLY_PLAN_ID = "An apply takes only the plan id and the typed confirmation."
+HELM_READ_ONLY = "Helm releases are read-only in Omnikrux. Use helm to change them."
+SECRET_EDIT = (
+    "Secrets can't be edited in Omnikrux: their values never reach the browser. "
+    "Use kubectl to change them."
+)
 
 # Deleting or draining one of these, or anything on a production cluster, needs the name typed.
 TYPED_KINDS = frozenset(
@@ -72,8 +74,6 @@ TYPED_KINDS = frozenset(
     }
 )
 TYPED_ACTIONS = frozenset({"delete", "drain"})
-# Set by the API server, so not part of what a user reviews or edits.
-SERVER_FIELDS = ("managedFields", "resourceVersion", "generation", "uid", "creationTimestamp")
 # A JSON-patch `test` op that didn't hold, as the API server words it (a 422).
 _TEST_FAILED = re.compile(r"\btest(?:ing value \S+)? failed")
 
@@ -256,42 +256,6 @@ class PlanStore:
             return entry[1] if entry is not None and entry[0] > self._clock() else None
 
 
-# --- YAML and diffs -----------------------------------------------------------------------
-
-
-def dump_yaml(obj: Any) -> str:
-    """The one YAML dump: keys in the object's order, non-ASCII text as it is."""
-    return yaml.safe_dump(obj, sort_keys=False, allow_unicode=True)
-
-
-def to_yaml(obj: dict) -> str:
-    """The object as a user reviews it: without status and the fields the server sets."""
-    out = copy.deepcopy(obj)
-    out.pop("status", None)
-    metadata = out.get("metadata")
-    if isinstance(metadata, dict):
-        for name in SERVER_FIELDS:
-            metadata.pop(name, None)
-    return dump_yaml(out)
-
-
-def diff_text(before: str, after: str) -> str:
-    """A unified diff, cut at a line boundary once it passes 64 KB."""
-    text = "".join(
-        difflib.unified_diff(
-            before.splitlines(keepends=True),
-            after.splitlines(keepends=True),
-            fromfile="before",
-            tofile="after",
-        )
-    )
-    data = text.encode()
-    if len(data) <= DIFF_LIMIT:
-        return text
-    kept = data[:DIFF_LIMIT].decode("utf-8", "ignore")
-    return kept[: kept.rfind("\n") + 1] + DIFF_CUT
-
-
 # --- rules --------------------------------------------------------------------------------
 
 
@@ -386,6 +350,12 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         handler.kinds is not None and target.kind_key not in handler.kinds
     ):
         raise HTTPException(status_code=422, detail=f"Can't {body.action} {target.kind_key}.")
+    # Refused here, whatever a handler would do: helm-releases are Helm's Secrets, and an edit
+    # of a Secret would be made from masked YAML.
+    if target.kind_key == HELM_RELEASES:
+        raise HTTPException(status_code=422, detail=HELM_READ_ONLY)
+    if body.action == "edit" and target.kind_key == "secrets":
+        raise HTTPException(status_code=422, detail=SECRET_EDIT)
     actor = actor_of(request)
     await _authorize(actor, body.action, target)
     try:
@@ -398,13 +368,8 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
     except Exception as exc:  # unreachable, or discovery failed: said in words
         detail = kube_error_message(exc, "read which kinds the cluster serves")
         raise HTTPException(status_code=502, detail=detail) from exc
-    if spec.namespaced != bool(target.namespace):
-        detail = (
-            f"Choose the namespace of {spec.kind} {target.name}."
-            if spec.namespaced
-            else f"{spec.kind} objects have no namespace."
-        )
-        raise HTTPException(status_code=422, detail=detail)
+    if (problem := namespace_problem(spec, target.name, target.namespace)) is not None:
+        raise HTTPException(status_code=422, detail=problem)
 
     async with AsyncExitStack() as stack:
         api = await _open_api(stack, state.connections, target.cluster_id)

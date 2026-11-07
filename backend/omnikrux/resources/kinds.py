@@ -54,8 +54,11 @@ class KindSpec:
     def _prefix(self) -> str:
         return f"/apis/{self.group}/{self.version}" if self.group else f"/api/{self.version}"
 
-    def list_path(self) -> str:
-        """The cluster-wide collection: `/api/v1/pods`, `/apis/apps/v1/deployments`."""
+    def list_path(self, namespace: str | None = None) -> str:
+        """The collection, cluster-wide (`/api/v1/pods`, `/apis/apps/v1/deployments`) or in one
+        namespace (`/api/v1/namespaces/demo/pods`)."""
+        if self.namespaced and namespace:
+            return f"{self._prefix()}/namespaces/{namespace}/{self.plural}"
         return f"{self._prefix()}/{self.plural}"
 
     def object_path(self, namespace: str | None, name: str) -> str:
@@ -66,6 +69,15 @@ class KindSpec:
 
 def kind_key(group: str, plural: str) -> str:
     return f"{plural}.{group}" if group else plural
+
+
+def namespace_problem(spec: KindSpec, name: str, namespace: str | None) -> str | None:
+    """Why `namespace` doesn't fit the kind, in words; None when it does."""
+    if spec.namespaced and not namespace:
+        return f"Choose the namespace of {spec.kind} {name}."
+    if not spec.namespaced and namespace:
+        return f"{spec.kind} objects have no namespace."
+    return None
 
 
 def is_kind_key(key: str) -> bool:

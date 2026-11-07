@@ -1,0 +1,222 @@
+"""Secret values never leave the server, except one key at a time in the reveal response.
+
+Masking lives in the one YAML helper, so every YAML and diff of a Secret is masked whoever
+asks for it; reveal is a POST for one key, answered with `no-store` and audited by key name."""
+
+import base64
+import logging
+
+import httpx
+import pytest
+import yaml
+from sqlalchemy import text
+
+from omnikrux.actions import authz
+from omnikrux.actions.authz import NotAllowed
+from omnikrux.clusters.registry import SOURCE_UPLOAD
+from omnikrux.config import Settings
+from omnikrux.main import create_app
+from omnikrux.resources.yaml_out import (
+    LAST_APPLIED,
+    MASK,
+    diff_text,
+    dump_yaml,
+    mask_secret,
+    to_yaml,
+)
+from tests.fakekube import kubeconfig_for
+from tests.resources.test_describe_any import SECRET_B64, SECRET_VALUE, secret
+
+BINARY = b"\xff\xfe\x00binary"
+BINARY_B64 = base64.b64encode(BINARY).decode()
+
+
+def leaks(body: str) -> list[str]:
+    return [v for v in (SECRET_VALUE, SECRET_B64, BINARY_B64) if v in body]
+
+
+def stored_secret() -> dict:
+    out = secret()
+    del out["stringData"]  # write-only: the API server never returns it
+    out["metadata"]["resourceVersion"] = "12"
+    out["metadata"]["managedFields"] = [{"manager": "kubectl", "fieldsV1": {"f:data": {}}}]
+    out["data"]["cert"] = BINARY_B64
+    return out
+
+
+# --- masking -------------------------------------------------------------------------------
+
+
+def test_mask_secret_masks_every_value_and_drops_last_applied():
+    original = secret()
+    masked = mask_secret(original)
+
+    assert masked["data"] == {"password": "•••••• (13 bytes)", "blob": "•••••• (2 bytes)"}
+    assert masked["stringData"] == {"extra": "•••••• (13 bytes)"}
+    assert masked["metadata"]["annotations"] == {"team": "data"}
+    assert MASK.format(n=3) == "•••••• (3 bytes)"
+    assert LAST_APPLIED == "kubectl.kubernetes.io/last-applied-configuration"
+    assert original["data"]["password"] == SECRET_B64  # a copy: the input is untouched
+
+    only = secret()
+    only["metadata"]["annotations"] = {LAST_APPLIED: "{}"}
+    assert "annotations" not in mask_secret(only)["metadata"]
+    broken = secret() | {"data": {"odd": "not base64!", "none": None}}
+    assert mask_secret(broken)["data"] == {"odd": MASK.format(n=11), "none": MASK.format(n=0)}
+
+
+def test_every_yaml_of_a_secret_is_masked():
+    """The choke point: dump_yaml and to_yaml mask any v1 Secret, with or without the hint,
+    so diffs built from them never carry a value either."""
+    for out in (
+        dump_yaml(secret()),
+        to_yaml(secret()),
+        dump_yaml(
+            {k: v for k, v in secret().items() if k not in ("kind", "apiVersion")}, secret=True
+        ),
+        diff_text(to_yaml(secret()), to_yaml(secret() | {"data": {"password": "aGk="}})),
+    ):
+        assert leaks(out) == [] and "last-applied" not in out
+    assert "password: •••••• (13 bytes)" in dump_yaml(secret())
+    # Not a Secret: values are the object's own.
+    config = {"apiVersion": "v1", "kind": "ConfigMap", "data": {"mode": SECRET_VALUE}}
+    assert SECRET_VALUE in dump_yaml(config)
+
+
+# --- over HTTP -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def env(fake_api, tmp_path):
+    app = create_app(
+        Settings(data_dir=tmp_path, kubeconfig="", in_container=False, rewrite_loopback=False)
+    )
+    async with app.router.lifespan_context(app):
+        [info] = await app.state.registry.upsert_from_kubeconfig(
+            yaml.safe_dump(kubeconfig_for(fake_api)), rewrite_loopback=False, source=SOURCE_UPLOAD
+        )
+        fake_api.objects["secrets"][("demo", "db")] = stored_secret()
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http:
+            yield app, http, info.id
+
+
+def reveal_url(cluster_id: str, name: str = "db") -> str:
+    return f"/api/clusters/{cluster_id}/secrets/demo/{name}/reveal"
+
+
+async def audit_rows(app) -> list[tuple]:
+    async with app.state.engine.connect() as conn:
+        return [tuple(row) for row in (await conn.execute(text("SELECT * FROM audit"))).all()]
+
+
+async def test_secret_yaml_masks_data_and_last_applied(env):
+    _, http, cluster_id = env
+    for kind_key in ("secrets", "helm-releases"):
+        r = await http.get(
+            f"/api/clusters/{cluster_id}/resources/{kind_key}/db/yaml", params={"namespace": "demo"}
+        )
+        assert r.status_code == 200
+        assert leaks(r.text) == []
+        assert "last-applied-configuration" not in r.text and "managedFields" not in r.text
+        doc = yaml.safe_load(r.json()["yaml"])
+        assert doc["data"] == {
+            "password": "•••••• (13 bytes)",
+            "blob": "•••••• (2 bytes)",
+            "cert": f"•••••• ({len(BINARY)} bytes)",
+        }
+        assert doc["metadata"]["annotations"] == {"team": "data"}
+        assert doc["metadata"]["resourceVersion"] == "12"
+
+
+async def test_secret_describe_route_lists_keys_only(env):
+    _, http, cluster_id = env
+    for kind_key in ("secrets", "helm-releases"):
+        r = await http.get(
+            f"/api/clusters/{cluster_id}/resources/{kind_key}/db/describe",
+            params={"namespace": "demo"},
+        )
+        assert r.status_code == 200
+        assert leaks(r.text) == [] and "last-applied" not in r.text
+        assert [k["key"] for k in r.json()["secret_keys"]] == ["blob", "cert", "password"]
+
+
+async def test_reveal_returns_one_key_no_store(env):
+    _, http, cluster_id = env
+    r = await http.post(reveal_url(cluster_id), json={"key": "password"})
+
+    assert r.status_code == 200
+    assert r.json() == {"key": "password", "value": SECRET_VALUE, "encoding": "utf-8"}
+    assert r.headers["cache-control"] == "no-store"
+    assert r.headers["pragma"] == "no-cache"
+
+    r = await http.post(reveal_url(cluster_id), json={"key": "cert"})
+    assert r.json() == {"key": "cert", "value": BINARY_B64, "encoding": "base64"}
+    assert SECRET_VALUE not in r.text  # one key only
+
+    r = await http.get(reveal_url(cluster_id), params={"key": "password"})
+    assert r.status_code == 405  # never a GET: a URL can be cached and logged
+    r = await http.post(reveal_url(cluster_id), json={"key": "password", "all": True})
+    assert r.status_code == 422
+
+
+async def test_reveal_is_audited_without_value(env, caplog):
+    app, http, cluster_id = env
+    caplog.set_level(logging.DEBUG)
+    r = await http.post(reveal_url(cluster_id), json={"key": "password"})
+    assert r.status_code == 200
+
+    [record] = (await app.state.audit.list()).records
+    assert (record.action, record.outcome) == ("secret_reveal", "succeeded")
+    assert (record.cluster_id, record.namespace, record.kind, record.name) == (
+        cluster_id,
+        "demo",
+        "secrets",
+        "db",
+    )
+    assert record.details == {"key": "password"} and record.diff is None
+    for row in await audit_rows(app):
+        assert leaks(" ".join(str(column) for column in row)) == []
+    assert leaks(caplog.text) == []
+
+
+async def test_reveal_unknown_key_404_plain(env):
+    app, http, cluster_id = env
+    r = await http.post(reveal_url(cluster_id), json={"key": "nope"})
+    assert r.status_code == 404
+    assert r.json() == {"detail": "Secret db has no key nope."}
+    [record] = (await app.state.audit.list()).records
+    assert (record.outcome, record.message) == ("failed", "Secret db has no key nope.")
+
+    r = await http.post(reveal_url(cluster_id, "ghost"), json={"key": "password"})
+    assert r.status_code == 404
+    assert "ghost" in r.json()["detail"] and "{" not in r.json()["detail"]
+
+    r = await http.post(reveal_url("nope"), json={"key": "password"})
+    assert r.status_code == 404 and r.json() == {"detail": "Unknown cluster"}
+
+
+async def test_reveal_needs_the_audit_and_permission(env, fake_api, monkeypatch):
+    app, http, cluster_id = env
+    calls = []
+
+    async def refusing(*args):
+        calls.append(args)
+        raise NotAllowed("Not for you.")
+
+    allowing = authz.authorize
+    monkeypatch.setattr(authz, "authorize", refusing)
+    r = await http.post(reveal_url(cluster_id), json={"key": "password"})
+    assert r.status_code == 403 and r.json() == {"detail": "Not for you."}
+    assert calls == [("local", "secret_reveal", cluster_id, "demo", "secrets", "db")]
+    monkeypatch.setattr(authz, "authorize", allowing)
+
+    async with app.state.engine.begin() as conn:
+        await conn.execute(text("DROP TABLE audit"))
+    fake_api.requests.clear()
+    r = await http.post(reveal_url(cluster_id), json={"key": "password"})
+    assert r.status_code == 503
+    assert r.json() == {
+        "detail": "Nothing was changed: the audit log can't be written (no such table: audit)."
+    }
+    assert not [p for _, p, _ in fake_api.requests if "/secrets/" in p]  # never read
