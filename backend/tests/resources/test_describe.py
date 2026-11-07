@@ -238,3 +238,27 @@ def test_missing_fields_do_not_crash():
     assert c.last_state is None and c.last_finished_at is None and c.limit_hit == []
     assert c.requests == c.limits == {} and c.ports == [] and c.probes == {}
     assert c.env == [] and c.mounts == []
+
+
+def test_running_ephemeral_container_is_ok_though_never_ready():
+    pod = oom_pod()
+    pod["spec"]["ephemeralContainers"] = [{"name": "debug-abcde", "image": "busybox:1.36"}]
+    pod["status"]["ephemeralContainerStatuses"] = [
+        {"name": "debug-abcde", "state": {"running": {}}, "ready": False, "restartCount": 0}
+    ]
+    [eph] = describe_pod(pod, []).ephemeral_containers
+    assert (eph.state, eph.state_class) == ("Running", "ok")
+
+
+def test_terminated_without_reason_invents_none():
+    pod = oom_pod()
+    status = pod["status"]["containerStatuses"][0]
+    status["state"] = {"terminated": {"exitCode": 2}}
+    status["lastState"] = {"terminated": {"exitCode": 0}}
+    [c] = describe_pod(pod, []).containers
+    assert (c.state, c.state_class) == ("Terminated (exit 2)", "bad")
+    assert c.last_state == "Terminated (exit 0)"
+
+    status["state"] = {"terminated": {}}
+    [c] = describe_pod(pod, []).containers
+    assert c.state == "Terminated"

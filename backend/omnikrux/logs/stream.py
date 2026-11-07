@@ -301,9 +301,10 @@ class LogStream:
         failures = 0
         opened_once = False
         while True:
-            opened_at, sent, error = loop.time(), 0, None
+            opened_at, sent, error = None, 0, None
             try:
                 resp = await self._open(api, container, since, tail)
+                opened_at = loop.time()  # a slow connect that then fails never lived
             except KUBE_ERRORS as exc:
                 if not opened_once or not self._follow:  # nothing to resume: say why now
                     raise LogStreamError(self._message(exc, container)) from exc
@@ -327,7 +328,9 @@ class LogStream:
                     resp.close()
             if not self._follow:
                 return
-            lived = sent > 0 or loop.time() - opened_at >= IMMEDIATE_SECONDS
+            lived = sent > 0 or (
+                opened_at is not None and loop.time() - opened_at >= IMMEDIATE_SECONDS
+            )
             if lived:  # only immediate failures count, and only consecutive ones
                 failures = 0
             if error is not None:

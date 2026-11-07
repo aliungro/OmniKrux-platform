@@ -7,6 +7,7 @@ import re
 import httpx
 import pytest
 import yaml
+from aiohttp import web
 
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
@@ -16,7 +17,7 @@ from omnikrux.exec.debug import (
     DebugError,
     add_debug_container,
     create_node_shell_pod,
-    delete_pod,
+    delete_node_shell_pod,
 )
 from omnikrux.kube.client import make_api_client
 from omnikrux.main import create_app
@@ -246,13 +247,45 @@ async def test_node_shell_cancelled_while_starting_is_deleted(api, fake_api):
     assert fake_api.deleted == [("default", created["metadata"]["name"])]
 
 
-async def test_delete_pod_is_idempotent(api, fake_api):
-    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = pod("omnikrux-node-shell-abcde")
+async def test_node_shell_whose_create_answer_is_lost_is_deleted(api, fake_api, monkeypatch):
+    """The API server created the pod, but the answer never arrived (a client timeout or a
+    cancel): the pod must not be left behind."""
+    create = fake_api._create_pod
 
-    await delete_pod(api, "default", "omnikrux-node-shell-abcde")
-    await delete_pod(api, "default", "omnikrux-node-shell-abcde")  # already gone: fine
+    async def create_then_hang(request, ns):
+        await create(request, ns)
+        await asyncio.Event().wait()  # the answer never comes
+
+    monkeypatch.setattr(fake_api, "_create_pod", create_then_hang)
+    task = asyncio.create_task(create_node_shell_pod(api, "worker", image="busybox:1.36"))
+    for _ in range(500):
+        if fake_api.created:
+            break
+        await asyncio.sleep(0.01)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    [created] = fake_api.created
+    assert fake_api.deleted == [("default", created["metadata"]["name"])]
+
+
+async def test_delete_node_shell_pod_is_idempotent(api, fake_api):
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+
+    await delete_node_shell_pod(api, "default", "omnikrux-node-shell-abcde")
+    await delete_node_shell_pod(api, "default", "omnikrux-node-shell-abcde")  # gone: fine
 
     assert fake_api.deleted == [("default", "omnikrux-node-shell-abcde")]
+
+
+async def test_delete_node_shell_pod_needs_the_label(api, fake_api):
+    fake_api.pods[("default", "web-a")] = node_shell("web-a", labels={"app": "web"})
+
+    await delete_node_shell_pod(api, "default", "web-a")
+
+    assert fake_api.deleted == [] and ("default", "web-a") in fake_api.pods
 
 
 # --- HTTP routes ----------------------------------------------------------------------------
@@ -406,6 +439,28 @@ async def test_node_shell_pod_deleted_when_shell_cannot_open(app, fake_api, fake
     assert fake_api.deleted == [("default", "omnikrux-node-shell-abcde")]
 
 
+async def test_node_shell_pod_deleted_when_it_cannot_be_read(
+    app, fake_api, fake_channel, monkeypatch
+):
+    """The pod read fails (the API server hiccups): the session ends, and the pod still goes,
+    through a delete that only matches it while it carries the node-shell label."""
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+    fake_api.pods[("default", "web-a")] = node_shell("web-a", labels={"app": "web"})
+
+    def unavailable(key):
+        body = {"kind": "Status", "status": "Failure", "code": 503, "message": "etcd is down"}
+        return web.json_response(body, status=503)
+
+    monkeypatch.setattr(fake_api, "_pod_or_404", unavailable)
+    for name in ("omnikrux-node-shell-abcde", "web-a"):
+        ws = BrowserSocket(app[0])
+        await start_shell(app, ws, name, cleanup_pod=True)
+        assert ws.sent[0]["type"] == "error" and ws.closed == (1011, None)
+
+    assert fake_api.deleted == [("default", "omnikrux-node-shell-abcde")]  # not web-a
+    assert not fake_channel.closed and fake_channel.stdin == []  # no shell was opened
+
+
 async def test_cleanup_refuses_unlabelled_pod(app, fake_api, fake_channel):
     fake_api.pods[("default", "web-a")] = node_shell("web-a", labels={"app": "web"})
     ws = BrowserSocket(app[0])
@@ -431,7 +486,7 @@ async def test_labelled_pod_kept_without_cleanup_flag(app, fake_api, fake_channe
     fake_channel.finish({"metadata": {}, "status": "Success"})
     await handler
 
-    assert ws.sent == [{"type": "exit", "code": 0, "message": None}]
+    assert ws.sent == [{"type": "exit", "code": 0, "message": None, "cannot_run": False}]
     assert fake_api.deleted == []
 
 

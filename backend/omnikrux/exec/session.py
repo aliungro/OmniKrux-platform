@@ -13,7 +13,7 @@ import contextlib
 import json
 import logging
 from contextlib import AsyncExitStack
-from typing import Protocol, Self
+from typing import NamedTuple, Protocol, Self
 
 import aiohttp
 from kubernetes_asyncio.client import CoreV1Api
@@ -118,29 +118,44 @@ class KubeExecChannel:
         await self._resources.aclose()  # closes the socket, then the client; safe to repeat
 
 
-def exit_from_status(raw: bytes | None) -> tuple[int | None, str | None]:
-    """(exit code, message) from the status channel's `Status`; the message only when there is
-    no exit code to tell the story."""
+# Exit codes a shell gives when the command itself couldn't be started.
+CANNOT_RUN_CODES = {126: "it can't be executed", 127: "it wasn't found"}
+
+
+class ShellExit(NamedTuple):
+    code: int | None
+    message: str | None  # only when the exit code alone doesn't tell the story
+    cannot_run: bool  # the command couldn't start in the container (no shell there, say)
+
+
+def exit_from_status(raw: bytes | None) -> ShellExit:
+    """How the shell ended, from the status channel's `Status`."""
     if raw is None:
-        return None, "The shell ended without an exit status."
+        return ShellExit(None, "The shell ended without an exit status.", False)
     try:
         status = json.loads(raw)
     except ValueError:
         status = None
     if not isinstance(status, dict):
-        return None, "The shell ended with a status the console couldn't read."
+        return ShellExit(None, "The shell ended with a status the console couldn't read.", False)
     if status.get("status") == "Success":
-        return 0, None
+        return ShellExit(0, None, False)
+    message = status.get("message")
+    reason = message[:500] if isinstance(message, str) and message else None
     for cause in (status.get("details") or {}).get("causes") or []:
         if cause.get("reason") == "ExitCode":
             try:
-                return int(cause.get("message")), None
+                code = int(cause.get("message"))
             except (TypeError, ValueError):
                 break
-    message = status.get("message")
-    if isinstance(message, str) and message:
-        return None, f"The command couldn't run: {message[:500]}"
-    return None, "The shell ended with an error."
+            if code not in CANNOT_RUN_CODES:
+                return ShellExit(code, None, False)
+            words = f"The command couldn't run in the container (exit {code}: "
+            words += CANNOT_RUN_CODES[code] + ")"
+            return ShellExit(code, f"{words}: {reason}" if reason else f"{words}.", True)
+    if reason:  # the runtime couldn't start the command at all (an InternalError)
+        return ShellExit(None, f"The command couldn't run: {reason}", True)
+    return ShellExit(None, "The shell ended with an error.", False)
 
 
 def _browser_message(text: str) -> dict | None:
@@ -245,6 +260,6 @@ class ExecBridge:
                 status = data
         for channel, decoder in decoders.items():  # a character cut off at the very end
             await send(channel, decoder.decode(b"", final=True))
-        code, message = exit_from_status(status)
-        await websocket.send_text(json.dumps({"type": "exit", "code": code, "message": message}))
+        ended = exit_from_status(status)
+        await websocket.send_text(json.dumps({"type": "exit", **ended._asdict()}))
         return 1000

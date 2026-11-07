@@ -140,6 +140,8 @@ class FakeKubeApi:
         self.follow_lines: asyncio.Queue[str | None] = asyncio.Queue()
         self.execs: list[dict] = []
         self.exec_resizes: list[dict] = []
+        # A Status the exec sends at once, then ends: a command that couldn't start (no shell).
+        self.exec_status: dict | None = None
         self.start_states: list[dict] = [{"waiting": {"reason": "ContainerCreating"}}, STARTED]
         self.created: list[dict] = []
         self.patches: list[dict] = []
@@ -190,6 +192,8 @@ class FakeKubeApi:
                 return await self._create_pod(request, match["ns"])
             if method == "GET":
                 return self._list_pods(request, match["ns"])
+            if method == "DELETE":
+                return self._delete_pods(request, match["ns"])
         if match := POD_ROUTE.match(path):
             key, sub = (match["ns"], match["name"]), match["sub"]
             if method == "GET" and sub is None:
@@ -224,26 +228,43 @@ class FakeKubeApi:
             if field == "containerStatuses" and "running" in state:
                 status["phase"] = "Running"
 
+    def _selected(self, request: web.Request, ns: str) -> list[tuple[tuple[str, str], dict]]:
+        """Pods in `ns` matching an equality `labelSelector` (`k=v,k2=v2`) and a
+        `fieldSelector` of `metadata.name=...`."""
+
+        def terms(name: str) -> list[list[str]]:
+            return [t.partition("=")[::2] for t in request.query.get(name, "").split(",") if t]
+
+        labels = terms("labelSelector")
+        names = [v for k, v in terms("fieldSelector") if k == "metadata.name"]
+        return [
+            (key, pod)
+            for key, pod in self.pods.items()
+            if key[0] == ns
+            and all((pod.get("metadata", {}).get("labels") or {}).get(k) == v for k, v in labels)
+            and all(key[1] == name for name in names)
+        ]
+
     def _list_pods(self, request: web.Request, ns: str) -> web.Response:
-        """Pods in `ns`, filtered by an equality `labelSelector` (`k=v,k2=v2`)."""
-        wanted = [
-            term.partition("=")[::2]
-            for term in request.query.get("labelSelector", "").split(",")
-            if term
-        ]
-        items = [
-            pod
-            for (pod_ns, _), pod in self.pods.items()
-            if pod_ns == ns
-            and all((pod.get("metadata", {}).get("labels") or {}).get(k) == v for k, v in wanted)
-        ]
         return web.json_response(
             {
                 "kind": "PodList",
                 "apiVersion": "v1",
                 "metadata": {"resourceVersion": "42"},
-                "items": items,
+                "items": [pod for _, pod in self._selected(request, ns)],
             }
+        )
+
+    def _delete_pods(self, request: web.Request, ns: str) -> web.Response:
+        """DELETE on the collection: every selected pod; none selected is fine (an empty list)."""
+        items = []
+        for key, pod in self._selected(request, ns):
+            self.pods.pop(key)
+            self._starting.pop(key, None)
+            self.deleted.append(key)
+            items.append(pod)
+        return web.json_response(
+            {"kind": "PodList", "apiVersion": "v1", "metadata": {}, "items": items}
         )
 
     def _events(self, request: web.Request, ns: str) -> web.Response:
@@ -374,7 +395,8 @@ class FakeKubeApi:
 
     async def _exec(self, request: web.Request, key: tuple[str, str]) -> web.StreamResponse:
         """An echo shell: stdin comes back on stdout; "exit N" ends it with exit code N. Each call
-        is recorded in `execs`, each resize in `exec_resizes`."""
+        is recorded in `execs`, each resize in `exec_resizes`. With `exec_status` set, the command
+        "couldn't start": that Status is sent at once and the stream ends."""
         if key not in self.pods:
             return not_found(f'pods "{key[1]}" not found')
         query = request.query
@@ -390,6 +412,10 @@ class FakeKubeApi:
         await ws.prepare(request)
         for channel in (1, 2, 3):  # the API server opens each stream with an empty frame
             await ws.send_bytes(bytes([channel]))
+        if self.exec_status is not None:
+            await ws.send_bytes(bytes([3]) + json.dumps(self.exec_status).encode())
+            await ws.close()
+            return ws
         async for msg in ws:
             channel, data = msg.data[0], msg.data[1:]
             if channel == 4:

@@ -12,7 +12,6 @@ import string
 from collections.abc import Awaitable
 
 from kubernetes_asyncio.client import ApiClient, CoreV1Api
-from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.kube.http import read_json
 from omnikrux.logs.stream import (
@@ -162,17 +161,17 @@ async def create_node_shell_pod(
 ) -> tuple[str, str, str]:
     """Start a privileged pod on `node` with a shell in the host's namespaces; wait until it runs
     and return (namespace, pod, container). If it doesn't start (or the wait is cancelled), the
-    pod is deleted again."""
+    pod is deleted again; so is one whose create may have reached the API server unanswered."""
     name = f"omnikrux-node-shell-{_suffix()}"
-    await read_json(
-        CoreV1Api(api).create_namespaced_pod(
-            NODE_SHELL_NAMESPACE,
-            node_shell_pod(name, node, image),
-            _preload_content=False,
-            _request_timeout=REQUEST_TIMEOUT,
-        )
-    )
     try:
+        await read_json(
+            CoreV1Api(api).create_namespaced_pod(
+                NODE_SHELL_NAMESPACE,
+                node_shell_pod(name, node, image),
+                _preload_content=False,
+                _request_timeout=REQUEST_TIMEOUT,
+            )
+        )
         await _wait_running(
             api, NODE_SHELL_NAMESPACE, name, NODE_SHELL_CONTAINER, "node shell", _timeout(timeout)
         )
@@ -182,22 +181,24 @@ async def create_node_shell_pod(
     return NODE_SHELL_NAMESPACE, name, NODE_SHELL_CONTAINER
 
 
-async def delete_pod(api: ApiClient, ns: str, name: str) -> None:
-    """Delete the pod; one that is already gone is fine."""
-    try:
-        await read_json(
-            CoreV1Api(api).delete_namespaced_pod(
-                name, ns, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
-            )
+async def delete_node_shell_pod(api: ApiClient, ns: str, name: str) -> None:
+    """Delete the pod by name, but only while it carries the node-shell label (a collection
+    delete by name and label), so the label is enforced even when the pod couldn't be read. One
+    that is already gone (or never existed) is fine."""
+    await read_json(
+        CoreV1Api(api).delete_collection_namespaced_pod(
+            ns,
+            label_selector=f"{NODE_SHELL_LABEL}=true",
+            field_selector=f"metadata.name={name}",
+            _preload_content=False,
+            _request_timeout=REQUEST_TIMEOUT,
         )
-    except ApiException as exc:
-        if exc.status != 404:
-            raise
+    )
 
 
 async def _delete_quietly(api: ApiClient, ns: str, name: str) -> None:
     try:
-        await delete_pod(api, ns, name)
+        await delete_node_shell_pod(api, ns, name)
     except Exception as exc:  # noqa: BLE001 (it stops by itself after the deadline anyway)
         log.warning("Could not delete node-shell pod %s/%s (%s)", ns, name, type(exc).__name__)
 

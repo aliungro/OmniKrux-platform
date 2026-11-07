@@ -99,7 +99,9 @@ def describe_pod(pod: dict, events: list[dict]) -> PodDescribe:
             spec.get("initContainers"), status.get("initContainerStatuses")
         ),
         ephemeral_containers=_containers(
-            spec.get("ephemeralContainers"), status.get("ephemeralContainerStatuses")
+            spec.get("ephemeralContainers"),
+            status.get("ephemeralContainerStatuses"),
+            ephemeral=True,
         ),
         conditions=[
             Condition(
@@ -141,13 +143,17 @@ def _pod_info(pod: dict) -> PodInfo:
     )
 
 
-def _containers(specs: list[dict] | None, statuses: list[dict] | None) -> list[ContainerInfo]:
+def _containers(
+    specs: list[dict] | None, statuses: list[dict] | None, *, ephemeral: bool = False
+) -> list[ContainerInfo]:
     by_name = {s.get("name"): s for s in statuses or []}
-    return [_container(c, by_name.get(c.get("name")) or {}) for c in specs or []]
+    return [_container(c, by_name.get(c.get("name")) or {}, ephemeral) for c in specs or []]
 
 
-def _container(spec: dict, status: dict) -> ContainerInfo:
-    state, state_class = _state(status.get("state") or {}, bool(status.get("ready")))
+def _container(spec: dict, status: dict, ephemeral: bool) -> ContainerInfo:
+    # Ephemeral containers have no probes and never report ready: running is as good as it gets.
+    healthy = ephemeral or bool(status.get("ready"))
+    state, state_class = _state(status.get("state") or {}, healthy)
     last = status.get("lastState") or {}
     terminations = [(status.get("state") or {}).get("terminated"), last.get("terminated")]
     resources = spec.get("resources") or {}
@@ -188,8 +194,9 @@ def _state(state: dict, ready: bool) -> tuple[str, StatusClass]:
         return f"Waiting: {reason}", "bad" if reason in BAD_WAITING else "warn"
     if (terminated := state.get("terminated")) is not None:
         code = terminated.get("exitCode")
-        reason = terminated.get("reason") or ("Completed" if code == 0 else "Error")
-        text = f"Terminated: {reason}" + (f" (exit {code})" if code is not None else "")
+        reason = terminated.get("reason")  # said only when Kubernetes gives one
+        text = "Terminated" + (f": {reason}" if reason else "")
+        text += f" (exit {code})" if code is not None else ""
         return text, "done" if code == 0 else "bad"
     if "running" in state:
         return "Running", "ok" if ready else "warn"

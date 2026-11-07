@@ -216,6 +216,21 @@ def test_exec_echo_in_web_pod(client, cluster):
     assert last["type"] == "exit" and last["code"] == 0, last
 
 
+def test_exec_command_that_cannot_run_says_why(client, cluster):
+    """What a distroless image does to the default shell: the runtime can't start the command.
+    The reason is kept and the browser is told, so it can offer a debug container."""
+    pod = kubectl(
+        "-n", "demo", "get", "pods", "-l", "app=web", "--field-selector=status.phase=Running",
+        "-o", "jsonpath={.items[0].metadata.name}",
+    )  # fmt: skip
+    assert pod, "no running web pod"
+    url = exec_url(cluster, pod=pod, container="nginx", command="/no/such/shell")
+    _, last = run_shell(client, url, [])
+    assert last["type"] == "exit" and last["cannot_run"] is True, last
+    assert "no such file" in last["message"].lower(), last
+    assert "Traceback" not in last["message"]
+
+
 def test_exec_into_crasher_gives_plain_message(client, cluster):
     # Wait for a moment when crasher is between runs, so the refusal is deterministic.
     state = "jsonpath={.status.containerStatuses[0].state}"

@@ -64,7 +64,7 @@ async def test_shell_round_trip(app, fake_api, caplog):
         await handler
 
     assert ws.output("stdout") == "echo secret-ish ünïcode\r"
-    assert ws.sent[-1] == {"type": "exit", "code": 7, "message": None}
+    assert ws.sent[-1] == {"type": "exit", "code": 7, "message": None, "cannot_run": False}
     assert ws.closed == (1000, None)
     [call] = fake_api.execs
     assert call == {
@@ -92,7 +92,7 @@ async def test_named_ephemeral_container_and_command(app, fake_api):
     ws.type({"type": "stdin", "data": "exit 0"})
     await handler
 
-    assert ws.sent == [{"type": "exit", "code": 0, "message": None}]
+    assert ws.sent == [{"type": "exit", "code": 0, "message": None, "cannot_run": False}]
     [call] = fake_api.execs
     assert (call["container"], call["command"]) == ("debugger-x1", ["sh"])
 
@@ -125,6 +125,31 @@ async def test_exec_into_crashing_container_reports_plainly(app, fake_api, state
     ]
     assert ws.closed == (1011, None)
     assert fake_api.execs == []  # exec was not attempted
+
+
+async def test_running_container_without_shell_says_why(app, fake_api):
+    """A distroless image: the handshake works, /bin/sh can't start, the API server sends a
+    Failure Status with ExitCode 126. The reason is kept and the browser is told it can't run."""
+    app_, cluster_id = app
+    fake_api.pods[("demo", "distroless")] = pod("distroless")
+    reason = 'OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or directory'
+    fake_api.exec_status = status_body(500, "NonZeroExitCode", reason) | {
+        "details": {"causes": [{"reason": "ExitCode", "message": "126"}]}
+    }
+    ws = BrowserSocket(app_)
+
+    await start(app_, cluster_id, ws, "distroless")
+
+    assert ws.sent == [
+        {
+            "type": "exit",
+            "code": 126,
+            "message": f"The command couldn't run in the container (exit 126: it can't be "
+            f"executed): {reason}",
+            "cannot_run": True,
+        }
+    ]
+    assert ws.closed == (1000, None)
 
 
 async def test_missing_container_or_pod_is_plain(app, fake_api):

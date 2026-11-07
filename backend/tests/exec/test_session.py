@@ -114,7 +114,7 @@ async def test_stdin_and_resize_forwarded():
 
     assert channel.stdin == [b"ls -l\r", "é\x03".encode()]
     assert channel.resizes == [(120, 40)]
-    assert ws.sent == [{"type": "exit", "code": 0, "message": None}]
+    assert ws.sent == [{"type": "exit", "code": 0, "message": None, "cannot_run": False}]
 
 
 async def test_stdout_stderr_relayed_as_utf8_with_replacement():
@@ -133,14 +133,17 @@ async def test_stdout_stderr_relayed_as_utf8_with_replacement():
     assert ws.output("stdout") == "price: €\r\n"
     assert ws.output("stderr") == "bad � byte and a cut-off �"
     assert all(m["data"] for m in ws.sent if m["type"] in ("stdout", "stderr"))
-    assert ws.sent[-1] == {"type": "exit", "code": 0, "message": None}
+    assert ws.sent[-1] == {"type": "exit", "code": 0, "message": None, "cannot_run": False}
+
+
+NO_SH = 'OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or directory'
 
 
 @pytest.mark.parametrize(
-    ("status", "code", "message"),
+    ("status", "code", "message", "cannot_run"),
     [
-        ({"metadata": {}, "status": "Success"}, 0, None),
-        (NON_ZERO, 3, None),
+        ({"metadata": {}, "status": "Success"}, 0, None, False),
+        (NON_ZERO, 3, None, False),
         (
             {
                 "status": "Failure",
@@ -149,11 +152,33 @@ async def test_stdout_stderr_relayed_as_utf8_with_replacement():
             },
             None,
             'The command couldn\'t run: exec: "bash": executable file not found in $PATH',
+            True,
         ),
-        (None, None, "The shell ended without an exit status."),
+        (
+            {
+                "status": "Failure",
+                "message": NO_SH,
+                "reason": "NonZeroExitCode",
+                "details": {"causes": [{"reason": "ExitCode", "message": "126"}]},
+            },
+            126,
+            f"The command couldn't run in the container (exit 126: it can't be executed): {NO_SH}",
+            True,
+        ),
+        (
+            {
+                "status": "Failure",
+                "reason": "NonZeroExitCode",
+                "details": {"causes": [{"reason": "ExitCode", "message": "127"}]},
+            },
+            127,
+            "The command couldn't run in the container (exit 127: it wasn't found).",
+            True,
+        ),
+        (None, None, "The shell ended without an exit status.", False),
     ],
 )
-async def test_exit_code_from_status_channel(status, code, message):
+async def test_exit_code_from_status_channel(status, code, message, cannot_run):
     channel, ws = FakeExecChannel(), BrowserSocket()
     channel.emit(1, b"bye\r\n")
     channel.finish(status)
@@ -162,7 +187,7 @@ async def test_exit_code_from_status_channel(status, code, message):
 
     assert ws.sent == [
         {"type": "stdout", "data": "bye\r\n"},
-        {"type": "exit", "code": code, "message": message},
+        {"type": "exit", "code": code, "message": message, "cannot_run": cannot_run},
     ]
     assert ws.closed == (1000, None)
     assert channel.closed
@@ -207,7 +232,7 @@ async def test_broken_pasted_text_is_forwarded_with_replacement():
     await bridge
 
     assert channel.stdin == [b"a?b"]
-    assert ws.sent == [{"type": "exit", "code": 0, "message": None}]
+    assert ws.sent == [{"type": "exit", "code": 0, "message": None, "cannot_run": False}]
 
 
 class RefusingChannel(FakeExecChannel):
@@ -263,5 +288,5 @@ async def test_browser_gone_at_the_end_is_quiet():
 
     await run(channel, ws)  # does not raise
 
-    assert ws.sent == [{"type": "exit", "code": 0, "message": None}]
+    assert ws.sent == [{"type": "exit", "code": 0, "message": None, "cannot_run": False}]
     assert channel.closed

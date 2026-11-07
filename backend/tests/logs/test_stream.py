@@ -205,6 +205,34 @@ async def test_gives_up_after_five_immediate_failures(fake_api, connections, fas
     assert e.value.message.startswith("Lost the log stream after 5 attempts: Not allowed")
 
 
+async def test_slow_failing_reopens_still_count_as_failures(
+    fake_api, connections, fast_retries, monkeypatch
+):
+    """A reopen that times out after a long connect never lived: the stream must give up, not
+    retry forever while showing "streaming"."""
+    monkeypatch.setattr(stream_module, "IMMEDIATE_SECONDS", 0.05)
+    real_open = LogStream._open
+    calls = 0
+
+    async def open_then_time_out(self, *args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await real_open(self, *args)
+        await asyncio.sleep(0.1)  # longer than IMMEDIATE_SECONDS, like a 30 s connect timeout
+        raise TimeoutError
+
+    monkeypatch.setattr(LogStream, "_open", open_then_time_out)
+    fake_api.pods[("demo", "crasher")] = pod()
+    async with aclosing(make(connections, follow=True).lines()) as lines:
+        await fake_api.follow_lines.put("one")
+        await next_item(lines)
+        await fake_api.follow_lines.put(None)
+        with pytest.raises(LogStreamError) as e:
+            await next_item(lines)
+    assert e.value.message.startswith("Lost the log stream after 5 attempts")
+
+
 async def test_previous_is_never_followed(fake_api, connections):
     fake_api.pods[("demo", "crasher")] = pod(restarts=1)
     fake_api.logs[("demo", "crasher", "app", True)] = ["old"]

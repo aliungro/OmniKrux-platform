@@ -9,7 +9,12 @@ from typing import Annotated
 from fastapi import APIRouter, Query, WebSocket
 from kubernetes_asyncio.client import CoreV1Api
 
-from omnikrux.exec.debug import NSENTER, delete_pod, finish_even_if_cancelled, is_node_shell
+from omnikrux.exec.debug import (
+    NSENTER,
+    delete_node_shell_pod,
+    finish_even_if_cancelled,
+    is_node_shell,
+)
 from omnikrux.exec.session import BROWSER_GONE, ExecBridge, KubeExecChannel
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.kube.http import read_json
@@ -107,7 +112,7 @@ async def _delete_node_shell(
 ) -> None:
     try:
         async with connections.api(cluster) as api:
-            await delete_pod(api, namespace, pod)
+            await delete_node_shell_pod(api, namespace, pod)
     except Exception as exc:  # noqa: BLE001 (it stops by itself after its deadline anyway)
         log.warning(
             "Could not delete node-shell pod %s/%s (%s)", namespace, pod, type(exc).__name__
@@ -144,26 +149,29 @@ async def exec_shell(
         await _fail(websocket, "Choose a namespace and a pod (and no empty command words).", 1008)
         return
     connections: ClusterConnections = websocket.app.state.connections
+    cleanup = cleanup_pod
     try:
-        found = await _read_pod(connections, cluster, namespace, pod)
-    except KeyError:
-        await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
-        return
-    except ExecRefused as exc:
-        await _fail(websocket, exc.message, 1011)
-        return
-    if cleanup_pod and not is_node_shell(found):
-        message = (
-            "Only node-shell pods are deleted when their session ends, "
-            f"and pod {namespace}/{pod} isn't one. Open the shell without cleanup."
-        )
-        await _fail(websocket, message, 1008)
-        return
-    command = command or (NSENTER if is_node_shell(found) else DEFAULT_COMMAND)
-    try:
+        try:
+            found = await _read_pod(connections, cluster, namespace, pod)
+        except KeyError:
+            cleanup = False  # no such cluster: nothing to delete there
+            await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
+            return
+        except ExecRefused as exc:  # the delete below still only matches a node-shell pod
+            await _fail(websocket, exc.message, 1011)
+            return
+        if cleanup_pod and not is_node_shell(found):
+            cleanup = False
+            message = (
+                "Only node-shell pods are deleted when their session ends, "
+                f"and pod {namespace}/{pod} isn't one. Open the shell without cleanup."
+            )
+            await _fail(websocket, message, 1008)
+            return
+        command = command or (NSENTER if is_node_shell(found) else DEFAULT_COMMAND)
         await _session(websocket, connections, cluster, namespace, pod, found, container, command)
     finally:
-        if cleanup_pod:  # whichever side closed, or if the session failed or was cancelled
+        if cleanup:  # whichever side closed, or if the session failed or was cancelled
             await finish_even_if_cancelled(_delete_node_shell(connections, cluster, namespace, pod))
 
 
