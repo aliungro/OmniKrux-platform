@@ -152,6 +152,8 @@ export function Dock({ dock }: { dock: DockApi }) {
             aria-labelledby={tabId(base, x.id)}
             hidden={!visible.includes(x)}
             className={`${s.panel} ${x.kind === "logs" ? s.logs : s.shell}`}
+            // Side by side, the selected tab is always the pane you're in: it names where keys go.
+            onFocus={x.id === state.focused ? undefined : () => dispatch({ type: "focus", id: x.id })}
           >
             {x.kind === "logs" ? (
               <LogPane key={x.id} session={toLogSession(x)} active={x.id === activeLogs} />

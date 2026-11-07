@@ -39,10 +39,17 @@ export interface DockState {
 }
 
 export type DockAction =
-  | { type: "open"; session: Session }
+  /**
+   * `focus: false` adds the tab without taking focus from the one you're using (an open that
+   * finished after a newer one). With nothing focused yet, the new tab is shown anyway.
+   */
+  | { type: "open"; session: Session; focus?: boolean }
   | { type: "close"; id: string }
   | { type: "focus"; id: string }
-  /** Puts a new session where an old one was (a node shell started again makes a new pod). */
+  /**
+   * Puts a new session where an old one was (a node shell started again makes a new pod). If the
+   * old tab has closed meanwhile, the session is added instead: its pod needs a session to be cleaned up.
+   */
   | { type: "replace"; id: string; session: Session }
   | { type: "toggleLayout" }
   | { type: "resize"; height: number; viewport: number };
@@ -114,9 +121,13 @@ function newestOf(sessions: Session[], kind: SessionKind): string | null {
 export function dockReducer(state: DockState, action: DockAction): DockState {
   switch (action.type) {
     case "open": {
+      const quiet = action.focus === false && state.focused !== null;
       const existing = state.sessions.find((s) => sameTarget(s, action.session));
-      if (existing) return focusOn(state, existing);
-      return focusOn({ ...state, sessions: [...state.sessions, action.session] }, action.session);
+      if (existing) return quiet ? state : focusOn(state, existing);
+      const added = { ...state, sessions: [...state.sessions, action.session] };
+      if (!quiet) return focusOn(added, action.session);
+      const kind = action.session.kind;
+      return added.last[kind] === null ? { ...added, last: { ...added.last, [kind]: action.session.id } } : added;
     }
     case "close": {
       const at = state.sessions.findIndex((s) => s.id === action.id);
@@ -140,7 +151,7 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
     }
     case "replace": {
       const at = state.sessions.findIndex((s) => s.id === action.id);
-      if (at < 0) return state;
+      if (at < 0) return dockReducer(state, { type: "open", session: action.session });
       const sessions = state.sessions.slice();
       sessions[at] = action.session;
       const last = { ...state.last };

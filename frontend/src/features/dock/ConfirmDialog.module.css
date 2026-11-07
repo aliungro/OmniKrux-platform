@@ -79,6 +79,15 @@
   cursor: pointer;
 }
 
+.dialog:focus {
+  outline: none;
+}
+
+.btn:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
 .btn:hover:not(:disabled) {
   border-color: var(--ink-3);
 }

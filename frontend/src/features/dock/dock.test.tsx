@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Cluster } from "../../api/types";
+import type { Cluster, ResourceRow } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import type { Session } from "./dockState";
 
@@ -88,7 +88,7 @@ const shown = () => screen.getAllByRole("tabpanel").filter((p) => !p.hidden);
 beforeEach(() => {
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
-  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
 });
 afterEach(() => {
   cleanup();
@@ -235,5 +235,88 @@ describe("Dock", () => {
     fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("an open that resolves late never takes focus from a newer one", async () => {
+    const rowOf = (cluster_id: string, name: string): ResourceRow => ({
+      uid: name, cluster_id, kind: "Pod", namespace: "payments", name, created_at: null,
+      columns: { status: "Running", status_class: "ok", resource_version: "1" },
+    });
+    const describe = (name: string) => ({
+      pod: { name, namespace: "payments", status: "Running", status_class: "ok", node: "n1", pod_ip: null, host_ip: null,
+        qos: null, service_account: null, owner: null, started_at: null, resource_version: "1" },
+      containers: [{ name: "app", state: "Running", state_class: "ok" }],
+      init_containers: [], ephemeral_containers: [], conditions: [], labels: {}, annotations: {}, events: [], events_error: null,
+    });
+    let slowAnswer!: () => void;
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.includes("/clusters/c1/")) {
+        // Cluster A answers slowly.
+        return new Promise<Response>((resolve) => {
+          slowAnswer = () => void json(describe("api-a")).then(resolve);
+        });
+      }
+      return json(describe("api-b"));
+    }));
+    renderDock();
+    act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+    act(() => dock.openPod(rowOf("c2", "api-b"), "shell"));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(FakeWebSocket.last.params.get("pod")).toBe("api-b");
+
+    await act(async () => slowAnswer());
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    // A's tab is there, but B (the newer request, where you're typing) keeps the focus.
+    const [tabB, tabA] = screen.getAllByRole("tab");
+    expect(tabA.textContent).toContain("api-a");
+    expect(tabB.getAttribute("aria-selected")).toBe("true");
+    expect(tabA.getAttribute("aria-selected")).toBe("false");
+    const [pane] = shown();
+    expect(pane.textContent).toContain("eks-staging / payments / api-b");
+  });
+
+  it("cancel can't be used while the request runs, and a restart whose tab closed still opens", async () => {
+    let answer!: (r: Response) => void;
+    const fetch = vi.fn()
+      .mockImplementationOnce(() => json({ namespace: "default", pod: "omnikrux-node-shell-a1b2c", container: "shell" }))
+      .mockImplementationOnce(() => new Promise<Response>((r) => { answer = r; }));
+    vi.stubGlobal("fetch", fetch);
+    renderDock();
+    fireEvent.click(screen.getByRole("button", { name: "node shell" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start node shell" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.last.emit({ type: "exit", code: 0, message: null }));
+    fireEvent.click(screen.getByRole("button", { name: "Start again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start node shell" }));
+
+    // The pod is being made: neither Escape nor Cancel can drop it on the floor.
+    const dialog = screen.getByRole("alertdialog");
+    expect((within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    act(() => dock.cancel());
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+    // The old tab goes away meanwhile; the new pod still gets its session (and so its cleanup).
+    const old = dock.state.sessions[0].id;
+    act(() => dock.dispatch({ type: "close", id: old }));
+    await act(async () => answer(new Response(JSON.stringify({ namespace: "default", pod: "omnikrux-node-shell-d3e4f", container: "shell" }), { status: 200, headers: { "content-type": "application/json" } })));
+    await waitFor(() => expect(FakeWebSocket.last.params.get("pod")).toBe("omnikrux-node-shell-d3e4f"));
+    expect(FakeWebSocket.last.params.get("cleanup_pod")).toBe("true");
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("in split layout, focusing a pane selects its tab", async () => {
+    renderDock();
+    open({ ...shell("l"), kind: "logs" });
+    await openShell(shell("s", { cluster: eks, pod: "redis-0", container: "redis" }));
+    fireEvent.keyDown(window, { key: "\\", ctrlKey: true });
+    expect(shown()).toHaveLength(2);
+    const [logsTab, shellTab] = screen.getAllByRole("tab");
+    expect(shellTab.getAttribute("aria-selected")).toBe("true");
+    act(() => screen.getByRole("log").focus());
+    expect(logsTab.getAttribute("aria-selected")).toBe("true");
+    expect(shellTab.getAttribute("aria-selected")).toBe("false");
+    expect(shown()).toHaveLength(2);
   });
 });

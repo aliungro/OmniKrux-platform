@@ -23,11 +23,18 @@ export function ConfirmDialog({ ask, onConfirm, onCancel }: { ask: Ask; onConfir
     };
   }, []);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // While the request runs both buttons are off; keep focus in the dialog rather than lose it.
+  useEffect(() => {
+    if (ask.busy) dialogRef.current?.focus();
+  }, [ask.busy]);
+
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      onCancel();
+      if (!ask.busy) onCancel(); // a request on its way can't be called back
       return;
     }
     // Two buttons: Tab moves between them and never leaves the dialog.
@@ -41,8 +48,11 @@ export function ConfirmDialog({ ask, onConfirm, onCancel }: { ask: Ask; onConfir
   return (
     <div className={s.backdrop} onMouseDown={(e) => e.target === e.currentTarget && !ask.busy && onCancel()}>
       <div
+        ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
+        aria-busy={ask.busy}
+        tabIndex={-1}
         aria-labelledby={`${id}-t`}
         aria-describedby={`${id}-b`}
         className={`${s.dialog} ${pc[knownProvider(ask.cluster.provider)]}`}
@@ -57,7 +67,7 @@ export function ConfirmDialog({ ask, onConfirm, onCancel }: { ask: Ask; onConfir
         <p id={`${id}-b`} className={s.body}>{ask.body}</p>
         {ask.error && <p className={s.error} role="alert">{ask.error}</p>}
         <div className={s.actions}>
-          <button ref={cancelRef} type="button" className={s.btn} onClick={onCancel}>
+          <button ref={cancelRef} type="button" className={s.btn} onClick={onCancel} disabled={ask.busy}>
             Cancel
           </button>
           <button
@@ -66,7 +76,6 @@ export function ConfirmDialog({ ask, onConfirm, onCancel }: { ask: Ask; onConfir
             className={`${s.btn} ${s.go}`}
             onClick={onConfirm}
             disabled={ask.busy}
-            aria-busy={ask.busy}
           >
             {ask.busy ? "Starting…" : ask.confirmLabel}
           </button>

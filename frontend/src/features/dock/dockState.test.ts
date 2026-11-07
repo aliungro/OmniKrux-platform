@@ -105,6 +105,21 @@ describe("dockReducer", () => {
     expect(s.sessions.map((x) => x.id)).toEqual(["n2", "l"]);
     expect(s.focused).toBe("n2");
     expect(s.last.shell).toBe("n2");
+    // The old tab closed while the new pod was being made: the session is added, never lost.
+    s = dockReducer(s, { type: "replace", id: "gone", session: session("n3", { kind: "shell", pod: "node-shell-3", cleanupPod: true, node: "w1" }) });
+    expect(s.sessions.map((x) => x.id)).toEqual(["n2", "l", "n3"]);
+    expect(s.focused).toBe("n3");
+  });
+
+  it("an open without focus adds the tab and leaves the focused one alone", () => {
+    let s = run(start(), { type: "open", session: session("a") });
+    s = dockReducer(s, { type: "open", session: session("b", { kind: "shell" }), focus: false });
+    expect(s.sessions.map((x) => x.id)).toEqual(["a", "b"]);
+    expect(s).toMatchObject({ focused: "a", last: { logs: "a", shell: "b" } });
+    s = dockReducer(s, { type: "open", session: session("c"), focus: false }); // same target as "a"
+    expect(s.sessions).toHaveLength(2);
+    // Nothing focused yet (an empty dock): the tab is shown.
+    expect(dockReducer(start(), { type: "open", session: session("d"), focus: false }).focused).toBe("d");
   });
 });
 

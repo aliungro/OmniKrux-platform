@@ -74,6 +74,11 @@ export function useDock(clusters: Cluster[]): DockApi {
   const [ask, setAsk] = useState<Ask | null>(null);
   const queryClient = useQueryClient();
   const nextId = useRef(0);
+  /**
+   * The newest open request. Opens wait for the pod's describe, so they can finish out of order;
+   * only the newest takes focus, or a slow one would pull your keystrokes to another pod (or cluster).
+   */
+  const latestOpen = useRef(0);
   const newId = useCallback(() => `s${++nextId.current}`, []);
   const clustersRef = useRef(clusters);
   clustersRef.current = clusters;
@@ -96,6 +101,7 @@ export function useDock(clusters: Cluster[]): DockApi {
     (row: ResourceRow, kind: SessionKind, opts: { previous?: boolean } = {}) => {
       const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
       if (!cluster) return;
+      const request = ++latestOpen.current;
       void containersOf(row).then((d) => {
         const session: Session = {
           id: newId(),
@@ -107,7 +113,7 @@ export function useDock(clusters: Cluster[]): DockApi {
           containers: d ? allContainers(d) : [],
         };
         if (kind === "logs" && opts.previous) session.previous = true;
-        dispatch({ type: "open", session });
+        dispatch({ type: "open", session, focus: request === latestOpen.current });
       });
     },
     [containersOf, newId],
@@ -118,9 +124,11 @@ export function useDock(clusters: Cluster[]): DockApi {
       const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
       if (!cluster || !owner.selector) return;
       const selector = owner.selector;
+      const request = ++latestOpen.current;
       void containersOf(row).then((d) => {
         dispatch({
           type: "open",
+          focus: request === latestOpen.current,
           session: {
             id: newId(),
             kind: "logs",
@@ -223,7 +231,9 @@ export function useDock(clusters: Cluster[]): DockApi {
     );
   };
 
-  const cancel = () => setAsk(null);
+  // Once the request is on its way it can't be called back: the pod or container is being made,
+  // and it needs its session (a node-shell pod is only deleted when its session ends).
+  const cancel = () => setAsk((a) => (a?.busy ? a : null));
 
   // Everything but `state` and `ask` keeps its identity, so the table's rows don't re-render.
   const stable = useRef({ askNodeShell, askDebug, askRestart, confirm, cancel });
