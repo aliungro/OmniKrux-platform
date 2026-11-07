@@ -41,6 +41,7 @@ async def test_migration_matches_orm_model(tmp_settings):
     from alembic.autogenerate import compare_metadata
     from alembic.migration import MigrationContext
 
+    from omnikrux.audit import models as audit_models  # noqa: F401
     from omnikrux.clusters import models  # noqa: F401
     from omnikrux.db import Base
 
@@ -159,3 +160,40 @@ async def test_migration_0003_downgrade_restores_old_identity(tmp_settings):
         rows = (await conn.execute(text("SELECT id, source FROM clusters ORDER BY id"))).all()
     await engine.dispose()
     assert [tuple(r) for r in rows] == [("g", "file"), ("x", "file")]
+
+
+async def test_migration_0004_upgrade_and_downgrade(tmp_settings):
+    from sqlalchemy import text
+
+    def tables_and_indexes(conn):
+        found = inspect(conn)
+        names = set(found.get_table_names())
+        indexes = {i["name"] for i in found.get_indexes("audit")} if "audit" in names else set()
+        return names, indexes
+
+    engine = make_engine(tmp_settings.db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(_migrate, "upgrade", "0003")
+        await conn.execute(_row("f", "file", "kind-dev", "https://h:1", "2026-01-01 10:00:00"))
+    await init_db(engine)
+    async with engine.begin() as conn:
+        names, indexes = await conn.run_sync(tables_and_indexes)
+        assert "audit" in names
+        assert indexes == {"ix_audit_started_at", "ix_audit_cluster_id"}
+        await conn.execute(
+            text(
+                "INSERT INTO audit (started_at, actor, action, cluster_id, cluster_name, provider,"
+                " namespace, kind, name, outcome) VALUES ('2026-11-07 10:00:00', 'local',"
+                " 'cordon', 'f', 'kind-dev', 'kind', NULL, 'nodes', 'worker', 'started')"
+            )
+        )
+        row = (await conn.execute(text("SELECT id, namespace, diff FROM audit"))).one()
+        assert tuple(row) == (1, None, None)
+    async with engine.begin() as conn:
+        await conn.run_sync(_migrate, "downgrade", "0003")
+    async with engine.connect() as conn:
+        names, _ = await conn.run_sync(tables_and_indexes)
+        clusters = (await conn.execute(text("SELECT id FROM clusters"))).all()
+    await engine.dispose()
+    assert "audit" not in names
+    assert [tuple(r) for r in clusters] == [("f",)]

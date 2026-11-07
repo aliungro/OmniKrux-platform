@@ -6,13 +6,30 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 
-import yaml
 from fastapi import APIRouter, HTTPException, Request
 from kubernetes_asyncio.client import ApiClient, AppsV1Api, BatchV1Api, CoreV1Api
 from kubernetes_asyncio.client.exceptions import ApiException
 from pydantic import BaseModel
 
-from omnikrux.exec.debug import DebugError, add_debug_container, create_node_shell_pod
+from omnikrux.actions import authz
+from omnikrux.actions.authz import NotAllowed
+from omnikrux.actions.pipeline import dump_yaml
+from omnikrux.audit.store import (
+    AuditEntry,
+    AuditLog,
+    AuditUnavailable,
+    actor_of,
+    no_audit_message,
+)
+from omnikrux.exec.debug import (
+    NODE_SHELL_NAMESPACE,
+    DebugError,
+    add_debug_container,
+    create_node_shell_pod,
+    finish_even_if_cancelled,
+    new_debug_container_name,
+    new_node_shell_pod_name,
+)
 from omnikrux.kube.connections import kube_error_message
 from omnikrux.kube.http import read_json
 from omnikrux.kube.pods import REQUEST_TIMEOUT, read_pod
@@ -21,6 +38,8 @@ from omnikrux.resources.describe import OwnerRef, PodDescribe, describe_pod
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/clusters/{cluster_id}")
+
+CANCELLED = "The request stopped before the cluster answered."
 
 
 async def _call[T](
@@ -121,7 +140,7 @@ async def pod_yaml(cluster_id: str, namespace: str, name: str, request: Request)
     async def run(api: ApiClient) -> dict[str, str]:
         pod = await read_pod(api, namespace, name, timeout=REQUEST_TIMEOUT)
         (pod.get("metadata") or {}).pop("managedFields", None)
-        return {"yaml": yaml.safe_dump(pod, sort_keys=False)}
+        return {"yaml": dump_yaml(pod)}
 
     return await _call(request, cluster_id, f"read pod {namespace}/{name} as YAML", run)
 
@@ -137,27 +156,105 @@ class DebugOut(BaseModel):
     target: str | None
 
 
+async def _begin_audit(
+    request: Request, entry: AuditEntry, object_kind: str, object_name: str
+) -> int:
+    """Check the cluster and the actor, then write the `started` record (no audit, no change).
+    `object_kind`/`object_name`: what is authorized (a node shell is authorized on its node)."""
+    try:
+        await request.app.state.registry.get(entry.cluster_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown cluster") from exc
+    try:
+        await authz.authorize(
+            entry.actor,
+            entry.action,
+            entry.cluster_id,
+            entry.namespace if object_kind == "pods" else None,
+            object_kind,
+            object_name,
+        )
+    except NotAllowed as exc:
+        raise HTTPException(status_code=403, detail=exc.message) from exc
+    try:
+        return await request.app.state.audit.begin(entry)
+    except AuditUnavailable as exc:
+        raise HTTPException(status_code=503, detail=no_audit_message(exc)) from exc
+
+
+async def _audited_call[T](
+    request: Request,
+    audit_id: int,
+    cluster_id: str,
+    action: str,
+    fn: Callable[[ApiClient], Awaitable[T]],
+) -> T:
+    """`_call`, finishing the audit record `failed` (with the same words) if it fails."""
+    audit: AuditLog = request.app.state.audit
+    try:
+        return await _call(request, cluster_id, action, fn)
+    except HTTPException as exc:
+        await audit.finish(audit_id, "failed", exc.detail)
+        raise
+    except BaseException:  # cancelled: whether it happened isn't known
+        await finish_even_if_cancelled(audit.finish(audit_id, "unknown", CANCELLED))
+        raise
+
+
 @router.post("/pods/{namespace}/{name}/debug")
 async def debug_container(
     cluster_id: str, namespace: str, name: str, body: DebugRequest, request: Request
 ) -> DebugOut:
     image = request.app.state.settings.debug_image
+    container = new_debug_container_name()
+    entry = AuditEntry(
+        actor=actor_of(request),
+        action="debug_container",
+        cluster_id=cluster_id,
+        namespace=namespace,
+        kind="pods",
+        name=name,
+        details={"container": container, "target": body.target},
+    )
+    audit_id = await _begin_audit(request, entry, "pods", name)
 
     async def run(api: ApiClient) -> DebugOut:
-        container, target = await add_debug_container(
-            api, namespace, name, target=body.target, image=image
+        added, target = await add_debug_container(
+            api, namespace, name, target=body.target, image=image, name=container
         )
-        return DebugOut(container=container, target=target)
+        return DebugOut(container=added, target=target)
 
-    return await _call(request, cluster_id, f"add a debug container to pod {namespace}/{name}", run)
+    out = await _audited_call(
+        request, audit_id, cluster_id, f"add a debug container to pod {namespace}/{name}", run
+    )
+    message = f"Debug container {out.container} started."
+    if body.target and out.target is None:
+        message += f" Container {body.target} wasn't running, so it isn't attached to it."
+    await request.app.state.audit.finish(audit_id, "succeeded", message)
+    return out
 
 
 @router.post("/nodes/{node}/shell")
 async def node_shell(cluster_id: str, node: str, request: Request) -> dict[str, str]:
+    """The pod's audit record stays `started` while the pod exists: the shell session's cleanup
+    finishes it when it deletes the pod (see `exec.api`)."""
     image = request.app.state.settings.debug_image
+    pod_name = new_node_shell_pod_name()
+    entry = AuditEntry(
+        actor=actor_of(request),
+        action="node_shell",
+        cluster_id=cluster_id,
+        namespace=NODE_SHELL_NAMESPACE,
+        kind="pods",
+        name=pod_name,
+        details={"node": node},
+    )
+    audit_id = await _begin_audit(request, entry, "nodes", node)
 
     async def run(api: ApiClient) -> dict[str, str]:
-        namespace, pod, container = await create_node_shell_pod(api, node, image=image)
+        namespace, pod, container = await create_node_shell_pod(
+            api, node, image=image, name=pod_name
+        )
         return {"namespace": namespace, "pod": pod, "container": container}
 
-    return await _call(request, cluster_id, f"start a node shell on {node}", run)
+    return await _audited_call(request, audit_id, cluster_id, f"start a node shell on {node}", run)

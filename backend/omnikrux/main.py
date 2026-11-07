@@ -6,6 +6,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from omnikrux.actions.pipeline import PlanStore
+from omnikrux.actions.pipeline import router as actions_router
+from omnikrux.audit.api import router as audit_router
+from omnikrux.audit.store import AuditLog
 from omnikrux.clusters.api import router as clusters_router
 from omnikrux.clusters.kubeconfig import (
     ParsedContext,
@@ -122,6 +126,19 @@ async def _import_file(
     return {ctx.context_name for ctx in parsed.contexts}
 
 
+async def _mark_interrupted(audit: AuditLog) -> None:
+    """Records the last run left `started` can't be finished any more: they become `unknown`."""
+    try:
+        count = await audit.mark_interrupted()
+    except Exception as exc:  # noqa: BLE001 (never stops startup; writes say why if it's broken)
+        log.warning("Could not check the audit log for unfinished records (%s)", type(exc).__name__)
+        return
+    if count:
+        log.warning(
+            "%d audit record(s) were still open when the console stopped; marked unknown", count
+        )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings if settings is not None else get_settings()
 
@@ -144,12 +161,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             catalog.forget(cluster_id)
 
         hub = WatchHub(registry, source_for, on_forget=on_forget)
+        audit = AuditLog(sessionmaker, registry)
+        await _mark_interrupted(audit)
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.registry = registry
         app.state.connections = connections
         app.state.catalog = catalog
         app.state.hub = hub
+        app.state.audit = audit
+        app.state.plans = PlanStore()
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
@@ -174,6 +195,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(kinds_router)
     app.include_router(logs_router)
     app.include_router(exec_router)
+    app.include_router(audit_router)
+    app.include_router(actions_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

@@ -13,7 +13,7 @@ import contextlib
 import json
 import logging
 from contextlib import AsyncExitStack
-from typing import NamedTuple, Protocol, Self
+from typing import Literal, NamedTuple, Protocol, Self
 
 import aiohttp
 from kubernetes_asyncio.client import CoreV1Api
@@ -158,6 +158,23 @@ def exit_from_status(raw: bytes | None) -> ShellExit:
     return ShellExit(None, "The shell ended with an error.", False)
 
 
+class SessionEnd(NamedTuple):
+    """How a session ended, for its audit record."""
+
+    outcome: Literal["ended", "failed"]
+    message: str
+
+
+BROWSER_LEFT = SessionEnd("ended", "The browser closed the shell.")
+
+
+def session_end(ended: ShellExit) -> SessionEnd:
+    """`ended` with the exit code when the shell exited; `failed` when it couldn't run."""
+    if ended.code is not None and not ended.cannot_run:
+        return SessionEnd("ended", f"exit {ended.code}")
+    return SessionEnd("failed", ended.message or "The shell ended with an error.")
+
+
 def _browser_message(text: str) -> dict | None:
     try:
         msg = json.loads(text)
@@ -174,11 +191,11 @@ class ExecBridge:
     def __init__(self, channel: ExecChannel):
         self._channel = channel
 
-    async def run(self, websocket: WebSocket) -> None:
-        """Relay until either side ends. The channel is always closed. If the shell ended, the
-        browser gets `exit` (or `error` if the stream broke) and the socket is closed; if the
-        browser's input couldn't be passed on, it gets `error` and the socket is closed; if the
-        browser left, nothing more is sent."""
+    async def run(self, websocket: WebSocket) -> SessionEnd:
+        """Relay until either side ends, and return how it ended. The channel is always closed.
+        If the shell ended, the browser gets `exit` (or `error` if the stream broke) and the
+        socket is closed; if the browser's input couldn't be passed on, it gets `error` and the
+        socket is closed; if the browser left, nothing more is sent."""
         to_shell = asyncio.create_task(self._from_browser(websocket))
         to_browser = asyncio.create_task(self._to_browser(websocket))
         tasks = (to_shell, to_browser)
@@ -200,16 +217,24 @@ class ExecBridge:
         }
         for exc in failed.values():
             log.warning("exec socket failed", exc_info=exc)
+        end = BROWSER_LEFT
         with contextlib.suppress(*BROWSER_GONE):  # the browser may leave at this very moment
             if to_browser.done() and not to_browser.cancelled() and not to_browser.exception():
-                await websocket.close(code=to_browser.result())  # the shell ended
+                code, end = to_browser.result()  # the shell ended
+                await websocket.close(code=code)
             elif to_shell in failed:
                 message = (
                     "The console couldn't pass your typing to the shell "
                     f"({type(failed[to_shell]).__name__}). Reconnect to start a new shell."
                 )
+                end = SessionEnd("failed", message)
                 await websocket.send_text(json.dumps({"type": "error", "message": message}))
                 await websocket.close(code=1011)
+            elif to_browser in failed:
+                end = SessionEnd(
+                    "failed", f"The shell session failed ({type(failed[to_browser]).__name__})."
+                )
+        return end
 
     async def _from_browser(self, websocket: WebSocket) -> None:
         """Keystrokes and resizes into the channel until the browser goes away. Messages that
@@ -227,8 +252,9 @@ class ExecBridge:
             elif msg.get("type") == "resize" and _side(msg.get("cols")) and _side(msg.get("rows")):
                 await self._channel.resize(msg["cols"], msg["rows"])
 
-    async def _to_browser(self, websocket: WebSocket) -> int:
-        """The shell's output to the browser, then how it ended; returns the close code."""
+    async def _to_browser(self, websocket: WebSocket) -> tuple[int, SessionEnd]:
+        """The shell's output to the browser, then how it ended; returns the close code and
+        how the session ended."""
         decoders = {
             channel: codecs.getincrementaldecoder("utf-8")(errors="replace")
             for channel in (STDOUT, STDERR)
@@ -250,7 +276,7 @@ class ExecBridge:
                     "Reconnect to start a new shell."
                 )
                 await websocket.send_text(json.dumps({"type": "error", "message": message}))
-                return 1011
+                return 1011, SessionEnd("failed", message)
             if frame is None:
                 break
             channel, data = frame
@@ -262,4 +288,4 @@ class ExecBridge:
             await send(channel, decoder.decode(b"", final=True))
         ended = exit_from_status(status)
         await websocket.send_text(json.dumps({"type": "exit", **ended._asdict()}))
-        return 1000
+        return 1000, session_end(ended)
