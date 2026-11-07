@@ -2,6 +2,7 @@
 describe, logs, shells, debug containers and node shells, through the real app in-process."""
 
 import queue
+import shutil
 import subprocess
 import threading
 import time
@@ -52,10 +53,22 @@ def cluster(client):
     return clusters[0]["id"]
 
 
+@pytest.fixture(autouse=True)
+def need_kubectl():
+    if shutil.which("kubectl") is None:
+        pytest.skip("kubectl is not installed")
+
+
 def kubectl(*args: str) -> str:
+    """kubectl's stdout; a failure (wrong context, no access, timeout) fails the test."""
     done = subprocess.run(
-        ["kubectl", "--context", CONTEXT, *args], check=False, capture_output=True, text=True
+        ["kubectl", "--context", CONTEXT, *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
+    assert done.returncode == 0, f"kubectl {' '.join(args)} failed: {done.stderr.strip()}"
     return done.stdout
 
 
@@ -137,10 +150,18 @@ def test_previous_logs_of_crasher_contain_boom(client, cluster):
         "crasher to restart",
     )
     url = logs_url(cluster, pod="crasher", container="crasher", previous="true", follow="false")
-    with client.websocket_connect(url) as ws:
-        messages = Reader(ws).until(ended, "the previous logs to end")
-    assert not any(m.get("state") == "error" for m in messages), messages
-    assert "boom" in [line.get("text") for line in log_lines(messages)]
+
+    def previous_text() -> list[str] | None:
+        # The kubelet briefly can't serve the previous run while the container is replaced
+        # ("unable to retrieve container logs"); that passes, so ask again.
+        with client.websocket_connect(url) as ws:
+            messages = Reader(ws).until(ended, "the previous logs to end")
+        if any(m.get("state") == "error" for m in messages):
+            return None
+        return [line.get("text") for line in log_lines(messages)]
+
+    texts = wait_for(previous_text, "the previous logs of crasher", timeout=30, interval=0.5)
+    assert "boom" in texts
 
 
 def test_follow_logger_receives_ticks(client, cluster):
@@ -187,14 +208,22 @@ def test_exec_echo_in_web_pod(client, cluster):
     )  # fmt: skip
     assert pod, "no running web pod"
     output, last = run_shell(
-        client, exec_url(cluster, pod=pod, container="nginx"), ["echo omnikrux-ok\n", "exit\n"]
+        client,
+        exec_url(cluster, pod=pod, container="nginx"),
+        ["echo omnikrux-$((6*7))\n", "exit\n"],
     )
-    assert "omnikrux-ok" in output
+    assert "omnikrux-42" in output  # computed: a typed-in echo of the command is not enough
     assert last["type"] == "exit" and last["code"] == 0, last
 
 
 def test_exec_into_crasher_gives_plain_message(client, cluster):
     # Wait for a moment when crasher is between runs, so the refusal is deterministic.
+    state = "jsonpath={.status.containerStatuses[0].state}"
+    wait_for(
+        lambda: "running" not in kubectl("-n", "demo", "get", "pod", "crasher", "-o", state),
+        "crasher to be waiting or terminated",
+        interval=0.2,
+    )
     url = exec_url(cluster, pod="crasher", container="crasher")
     with client.websocket_connect(url) as ws:
         messages = Reader(ws).until(
@@ -215,13 +244,15 @@ def test_debug_container_into_crasher_runs_shell(client, cluster):
     assert body["container"]
     assert body["target"] in ("crasher", None)  # None: crasher wasn't running just then
     url = exec_url(cluster, pod="crasher", container=body["container"])
-    output, last = run_shell(client, url, ["echo debug-ok\n", "exit\n"])
-    assert "debug-ok" in output
+    output, last = run_shell(client, url, ["echo debug-$((6*7))\n", "exit\n"])
+    assert "debug-42" in output  # computed: a typed-in echo of the command is not enough
     assert last["type"] == "exit" and last["code"] == 0, last
 
 
-def node_shell_pods() -> list[str]:
-    return kubectl("get", "pods", "-A", "-l", NODE_SHELL_LABEL, "-o", "name").split()
+def node_shell_pod_present(namespace: str, pod: str) -> bool:
+    """Whether this node-shell pod is still listed (the listing itself must succeed)."""
+    listed = kubectl("-n", namespace, "get", "pods", "-l", NODE_SHELL_LABEL, "-o", "name")
+    return f"pod/{pod}" in listed.split()
 
 
 def test_node_shell_runs_hostname_and_cleans_up(client, cluster):
@@ -241,6 +272,13 @@ def test_node_shell_runs_hostname_and_cleans_up(client, cluster):
         output, last = run_shell(client, url, ["hostname\n", "exit\n"])
         assert node in output  # the node's hostname, not the pod's
         assert last["type"] == "exit" and last["code"] == 0, last
-        wait_for(lambda: not node_shell_pods(), "node-shell pods to be gone", timeout=30)
+        wait_for(
+            lambda: not node_shell_pod_present(shell["namespace"], shell["pod"]),
+            f"node-shell pod {shell['pod']} to be gone",
+            timeout=30,
+        )
     finally:
-        kubectl("-n", shell["namespace"], "delete", "pod", shell["pod"], "--wait=false")
+        kubectl(
+            "-n", shell["namespace"], "delete", "pod", shell["pod"], "--wait=false",
+            "--ignore-not-found",
+        )  # fmt: skip
