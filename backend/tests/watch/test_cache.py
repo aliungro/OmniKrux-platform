@@ -446,3 +446,37 @@ async def test_rows_come_from_the_current_sources_to_row():
     msgs = await drain(q, 3)
     assert [r["kind"] for r in msgs[2]["rows"]] == ["Widget"]
     await cache.stop()
+
+
+async def test_a_kind_that_goes_absent_clears_subscribers_rows():
+    # Watched and ready, then the CRD is deleted: the watch fails and the factory says absent.
+    from omnikrux.resources.catalog import KindNotServed
+
+    key = "widgets.example.omnikrux.dev"
+    src = FakeSource(lists=[([p("a")], "1")], watches=[RuntimeError("the server could not find")])
+    calls = 0
+
+    async def factory():
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise KindNotServed(key)
+        return src
+
+    cache = WatchCache("cl", factory, backoff=(0,))
+    q = cache.subscribe()
+    await cache.start()
+    msgs = await drain(q, 7)
+    assert [(m["type"], m.get("state")) for m in msgs] == [
+        ("cluster_status", "syncing"),
+        ("cluster_status", "ready"),
+        ("snapshot", None),
+        ("cluster_status", "error"),
+        ("cluster_status", "syncing"),
+        ("cluster_status", "absent"),
+        ("snapshot", None),
+    ]
+    assert [r["uid"] for r in msgs[2]["rows"]] == ["a"]
+    assert msgs[6]["rows"] == [] and msgs[6]["last"] is True  # never stale rows
+    assert cache.rows == {}
+    await cache.stop()

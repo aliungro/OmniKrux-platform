@@ -11,7 +11,6 @@ import json
 import logging
 from dataclasses import dataclass
 
-import aiohttp
 from kubernetes_asyncio.client import ApiClient
 
 from omnikrux.kube.client import ClusterUnavailable
@@ -58,10 +57,14 @@ class _Unexpected(Exception):
 
 
 async def discover(api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS) -> Discovery:
-    """Discover what the cluster serves. Raises `ClusterUnavailable` (in words) when the core or
-    group list can't be read; connection errors (aiohttp) propagate as they are."""
+    """Discover what the cluster serves, within one deadline `timeout` seconds from now.
+
+    Raises `ClusterUnavailable` (in words) when the core or group list can't be read; connection
+    errors (aiohttp) there propagate as they are. A group still unanswered at the deadline, or
+    failing in any way, is only that group's entry in `failed_groups`."""
+    deadline = asyncio.get_running_loop().time() + timeout
     try:
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout_at(deadline):
             core = _resources("", "v1", await _get(api, "/api/v1", timeout))
             versions = _preferred_versions(await _get(api, "/apis", timeout))
     except TimeoutError as exc:
@@ -80,26 +83,26 @@ async def discover(api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
     limit = asyncio.Semaphore(MAX_CONCURRENT_GROUPS)
 
     async def group_resources(group: str, version: str) -> list[ApiResource] | str:
-        async with limit:
-            try:
-                async with asyncio.timeout(timeout):
-                    body = await _get(api, f"/apis/{group}/{version}", timeout)
-                return _resources(group, version, body)
-            except TimeoutError:
-                why = f"The {group} API didn't answer within {timeout:g} s"
-            except _Refused as exc:
-                if exc.status == 403:
-                    return f"Not allowed to read the {group} API: {exc.message}"
-                why = f"The {group} API didn't answer ({exc.status}: {exc.message})"
-            except _Unexpected:
-                why = f"The {group} API answered with something unexpected"
-            except aiohttp.ClientError as exc:
-                why = f"The {group} API couldn't be reached ({type(exc).__name__})"
-            return f"{why}; its kinds are hidden until it does."
+        try:
+            async with asyncio.timeout_at(deadline), limit:  # waiting for a slot counts too
+                body = await _get(api, f"/apis/{group}/{version}", timeout)
+            return _resources(group, version, body)
+        except TimeoutError:
+            why = f"The {group} API didn't answer within {timeout:g} s"
+        except _Refused as exc:
+            if exc.status == 403:
+                return f"Not allowed to read the {group} API: {exc.message}"
+            why = f"The {group} API didn't answer ({exc.status}: {exc.message})"
+        except _Unexpected:
+            why = f"The {group} API answered with something unexpected"
+        except Exception as exc:  # noqa: BLE001 (one group never fails the others)
+            logger.warning("reading API group %s failed (%s)", group, type(exc).__name__)
+            why = f"The {group} API couldn't be read ({type(exc).__name__})"
+        return f"{why}; its kinds are hidden until it does."
 
     results, printer = await asyncio.gather(
         asyncio.gather(*(group_resources(g, v) for g, v in versions.items())),
-        _crd_printer_columns(api, versions, timeout),
+        _crd_printer_columns(api, versions, timeout, deadline),
     )
     resources, failed = list(core), {}
     for group, result in zip(versions, results, strict=True):
@@ -183,23 +186,29 @@ def _preferred_versions(body: dict) -> dict[str, str]:
 
 
 async def _crd_printer_columns(
-    api: ApiClient, versions: dict[str, str], timeout: float
+    api: ApiClient, versions: dict[str, str], timeout: float, deadline: float
 ) -> dict[tuple[str, str], list[dict]]:
-    """Each CRD's printer columns for the version discovery uses; {} when they can't be read
-    (the CRDs then keep generic columns)."""
+    """Each CRD's printer columns for the version discovery uses; {} when they can't be read by
+    the deadline (the CRDs then keep generic columns)."""
     if CRD_GROUP not in versions:
         return {}
     try:
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout_at(deadline):
             body = await _get(api, CRDS_PATH, timeout)
-    except (TimeoutError, _Refused, _Unexpected, aiohttp.ClientError) as exc:
+    except Exception as exc:  # noqa: BLE001 (printer columns are optional)
         logger.info("CRD printer columns not read (%s); CRDs keep generic columns", exc)
         return {}
+    items = body.get("items")
     columns = {}
-    for crd in body.get("items") or []:
+    for crd in items if isinstance(items, list) else []:
         spec = (crd.get("spec") or {}) if isinstance(crd, dict) else {}
-        group, plural = spec.get("group"), (spec.get("names") or {}).get("plural")
-        crd_versions = [v for v in spec.get("versions") or [] if isinstance(v, dict)]
+        names = spec.get("names") if isinstance(spec, dict) else None
+        group = spec.get("group") if isinstance(spec, dict) else None
+        plural = names.get("plural") if isinstance(names, dict) else None
+        listed = spec.get("versions") if isinstance(spec, dict) else None
+        crd_versions = (
+            [v for v in listed if isinstance(v, dict)] if isinstance(listed, list) else []
+        )
         chosen = next((v for v in crd_versions if v.get("name") == versions.get(group)), None)
         chosen = chosen or next((v for v in crd_versions if v.get("storage")), None)
         printer = (chosen or {}).get("additionalPrinterColumns")

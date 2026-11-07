@@ -240,3 +240,57 @@ async def test_kinds_route_lists_union_and_cluster_errors(tmp_path):
                 assert discoveries(good) == before  # cached
                 assert (await http.get("/api/kinds?refresh=true")).status_code == 200
                 assert discoveries(good) == before + 1
+
+
+async def test_forget_cancels_an_inflight_discovery(fake_api):
+    fake_api.mode = "hang"
+    catalog = catalog_for({"c1": fake_api})
+    waiter = asyncio.create_task(catalog.cluster("c1"))
+    await asyncio.sleep(0.1)
+    [inflight] = catalog._inflight.values()
+    catalog.forget("c1")
+    with pytest.raises(KeyError):  # forgotten while asked: as for a removed cluster
+        await asyncio.wait_for(waiter, 2)
+    await asyncio.sleep(0)
+    assert inflight.cancelled() and catalog._inflight == {} and catalog._entries == {}
+
+
+async def test_close_cancels_inflight_discoveries_and_drops_entries(fake_api):
+    catalog = catalog_for({"c1": fake_api, "c2": fake_api})
+    await catalog.cluster("c1")
+    fake_api.mode = "hang"
+    waiter = asyncio.create_task(catalog.cluster("c2"))
+    await asyncio.sleep(0.1)
+    [inflight] = catalog._inflight.values()
+    await catalog.close()
+    assert inflight.done() and catalog._inflight == {} and catalog._entries == {}
+    with pytest.raises(KeyError):
+        await asyncio.wait_for(waiter, 2)
+
+
+async def test_a_cancelled_caller_is_still_cancelled(fake_api):
+    fake_api.mode = "hang"
+    catalog = catalog_for({"c1": fake_api})
+    waiter = asyncio.create_task(catalog.cluster("c1"))
+    await asyncio.sleep(0.1)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    await catalog.close()
+
+
+async def test_app_shutdown_closes_the_catalog(fake_api, tmp_path):
+    fake_api.mode = "hang"
+    app = create_app(
+        Settings(data_dir=tmp_path, kubeconfig="", in_container=False, rewrite_loopback=False)
+    )
+    async with app.router.lifespan_context(app):
+        [info] = await app.state.registry.upsert_from_kubeconfig(
+            yaml.safe_dump(kubeconfig_for(fake_api)), rewrite_loopback=False, source=SOURCE_UPLOAD
+        )
+        waiter = asyncio.create_task(app.state.catalog.cluster(info.id))
+        await asyncio.sleep(0.1)
+        [inflight] = app.state.catalog._inflight.values()
+    assert inflight.done() and app.state.catalog._inflight == {}
+    with pytest.raises(KeyError):
+        await waiter

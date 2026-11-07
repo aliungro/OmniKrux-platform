@@ -1,5 +1,6 @@
 """discover() against the fake API server: what each cluster serves, and what it can't say."""
 
+import logging
 import time
 
 import pytest
@@ -126,3 +127,58 @@ async def test_crd_list_refused_keeps_generic_columns(api, fake_api):
     assert discovery.printer_columns == {}
     assert ("example.omnikrux.dev", "widgets") in by_key(discovery)
     assert discovery.failed_groups == {}
+
+
+async def test_hanging_groups_are_bounded_by_one_deadline(api, fake_api):
+    # More hanging groups than run at once, plus a hanging CRD list: the whole discovery still
+    # ends within its one deadline, with every other kind present.
+    slow = [f"g{n}.example.dev" for n in range(10)]
+    fake_api.resources += [FakeResource(g, "v1", "things", "Thing", True) for g in slow]
+    fake_api.hanging_groups = {*slow, "apiextensions.k8s.io"}
+    started = time.monotonic()
+    discovery = await discover(api, timeout=0.5)
+    assert time.monotonic() - started < 0.9
+    found = by_key(discovery)
+    assert ("apps", "deployments") in found and ("example.omnikrux.dev", "widgets") in found
+    assert set(discovery.failed_groups) == {*slow, "apiextensions.k8s.io"}
+    assert discovery.failed_groups["g0.example.dev"] == (
+        "The g0.example.dev API didn't answer within 0.5 s; its kinds are hidden until it does."
+    )
+    assert discovery.printer_columns == {}
+
+
+async def test_an_unexpected_error_in_one_group_is_only_that_groups(api, monkeypatch, caplog):
+    from omnikrux.kube import discovery as discovery_mod
+
+    real = discovery_mod._resources
+
+    def resources(group, version, body):
+        if group == "batch":
+            raise KeyError("surprise")
+        return real(group, version, body)
+
+    monkeypatch.setattr(discovery_mod, "_resources", resources)
+    with caplog.at_level(logging.WARNING, logger="omnikrux.kube.discovery"):
+        discovery = await discover(api)
+    assert discovery.failed_groups == {
+        "batch": "The batch API couldn't be read (KeyError); its kinds are hidden until it does."
+    }
+    assert ("apps", "deployments") in by_key(discovery)
+    [record] = caplog.records
+    assert "batch" in record.getMessage() and "KeyError" in record.getMessage()
+
+
+async def test_crd_items_that_are_not_a_list_keep_generic_columns(api, monkeypatch):
+    from omnikrux.kube import discovery as discovery_mod
+
+    real = discovery_mod._get
+
+    async def get(api, path, timeout=30):
+        if path == discovery_mod.CRDS_PATH:
+            return {"items": 5}
+        return await real(api, path, timeout)
+
+    monkeypatch.setattr(discovery_mod, "_get", get)
+    discovery = await discover(api)
+    assert discovery.printer_columns == {}
+    assert ("example.omnikrux.dev", "widgets") in by_key(discovery)

@@ -123,7 +123,14 @@ class KindCatalog:
             self._inflight[cluster_id] = task
             task.add_done_callback(lambda t: self._done(cluster_id, t))
         # Shielded: one caller giving up (a socket closing) must not cancel it for the others.
-        return await asyncio.shield(task)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if task.cancelled() and current is not None and not current.cancelling():
+                # The discovery was cancelled, not this caller: the cluster was forgotten.
+                raise KeyError(cluster_id) from None
+            raise
 
     async def spec(self, cluster_id: str, key: str) -> KindSpec:
         """The spec for `key` on `cluster_id`; raises KindNotServed, ClusterUnavailable or
@@ -158,9 +165,20 @@ class KindCatalog:
         return KindsOut(kinds=ordered, clusters=clusters)
 
     def forget(self, cluster_id: str) -> None:
-        """Drop what is known about a removed cluster; a discovery in flight is not stored."""
+        """Drop what is known about a removed cluster and cancel its discovery in flight (its
+        callers get KeyError, as for an unknown cluster)."""
         self._entries.pop(cluster_id, None)
-        self._inflight.pop(cluster_id, None)
+        if (task := self._inflight.pop(cluster_id, None)) is not None:
+            task.cancel()
+
+    async def close(self) -> None:
+        """Cancel every discovery in flight and wait for them; forget everything."""
+        tasks = list(self._inflight.values())
+        for cluster_id in list(self._inflight):
+            self.forget(cluster_id)
+        self._entries.clear()
+        if tasks:
+            await asyncio.wait(tasks)
 
     # --- internals ----------------------------------------------------------------------
 

@@ -5,7 +5,8 @@ on 127.0.0.1. Tests seed `pods`, `objects`, `events`, `logs` and `follow_lines` 
 followed stream, CUT breaks it) and read back `requests`.
 
 Discovery (`/api/v1`, `/apis`, `/apis/{group}/{version}`) is generated from `resources`; a group in
-`broken_groups` answers 503 there, as an aggregated API whose backend is down does. Every served
+`broken_groups` answers 503 there, as an aggregated API whose backend is down does, and one in
+`hanging_groups` doesn't answer at all until `release`. Every served
 kind can be listed (cluster-wide or in a namespace, with an equality `labelSelector` and a
 `fieldSelector` on `metadata.name` or `spec.nodeName`), read one by one and watched (each object
 ADDED, then the watch stays open until `release`). Objects live in `objects[kind_key]`, keyed by
@@ -209,6 +210,7 @@ class FakeKubeApi:
         self.url = ""
         self.resources: list[FakeResource] = default_resources()
         self.broken_groups: set[str] = set()
+        self.hanging_groups: set[str] = set()
         self.forbidden_kinds: set[str] = set()
         # kind key -> (namespace, name) -> object, e.g. objects["deployments.apps"][("demo", "web")]
         self.objects: dict[str, dict[tuple[str, str], dict]] = ObjectStore()
@@ -322,6 +324,8 @@ class FakeKubeApi:
     async def _get(self, request: web.Request, match: re.Match) -> web.StreamResponse:
         """Discovery, then list, watch or read any served kind."""
         group, version = match["group"] or "", match["core"] or match["version"]
+        if group in self.hanging_groups:
+            await self.release.wait()
         if group in self.broken_groups:
             return web.json_response(
                 status_body(503, "ServiceUnavailable", UNAVAILABLE), status=503

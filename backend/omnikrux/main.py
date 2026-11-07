@@ -156,6 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await hub.close()
+            await catalog.close()
             await engine.dispose()
 
     app = FastAPI(title="Omnikrux", lifespan=lifespan)

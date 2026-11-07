@@ -95,8 +95,11 @@ class WatchCache:
                     source = self._source = await self._source_factory()
                 except KindNotServed as exc:
                     self._retry.clear()
-                    self.rows = {}
+                    had_rows, self.rows = bool(self.rows), {}
                     self._set_state("absent", exc.message)
+                    if had_rows:  # subscribers drop the rows they hold: never stale data
+                        for msg in self._snapshot_messages():
+                            self._broadcast(msg)
                     step, last_error = 0, None
                     await self._wait_backoff(ABSENT_RECHECK_SECONDS)
                     continue
