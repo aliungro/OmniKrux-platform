@@ -194,7 +194,7 @@ async def _audited_call[T](
     try:
         return await _call(request, cluster_id, action, fn)
     except HTTPException as exc:
-        await audit.finish(audit_id, "failed", exc.detail)
+        await audit.finish(audit_id, "failed", str(exc.detail))
         raise
     except BaseException:  # cancelled: whether it happened isn't known
         await finish_even_if_cancelled(audit.finish(audit_id, "unknown", CANCELLED))

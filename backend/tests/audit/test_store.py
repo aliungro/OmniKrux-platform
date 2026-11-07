@@ -127,6 +127,9 @@ async def test_audit_list_filters_and_paging(setup):
     page = await audit.list(limit=2, before=page.next_before)
     assert [r.id for r in page.records] == [ids[0]] and page.next_before is None
 
+    accented = await audit.begin(entry(info.id, action="node_shell", details={"node": "wörker"}))
+    assert await listed(text="wörker") == [accented]  # non-ASCII details are searchable
+
 
 async def test_started_records_marked_unknown_on_startup(tmp_path):
     settings = Settings(data_dir=tmp_path, kubeconfig="", in_container=False)

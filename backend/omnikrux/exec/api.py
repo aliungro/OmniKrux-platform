@@ -11,7 +11,13 @@ from fastapi import APIRouter, Query, WebSocket
 
 from omnikrux.actions import authz
 from omnikrux.actions.authz import NotAllowed
-from omnikrux.audit.store import AuditEntry, AuditLog, AuditUnavailable, actor_of
+from omnikrux.audit.store import (
+    AuditEntry,
+    AuditLog,
+    AuditUnavailable,
+    actor_of,
+    no_audit_message,
+)
 from omnikrux.exec.debug import (
     NSENTER,
     delete_node_shell_pod,
@@ -38,7 +44,6 @@ router = APIRouter()
 
 # bash when the image has it, else sh.
 DEFAULT_COMMAND = ["/bin/sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"]
-NO_AUDIT = "Can't open the shell: the audit log can't be written ({reason})."
 CONSOLE_STOPPED = SessionEnd("ended", "The console closed the shell.")
 
 
@@ -168,13 +173,13 @@ async def exec_shell(
     connections: ClusterConnections = websocket.app.state.connections
     audit: AuditLog = websocket.app.state.audit
     actor = actor_of(websocket)
-    try:
-        await authz.authorize(actor, "shell", cluster, namespace, "pods", pod)
-    except NotAllowed as exc:
-        await _fail(websocket, exc.message, 4403)
-        return
     cleanup = cleanup_pod
     try:
+        try:
+            await authz.authorize(actor, "shell", cluster, namespace, "pods", pod)
+        except NotAllowed as exc:  # a node-shell pod asked to be cleaned up still goes
+            await _fail(websocket, exc.message, 4403)
+            return
         try:
             found = await _read_pod(connections, cluster, namespace, pod)
         except KeyError:
@@ -219,25 +224,36 @@ async def _session(
     command: list[str],
 ) -> None:
     """Open the shell in the read pod and relay until it ends; a refusal is sent as an error.
-    The session is audited from the moment the shell opens (what is typed is not recorded); if
-    the record can't be written the shell is closed again at once."""
+
+    The record is written before the channel opens, because opening it starts `command` in the
+    container: no audit, no change. What is typed is not recorded."""
     cluster, namespace, pod = entry.cluster_id, entry.namespace or "", entry.name or ""
     try:
         container = running_container(found, pod, container)
-        channel = await _open_channel(connections, cluster, namespace, pod, container, command)
-    except KeyError:
-        await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
-        return
-    except ExecRefused as exc:
+    except ExecRefused as exc:  # nothing was started: no record
         await _fail(websocket, exc.message, 1011)
         return
     entry.details = {"container": container, "command": command}
     try:
         audit_id = await audit.begin(entry)
     except AuditUnavailable as exc:
-        await channel.close()
-        await _fail(websocket, NO_AUDIT.format(reason=exc.reason), 1011)
+        await _fail(websocket, no_audit_message(exc), 1011)
         return
+    try:
+        channel = await _open_channel(connections, cluster, namespace, pod, container, command)
+    except KeyError:
+        await audit.finish(audit_id, "failed", "Unknown cluster")
+        await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
+        return
+    except ExecRefused as exc:
+        await audit.finish(audit_id, "failed", exc.message)
+        await _fail(websocket, exc.message, 1011)
+        return
+    except BaseException:  # cancelled while opening: the console is stopping
+        await finish_even_if_cancelled(
+            audit.finish(audit_id, CONSOLE_STOPPED.outcome, CONSOLE_STOPPED.message)
+        )
+        raise
     where = f"cluster={cluster} ns={namespace} pod={pod} container={container}"
     log.info("exec opened %s", where)
     try:

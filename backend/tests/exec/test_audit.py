@@ -7,6 +7,7 @@ import logging
 import httpx
 import pytest
 import yaml
+from aiohttp import web
 from sqlalchemy import text
 
 from omnikrux.actions import authz
@@ -21,7 +22,7 @@ from omnikrux.main import create_app
 from tests.exec.test_api import until_stdout
 from tests.exec.test_debug import node_shell, start_shell
 from tests.exec.test_session import BrowserSocket, FakeExecChannel
-from tests.fakekube import kubeconfig_for
+from tests.fakekube import kubeconfig_for, status_body
 from tests.logs.test_stream import pod
 
 
@@ -55,8 +56,10 @@ async def http(app):
 def fake_channel(monkeypatch):
     """Exec opens a FakeExecChannel instead of a real stream; the test drives it."""
     channel = FakeExecChannel()
+    channel.opens = []  # one entry per KubeExecChannel.open call
 
     async def open_channel(*args, **kwargs):
+        channel.opens.append(args)
         return channel
 
     monkeypatch.setattr(exec_api.KubeExecChannel, "open", open_channel)
@@ -168,17 +171,55 @@ async def test_exec_refused_when_audit_unavailable(app, fake_api, fake_channel):
         await conn.execute(text("DROP TABLE audit"))
     ws = BrowserSocket(app[0])
 
-    await start(app, ws, "web-a")
+    await start(app, ws, "web-a", command=["sh", "-c", "touch /tmp/ran"])
 
     assert ws.sent == [
         {
             "type": "error",
-            "message": "Can't open the shell: the audit log can't be written "
+            "message": "Nothing was changed: the audit log can't be written "
             "(no such table: audit).",
         }
     ]
     assert ws.closed == (1011, None)
-    assert fake_channel.closed and fake_channel.stdin == []
+    # No audit, no change: the command never reached the cluster.
+    assert fake_channel.opens == [] and fake_api.execs == []
+
+
+async def test_exec_audited_before_the_channel_opens(app, fake_api, monkeypatch):
+    """The record exists before the command can start; a channel that then won't open
+    finishes it `failed` with the words the browser gets."""
+    fake_api.pods[("demo", "web-a")] = pod("web-a")
+    seen = []
+    real_open = exec_api.KubeExecChannel.open
+
+    async def open_after_audit(*args, **kwargs):
+        seen.append([(r.action, r.outcome) for r in await records(app)])
+        return await real_open(*args, **kwargs)
+
+    async def refuse(request, key):
+        return web.json_response(status_body(403, "Forbidden", "nope"), status=403)
+
+    monkeypatch.setattr(exec_api.KubeExecChannel, "open", open_after_audit)
+    monkeypatch.setattr(fake_api, "_exec", refuse)
+    ws = BrowserSocket(app[0])
+
+    await start(app, ws, "web-a")
+
+    assert seen == [[("shell", "started")]]
+    message = "Not allowed to open a shell in pod demo/web-a: forbidden"
+    assert ws.sent == [{"type": "error", "message": message}]
+    [record] = await records(app)
+    assert (record.outcome, record.message) == ("failed", message)
+
+
+async def test_exec_into_stopped_container_writes_no_record(app, fake_api, fake_channel):
+    fake_api.pods[("demo", "web-a")] = pod("web-a", state={"waiting": {"reason": "Error"}})
+    ws = BrowserSocket(app[0])
+
+    await start(app, ws, "web-a")
+
+    assert ws.sent[0]["type"] == "error" and ws.closed == (1011, None)
+    assert fake_channel.opens == [] and await records(app) == []
 
 
 async def test_exec_not_allowed(app, fake_api, fake_channel, monkeypatch):
@@ -198,6 +239,55 @@ async def test_exec_not_allowed(app, fake_api, fake_channel, monkeypatch):
     assert ws.closed == (4403, None)
     assert calls == [("local", "shell", app[1], "demo", "pods", "web-a")]
     assert fake_channel.stdin == [] and await records(app) == []
+
+
+async def test_refused_node_shell_session_still_deletes_its_pod(
+    app, fake_api, fake_channel, monkeypatch
+):
+    record_id = await app[0].state.audit.begin(
+        AuditEntry(
+            actor="local",
+            action="node_shell",
+            cluster_id=app[1],
+            namespace="default",
+            kind="pods",
+            name="omnikrux-node-shell-abcde",
+            details={"node": "worker-1"},
+        )
+    )
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+
+    async def refusing(*args):
+        raise NotAllowed("Not allowed to open a shell here.")
+
+    monkeypatch.setattr(authz, "authorize", refusing)
+    ws = BrowserSocket(app[0])
+
+    await start_shell(app, ws, "omnikrux-node-shell-abcde", cleanup_pod=True)
+
+    assert ws.closed == (4403, None) and fake_channel.opens == []
+    assert fake_api.deleted == [("default", "omnikrux-node-shell-abcde")]
+    [record] = await records(app)
+    assert (record.id, record.outcome, record.message) == (record_id, "ended", "Pod deleted")
+
+
+async def test_debug_failure_with_structured_detail_still_finishes(
+    http, app, fake_api, monkeypatch
+):
+    from fastapi import HTTPException
+
+    from omnikrux.resources import api as resources_api
+
+    async def structured(*args, **kwargs):
+        raise HTTPException(status_code=502, detail={"reason": "odd"})
+
+    monkeypatch.setattr(resources_api, "_call", structured)
+    client, cluster_id = http
+    r = await client.post(f"/api/clusters/{cluster_id}/pods/demo/web-a/debug", json={})
+
+    assert r.status_code == 502
+    [record] = await records(app)
+    assert (record.outcome, record.message) == ("failed", "{'reason': 'odd'}")
 
 
 async def test_debug_container_audited(http, app, fake_api):

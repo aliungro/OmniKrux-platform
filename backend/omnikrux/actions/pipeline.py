@@ -501,7 +501,7 @@ async def apply_action(plan_id: str, body: ApplyIn, request: Request) -> ApplyOu
             except Exception as exc:
                 raise _failure(exc, stored.action, spec, target) from exc
     except HTTPException as exc:
-        await audit.finish(audit_id, "failed", exc.detail)
+        await audit.finish(audit_id, "failed", str(exc.detail))
         raise
     except BaseException:  # cancelled mid-apply: whether the change landed isn't known
         await finish_even_if_cancelled(audit.finish(audit_id, "unknown", CANCELLED))

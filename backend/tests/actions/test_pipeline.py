@@ -496,6 +496,17 @@ async def test_other_apply_failures_are_plain_and_audited(env, scale):
     assert (newest.outcome, newest.message) == ("failed", r.json()["detail"])
 
 
+async def test_structured_failure_detail_still_finishes_the_record(env, scale):
+    from fastapi import HTTPException
+
+    scale.error = HTTPException(status_code=422, detail={"field": "replicas"})
+    r = await apply(env, (await plan(env)).json()["plan_id"])
+
+    assert r.status_code == 422
+    [record] = await records(env)
+    assert (record.outcome, record.message) == ("failed", "{'field': 'replicas'}")
+
+
 async def test_authorize_hook_called_for_plan_and_apply(env, scale, monkeypatch):
     calls = []
 

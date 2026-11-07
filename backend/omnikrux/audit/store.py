@@ -173,7 +173,11 @@ class AuditLog:
                 outcome=STARTED,
                 message=None,
                 diff=entry.diff,
-                details=json.dumps(entry.details) if entry.details is not None else None,
+                details=(
+                    json.dumps(entry.details, ensure_ascii=False)  # searchable as written
+                    if entry.details is not None
+                    else None
+                ),
             )
             async with self._sessionmaker() as session:
                 session.add(row)
