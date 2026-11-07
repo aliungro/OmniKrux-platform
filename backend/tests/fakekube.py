@@ -13,6 +13,12 @@ ADDED, then the watch stays open until `release`). Objects live in `objects[kind
 (namespace, name), "" for the namespace of a cluster-scoped object; `pods` is `objects["pods"]` and
 `events` is a list of its own.
 
+Any served object can be replaced (PUT, honouring `metadata.resourceVersion` with a 409 like the
+API server, and `dryRun=All`) and patched (`application/merge-patch+json`, or
+`application/json-patch+json` with `test` / `add` / `replace` / `remove`; a failed `test` answers
+the API server's 422). Each write bumps `resourceVersion` (and `generation` when `spec` changed)
+and is recorded in `writes`.
+
 Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`.
 
 Creating a pod (recorded in `created`) or adding an ephemeral container (recorded in `patches`)
@@ -112,6 +118,14 @@ def default_resources() -> list[FakeResource]:
         R("discovery.k8s.io", "v1", "endpointslices", "EndpointSlice", True),
         R("networking.k8s.io", "v1", "ingresses", "Ingress", True, short_names=("ing",)),
         R(
+            "autoscaling",
+            "v2",
+            "horizontalpodautoscalers",
+            "HorizontalPodAutoscaler",
+            True,
+            short_names=("hpa",),
+        ),
+        R(
             "apiextensions.k8s.io",
             "v1",
             "customresourcedefinitions",
@@ -186,6 +200,9 @@ def invalid(message: str) -> web.Response:
 
 
 STRATEGIC_MERGE = "application/strategic-merge-patch+json"
+MERGE_PATCH = "application/merge-patch+json"
+JSON_PATCH = "application/json-patch+json"
+REJECTED = "the server rejected our request due to an error in our request"
 STARTED = {"running": {"startedAt": "2026-11-07T09:00:00Z"}}
 
 
@@ -232,6 +249,8 @@ class FakeKubeApi:
         self.created: list[dict] = []
         self.patches: list[dict] = []
         self.deleted: list[tuple[str, str]] = []
+        # Every PUT and PATCH of an object: method, path, query, content type and body.
+        self.writes: list[dict] = []
         # (namespace, pod) -> [status field, container, states still to go through]
         self._starting: dict[tuple[str, str], list[tuple[str, str, list[dict]]]] = {}
 
@@ -280,6 +299,8 @@ class FakeKubeApi:
                 return self._delete_pod(key)
         if method == "GET" and (match := API_PATH.match(path)):
             return await self._get(request, match)
+        if method in ("PUT", "PATCH") and (match := API_PATH.match(path)):
+            return await self._write(request, match)
         return not_found()
 
     # --- discovery and generic reads ----------------------------------------------------
@@ -337,19 +358,10 @@ class FakeKubeApi:
         parts = [part for part in (match["rest"] or "").split("/") if part]
         if not parts:
             return self._resource_list(group, version)
-        ns = None
-        if len(parts) >= 3 and parts[0] == "namespaces":
-            ns, parts = parts[1], parts[2:]
-        res = next(
-            (
-                r
-                for r in self.resources
-                if (r.group, r.version, r.plural) == (group, version, parts[0])
-            ),
-            None,
-        )
-        if res is None or len(parts) > 2 or (ns is not None and not res.namespaced):
+        found = self._resolve(group, version, parts)
+        if found is None:
             return not_found()
+        res, ns, parts = found
         if res.key in self.forbidden_kinds:
             message = f'{res.plural} is forbidden: User "fake" cannot list resource "{res.plural}"'
             return web.json_response(status_body(403, "Forbidden", message), status=403)
@@ -376,6 +388,70 @@ class FakeKubeApi:
                 "items": [obj for _, obj in selected],
             }
         )
+
+    def _resolve(
+        self, group: str, version: str, parts: list[str]
+    ) -> tuple[FakeResource, str | None, list[str]] | None:
+        """The served resource a path names, its namespace, and the path from the plural on."""
+        ns = None
+        if len(parts) >= 3 and parts[0] == "namespaces":
+            ns, parts = parts[1], parts[2:]
+        res = next(
+            (
+                r
+                for r in self.resources
+                if (r.group, r.version, r.plural) == (group, version, parts[0])
+            ),
+            None,
+        )
+        if res is None or len(parts) > 2 or (ns is not None and not res.namespaced):
+            return None
+        return res, ns, parts
+
+    # --- writes -------------------------------------------------------------------------
+
+    async def _write(self, request: web.Request, match: re.Match) -> web.Response:
+        """PUT or PATCH one served object."""
+        group, version = match["group"] or "", match["core"] or match["version"]
+        parts = [part for part in (match["rest"] or "").split("/") if part]
+        found = self._resolve(group, version, parts) if parts else None
+        if found is None or len(found[2]) != 2:
+            return not_found()
+        res, ns, parts = found
+        key = (ns or "", parts[1])
+        body = await request.json()
+        self.writes.append(
+            {
+                "method": request.method,
+                "path": request.path,
+                "query": dict(request.query),
+                "content_type": request.content_type,
+                "body": copy.deepcopy(body),
+            }
+        )
+        live = self.objects[res.key].get(key)
+        if live is None:
+            return not_found(f'{res.plural} "{parts[1]}" not found')
+        name = f"{res.plural}.{res.group}" if res.group else res.plural
+        if request.method == "PUT":
+            changed = _replaced(live, body, key, name)
+        elif request.content_type == JSON_PATCH:
+            changed = _json_patched(live, body)
+        elif request.content_type == MERGE_PATCH:
+            changed = _merged(live, body, key, name)
+        else:
+            message = f"the fake only accepts {MERGE_PATCH} or {JSON_PATCH} here"
+            return web.json_response(status_body(415, "UnsupportedMediaType", message), status=415)
+        if isinstance(changed, web.Response):
+            return changed
+        md = changed.setdefault("metadata", {})
+        md["resourceVersion"] = (live.get("metadata") or {}).get("resourceVersion")
+        if request.query.get("dryRun") != "All":
+            md["resourceVersion"] = str(int(md["resourceVersion"] or 0) + 1)
+            if changed.get("spec") != live.get("spec") and "generation" in md:
+                md["generation"] += 1
+            self.objects[res.key][key] = changed
+        return web.json_response(changed)
 
     def _items(self, kind_key: str) -> list[tuple[tuple[str, str], dict]]:
         if kind_key == "events":
@@ -648,6 +724,127 @@ class FakeKubeApi:
             await self.release.wait()
         await response.write_eof()
         return response
+
+
+def _conflict(name: str, object_name: str) -> web.Response:
+    message = (
+        f'Operation cannot be fulfilled on {name} "{object_name}": the object has been modified; '
+        "please apply your changes to the latest version and try again"
+    )
+    return web.json_response(status_body(409, "Conflict", message), status=409)
+
+
+def _replaced(live: dict, body: dict, key: tuple[str, str], name: str) -> dict | web.Response:
+    """A PUT: the body, with what the server owns (uid, creation time, status) kept, refused with
+    a 409 when its `resourceVersion` isn't the live one."""
+    md = body.get("metadata") or {}
+    live_md = live.get("metadata") or {}
+    if md.get("name") != key[1]:
+        return bad_request(
+            f"the name of the object ({md.get('name')}) does not match the name on the URL "
+            f"({key[1]})"
+        )
+    if (md.get("namespace") or "") not in ("", key[0]):
+        return bad_request(
+            "the namespace of the provided object does not match the namespace sent on the request"
+        )
+    if (rv := md.get("resourceVersion")) is not None and rv != live_md.get("resourceVersion"):
+        return _conflict(name, key[1])
+    changed = copy.deepcopy(body)
+    out_md = changed.setdefault("metadata", {})
+    for field in ("uid", "creationTimestamp", "generation"):
+        if field in live_md:
+            out_md[field] = live_md[field]
+    if key[0]:
+        out_md["namespace"] = key[0]
+    changed.pop("status", None)
+    if "status" in live:
+        changed["status"] = copy.deepcopy(live["status"])
+    return changed
+
+
+def _merged(live: dict, patch: dict, key: tuple[str, str], name: str) -> dict | web.Response:
+    """A JSON merge patch (RFC 7386); `metadata.resourceVersion` in it is a precondition."""
+    rv = (patch.get("metadata") or {}).get("resourceVersion")
+    if rv is not None and rv != (live.get("metadata") or {}).get("resourceVersion"):
+        return _conflict(name, key[1])
+    return _merge(live, patch)
+
+
+def _merge(target: object, patch: object) -> object:
+    if not isinstance(patch, dict):
+        return copy.deepcopy(patch)
+    out = copy.deepcopy(target) if isinstance(target, dict) else {}
+    for key, value in patch.items():
+        if value is None:
+            out.pop(key, None)
+        else:
+            out[key] = _merge(out.get(key), value)
+    return out
+
+
+_MISSING = object()
+
+
+def _parent(doc: object, path: str) -> tuple[object, str]:
+    """The container holding a JSON pointer's last token, and that token; KeyError if missing."""
+    tokens = [t.replace("~1", "/").replace("~0", "~") for t in path.split("/")[1:]]
+    node = doc
+    for token in tokens[:-1]:
+        if isinstance(node, dict) and token in node:
+            node = node[token]
+        elif isinstance(node, list) and token.isdigit() and int(token) < len(node):
+            node = node[int(token)]
+        else:
+            raise KeyError(path)
+    return node, tokens[-1]
+
+
+def _value_at(doc: object, path: str) -> object:
+    try:
+        node, token = _parent(doc, path)
+    except KeyError:
+        return _MISSING
+    if isinstance(node, dict):
+        return node.get(token, _MISSING)
+    if isinstance(node, list) and token.isdigit() and int(token) < len(node):
+        return node[int(token)]
+    return _MISSING
+
+
+def _patch_failed(message: str) -> web.Response:
+    """How the API server answers a JSON patch it can't apply: 422, the reason in `causes`."""
+    body = status_body(422, "Invalid", REJECTED)
+    body["details"] = {"causes": [{"type": "UnexpectedServerResponse", "message": message}]}
+    return web.json_response(body, status=422)
+
+
+def _json_patched(live: dict, ops: list[dict]) -> dict | web.Response:
+    """RFC 6902 `test`, `add`, `replace` and `remove`, all or nothing."""
+    doc = copy.deepcopy(live)
+    for op in ops:
+        kind, path, value = op.get("op"), op.get("path", ""), copy.deepcopy(op.get("value"))
+        if kind == "test":
+            if _value_at(doc, path) != value:
+                return _patch_failed(f"testing value {path} failed: test failed")
+            continue
+        try:
+            node, token = _parent(doc, path)
+        except KeyError:
+            return _patch_failed(f"{kind} operation does not apply: doc is missing path: {path}")
+        if kind == "add" and isinstance(node, dict):
+            node[token] = value
+        elif kind == "add" and isinstance(node, list):
+            node.insert(len(node) if token == "-" else int(token), value)
+        elif kind in ("replace", "remove") and _value_at(doc, path) is not _MISSING:
+            index = token if isinstance(node, dict) else int(token)
+            if kind == "remove":
+                del node[index]
+            else:
+                node[index] = value
+        else:
+            return _patch_failed(f"{kind} operation does not apply: doc is missing key: {path}")
+    return doc
 
 
 @asynccontextmanager

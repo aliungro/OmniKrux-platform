@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnikrux.actions import authz
 from omnikrux.actions.authz import NotAllowed
+from omnikrux.actions.workloads import Revision, deployment_revisions
 from omnikrux.audit.store import (
     AuditEntry,
     AuditLog,
@@ -276,6 +277,17 @@ async def resource_yaml(
         return {"yaml": dump_yaml(obj, secret=is_secret_resource(spec))}
 
     return await _call(request, cluster_id, f"read {spec.kind} {where} as YAML", run)
+
+
+@router.get("/deployments/{namespace}/{name}/revisions")
+async def revisions(cluster_id: str, namespace: str, name: str, request: Request) -> list[Revision]:
+    """The deployment's revisions (its ReplicaSets), newest first."""
+    spec, ns, where = await _target(request, cluster_id, "deployments.apps", name, namespace)
+
+    async def run(api: ApiClient) -> list[Revision]:
+        return await deployment_revisions(api, await _read_object(api, spec, ns, name))
+
+    return await _call(request, cluster_id, f"list the revisions of deployment {where}", run)
 
 
 @router.get("/pods/{namespace}/{name}/yaml")
