@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import quote
@@ -44,10 +45,12 @@ async def _read_object[T](
 ) -> T:
     """Run `fn(api)`; a failure of the object read inside it is a plain 404 / 502 `detail`."""
     try:
-        async with request.app.state.connections.api(cluster_id) as api:
+        async with AsyncExitStack() as stack:
+            try:
+                api = await stack.enter_async_context(request.app.state.connections.api(cluster_id))
+            except KeyError as exc:  # only the cluster lookup says "unknown cluster"
+                raise HTTPException(status_code=404, detail="Unknown cluster") from exc
             return await fn(api)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown cluster") from exc
     except ApiException as exc:
         status = 404 if exc.status == 404 else 502
         raise HTTPException(status_code=status, detail=kube_error_message(exc, what)) from exc
@@ -64,7 +67,7 @@ async def _metrics_or_failure(
     try:
         return await fetch_one(api, kind, namespace, name, timeout=REQUEST_TIMEOUT), None
     except Exception as exc:  # noqa: BLE001 (becomes the state and words of the answer)
-        return None, failure_of(exc)
+        return None, failure_of(exc, name)
 
 
 def _quantity(parse, resources: dict, field: str, resource: str) -> int | None:

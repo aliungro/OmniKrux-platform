@@ -21,7 +21,13 @@ NOT_ANSWERING = (
     "Metrics not available on this cluster: metrics-server isn't answering. "
     "Check its pod in kube-system."
 )
-NO_DATA_YET = "No metrics yet: metrics-server hasn't measured it."
+NO_DATA_YET = "No metrics yet: metrics-server hasn't measured {name}. Check again in a minute."
+UNKNOWN_CLUSTER = "Couldn't read metrics: that cluster isn't registered any more."
+
+
+class UnknownCluster(Exception):
+    """The cluster id is not (or no longer) registered."""
+
 
 _DURATION = re.compile(r"(\d+(?:\.\d+)?)(ms|[hms])")
 _UNITS = {"h": 3600, "m": 60, "s": 1, "ms": 0.001}
@@ -73,8 +79,14 @@ async def fetch_usage(
     items: dict[str, Usage] = {}
     for item in body.get("items") or []:
         meta = item.get("metadata") or {}
-        key = f"{meta['namespace']}/{meta['name']}" if kind == "pods" else meta["name"]
-        items[key] = usage_of(item, fetched)
+        name, namespace = meta.get("name"), meta.get("namespace")
+        if not name or (kind == "pods" and not namespace):
+            continue  # an item that doesn't say what it measures is not shown
+        try:
+            usage = usage_of(item, fetched)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        items[f"{namespace}/{name}" if kind == "pods" else name] = usage
     return items
 
 
@@ -98,12 +110,14 @@ def _names_missing_metrics(exc: ApiException) -> bool:
     return isinstance(message, str) and 'metrics.metrics.k8s.io "' in message
 
 
-def failure_of(exc: Exception) -> tuple[State, str]:
-    """The state and words for a failed metrics call."""
+def failure_of(exc: Exception, name: str = "it") -> tuple[State, str]:
+    """The state and words for a failed metrics call; `name` is the pod or node asked about."""
+    if isinstance(exc, UnknownCluster):
+        return "error", UNKNOWN_CLUSTER
     if isinstance(exc, ApiException):
         if exc.status == 404:
             if _names_missing_metrics(exc):
-                return "error", NO_DATA_YET
+                return "unavailable", NO_DATA_YET.format(name=name)
             return "unavailable", NOT_INSTALLED
         if exc.status == 503:
             return "unavailable", NOT_ANSWERING

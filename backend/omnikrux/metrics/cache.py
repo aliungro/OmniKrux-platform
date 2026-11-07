@@ -6,11 +6,18 @@ the numbers of an earlier good fetch are never kept to fall back on."""
 import asyncio
 import logging
 import time
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from typing import Literal
 
 from omnikrux.kube.connections import ClusterConnections
-from omnikrux.metrics.client import NOT_ANSWERING, NOT_INSTALLED, failure_of, fetch_usage
+from omnikrux.metrics.client import (
+    NOT_ANSWERING,
+    NOT_INSTALLED,
+    UnknownCluster,
+    failure_of,
+    fetch_usage,
+)
 from omnikrux.metrics.models import ClusterMetrics
 
 __all__ = ["NOT_ANSWERING", "NOT_INSTALLED", "MetricsCache"]
@@ -68,7 +75,11 @@ class MetricsCache:
         return result
 
     async def _read(self, cluster_id: str, kind: Kind) -> ClusterMetrics:
-        async with self._connections.api(cluster_id) as api:
+        async with AsyncExitStack() as stack:
+            try:
+                api = await stack.enter_async_context(self._connections.api(cluster_id))
+            except KeyError as exc:  # only the cluster lookup says "unknown cluster"
+                raise UnknownCluster(cluster_id) from exc
             fetched = datetime.now(UTC)
             items = await fetch_usage(api, kind, timeout=self.timeout, fetched=fetched)
         return ClusterMetrics(

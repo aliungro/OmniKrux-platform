@@ -186,6 +186,26 @@ async def test_unknown_cluster_is_an_error_not_a_crash(fake_api):
     cache = cache_for(fake_api)
     got = await cache.get("gone", "pods")
     assert got.state == "error" and got.items == {}
+    assert got.message == "Couldn't read metrics: that cluster isn't registered any more."
+    await cache.close()
+
+
+async def test_malformed_items_are_skipped_not_fatal(fake_api):
+    fake_api.pod_metrics[("demo", "web-1")] = pod_metric()
+    fake_api.pod_metrics[("demo", "")] = pod_metric()
+    cache = cache_for(fake_api)
+    got = await cache.get("a", "pods")
+    assert got.state == "ok" and list(got.items) == ["demo/web-1"]
+    await cache.close()
+
+
+async def test_cached_failure_issues_one_request_within_ttl(fake_api):
+    fake_api.metrics_mode = "unavailable"
+    cache = cache_for(fake_api, ttl=30)
+    first = await cache.get("a", "pods")
+    second = await cache.get("a", "pods")
+    assert first == second and first.state == "unavailable"
+    assert len(metric_requests(fake_api)) == 1
     await cache.close()
 
 

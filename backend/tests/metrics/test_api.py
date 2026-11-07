@@ -109,11 +109,34 @@ async def test_pod_metrics_stale_and_unavailable(client, fake_api):
     assert (await http.get("/api/clusters/nope/pods/demo/web-1/metrics")).status_code == 404
 
 
-async def test_pod_without_metrics_yet_is_not_called_not_installed(client, fake_api):
+async def test_pod_without_metrics_yet_says_check_again(client, fake_api):
     http, cluster_id, _ = client
     body = (await http.get(f"/api/clusters/{cluster_id}/pods/demo/web-1/metrics")).json()
-    assert body["state"] == "error" and body["containers"] == []
-    assert "isn't installed" not in body["message"]
+    assert body["state"] == "unavailable" and body["containers"] == []
+    assert body["message"] == (
+        "No metrics yet: metrics-server hasn't measured web-1. Check again in a minute."
+    )
+
+
+async def test_node_without_metrics_yet_says_check_again(client, fake_api):
+    http, cluster_id, _ = client
+    fake_api.objects["nodes"][("", "n2")] = {"metadata": {"name": "n2", "uid": "un2"}}
+    body = (await http.get(f"/api/clusters/{cluster_id}/nodes/n2/metrics")).json()
+    assert body["state"] == "unavailable" and body["cpu_m"] is None
+    assert body["message"] == (
+        "No metrics yet: metrics-server hasn't measured n2. Check again in a minute."
+    )
+
+
+async def test_malformed_object_is_not_an_unknown_cluster(client, fake_api):
+    http, cluster_id, _ = client
+    fake_api.pod_metrics[("demo", "web-1")] = {
+        "timestamp": stamp(),
+        "window": "30s",
+        "containers": [{"usage": {"cpu": "1m", "memory": "1Mi"}}],
+    }
+    resp = await http.get(f"/api/clusters/{cluster_id}/pods/demo/web-1/metrics")
+    assert "Unknown cluster" not in resp.text
 
 
 async def test_node_metrics_with_allocatable(client, fake_api):
