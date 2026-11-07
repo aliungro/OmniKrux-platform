@@ -66,6 +66,24 @@ The container runs as uid 10001, but `~/.kube/config` is normally mode 0600 and 
 
 Clusters imported through the API are treated as coming from your kubeconfig file; if their context isn't in the mounted file they are removed on first start — upload them again.
 
+## Troubleshooting
+
+You can work a problem from the pod list without leaving Omnikrux.
+
+- Describe, YAML and events open inline under the row (press Enter on a pod). Events show why a container was killed or can't start.
+- Logs are live and searchable. Open the previous run's logs for a container that keeps restarting, or open every pod's logs for a workload in one view (each line says which pod it came from). At most 50,000 lines are kept in the browser; Omnikrux says when older ones were dropped.
+- Shells open in a pod's container. If a container can't run a shell, start a debug container next to it. Node shells open on a node.
+- The bottom dock holds your log and shell sessions as tabs, each labelled with its cluster, namespace and pod, so you can see which cluster your keystrokes go to.
+
+Keyboard shortcuts: `↑` `↓` move, `Enter` details, `l` logs, `p` previous logs, `s` shell, `Ctrl F` search logs, `Ctrl \` layout, `/` filter, `?` all shortcuts.
+
+Things worth knowing before you use them:
+
+- Debug containers and node shells run `busybox:1.36` by default. Set `-e OMNIKRUX_DEBUG_IMAGE=your/image:tag` to use another image (it needs a shell).
+- Ephemeral debug containers can't be removed. A debug container stays in the pod until the pod is deleted.
+- A node shell creates a privileged pod in the `default` namespace on the node you choose, with full access to the node. Omnikrux deletes the pod when you close the session. If the session is never closed (the browser is shut, Omnikrux is stopped), the pod stops on its own after 1 hour but is not deleted; remove it yourself with `kubectl -n default delete pod <name>`.
+- Requests that change things (`POST`, `PUT`, `PATCH`, `DELETE`) from a web page on another origin are refused, and so are WebSocket connections from other origins. Tools such as `curl` send no origin and are not affected.
+
 ## Local development cluster
 
 `bash scripts/dev-kind.sh` creates a kind cluster (`omnikrux-dev`) with demo workloads in the `demo` namespace.

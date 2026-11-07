@@ -42,6 +42,16 @@ async def make_api_client(kubeconfig: dict) -> client.ApiClient:
 
 
 async def make_ws_api_client(kubeconfig: dict) -> WsApiClient:
-    return WsApiClient(
-        configuration=await build_configuration(kubeconfig), heartbeat=WS_HEARTBEAT_SECONDS
-    )
+    configuration = await build_configuration(kubeconfig)
+    api = WsApiClient(configuration=configuration, heartbeat=WS_HEARTBEAT_SECONDS)
+    if configuration.tls_server_name:
+        # kubernetes_asyncio sets the certificate name on plain requests but not on WebSocket
+        # ones, so a rewritten loopback server (kind in the container) would fail verification.
+        session = api.rest_client.pool_manager
+        ws_connect = session.ws_connect
+
+        def ws_connect_as(url, **kwargs):
+            return ws_connect(url, server_hostname=configuration.tls_server_name, **kwargs)
+
+        session.ws_connect = ws_connect_as
+    return api
