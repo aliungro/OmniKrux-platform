@@ -356,3 +356,13 @@ def test_missing_data_shows_as_missing_never_invented():
     assert kr.pv_row(pv, "c1").columns["claim"] == "data"
     node_taint = node(taints=[{"key": "k"}, {"key": "a", "value": "b", "effect": "NoSchedule"}])
     assert kr.node_row(node_taint, "c1").columns["taints_title"] == "k\na=b:NoSchedule"
+
+
+def test_pv_row_survives_a_partial_claimref():
+    both = obj(spec={"claimRef": {"namespace": "demo", "name": "data"}})
+    assert kr.pv_row(both, "c1").columns["claim"] == "demo/data"
+    only_ns = obj(spec={"claimRef": {"namespace": "demo"}})
+    assert kr.pv_row(only_ns, "c1").columns["claim"] == "demo"
+    only_name = obj(spec={"claimRef": {"name": "data"}})
+    assert kr.pv_row(only_name, "c1").columns["claim"] == "data"
+    assert kr.pv_row(obj(spec={"claimRef": {}}), "c1").columns["claim"] is None

@@ -312,9 +312,7 @@ def pv_row(obj: dict, cluster_id: str) -> ResourceRow:
     spec = obj.get("spec") or {}
     claim = spec.get("claimRef") or {}
     row.columns.update(
-        claim=(
-            f"{claim['namespace']}/{claim['name']}" if claim.get("namespace") else claim.get("name")
-        ),
+        claim="/".join(p for p in (claim.get("namespace"), claim.get("name")) if p) or None,
         capacity=(spec.get("capacity") or {}).get("storage"),
         reclaim=spec.get("persistentVolumeReclaimPolicy"),
         storage_class=spec.get("storageClassName"),
