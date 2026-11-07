@@ -12,9 +12,12 @@ from functools import partial
 from typing import Literal
 
 from omnikrux.kube.discovery import ApiResource
-from omnikrux.resources.rows import ResourceRow, parse_ts, pod_row
+from omnikrux.resources import kind_rows as kr
+from omnikrux.resources.printer import PrinterColumn, printer_columns, printer_row_builder
+from omnikrux.resources.rows import ResourceRow, base_row, pod_row
 
 ColumnType = Literal["text", "number", "status", "age", "time", "cpu", "memory", "object", "pods"]
+Width = Literal["s", "m", "l"]
 
 HELM_RELEASES = "helm-releases"
 
@@ -27,7 +30,7 @@ class Column:
     key: str
     label: str
     type: ColumnType = "text"
-    width: Literal["s", "m", "l"] = "m"
+    width: Width = "m"
 
 
 @dataclass(frozen=True)
@@ -69,29 +72,49 @@ def is_kind_key(key: str) -> bool:
     return key == HELM_RELEASES or (len(key) <= 253 and _KIND_KEY.match(key) is not None)
 
 
-NAME = Column("name", "Name", width="l")
-NAMESPACE = Column("namespace", "Namespace")
-AGE = Column("age", "Age", "age", "s")
+def _col(key: str, label: str, type: ColumnType = "text", width: Width = "m") -> Column:
+    return Column(key, label, type, width)
+
+
+NAME = _col("name", "Name", width="l")
+NAMESPACE = _col("namespace", "Namespace")
+AGE = _col("age", "Age", "age", "s")
+STATUS = _col("status", "Status", "status")
+READY = _col("ready", "Ready", width="s")
+UP_TO_DATE = _col("up_to_date", "Up-to-date", "number", "s")
+IMAGES = _col("images", "Images", width="l")
+CPU = _col("cpu", "CPU", "cpu", "s")
+MEMORY = _col("memory", "Memory", "memory", "s")
+CAPACITY = _col("capacity", "Capacity", width="s")
+STORAGE_CLASS = _col("storage_class", "Storage class")
 
 
 def generic_row(obj: dict, cluster_id: str, *, kind: str) -> ResourceRow:
     """The row every kind can have: identity, age and labels."""
-    md = obj.get("metadata") or {}
-    return ResourceRow(
-        uid=md.get("uid", ""),
-        cluster_id=cluster_id,
-        kind=kind,
-        namespace=md.get("namespace"),
-        name=md.get("name", ""),
-        created_at=parse_ts(md["creationTimestamp"]) if md.get("creationTimestamp") else None,
-        columns={},
-        labels=md.get("labels") or {},
-    )
+    return base_row(obj, cluster_id, kind)
+
+
+# Printer columns that the Name and Age columns already show.
+_DUPLICATES = {".metadata.name", ".metadata.creationTimestamp"}
+
+
+def _printer_column(column: PrinterColumn) -> Column:
+    if column.name in ("Ready", "Status"):
+        return _col(column.key, column.name, "status", "s")
+    if column.type in ("integer", "number"):
+        return _col(column.key, column.name, "number", "s")
+    return _col(column.key, column.name, "time" if column.type == "date" else "text")
 
 
 def generic_spec(res: ApiResource, printer: list[dict] | None) -> KindSpec:
-    """A spec for any served resource. `printer` (a CRD's printer columns) is used from Task 2."""
-    columns = (NAME, NAMESPACE, AGE) if res.namespaced else (NAME, AGE)
+    """A spec for any served resource; a CRD's priority-0 printer columns go between Namespace
+    and Age."""
+    extra = [c for c in printer_columns(printer or []) if c.json_path not in _DUPLICATES]
+    columns = (NAME, NAMESPACE) if res.namespaced else (NAME,)
+    columns += tuple(_printer_column(c) for c in extra) + (AGE,)
+    to_row = (
+        printer_row_builder(extra, kind=res.kind) if extra else partial(generic_row, kind=res.kind)
+    )
     return KindSpec(
         key=kind_key(res.group, res.plural),
         group=res.group,
@@ -101,31 +124,280 @@ def generic_spec(res: ApiResource, printer: list[dict] | None) -> KindSpec:
         namespaced=res.namespaced,
         label=res.kind,
         columns=columns,
-        to_row=partial(generic_row, kind=res.kind),
+        to_row=to_row,
         short_names=res.short_names,
         verbs=res.verbs,
     )
 
 
-KINDS: dict[str, KindSpec] = {
-    "pods": KindSpec(
-        key="pods",
+def _core(
+    plural: str,
+    kind: str,
+    columns: tuple[Column, ...],
+    to_row: Callable[[dict, str], ResourceRow],
+    *,
+    group: str = "",
+    version: str = "v1",
+    namespaced: bool = True,
+    **extra,
+) -> KindSpec:
+    return KindSpec(
+        key=kind_key(group, plural),
+        group=group,
+        version=version,
+        plural=plural,
+        kind=kind,
+        namespaced=namespaced,
+        label=kind,
+        columns=columns,
+        to_row=to_row,
+        **extra,
+    )
+
+
+_CURATED = (
+    _core(
+        "pods",
+        "Pod",
+        (
+            NAME,
+            NAMESPACE,
+            STATUS,
+            READY,
+            _col("restarts", "Restarts", "number", "s"),
+            CPU,
+            MEMORY,
+            _col("node", "Node"),
+            AGE,
+        ),
+        pod_row,
+        short_names=("po",),
+    ),
+    _core(
+        "deployments",
+        "Deployment",
+        (
+            NAME,
+            NAMESPACE,
+            STATUS,
+            READY,
+            UP_TO_DATE,
+            _col("available", "Available", "number", "s"),
+            IMAGES,
+            AGE,
+        ),
+        kr.deployment_row,
+        group="apps",
+        short_names=("deploy",),
+    ),
+    _core(
+        "statefulsets",
+        "StatefulSet",
+        (NAME, NAMESPACE, STATUS, READY, UP_TO_DATE, IMAGES, AGE),
+        kr.statefulset_row,
+        group="apps",
+        short_names=("sts",),
+    ),
+    _core(
+        "replicasets",
+        "ReplicaSet",
+        (NAME, NAMESPACE, STATUS, READY, _col("owner", "Owner", "object"), IMAGES, AGE),
+        kr.replicaset_row,
+        group="apps",
+        short_names=("rs",),
+    ),
+    _core(
+        "daemonsets",
+        "DaemonSet",
+        (
+            NAME,
+            NAMESPACE,
+            STATUS,
+            _col("desired", "Desired", "number", "s"),
+            READY,
+            UP_TO_DATE,
+            _col("node_selector", "Node selector"),
+            AGE,
+        ),
+        kr.daemonset_row,
+        group="apps",
+        short_names=("ds",),
+    ),
+    _core(
+        "jobs",
+        "Job",
+        (
+            NAME,
+            NAMESPACE,
+            STATUS,
+            _col("completions", "Completions", width="s"),
+            _col("duration", "Duration", width="s"),
+            AGE,
+        ),
+        kr.job_row,
+        group="batch",
+    ),
+    _core(
+        "cronjobs",
+        "CronJob",
+        (
+            NAME,
+            NAMESPACE,
+            STATUS,
+            _col("schedule", "Schedule"),
+            _col("last_run", "Last run", "time", "s"),
+            _col("active", "Active", "number", "s"),
+            AGE,
+        ),
+        kr.cronjob_row,
+        group="batch",
+        short_names=("cj",),
+    ),
+    _core(
+        "services",
+        "Service",
+        (
+            NAME,
+            NAMESPACE,
+            _col("type", "Type", width="s"),
+            _col("cluster_ip", "Cluster IP"),
+            _col("external", "External"),
+            _col("ports", "Ports"),
+            AGE,
+        ),
+        kr.service_row,
+        short_names=("svc",),
+    ),
+    _core(
+        "ingresses",
+        "Ingress",
+        (
+            NAME,
+            NAMESPACE,
+            _col("ingress_class", "Class", width="s"),
+            _col("hosts", "Hosts", width="l"),
+            _col("address", "Address"),
+            AGE,
+        ),
+        kr.ingress_row,
+        group="networking.k8s.io",
+        short_names=("ing",),
+    ),
+    _core(
+        "configmaps",
+        "ConfigMap",
+        (NAME, NAMESPACE, _col("keys", "Keys", "number", "s"), AGE),
+        kr.configmap_row,
+        short_names=("cm",),
+    ),
+    _core(
+        "secrets",
+        "Secret",
+        (NAME, NAMESPACE, _col("type", "Type"), _col("keys", "Keys", "number", "s"), AGE),
+        kr.secret_row,
+    ),
+    _core(
+        "persistentvolumeclaims",
+        "PersistentVolumeClaim",
+        (NAME, NAMESPACE, STATUS, _col("volume", "Volume"), CAPACITY, STORAGE_CLASS, AGE),
+        kr.pvc_row,
+        short_names=("pvc",),
+    ),
+    _core(
+        "persistentvolumes",
+        "PersistentVolume",
+        (
+            NAME,
+            STATUS,
+            _col("claim", "Claim"),
+            CAPACITY,
+            _col("reclaim", "Reclaim", width="s"),
+            STORAGE_CLASS,
+            AGE,
+        ),
+        kr.pv_row,
+        namespaced=False,
+        short_names=("pv",),
+    ),
+    _core(
+        "nodes",
+        "Node",
+        (
+            NAME,
+            STATUS,
+            _col("roles", "Roles"),
+            _col("version", "Version", width="s"),
+            CPU,
+            MEMORY,
+            _col("pods", "Pods", "pods", "s"),
+            _col("pressure", "Pressure"),
+            _col("taints", "Taints", "number", "s"),
+            AGE,
+        ),
+        kr.node_row,
+        namespaced=False,
+        short_names=("no",),
+    ),
+    _core(
+        "events",
+        "Event",
+        (
+            NAMESPACE,
+            _col("status", "Type", "status", "s"),
+            _col("reason", "Reason"),
+            _col("object", "Object", "object", "l"),
+            _col("message", "Message", width="l"),
+            _col("count", "Count", "number", "s"),
+            _col("last_seen", "Last seen", "time", "s"),
+        ),
+        kr.event_row,
+        sort="recent",
+        short_names=("ev",),
+    ),
+    _core(
+        "namespaces",
+        "Namespace",
+        (NAME, STATUS, AGE),
+        kr.namespace_row,
+        namespaced=False,
+        short_names=("ns",),
+    ),
+    _core(
+        "horizontalpodautoscalers",
+        "HorizontalPodAutoscaler",
+        (
+            NAME,
+            NAMESPACE,
+            _col("target", "Target", "object"),
+            _col("replicas", "Replicas", width="s"),
+            AGE,
+        ),
+        kr.hpa_row,
+        group="autoscaling",
+        version="v2",
+        short_names=("hpa",),
+    ),
+    # Helm keeps each release revision in a Secret labelled owner=helm; rows read only the labels.
+    KindSpec(
+        key=HELM_RELEASES,
         group="",
         version="v1",
-        plural="pods",
-        kind="Pod",
+        plural="secrets",
+        kind="HelmRelease",
         namespaced=True,
-        label="Pod",
+        label="Helm release",
         columns=(
             NAME,
             NAMESPACE,
-            Column("status", "Status", "status"),
-            Column("ready", "Ready", width="s"),
-            Column("restarts", "Restarts", "number", "s"),
-            Column("node", "Node"),
-            AGE,
+            _col("revision", "Revision", "number", "s"),
+            STATUS,
+            _col("updated", "Updated", "time", "s"),
         ),
-        to_row=pod_row,
-        short_names=("po",),
+        to_row=kr.helm_release_row,
+        sort="recent",
+        label_selector="owner=helm",
+        plural_label="Helm releases",
     ),
-}
+)
+
+KINDS: dict[str, KindSpec] = {spec.key: spec for spec in _CURATED}

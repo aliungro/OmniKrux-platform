@@ -1,7 +1,10 @@
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
+
+from omnikrux.resources.quantity import parse_bytes, parse_cpu_m
 
 StatusClass = Literal["ok", "warn", "bad", "done"]
 
@@ -29,6 +32,21 @@ class ResourceRow(BaseModel):
 
 def parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
+
+
+def base_row(obj: dict, cluster_id: str, kind: str) -> ResourceRow:
+    """The row every kind can have: identity, age and labels; its columns are for the caller."""
+    md = obj.get("metadata") or {}
+    return ResourceRow(
+        uid=md.get("uid", ""),
+        cluster_id=cluster_id,
+        kind=kind,
+        namespace=md.get("namespace"),
+        name=md.get("name", ""),
+        created_at=parse_ts(md["creationTimestamp"]) if md.get("creationTimestamp") else None,
+        columns={},
+        labels=md.get("labels") or {},
+    )
 
 
 def pod_status(pod: dict) -> tuple[str, StatusClass]:
@@ -71,6 +89,39 @@ def pod_status(pod: dict) -> tuple[str, StatusClass]:
     return "Unknown", "warn"
 
 
+def _quantity(value: Any, parse: Callable[[str], int]) -> int | None:
+    try:
+        return parse(value)
+    except ValueError:
+        return None
+
+
+def _resources(pod: dict) -> dict[str, Any]:
+    """Requests and limits summed over the regular containers (init containers run first and
+    don't add up). A limit is None when any container has none; so is an unreadable one."""
+    containers = (pod.get("spec") or {}).get("containers") or []
+    out: dict[str, Any] = {
+        "images": [c["image"] for c in containers if c.get("image")],
+    }
+    for prefix, resource, parse in (
+        ("cpu", "cpu", parse_cpu_m),
+        ("memory", "memory", parse_bytes),
+    ):
+        suffix = "m" if prefix == "cpu" else "b"
+        for field in ("requests", "limits"):
+            values = [
+                _quantity(((c.get("resources") or {}).get(field) or {}).get(resource), parse)
+                for c in containers
+            ]
+            if field == "requests":
+                out[f"{prefix}_request_{suffix}"] = sum(v or 0 for v in values)
+            else:
+                out[f"{prefix}_limit_{suffix}"] = (
+                    None if not values or None in values else sum(values)
+                )
+    return out
+
+
 def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
     md = pod.get("metadata") or {}
     status = pod.get("status") or {}
@@ -82,21 +133,15 @@ def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
         if (f := (((cs.get("lastState") or {}).get("terminated")) or {}).get("finishedAt"))
     ]
     last_restart = max(finished, key=parse_ts) if finished else None
-    return ResourceRow(
-        uid=md.get("uid", ""),
-        cluster_id=cluster_id,
-        kind="Pod",
-        namespace=md.get("namespace"),
-        name=md.get("name", ""),
-        created_at=parse_ts(md["creationTimestamp"]) if md.get("creationTimestamp") else None,
-        columns={
-            "status": label,
-            "status_class": status_class,
-            "ready": f"{sum(1 for cs in containers if cs.get('ready'))}/{len(containers)}",
-            "restarts": sum((cs.get("restartCount") or 0) for cs in containers),
-            "node": (pod.get("spec") or {}).get("nodeName"),
-            "last_restart_at": last_restart,
-            "resource_version": md.get("resourceVersion"),
-        },
-        labels=md.get("labels") or {},
-    )
+    row = base_row(pod, cluster_id, "Pod")
+    row.columns = {
+        "status": label,
+        "status_class": status_class,
+        "ready": f"{sum(1 for cs in containers if cs.get('ready'))}/{len(containers)}",
+        "restarts": sum((cs.get("restartCount") or 0) for cs in containers),
+        "node": (pod.get("spec") or {}).get("nodeName"),
+        "last_restart_at": last_restart,
+        "resource_version": md.get("resourceVersion"),
+        **_resources(pod),
+    }
+    return row

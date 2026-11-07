@@ -78,14 +78,15 @@ async def test_union_lists_clusters_serving_each_kind():
         "Widget",
     )
     assert widget.label == "Widget" and widget.plural_label == "widgets"
-    assert [c.key for c in widget.columns] == ["name", "namespace", "age"]
-    assert [c.type for c in widget.columns] == ["text", "text", "age"]
+    assert [c.key for c in widget.columns] == ["name", "namespace", "pc_size", "age"]
+    assert [c.type for c in widget.columns] == ["text", "text", "number", "age"]
     nodes = kinds["nodes"]
-    assert nodes.namespaced is False and [c.key for c in nodes.columns] == ["name", "age"]
+    assert nodes.namespaced is False and nodes.columns[0].key == "name"
     # Curated kinds first (in KINDS order), then by label.
     keys = [k.key for k in out.kinds]
-    assert keys[: len(KINDS)] == [k for k in KINDS if k in kinds]
-    labels = [k.label for k in out.kinds[len(KINDS) :]]
+    curated = [k for k in KINDS if k in kinds]
+    assert keys[: len(curated)] == curated
+    labels = [k.label for k in out.kinds[len(curated) :]]
     assert labels == sorted(labels)
     assert "pods/log" not in kinds and "bindings" not in kinds
 
