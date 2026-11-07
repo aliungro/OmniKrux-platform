@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from omnikrux.actions.jobs import JobRunner
 from omnikrux.actions.pipeline import PlanStore
 from omnikrux.actions.pipeline import router as actions_router
 from omnikrux.audit.api import router as audit_router
@@ -171,11 +172,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.hub = hub
         app.state.audit = audit
         app.state.plans = PlanStore()
+        jobs = app.state.jobs = JobRunner(audit)
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
             yield
         finally:
+            await jobs.close()  # first: a stopped drain still writes its audit record
             await hub.close()
             await catalog.close()
             await engine.dispose()

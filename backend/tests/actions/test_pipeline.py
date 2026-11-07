@@ -58,7 +58,7 @@ class FakeHandler:
         self.plans: list[tuple] = []
         self.applies: list[tuple] = []
 
-    async def plan(self, api, spec, target, params):
+    async def plan(self, api, spec, target, params, *, cluster):
         live = await get_object(api, spec, target)
         after = copy.deepcopy(live)
         after.setdefault("spec", {})["replicas"] = params.get("replicas", 3)
@@ -194,7 +194,7 @@ class KindlessSecretHandler(FakeHandler):
     """Hands the pipeline a Secret without `kind`/`apiVersion` (as a list item, or a hand-built
     copy, would be): the pipeline must still mask it, because the kind's resource is secrets."""
 
-    async def plan(self, api, spec, target, params):
+    async def plan(self, api, spec, target, params, *, cluster):
         live = await get_object(api, spec, target)
         bare = {k: v for k, v in live.items() if k not in ("kind", "apiVersion")}
         self.plans.append((target, params))
@@ -238,7 +238,7 @@ async def test_plan_and_audit_diffs_mask_a_secret_by_its_resource(env, monkeypat
 
 async def test_plan_without_objects_has_no_diff(env, monkeypatch):
     class NoDiff(FakeHandler):
-        async def plan(self, api, spec, target, params):
+        async def plan(self, api, spec, target, params, *, cluster):
             return Planned(title="Cordon", apply_label="Cordon")
 
     monkeypatch.setitem(ACTIONS, "scale", NoDiff())

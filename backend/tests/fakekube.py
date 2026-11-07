@@ -17,7 +17,14 @@ Any served object can be replaced (PUT, honouring `metadata.resourceVersion` wit
 API server, and `dryRun=All`) and patched (`application/merge-patch+json`, or
 `application/json-patch+json` with `test` / `add` / `replace` / `remove`; a failed `test` answers
 the API server's 422). Each write bumps `resourceVersion` (and `generation` when `spec` changed)
-and is recorded in `writes`.
+and is recorded in `writes`. Any served object can be deleted (recorded in `deletes`), honouring
+DeleteOptions `preconditions.uid` (and `resourceVersion`) with the API server's 409.
+
+A pod can be evicted (`POST .../pods/{name}/eviction`, recorded in `eviction_requests`): each
+eviction of a pod takes the next status of `evictions[(ns, name)]` (the last one sticks; none:
+201). 201 deletes the pod, honouring `deleteOptions.preconditions.uid`; 429 is the API server's
+PodDisruptionBudget refusal. A deleted or evicted pod in `linger` stays, with a
+`deletionTimestamp`, until the test removes it (a pod still terminating).
 
 Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`.
 
@@ -249,6 +256,17 @@ class FakeKubeApi:
         self.created: list[dict] = []
         self.patches: list[dict] = []
         self.deleted: list[tuple[str, str]] = []
+        # Every DELETE of one object: its path and DeleteOptions body.
+        self.deletes: list[dict] = []
+        # (namespace, pod) -> the statuses its evictions answer with, in turn (the last sticks).
+        self.evictions: dict[tuple[str, str], list[int]] = {}
+        self.eviction_requests: list[dict] = []
+        # Pods that stay, terminating, when deleted or evicted, until the test removes them.
+        self.linger: set[tuple[str, str]] = set()
+        # Seconds each eviction takes, and the most evictions seen in flight at once.
+        self.eviction_delay = 0.0
+        self.evictions_in_flight_max = 0
+        self._evicting = 0
         # Every PUT and PATCH of an object: method, path, query, content type and body.
         self.writes: list[dict] = []
         # (namespace, pod) -> [status field, container, states still to go through]
@@ -296,11 +314,15 @@ class FakeKubeApi:
             if method == "PATCH" and sub == "/ephemeralcontainers":
                 return await self._patch_ephemeral(request, key)
             if method == "DELETE" and sub is None:
-                return self._delete_pod(key)
+                return await self._delete_pod(request, key)
+            if method == "POST" and sub == "/eviction":
+                return await self._evict(request, key)
         if method == "GET" and (match := API_PATH.match(path)):
             return await self._get(request, match)
         if method in ("PUT", "PATCH") and (match := API_PATH.match(path)):
             return await self._write(request, match)
+        if method == "DELETE" and (match := API_PATH.match(path)):
+            return await self._delete(request, match)
         return not_found()
 
     # --- discovery and generic reads ----------------------------------------------------
@@ -602,13 +624,71 @@ class FakeKubeApi:
             self._start(key, "ephemeralContainerStatuses", container["name"])
         return web.json_response(pod)
 
-    def _delete_pod(self, key: tuple[str, str]) -> web.Response:
-        pod = self.pods.pop(key, None)
+    async def _delete_pod(self, request: web.Request, key: tuple[str, str]) -> web.Response:
+        options = await _body(request)
+        self.deletes.append({"path": request.path, "body": copy.deepcopy(options)})
+        pod = self.pods.get(key)
         if pod is None:
             return not_found(f'pods "{key[1]}" not found')
+        if (refused := _precondition_failed(pod, options, "pods", key[1])) is not None:
+            return refused
+        return web.json_response(self._remove_pod(key))
+
+    def _remove_pod(self, key: tuple[str, str]) -> dict:
+        """Delete a pod; one in `linger` stays, terminating, until the test removes it."""
         self.deleted.append(key)
         self._starting.pop(key, None)
-        return web.json_response(pod)
+        if key in self.linger:
+            pod = self.pods[key]
+            pod.setdefault("metadata", {})["deletionTimestamp"] = "2026-11-07T09:00:00Z"
+            return pod
+        return self.pods.pop(key)
+
+    async def _delete(self, request: web.Request, match: re.Match) -> web.Response:
+        """DELETE one served object, honouring DeleteOptions preconditions."""
+        group, version = match["group"] or "", match["core"] or match["version"]
+        parts = [part for part in (match["rest"] or "").split("/") if part]
+        found = self._resolve(group, version, parts) if parts else None
+        if found is None or len(found[2]) != 2:
+            return not_found()
+        res, ns, parts = found
+        key = (ns or "", parts[1])
+        options = await _body(request)
+        self.deletes.append({"path": request.path, "body": copy.deepcopy(options)})
+        live = self.objects[res.key].get(key)
+        if live is None:
+            return not_found(f'{res.plural} "{parts[1]}" not found')
+        name = f"{res.plural}.{res.group}" if res.group else res.plural
+        if (refused := _precondition_failed(live, options, name, key[1])) is not None:
+            return refused
+        return web.json_response(self.objects[res.key].pop(key))
+
+    async def _evict(self, request: web.Request, key: tuple[str, str]) -> web.Response:
+        """A policy/v1 Eviction: the pod's next scripted status (201 when none is scripted)."""
+        body = await _body(request)
+        self.eviction_requests.append({"pod": key, "body": copy.deepcopy(body)})
+        self._evicting += 1
+        self.evictions_in_flight_max = max(self.evictions_in_flight_max, self._evicting)
+        try:
+            await asyncio.sleep(self.eviction_delay)
+        finally:
+            self._evicting -= 1
+        pod = self.pods.get(key)
+        if pod is None:
+            return not_found(f'pods "{key[1]}" not found')
+        options = body.get("deleteOptions") if isinstance(body, dict) else None
+        if (refused := _precondition_failed(pod, options, "pods", key[1])) is not None:
+            return refused
+        script = self.evictions.get(key) or [201]
+        status = script.pop(0) if len(script) > 1 else script[0]
+        if status == 429:
+            return web.json_response(_pdb_refusal(key[1]), status=429)
+        if status != 201:
+            failure = status_body(status, "InternalError", f"eviction of {key[1]} failed")
+            return web.json_response(failure, status=status)
+        self._remove_pod(key)
+        success = {"kind": "Status", "apiVersion": "v1", "status": "Success", "code": 201}
+        return web.json_response(success, status=201)
 
     async def _log(self, request: web.Request, key: tuple[str, str]) -> web.StreamResponse:
         accept = request.headers.get("Accept", "*/*")
@@ -724,6 +804,40 @@ class FakeKubeApi:
             await self.release.wait()
         await response.write_eof()
         return response
+
+
+async def _body(request: web.Request) -> dict:
+    """A request's JSON body; {} when it has none."""
+    raw = await request.read()
+    return json.loads(raw) if raw else {}
+
+
+PDB_REFUSAL = "Cannot evict pod as it would violate the pod's disruption budget."
+
+
+def _pdb_refusal(pod: str) -> dict:
+    """How the API server refuses an eviction a PodDisruptionBudget doesn't allow (a 429)."""
+    body = status_body(429, "TooManyRequests", PDB_REFUSAL)
+    message = f"The disruption budget for {pod} needs 1 healthy pods and has 1 currently"
+    body["details"] = {"causes": [{"reason": "DisruptionBudget", "message": message}]}
+    return body
+
+
+def _precondition_failed(
+    live: dict, options: dict | None, name: str, object_name: str
+) -> web.Response | None:
+    """The API server's 409 for DeleteOptions preconditions the live object doesn't meet."""
+    wanted = (options or {}).get("preconditions") or {}
+    md = live.get("metadata") or {}
+    for field, label in (("uid", "UID"), ("resourceVersion", "ResourceVersion")):
+        if wanted.get(field) is not None and wanted[field] != md.get(field):
+            message = (
+                f'Operation cannot be fulfilled on {name} "{object_name}": Precondition failed: '
+                f"{label} in precondition: {wanted[field]}, {label} in object meta: "
+                f"{md.get(field)}"
+            )
+            return web.json_response(status_body(409, "Conflict", message), status=409)
+    return None
 
 
 def _conflict(name: str, object_name: str) -> web.Response:

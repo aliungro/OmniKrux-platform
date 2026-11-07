@@ -15,7 +15,14 @@ from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 from pydantic import BaseModel
 
-from omnikrux.actions.pipeline import ActionError, Applied, ApplyContext, Planned, Target
+from omnikrux.actions.pipeline import (
+    ActionError,
+    Applied,
+    ApplyContext,
+    ClusterRef,
+    Planned,
+    Target,
+)
 from omnikrux.kube.connections import kube_error_message
 from omnikrux.kube.http import call_json
 from omnikrux.kube.pods import REQUEST_TIMEOUT
@@ -106,7 +113,9 @@ async def _hpa_warnings(api: ApiClient, spec: KindSpec, target: Target) -> list[
 class ScaleAction:
     kinds = frozenset({"deployments.apps", "statefulsets.apps", "replicasets.apps"})
 
-    async def plan(self, api: ApiClient, spec: KindSpec, target: Target, params: dict) -> Planned:
+    async def plan(
+        self, api: ApiClient, spec: KindSpec, target: Target, params: dict, *, cluster: ClusterRef
+    ) -> Planned:
         replicas = params.get("replicas")
         if not _is_count(replicas) or not 0 <= replicas <= MAX_REPLICAS:
             raise ActionError(422, BAD_REPLICAS)
@@ -172,7 +181,9 @@ def _restart_op(template: dict, stamp: str) -> dict:
 class RestartAction:
     kinds = frozenset({"deployments.apps", "statefulsets.apps", "daemonsets.apps"})
 
-    async def plan(self, api: ApiClient, spec: KindSpec, target: Target, params: dict) -> Planned:
+    async def plan(
+        self, api: ApiClient, spec: KindSpec, target: Target, params: dict, *, cluster: ClusterRef
+    ) -> Planned:
         live = await _read(api, spec, target)
         template = (live.get("spec") or {}).get("template") or {}
         stamp = _now()  # stamped once: the apply writes exactly what the user reviewed
@@ -281,7 +292,9 @@ def _without_hash(template: dict) -> dict:
 class RollbackAction:
     kinds = frozenset({"deployments.apps"})
 
-    async def plan(self, api: ApiClient, spec: KindSpec, target: Target, params: dict) -> Planned:
+    async def plan(
+        self, api: ApiClient, spec: KindSpec, target: Target, params: dict, *, cluster: ClusterRef
+    ) -> Planned:
         wanted = params.get("revision")
         if wanted is not None and (not _is_count(wanted) or wanted < 1):
             raise ActionError(422, BAD_REVISION)

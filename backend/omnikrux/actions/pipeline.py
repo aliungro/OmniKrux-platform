@@ -20,7 +20,7 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
 from kubernetes_asyncio.client import ApiClient
@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnikrux.actions import authz
 from omnikrux.actions.authz import NotAllowed
+from omnikrux.actions.jobs import JobOut, JobRunner
 from omnikrux.audit.store import (
     AuditEntry,
     AuditLog,
@@ -180,7 +181,7 @@ class Applied:
 class ApplyContext:
     api: ApiClient  # the plan's cluster, and only that
     connections: ClusterConnections
-    jobs: Any = None  # the JobRunner (Task 6)
+    jobs: JobRunner | None = None  # runs what an apply leaves going (a drain)
     audit: AuditLog
     audit_id: int
     actor: str
@@ -189,8 +190,11 @@ class ApplyContext:
 class ActionHandler(Protocol):
     kinds: frozenset[str] | None  # the kind keys it acts on; None: any served kind
 
-    async def plan(self, api: ApiClient, spec: KindSpec, target: Target, params: dict) -> Planned:
-        """Read the live object and work out the change. Raise ActionError to refuse."""
+    async def plan(
+        self, api: ApiClient, spec: KindSpec, target: Target, params: dict, *, cluster: ClusterRef
+    ) -> Planned:
+        """Read the live object and work out the change. Raise ActionError to refuse.
+        `cluster` is the plan's cluster, for copy that names it."""
         ...
 
     async def apply(
@@ -402,16 +406,17 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
     if (problem := target_problem(spec, target.name, target.namespace)) is not None:
         raise HTTPException(status_code=422, detail=problem)
 
-    async with AsyncExitStack() as stack:
-        api = await _open_api(stack, state.connections, target.cluster_id)
-        try:
-            planned = await handler.plan(api, spec, target, copy.deepcopy(body.params))
-        except Exception as exc:
-            raise _failure(exc, body.action, spec, target) from exc
-
     cluster = ClusterRef(
         id=info.id, name=info.name, provider=info.provider.value, environment=info.environment.value
     )
+    async with AsyncExitStack() as stack:
+        api = await _open_api(stack, state.connections, target.cluster_id)
+        try:
+            params = copy.deepcopy(body.params)
+            planned = await handler.plan(api, spec, target, params, cluster=cluster)
+        except Exception as exc:
+            raise _failure(exc, body.action, spec, target) from exc
+
     typed = needs_typed_confirmation(body.action, cluster.environment, spec.key, planned.typed)
     warnings = list(planned.warnings)
     if cluster.environment == Environment.PRODUCTION and PRODUCTION not in warnings:
@@ -510,3 +515,32 @@ async def apply_action(plan_id: str, body: ApplyIn, request: Request) -> ApplyOu
         )
     await audit.finish(audit_id, "succeeded", applied.message)
     return ApplyOut(outcome="succeeded", message=applied.message, job_id=None, audit_id=audit_id)
+
+
+# --- jobs ---------------------------------------------------------------------------------
+
+NO_SUCH_JOB = "This job isn't known: it ended more than an hour ago, or the console restarted."
+
+
+def _jobs(request: Request) -> JobRunner:
+    jobs = getattr(request.app.state, "jobs", None)
+    if jobs is None:
+        raise HTTPException(status_code=404, detail=NO_SUCH_JOB)
+    return jobs
+
+
+@router.get("/api/actions/jobs/{job_id}")
+async def get_job(job_id: str, request: Request) -> JobOut:
+    try:
+        return _jobs(request).get(job_id, actor=actor_of(request))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=NO_SUCH_JOB) from exc
+
+
+@router.post("/api/actions/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, request: Request) -> JobOut:
+    """Stop a running job; what it already did stays done (a drain's node stays cordoned)."""
+    try:
+        return await _jobs(request).cancel(job_id, actor=actor_of(request))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=NO_SUCH_JOB) from exc

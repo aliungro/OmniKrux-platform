@@ -19,6 +19,7 @@ from omnikrux.actions.pipeline import (
     ActionError,
     Applied,
     ApplyContext,
+    ClusterRef,
     Planned,
     Target,
 )
@@ -89,7 +90,9 @@ def _reviewed(obj: dict) -> dict:
 class EditAction:
     kinds = None  # any kind the cluster lets us update, but never a Secret
 
-    async def plan(self, api: ApiClient, spec: KindSpec, target: Target, params: dict) -> Planned:
+    async def plan(
+        self, api: ApiClient, spec: KindSpec, target: Target, params: dict, *, cluster: ClusterRef
+    ) -> Planned:
         if is_secret_resource(spec):
             raise ActionError(422, SECRET_EDIT)
         if "update" not in spec.verbs:
