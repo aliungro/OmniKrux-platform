@@ -1,9 +1,12 @@
 """Scale, restart and roll back workloads.
 
 Each apply is a JSON patch whose `test` ops hold what the plan read: the object's uid (so a
-workload deleted and re-created under the same name isn't touched) and the values the change
-replaces. If any of them moved since the review, the API server refuses the whole patch (a 422
-naming the failed test) and the user reads the conflict copy."""
+workload deleted and re-created under the same name isn't touched), and either the replicas a
+scale replaces or the `metadata.generation`, which the API server bumps on every spec change.
+Pod templates are never compared themselves: the API server's JSON escapes text differently from
+Python's (`&` as \u0026, non-ASCII as itself) and json-patch compares strings byte for byte, so a
+template `test` could fail on every try. If a test fails, the API server refuses the whole patch
+(a 422 naming it) and the user reads the conflict copy."""
 
 import copy
 from datetime import UTC, datetime
@@ -28,9 +31,11 @@ RESTARTED_AT = "kubectl.kubernetes.io/restartedAt"
 BAD_REPLICAS = "Replicas must be a whole number from 0 to 10,000."
 SCALE_TO_ZERO = "Scaling to 0 stops every pod of {name}."
 HPA_MANAGES = "HorizontalPodAutoscaler {hpa} manages these replicas and may change them back."
+SAME_COUNT = "Nothing changes: {name} already runs {n} replicas."
 PAUSED = "This deployment is paused: the restart happens once it's resumed."
+PAUSED_ROLLBACK = "Deployment {name} is paused: resume it before rolling back."
 NO_EARLIER = "Deployment {name} has no earlier revision to roll back to."
-NO_SUCH_REVISION = "Deployment {name} has no revision {revision}."
+NO_SUCH_REVISION = "Deployment {name} has no revision {revision}. Pick one from its revisions."
 ALREADY_RUNS = "Deployment {name} already runs revision {revision}."
 BAD_REVISION = "The revision must be a whole number from 1 up, or empty for the previous one."
 
@@ -41,6 +46,18 @@ def _where(target: Target) -> str:
 
 def _uid(obj: dict) -> str | None:
     return (obj.get("metadata") or {}).get("uid")
+
+
+def _generation(obj: dict) -> int | None:
+    return (obj.get("metadata") or {}).get("generation")
+
+
+def _unchanged(state: dict) -> list[dict]:
+    """The object is the one the plan read, with the spec the plan read."""
+    return [
+        _test("/metadata/uid", state["uid"]),
+        _test("/metadata/generation", state["generation"]),
+    ]
 
 
 def _is_count(value: object) -> bool:
@@ -103,6 +120,7 @@ class ScaleAction:
             title=f"Scale {spec.kind} {target.name}",
             summary=[f"Scale {spec.kind} {_where(target)} from {current} to {replicas} replicas."],
             warnings=warnings,
+            blocked=[SAME_COUNT.format(name=target.name, n=current)] if replicas == current else [],
             before=live,
             after=after,
             apply_label="Scale",
@@ -136,38 +154,19 @@ def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _restart_ops(template: dict, uid: str | None, stamp: str) -> list[dict]:
-    """Set the restartedAt annotation of the pod template, as `kubectl rollout restart` does.
-
-    When the template has no annotations yet the whole map is added, and only if the template's
-    metadata is still what the plan read: an `add` of the map would replace one that appeared
-    meanwhile."""
-    ops = [_test("/metadata/uid", uid)]
+def _restart_op(template: dict, stamp: str) -> dict:
+    """Set the pod template's restartedAt annotation, as `kubectl rollout restart` does. With no
+    annotations yet the whole map is added; the generation test guards it, so a map that
+    appeared meanwhile (a spec change) is never replaced."""
     metadata = template.get("metadata")
     if metadata is None:
-        ops += [
-            _test("/spec/template", template),
-            {
-                "op": "add",
-                "path": "/spec/template/metadata",
-                "value": {"annotations": {RESTARTED_AT: stamp}},
-            },
-        ]
-    elif metadata.get("annotations") is None:
-        ops += [
-            _test("/spec/template/metadata", metadata),
-            {
-                "op": "add",
-                "path": "/spec/template/metadata/annotations",
-                "value": {RESTARTED_AT: stamp},
-            },
-        ]
-    else:
-        key = RESTARTED_AT.replace("~", "~0").replace("/", "~1")
-        ops.append(
-            {"op": "add", "path": f"/spec/template/metadata/annotations/{key}", "value": stamp}
-        )
-    return ops
+        value = {"annotations": {RESTARTED_AT: stamp}}
+        return {"op": "add", "path": "/spec/template/metadata", "value": value}
+    if metadata.get("annotations") is None:
+        value = {RESTARTED_AT: stamp}
+        return {"op": "add", "path": "/spec/template/metadata/annotations", "value": value}
+    key = RESTARTED_AT.replace("~", "~0").replace("/", "~1")
+    return {"op": "add", "path": f"/spec/template/metadata/annotations/{key}", "value": stamp}
 
 
 class RestartAction:
@@ -176,10 +175,11 @@ class RestartAction:
     async def plan(self, api: ApiClient, spec: KindSpec, target: Target, params: dict) -> Planned:
         live = await _read(api, spec, target)
         template = (live.get("spec") or {}).get("template") or {}
+        stamp = _now()  # stamped once: the apply writes exactly what the user reviewed
         after = copy.deepcopy(live)
         after_template = after.setdefault("spec", {}).setdefault("template", {})
         after_template.setdefault("metadata", {}).setdefault("annotations", {})[RESTARTED_AT] = (
-            _now()
+            stamp
         )
         paused = spec.kind == "Deployment" and (live.get("spec") or {}).get("paused") is True
         return Planned(
@@ -194,14 +194,18 @@ class RestartAction:
             before=live,
             after=after,
             apply_label="Restart",
-            state={"uid": _uid(live), "template": template},
+            state={
+                "uid": _uid(live),
+                "generation": _generation(live),
+                "op": _restart_op(template, stamp),
+            },
         )
 
     async def apply(
         self, ctx: ApplyContext, target: Target, spec: KindSpec, planned: Planned
     ) -> Applied:
         state = planned.state
-        await _patch(ctx.api, spec, target, _restart_ops(state["template"], state["uid"], _now()))
+        await _patch(ctx.api, spec, target, [*_unchanged(state), state["op"]])
         return Applied(f"Restarting every pod of {spec.kind} {_where(target)}.")
 
 
@@ -282,9 +286,12 @@ class RollbackAction:
         if wanted is not None and (not _is_count(wanted) or wanted < 1):
             raise ActionError(422, BAD_REVISION)
         live = await _read(api, spec, target)
+        title = f"Roll back {spec.kind} {target.name}"
+        if (live.get("spec") or {}).get("paused") is True:
+            blocked = [PAUSED_ROLLBACK.format(name=target.name)]
+            return Planned(title=title, blocked=blocked, apply_label="Roll back")
         sets = await replica_sets(api, live)
         current = _current_revision(live, sets)
-        title = f"Roll back {spec.kind} {target.name}"
         if wanted is None:
             older = [r for r in sets if current is None or r < current]
             if not older:
@@ -311,7 +318,7 @@ class RollbackAction:
             apply_label="Roll back",
             state={
                 "uid": _uid(live),
-                "template": template,
+                "generation": _generation(live),
                 "rolled_back": rolled_back,
                 "revision": wanted,
             },
@@ -322,8 +329,7 @@ class RollbackAction:
     ) -> Applied:
         state = planned.state
         ops = [
-            _test("/metadata/uid", state["uid"]),
-            _test("/spec/template", state["template"]),
+            *_unchanged(state),
             {"op": "replace", "path": "/spec/template", "value": state["rolled_back"]},
         ]
         await _patch(ctx.api, spec, target, ops)

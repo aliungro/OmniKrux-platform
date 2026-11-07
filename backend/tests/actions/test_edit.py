@@ -89,7 +89,8 @@ async def test_edit_needs_the_update_verb(env):
 
     assert r.status_code == 422
     assert r.json() == {
-        "detail": "Deployment objects can't be edited on this cluster: it doesn't allow updates."
+        "detail": "Deployment objects can't be edited on this cluster: it doesn't allow updates. "
+        "Use kubectl if your access allows it."
     }
     assert fake.writes == []
 

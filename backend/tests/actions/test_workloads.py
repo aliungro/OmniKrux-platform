@@ -1,12 +1,14 @@
 """Scale, restart and rollback through the action pipeline, against fake Kubernetes APIs: every
-apply is a JSON patch whose `test` ops hold the values the plan read, so a change since review
-answers with the conflict copy."""
+apply is a JSON patch whose `test` ops hold what the plan read (the uid, and the replicas or the
+generation), so a change since review answers with the conflict copy."""
 
-import copy
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
+import yaml
 
+from omnikrux.actions import workloads
 from tests.actions.clusters import apply, plan, records
 
 CONFLICT = "Deployment web changed since you reviewed this change. Review it again."
@@ -126,6 +128,18 @@ def patches(env, cluster: str = "dev-a") -> list[dict]:
     return [w for w in env.fakes[cluster].writes if w["method"] == "PATCH"]
 
 
+async def changed_elsewhere(env, patch: dict, key: str = DEPLOYMENTS) -> None:
+    """Someone else changes demo/web through the API (a merge patch), as kubectl would: the API
+    server bumps its resourceVersion, and its generation when the spec changed."""
+    plural, _, group = key.partition(".")
+    path = f"/apis/{group}/v1/namespaces/demo/{plural}/web"
+    async with httpx.AsyncClient(base_url=env.fakes["dev-a"].url) as client:
+        r = await client.patch(
+            path, json=patch, headers={"Content-Type": "application/merge-patch+json"}
+        )
+    assert r.status_code == 200, r.text
+
+
 # --- scale ------------------------------------------------------------------------------
 
 
@@ -150,6 +164,19 @@ async def test_scale_plan_summary_and_zero_warning(env):
     seed(env, key="statefulsets.apps", kind="StatefulSet", replicas=1)
     r = await plan(env, "scale", kind_key="statefulsets.apps", params={"replicas": 2})
     assert r.json()["summary"] == ["Scale StatefulSet demo/web from 1 to 2 replicas."]
+
+
+async def test_scale_to_the_current_count_is_blocked(env):
+    seed(env)
+
+    r = await plan(env, "scale", params={"replicas": 3})
+
+    assert r.status_code == 200
+    assert r.json()["blocked"] == ["Nothing changes: web already runs 3 replicas."]
+    r = await apply(env, r.json()["plan_id"])
+    assert r.status_code == 422
+    assert r.json() == {"detail": "Nothing changes: web already runs 3 replicas."}
+    assert patches(env) == [] and await records(env) == []
 
 
 async def test_scale_warns_about_hpa(env):
@@ -243,7 +270,7 @@ async def test_scale_rejects_other_kinds_and_negative(env):
 # --- restart ----------------------------------------------------------------------------
 
 
-async def test_restart_sets_restarted_at_annotation(env):
+async def test_restart_sets_restarted_at_annotation(env, monkeypatch):
     seed(env)
 
     r = await plan(env, "restart")
@@ -257,27 +284,35 @@ async def test_restart_sets_restarted_at_annotation(env):
     assert body["warnings"] == [] and body["apply_label"] == "Restart"
     assert RESTARTED_AT not in body["diff"]["before"] and RESTARTED_AT in body["diff"]["after"]
 
-    before = datetime.now(UTC).replace(microsecond=0)
+    reviewed = yaml.safe_load(body["diff"]["after"])["spec"]["template"]["metadata"]
+    reviewed_stamp = reviewed["annotations"][RESTARTED_AT]
+    moment = datetime.fromisoformat(reviewed_stamp)
+    assert abs(moment - datetime.now(UTC)) < timedelta(seconds=5)
+    # The clock moves on between review and apply: the reviewed stamp is still the one written.
+    monkeypatch.setattr(workloads, "_now", lambda: "2099-01-01T00:00:00Z")
+
     r = await apply(env, body["plan_id"])
 
     assert r.status_code == 200, r.text
     assert r.json()["message"] == "Restarting every pod of Deployment demo/web."
     [write] = patches(env)
     assert write["content_type"] == JSON_PATCH
-    test_uid, test_metadata, add = write["body"]
-    assert test_uid == {"op": "test", "path": "/metadata/uid", "value": "u-web"}
-    # No annotations yet: the map is added whole, and only if the template's metadata is still
-    # what the plan read (a map added meanwhile would otherwise be replaced).
-    assert test_metadata == {
-        "op": "test",
-        "path": "/spec/template/metadata",
-        "value": {"creationTimestamp": None, "labels": {"app": "web"}},
-    }
-    assert add["op"] == "add" and add["path"] == "/spec/template/metadata/annotations"
+    # No annotations yet: the map is added whole. The generation (bumped by any spec change)
+    # guards it, so a map added meanwhile is never replaced.
+    assert write["body"] == [
+        {"op": "test", "path": "/metadata/uid", "value": "u-web"},
+        {"op": "test", "path": "/metadata/generation", "value": 4},
+        {
+            "op": "add",
+            "path": "/spec/template/metadata/annotations",
+            "value": {RESTARTED_AT: reviewed_stamp},
+        },
+    ]
+    # Exactly the stamp the user reviewed and the audit recorded.
     stamp = live(env)["spec"]["template"]["metadata"]["annotations"][RESTARTED_AT]
-    assert add["value"] == {RESTARTED_AT: stamp}
-    moment = datetime.fromisoformat(stamp)
-    assert before <= moment <= datetime.now(UTC) + timedelta(seconds=1)
+    assert stamp == reviewed_stamp
+    [record] = await records(env)
+    assert f"{RESTARTED_AT}: '{reviewed_stamp}'" in record.diff
 
     # With annotations already there, only the one key is added (or replaced).
     obj = seed(env, key="statefulsets.apps", kind="StatefulSet")
@@ -289,8 +324,9 @@ async def test_restart_sets_restarted_at_annotation(env):
         "Restart every pod of StatefulSet demo/web, following its update strategy (OnDelete)."
     ]
     assert (await apply(env, r.json()["plan_id"])).status_code == 200
-    test_uid, add = patches(env)[-1]["body"]
+    test_uid, test_generation, add = patches(env)[-1]["body"]
     assert test_uid["path"] == "/metadata/uid"
+    assert test_generation == {"op": "test", "path": "/metadata/generation", "value": 4}
     assert add["op"] == "add"
     assert add["path"] == "/spec/template/metadata/annotations/kubectl.kubernetes.io~1restartedAt"
     annotations = live(env, key="statefulsets.apps")["spec"]["template"]["metadata"]["annotations"]
@@ -315,7 +351,9 @@ async def test_restart_paused_deployment_warning(env):
 async def test_restart_conflict_when_annotations_appeared(env):
     seed(env)
     plan_id = (await plan(env, "restart")).json()["plan_id"]
-    live(env)["spec"]["template"]["metadata"]["annotations"] = {"team": "web"}
+    await changed_elsewhere(
+        env, {"spec": {"template": {"metadata": {"annotations": {"team": "web"}}}}}
+    )
 
     r = await apply(env, plan_id)
 
@@ -405,7 +443,8 @@ async def test_rollback_without_earlier_revision_plain(env):
     seed(env)
     seed_revisions(env)
     r = await plan(env, "rollback", params={"revision": 9})
-    assert r.status_code == 422 and r.json() == {"detail": "Deployment web has no revision 9."}
+    assert r.status_code == 422
+    assert r.json() == {"detail": "Deployment web has no revision 9. Pick one from its revisions."}
     r = await plan(env, "rollback", params={"revision": 3})
     assert r.json()["blocked"] == ["Deployment web already runs revision 3."]
     for params in ({"revision": "2"}, {"revision": 0}, {"revision": True}):
@@ -416,10 +455,27 @@ async def test_rollback_without_earlier_revision_plain(env):
     assert patches(env) == []
 
 
+async def test_rollback_of_a_paused_deployment_is_blocked(env):
+    seed(env, paused=True)
+    seed_revisions(env)
+
+    r = await plan(env, "rollback", params={"revision": None})
+
+    assert r.status_code == 200
+    assert r.json()["blocked"] == ["Deployment web is paused: resume it before rolling back."]
+    r = await apply(env, r.json()["plan_id"])
+    assert r.status_code == 422
+    assert r.json() == {"detail": "Deployment web is paused: resume it before rolling back."}
+    assert patches(env) == []
+
+
 async def test_rollback_apply_replaces_template_without_hash_label(env):
     obj = seed(env)
+    # Text the API server's JSON writes differently from Python's (`&&` escaped as \u0026, and
+    # non-ASCII): the precondition must not compare it byte for byte, so it tests the generation.
+    obj["spec"]["template"]["spec"]["containers"][0]["command"] = ["sh", "-c", "a && b < c ≥ d"]
+    env.fakes["dev-a"].objects[DEPLOYMENTS][("demo", "web")] = obj
     seed_revisions(env)
-    current = copy.deepcopy(obj["spec"]["template"])
     plan_id = (await plan(env, "rollback", params={"revision": 2})).json()["plan_id"]
 
     r = await apply(env, plan_id)
@@ -431,17 +487,19 @@ async def test_rollback_apply_replaces_template_without_hash_label(env):
     assert write["content_type"] == JSON_PATCH
     assert write["body"] == [
         {"op": "test", "path": "/metadata/uid", "value": "u-web"},
-        {"op": "test", "path": "/spec/template", "value": current},
+        {"op": "test", "path": "/metadata/generation", "value": 4},
         {"op": "replace", "path": "/spec/template", "value": target_template},
     ]
     assert live(env)["spec"]["template"] == target_template
     [record] = await records(env)
-    assert "-    image: nginx:1.27\n+    image: nginx:1.26\n" in record.diff
+    assert "-    image: nginx:1.27\n" in record.diff and "+    image: nginx:1.26\n" in record.diff
+    assert "-    - a && b < c ≥ d\n" in record.diff
 
-    # The template changed after the review: nothing is rolled back.
+    # The spec changed after the review: nothing is rolled back.
     seed(env)
     plan_id = (await plan(env, "rollback", params={"revision": 2})).json()["plan_id"]
-    live(env)["spec"]["template"]["spec"]["containers"][0]["image"] = "nginx:1.28"
+    containers = [{"name": "web", "image": "nginx:1.28"}]
+    await changed_elsewhere(env, {"spec": {"template": {"spec": {"containers": containers}}}})
     r = await apply(env, plan_id)
     assert r.status_code == 409 and r.json() == {"detail": CONFLICT}
     assert live(env)["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:1.28"

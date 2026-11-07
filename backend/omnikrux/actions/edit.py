@@ -38,7 +38,10 @@ NO_VERSION = (
     "The edited YAML has no metadata.resourceVersion, so Omnikrux can't tell whether it was "
     "made from the object as it is now. Open the YAML again and edit that."
 )
-NOT_UPDATABLE = "{kind} objects can't be edited on this cluster: it doesn't allow updates."
+NOT_UPDATABLE = (
+    "{kind} objects can't be edited on this cluster: it doesn't allow updates. "
+    "Use kubectl if your access allows it."
+)
 
 
 class _JsonLoader(yaml.SafeLoader):
