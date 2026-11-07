@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, WebSocket
 from kubernetes_asyncio.client import CoreV1Api
 
+from omnikrux.exec.debug import delete_pod, finish_even_if_cancelled, is_node_shell
 from omnikrux.exec.session import BROWSER_GONE, ExecBridge, KubeExecChannel
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.kube.http import read_json
@@ -19,6 +20,7 @@ from omnikrux.logs.stream import (
     container_names,
     container_status,
     pod_missing_message,
+    state_words,
 )
 from omnikrux.web_security import is_cross_origin
 
@@ -38,15 +40,6 @@ class ExecRefused(Exception):
         self.message = message
 
 
-def _state_words(state: dict) -> str:
-    """How a container that isn't running is doing, in a word or two (Kubernetes' reason)."""
-    if "waiting" in state:
-        return (state["waiting"] or {}).get("reason") or "waiting"
-    if "terminated" in state:
-        return (state["terminated"] or {}).get("reason") or "terminated"
-    return "not started"
-
-
 def running_container(found: dict, pod: str, container: str | None) -> str:
     """The container to open the shell in: `container`, or the pod's first one. ExecRefused
     when it isn't in the pod or isn't running."""
@@ -60,16 +53,16 @@ def running_container(found: dict, pod: str, container: str | None) -> str:
     state = container_status(found, container).get("state") or {}
     if "running" not in state:
         raise ExecRefused(
-            f"Can't open a shell: container {container} isn't running ({_state_words(state)}). "
+            f"Can't open a shell: container {container} isn't running ({state_words(state)}). "
             "Start a debug container to look inside the pod."
         )
     return container
 
 
-async def _check_pod(
-    connections: ClusterConnections, cluster: str, namespace: str, pod: str, container: str | None
-) -> str:
-    """The running container to exec into. Unknown cluster: KeyError; otherwise ExecRefused."""
+async def _read_pod(
+    connections: ClusterConnections, cluster: str, namespace: str, pod: str
+) -> dict:
+    """The pod to exec into. Unknown cluster: KeyError; otherwise ExecRefused."""
     async with AsyncExitStack() as stack:
         try:
             api = await stack.enter_async_context(connections.api(cluster))
@@ -78,7 +71,7 @@ async def _check_pod(
         except Exception as exc:  # e.g. a missing exec plugin, said in words
             raise ExecRefused(kube_error_message(exc, "connect to the cluster")) from exc
         try:
-            found = await read_json(
+            return await read_json(
                 CoreV1Api(api).read_namespaced_pod(
                     pod, namespace, _preload_content=False, _request_timeout=REQUEST_TIMEOUT
                 )
@@ -87,7 +80,40 @@ async def _check_pod(
             if getattr(exc, "status", None) == 404:
                 raise ExecRefused(pod_missing_message(namespace, pod)) from exc
             raise ExecRefused(kube_error_message(exc, f"read pod {namespace}/{pod}")) from exc
-    return running_container(found, pod, container)
+
+
+async def _open_channel(
+    connections: ClusterConnections,
+    cluster: str,
+    namespace: str,
+    pod: str,
+    container: str,
+    command: list[str],
+) -> KubeExecChannel:
+    """Unknown cluster: KeyError; otherwise ExecRefused."""
+    try:
+        return await KubeExecChannel.open(connections, cluster, namespace, pod, container, command)
+    except KeyError:
+        raise
+    except Exception as exc:  # refused, unreachable, or a missing exec plugin
+        if not isinstance(exc, KUBE_ERRORS):
+            log.warning("exec failed to open", exc_info=exc)
+        action = f"open a shell in pod {namespace}/{pod}"
+        raise ExecRefused(kube_error_message(exc, action)) from exc
+
+
+async def _delete_node_shell(
+    connections: ClusterConnections, cluster: str, namespace: str, pod: str
+) -> None:
+    try:
+        async with connections.api(cluster) as api:
+            await delete_pod(api, namespace, pod)
+    except Exception as exc:  # noqa: BLE001 (it stops by itself after its deadline anyway)
+        log.warning(
+            "Could not delete node-shell pod %s/%s (%s)", namespace, pod, type(exc).__name__
+        )
+    else:
+        log.info("node-shell pod deleted cluster=%s ns=%s pod=%s", cluster, namespace, pod)
 
 
 async def _fail(websocket: WebSocket, message: str, code: int, reason: str | None = None) -> None:
@@ -104,7 +130,10 @@ async def exec_shell(
     pod: str,
     container: str | None = None,
     command: Annotated[list[str] | None, Query()] = None,
+    cleanup_pod: bool = False,
 ) -> None:
+    """`cleanup_pod`: delete the pod when the session ends, however it ends (node-shell pods
+    only)."""
     if is_cross_origin(websocket):
         await websocket.close(code=4403, reason="Cross-origin request refused")  # HTTP 403
         return
@@ -116,18 +145,41 @@ async def exec_shell(
         return
     connections: ClusterConnections = websocket.app.state.connections
     try:
-        container = await _check_pod(connections, cluster, namespace, pod, container)
-        try:
-            channel = await KubeExecChannel.open(
-                connections, cluster, namespace, pod, container, command
-            )
-        except KeyError:
-            raise
-        except Exception as exc:  # refused, unreachable, or a missing exec plugin
-            if not isinstance(exc, KUBE_ERRORS):
-                log.warning("exec failed to open", exc_info=exc)
-            action = f"open a shell in pod {namespace}/{pod}"
-            raise ExecRefused(kube_error_message(exc, action)) from exc
+        found = await _read_pod(connections, cluster, namespace, pod)
+    except KeyError:
+        await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
+        return
+    except ExecRefused as exc:
+        await _fail(websocket, exc.message, 1011)
+        return
+    if cleanup_pod and not is_node_shell(found):
+        message = (
+            "Only node-shell pods are deleted when their session ends, "
+            f"and pod {namespace}/{pod} isn't one. Open the shell without cleanup."
+        )
+        await _fail(websocket, message, 1008)
+        return
+    try:
+        await _session(websocket, connections, cluster, namespace, pod, found, container, command)
+    finally:
+        if cleanup_pod:  # whichever side closed, or if the session failed or was cancelled
+            await finish_even_if_cancelled(_delete_node_shell(connections, cluster, namespace, pod))
+
+
+async def _session(
+    websocket: WebSocket,
+    connections: ClusterConnections,
+    cluster: str,
+    namespace: str,
+    pod: str,
+    found: dict,
+    container: str | None,
+    command: list[str],
+) -> None:
+    """Open the shell in the read pod and relay until it ends; a refusal is sent as an error."""
+    try:
+        container = running_container(found, pod, container)
+        channel = await _open_channel(connections, cluster, namespace, pod, container, command)
     except KeyError:
         await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
         return

@@ -41,3 +41,10 @@ def test_rewrite_loopback_follows_in_container_unless_set(monkeypatch):
     assert Settings(in_container=True).kubeconfig_paths == [
         Path("/kube/config")
     ]  # path choice unchanged
+
+
+def test_debug_image_default_and_env(monkeypatch):
+    monkeypatch.delenv("OMNIKRUX_DEBUG_IMAGE", raising=False)
+    assert Settings().debug_image == "busybox:1.36"
+    monkeypatch.setenv("OMNIKRUX_DEBUG_IMAGE", "registry.local/toolbox:2")
+    assert Settings().debug_image == "registry.local/toolbox:2"

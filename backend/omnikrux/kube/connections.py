@@ -74,7 +74,7 @@ def kube_error_message(exc: Exception, action: str) -> str:
             return f"Not allowed to {action}: {_status_message(exc) or 'forbidden'}"
         if exc.status == 404:
             return f"{action}: not found (it may have just been deleted)."
-        if exc.status == 400:  # the API server says in words what was wrong with the request
+        if exc.status in (400, 422):  # the API server says in words what was wrong
             reason = (_status_message(exc) or "the cluster refused the request")[:MAX_REASON]
             return f"Couldn't {action}: {reason}"
     elif isinstance(exc, aiohttp.ClientConnectorError):

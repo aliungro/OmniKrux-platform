@@ -160,6 +160,15 @@ def container_status(pod: dict, container: str) -> dict:
     return {}
 
 
+def state_words(state: dict) -> str:
+    """How a container that isn't running is doing, in a word or two (Kubernetes' reason)."""
+    if "waiting" in state:
+        return (state["waiting"] or {}).get("reason") or "waiting"
+    if "terminated" in state:
+        return (state["terminated"] or {}).get("reason") or "terminated"
+    return "not started"
+
+
 def will_restart(pod: dict, container: str, terminated: dict) -> bool:
     """Whether the kubelet starts this terminated container again."""
     spec = pod.get("spec") or {}

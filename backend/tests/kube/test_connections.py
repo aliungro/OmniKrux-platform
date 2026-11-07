@@ -102,6 +102,10 @@ def _api_exc(status: int, body: dict | None = None) -> ApiException:
             'Couldn\'t list pods: container "x" is not valid for pod "p"',
         ),
         (_api_exc(400), "Couldn't list pods: the cluster refused the request"),
+        (
+            _api_exc(422, {"message": 'Pod "p" is invalid: spec.containers: Required value'}),
+            'Couldn\'t list pods: Pod "p" is invalid: spec.containers: Required value',
+        ),
         (TimeoutError(), "The cluster didn't answer while trying to list pods."),
         (aiohttp.ServerTimeoutError(), "The cluster didn't answer while trying to list pods."),
         (

@@ -5,6 +5,10 @@ on 127.0.0.1. Tests seed `pods`, `events`, `logs` and `follow_lines` (None ends 
 breaks it) and read back `requests`.
 
 Exec is served over WebSocket (`v4.channel.k8s.io`) by a tiny echo shell: see `_exec`.
+
+Creating a pod (recorded in `created`) or adding an ephemeral container (recorded in `patches`)
+starts its containers: each read of the pod moves a new container one step through
+`start_states`, and the last state sticks. Deleted pods are recorded in `deleted`.
 """
 
 import asyncio
@@ -94,6 +98,14 @@ def bad_request(message: str) -> web.Response:
     return web.json_response(status_body(400, "BadRequest", message), status=400)
 
 
+def invalid(message: str) -> web.Response:
+    return web.json_response(status_body(422, "Invalid", message), status=422)
+
+
+STRATEGIC_MERGE = "application/strategic-merge-patch+json"
+STARTED = {"running": {"startedAt": "2026-11-07T09:00:00Z"}}
+
+
 def _stamp(moment: datetime) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
 
@@ -123,6 +135,12 @@ class FakeKubeApi:
         self.follow_lines: asyncio.Queue[str | None] = asyncio.Queue()
         self.execs: list[dict] = []
         self.exec_resizes: list[dict] = []
+        self.start_states: list[dict] = [{"waiting": {"reason": "ContainerCreating"}}, STARTED]
+        self.created: list[dict] = []
+        self.patches: list[dict] = []
+        self.deleted: list[tuple[str, str]] = []
+        # (namespace, pod) -> [status field, container, states still to go through]
+        self._starting: dict[tuple[str, str], list[tuple[str, str, list[dict]]]] = {}
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
         self.paths.append(request.path)
@@ -182,7 +200,21 @@ class FakeKubeApi:
         pod = self.pods.get(key)
         if pod is None:
             return not_found(f'pods "{key[1]}" not found')
+        self._advance(key, pod)
         return web.json_response(pod)
+
+    def _start(self, key: tuple[str, str], field: str, container: str) -> None:
+        self._starting.setdefault(key, []).append((field, container, list(self.start_states)))
+
+    def _advance(self, key: tuple[str, str], pod: dict) -> None:
+        """One step of each starting container's `start_states`; the last one sticks."""
+        status = pod.setdefault("status", {})
+        for field, container, states in self._starting.get(key, []):
+            state = states.pop(0) if len(states) > 1 else states[0]
+            entries = [e for e in status.get(field) or [] if e.get("name") != container]
+            status[field] = [*entries, {"name": container, "state": state}]
+            if field == "containerStatuses" and "running" in state:
+                status["phase"] = "Running"
 
     def _list_pods(self, request: web.Request, ns: str) -> web.Response:
         """Pods in `ns`, filtered by an equality `labelSelector` (`k=v,k2=v2`)."""
@@ -223,26 +255,50 @@ class FakeKubeApi:
 
     async def _create_pod(self, request: web.Request, ns: str) -> web.Response:
         pod = await request.json()
+        self.created.append(copy.deepcopy(pod))
         name = pod.get("metadata", {}).get("name", "")
         pod.setdefault("metadata", {})["namespace"] = ns
         pod["status"] = {"phase": "Pending"}
         self.pods[(ns, name)] = pod
+        for container in pod.get("spec", {}).get("containers", []):
+            self._start((ns, name), "containerStatuses", container.get("name", ""))
         return web.json_response(pod, status=201)
 
     async def _patch_ephemeral(self, request: web.Request, key: tuple[str, str]) -> web.Response:
+        """Strategic merge only: a JSON merge patch would replace the whole list (and the real
+        API server refuses to remove an ephemeral container)."""
+        if request.content_type != STRATEGIC_MERGE:
+            message = f"the fake only accepts {STRATEGIC_MERGE}, got {request.content_type}"
+            return web.json_response(status_body(415, "UnsupportedMediaType", message), status=415)
         pod = self.pods.get(key)
         if pod is None:
             return not_found(f'pods "{key[1]}" not found')
         patch = await request.json()
+        self.patches.append(patch)
         added = patch.get("spec", {}).get("ephemeralContainers", [])
         spec = pod.setdefault("spec", {})
+        existing = {c.get("name") for c in spec.get("ephemeralContainers", [])}
+        regular = {c.get("name") for c in spec.get("containers", [])}
+        for container in added:
+            if container.get("name") in existing:
+                return invalid(f'Pod "{key[1]}" is invalid: ephemeral containers may not change')
+            target = container.get("targetContainerName")
+            if target is not None and target not in regular:
+                return invalid(
+                    f'Pod "{key[1]}" is invalid: spec.ephemeralContainers[0].'
+                    f'targetContainerName: Not found: "{target}"'
+                )
         spec["ephemeralContainers"] = [*spec.get("ephemeralContainers", []), *added]
+        for container in added:
+            self._start(key, "ephemeralContainerStatuses", container["name"])
         return web.json_response(pod)
 
     def _delete_pod(self, key: tuple[str, str]) -> web.Response:
         pod = self.pods.pop(key, None)
         if pod is None:
             return not_found(f'pods "{key[1]}" not found')
+        self.deleted.append(key)
+        self._starting.pop(key, None)
         return web.json_response(pod)
 
     async def _log(self, request: web.Request, key: tuple[str, str]) -> web.StreamResponse:
