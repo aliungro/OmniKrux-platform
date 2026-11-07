@@ -160,3 +160,29 @@ export interface LogSession {
   /** Open on the previous run's log (the `p` shortcut). */
   previous?: boolean;
 }
+
+/** What the server sends on `WS /api/exec` (the browser sends `stdin` and `resize` frames). */
+export type ExecMessage =
+  | { type: "stdout" | "stderr"; data: string }
+  /** The shell ended; the server closes the socket after this. `code` is null when unknown. */
+  | { type: "exit"; code: number | null; message: string | null }
+  /** The shell couldn't be opened or broke; the server closes the socket after this. */
+  | { type: "error"; message: string };
+
+/**
+ * What a shell pane shows. The dock (Task 13) builds one per shell session and renders
+ * `<ShellPane key={sessionId} session={…} />`; a new session needs a new key (a fresh shell).
+ * A node shell is the same thing with the node-shell pod as `pod` and `cleanupPod: true`.
+ */
+export interface ShellSession {
+  clusterId: string;
+  /** For the pane header, which names the cluster as "cluster / namespace / pod (container)". */
+  clusterName: string;
+  provider: Provider;
+  namespace: string;
+  pod: string;
+  /** Null lets the server pick the pod's first container. */
+  container: string | null;
+  /** True for node shells: the server deletes the pod when the session ends. */
+  cleanupPod: boolean;
+}
