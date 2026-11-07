@@ -45,7 +45,12 @@ from omnikrux.resources.describe_any import (
     event_uids,
     related_lists,
 )
-from omnikrux.resources.kinds import KindSpec, namespace_problem
+from omnikrux.resources.kinds import (
+    KindSpec,
+    matches_selector,
+    object_name_problem,
+    target_problem,
+)
 from omnikrux.resources.yaml_out import dump_yaml, is_secret_resource
 
 log = logging.getLogger(__name__)
@@ -54,6 +59,8 @@ router = APIRouter(prefix="/api/clusters/{cluster_id}")
 
 CANCELLED = "The request stopped before the cluster answered."
 NO_KEY = "Secret {name} has no key {key}."
+NOT_SELECTED = "{label} {where} not found: that object doesn't have the label {selector}."
+UNRECORDED = "The value isn't shown: the audit log couldn't record the reveal. Try again."
 # A revealed value is kept by no cache: not the browser's, not a proxy's.
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
@@ -71,6 +78,8 @@ async def _call[T](
             raise HTTPException(status_code=502, detail=kube_error_message(exc, action)) from exc
         try:
             return await fn(api)
+        except HTTPException:  # `fn` already said it in words
+            raise
         except ApiException as exc:
             status = 404 if exc.status == 404 else 502
             raise HTTPException(status_code=status, detail=kube_error_message(exc, action)) from exc
@@ -185,7 +194,7 @@ async def _target(
     """The kind's spec, the namespace (None for a cluster-scoped kind) and "ns/name" for words."""
     spec = await _kind_spec(request, cluster_id, kind_key)
     ns = namespace or None
-    if (problem := namespace_problem(spec, name, ns)) is not None:
+    if (problem := target_problem(spec, name, ns)) is not None:
         raise HTTPException(status_code=422, detail=problem)
     return spec, ns, f"{ns}/{name}" if ns else name
 
@@ -203,6 +212,17 @@ async def _events(api: ApiClient, spec: KindSpec, obj: dict, namespace: str | No
         for event in answer.get("items") or []:
             found.setdefault((event.get("metadata") or {}).get("uid") or str(id(event)), event)
     return list(found.values())
+
+
+async def _read_object(api: ApiClient, spec: KindSpec, namespace: str | None, name: str) -> dict:
+    """The object; a 404 in words when it lacks the spec's labels (a Secret that isn't a Helm
+    release, read as one)."""
+    obj = await _get_json(api, spec.object_path(namespace, name))
+    if not matches_selector(spec, obj):
+        where = f"{namespace}/{name}" if namespace else name
+        detail = NOT_SELECTED.format(label=spec.label, where=where, selector=spec.label_selector)
+        raise HTTPException(status_code=404, detail=detail)
+    return obj
 
 
 async def _related(api: ApiClient, wanted: RelatedList) -> list[dict] | str:
@@ -226,7 +246,7 @@ async def describe_any(
             return exc
 
     async def run(api: ApiClient) -> ResourceDescribe:
-        obj = await _get_json(api, spec.object_path(ns, name))
+        obj = await _read_object(api, spec, ns, name)
         wanted = related_lists(spec, obj)
         events, *lists = await asyncio.gather(
             events_of(api, obj), *(_related(api, w) for w in wanted)
@@ -251,7 +271,7 @@ async def resource_yaml(
     spec, ns, where = await _target(request, cluster_id, kind_key, name, namespace)
 
     async def run(api: ApiClient) -> dict[str, str]:
-        obj = await _get_json(api, spec.object_path(ns, name))
+        obj = await _read_object(api, spec, ns, name)
         (obj.get("metadata") or {}).pop("managedFields", None)
         return {"yaml": dump_yaml(obj, secret=is_secret_resource(spec))}
 
@@ -422,6 +442,9 @@ async def reveal_secret(
         name=name,
         details={"key": body.key},
     )
+    # The names go into the API path unencoded: "db?x" would read Secret db.
+    if (problem := object_name_problem(name, namespace)) is not None:
+        raise HTTPException(status_code=422, detail=problem)
     audit: AuditLog = request.app.state.audit
     audit_id = await _begin_audit(request, entry, "secrets", name)
 
@@ -436,7 +459,9 @@ async def reveal_secret(
         message = NO_KEY.format(name=name, key=body.key)
         await audit.finish(audit_id, "failed", message)
         raise HTTPException(status_code=404, detail=message)
+    if not await audit.finish(audit_id, "succeeded", f"Key {body.key} revealed."):
+        # Not on record as revealed: the value is withheld (the row is marked unknown later).
+        raise HTTPException(status_code=503, detail=UNRECORDED)
     value, encoding = _decoded(encoded)
-    await audit.finish(audit_id, "succeeded", f"Key {body.key} revealed.")
     response.headers.update(NO_STORE)
     return RevealOut(key=body.key, value=value, encoding=encoding)

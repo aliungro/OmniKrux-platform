@@ -167,3 +167,15 @@ async def test_begin_raises_audit_unavailable_with_reason(setup, caplog):
     with caplog.at_level(logging.WARNING, logger="omnikrux.audit.store"):
         await audit.finish(1, "succeeded")  # never raises
     assert "Could not finish audit record 1" in caplog.text
+
+
+async def test_finish_reports_whether_it_finished(setup):
+    audit, info, engine = setup
+    record = await audit.begin(entry(info.id))
+    assert await audit.finish(record, "succeeded", "Scaled.") is True
+    assert await audit.finish(record, "failed", "again") is False  # not open any more
+
+    other = await audit.begin(entry(info.id))
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE audit"))
+    assert await audit.finish(other, "succeeded", "Scaled.") is False

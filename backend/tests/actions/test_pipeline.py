@@ -20,7 +20,6 @@ from omnikrux.actions.authz import NotAllowed
 from omnikrux.actions.pipeline import (
     ACTIONS,
     Applied,
-    Diff,
     Planned,
     PlanStore,
 )
@@ -91,7 +90,8 @@ class FakeHandler:
             summary=[f"Scale {target.name} to {params.get('replicas', 3)}."],
             warnings=[],
             blocked=list(self.blocked),
-            diff=Diff(before=to_yaml(live), after=to_yaml(after)),
+            before=live,
+            after=after,
             typed=self.typed,
             apply_label="Apply",
             state={"uid": live["metadata"]["uid"]},
@@ -277,6 +277,77 @@ async def test_helm_releases_and_secret_edits_refused_centrally(env, monkeypatch
     r = await plan(env, action="delete", kind_key="secrets", name="db")  # deleting is fine
     assert r.status_code == 200
     assert "aHVudGVyMg==" not in r.text and "•••••• (7 bytes)" in r.json()["diff"]["before"]
+
+
+class KindlessSecretHandler(FakeHandler):
+    """Hands the pipeline a Secret without `kind`/`apiVersion` (as a list item, or a hand-built
+    copy, would be): the pipeline must still mask it, because the kind's resource is secrets."""
+
+    async def plan(self, api, spec, target, params):
+        live = await get_object(api, spec, target)
+        bare = {k: v for k, v in live.items() if k not in ("kind", "apiVersion")}
+        self.plans.append((target, params))
+        after = copy.deepcopy(bare) | {"data": {"password": "bmV3LXZhbHVl"}}
+        return Planned(title="Change Secret db", before=bare, after=after, apply_label="Apply")
+
+
+async def test_plan_and_audit_diffs_mask_a_secret_by_its_resource(env, monkeypatch):
+    handler = KindlessSecretHandler(kinds=None)
+    monkeypatch.setitem(ACTIONS, "delete", handler)
+    env.fakes["dev-a"].objects["secrets"][("demo", "db")] = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": "db",
+            "namespace": "demo",
+            "uid": "u-db",
+            "annotations": {
+                "kubectl.kubernetes.io/last-applied-configuration": '{"data":{"password":"x"}}'
+            },
+        },
+        "data": {"password": "aHVudGVyMg=="},
+    }
+    values = ("aHVudGVyMg==", "hunter2", "bmV3LXZhbHVl", "new-value", "last-applied")
+
+    r = await plan(env, action="delete", kind_key="secrets", name="db")
+    assert r.status_code == 200
+    diff = r.json()["diff"]
+    assert "password: •••••• (7 bytes)" in diff["before"]
+    assert "password: •••••• (9 bytes)" in diff["after"]
+    assert [v for v in values if v in r.text] == []
+
+    r = await apply(env, r.json()["plan_id"])
+    assert r.status_code == 200
+    [record] = await records(env)
+    assert "•••••• (7 bytes)" in record.diff
+    async with env.app.state.engine.connect() as conn:
+        rows = (await conn.execute(text("SELECT * FROM audit"))).all()
+    assert [v for v in values if v in " ".join(str(c) for c in rows[0])] == []
+
+
+async def test_plan_without_objects_has_no_diff(env, monkeypatch):
+    class NoDiff(FakeHandler):
+        async def plan(self, api, spec, target, params):
+            return Planned(title="Cordon", apply_label="Cordon")
+
+    monkeypatch.setitem(ACTIONS, "scale", NoDiff())
+    r = await plan(env)
+    assert r.status_code == 200 and r.json()["diff"] is None
+
+
+async def test_plan_refuses_names_that_are_not_path_safe(env, scale):
+    for overrides in (
+        {"name": "web?x"},
+        {"name": "web#x"},
+        {"name": ".."},
+        {"name": "web/x"},
+        {"namespace": "de mo"},
+        {"namespace": "Demo"},
+    ):
+        r = await plan(env, **overrides)
+        assert r.status_code == 422, overrides
+        assert "{" not in r.json()["detail"]
+    assert scale.plans == []
 
 
 # --- apply -----------------------------------------------------------------------------

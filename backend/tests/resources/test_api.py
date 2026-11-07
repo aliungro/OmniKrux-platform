@@ -6,6 +6,7 @@ from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.main import create_app
 from omnikrux.resources import api as resources_api
+from omnikrux.resources.kinds import object_name_problem
 from tests.fakekube import EVENTS_FORBIDDEN, FORBIDDEN, kubeconfig_for
 from tests.resources.test_describe_any import (
     deployment,
@@ -279,6 +280,16 @@ async def test_describe_namespace_must_match_the_kind(client):
         resource_url(cluster_id, "nodes", "kind-worker", "yaml"), params={"namespace": "demo"}
     )
     assert r.status_code == 422 and r.json() == {"detail": "Node objects have no namespace."}
+
+
+def test_object_name_problem_allows_kubernetes_names_only():
+    for name in ("web", "web-1.abc", "system:controller:attachdetach-controller", "a"):
+        assert object_name_problem(name, "demo") is None, name
+    assert object_name_problem("kind-worker", None) is None
+    for name in ("web?x", "web#x", "web/x", "web%2F", ".", "..", "-web", "web ", "", "a" * 254):
+        assert object_name_problem(name, "demo") is not None, name
+    for namespace in ("Demo", "de mo", "de.mo", "", "-demo", "d" * 64):
+        assert object_name_problem("web", namespace) is not None, namespace
 
 
 def seed_web(fake_api) -> None:

@@ -220,3 +220,71 @@ async def test_reveal_needs_the_audit_and_permission(env, fake_api, monkeypatch)
         "detail": "Nothing was changed: the audit log can't be written (no such table: audit)."
     }
     assert not [p for _, p, _ in fake_api.requests if "/secrets/" in p]  # never read
+
+
+async def test_reveal_withholds_the_value_when_the_audit_cannot_finish(env, caplog):
+    app, http, cluster_id = env
+    audit = app.state.audit
+    finish = audit.finish
+
+    async def table_gone_before_success(record_id, outcome, message=None):
+        if outcome == "succeeded":
+            async with app.state.engine.begin() as conn:
+                await conn.execute(text("DROP TABLE audit"))
+        return await finish(record_id, outcome, message)
+
+    audit.finish = table_gone_before_success
+    try:
+        r = await http.post(reveal_url(cluster_id), json={"key": "password"})
+    finally:
+        audit.finish = finish
+    assert r.status_code == 503
+    assert r.json() == {
+        "detail": "The value isn't shown: the audit log couldn't record the reveal. Try again."
+    }
+    assert leaks(r.text) == [] and leaks(caplog.text) == []
+
+
+async def test_names_that_are_not_path_safe_are_refused(env, fake_api):
+    app, http, cluster_id = env
+    fake_api.requests.clear()
+    # "db%3Fx" arrives as "db?x": joined into a path unencoded, the cluster would read "db".
+    r = await http.post(f"/api/clusters/{cluster_id}/secrets/demo/db%3Fx/reveal", json={"key": "a"})
+    assert r.status_code == 422
+    assert r.json() == {
+        "detail": "db?x isn't a valid object name: names use letters, digits, '-', '.' and ':'."
+    }
+    r = await http.post(f"/api/clusters/{cluster_id}/secrets/de%20mo/db/reveal", json={"key": "a"})
+    assert r.status_code == 422
+    assert r.json() == {
+        "detail": "de mo isn't a valid namespace: namespaces use lower-case letters, digits "
+        "and '-'."
+    }
+    for what in ("describe", "yaml"):
+        for name in ("db%3Fx", "db%23x", "db%20x"):
+            url = f"/api/clusters/{cluster_id}/resources/secrets/{name}/{what}"
+            r = await http.get(url, params={"namespace": "demo"})
+            assert r.status_code == 422, (what, name)
+    assert (await app.state.audit.list()).records == []
+    assert not [p for _, p, _ in fake_api.requests if "/secrets" in p]
+
+
+async def test_helm_release_describe_and_yaml_need_the_helm_label(env, fake_api):
+    _, http, cluster_id = env
+    plain = stored_secret()
+    plain["metadata"]["name"] = "plain"
+    del plain["metadata"]["labels"]
+    fake_api.objects["secrets"][("demo", "plain")] = plain
+    for what in ("describe", "yaml"):
+        url = f"/api/clusters/{cluster_id}/resources/helm-releases/plain/{what}"
+        r = await http.get(url, params={"namespace": "demo"})
+        assert r.status_code == 404, what
+        assert r.json() == {
+            "detail": "Helm release demo/plain not found: that object doesn't have the label "
+            "owner=helm."
+        }
+        r = await http.get(
+            f"/api/clusters/{cluster_id}/resources/secrets/plain/{what}",
+            params={"namespace": "demo"},
+        )
+        assert r.status_code == 200 and leaks(r.text) == []

@@ -188,9 +188,10 @@ class AuditLog:
             log.warning("Could not write the audit record for %s (%s)", entry.action, reason)
             raise AuditUnavailable(reason) from exc
 
-    async def finish(self, record_id: int, outcome: Outcome, message: str | None = None) -> None:
+    async def finish(self, record_id: int, outcome: Outcome, message: str | None = None) -> bool:
         """Record how a `started` record ended. Never raises: a failure is logged as a WARNING,
-        and so is a record that isn't open (it keeps how it first finished)."""
+        and so is a record that isn't open (it keeps how it first finished).
+        Returns whether this call finished it."""
         try:
             async with self._sessionmaker() as session:
                 result = await session.execute(
@@ -203,9 +204,11 @@ class AuditLog:
             log.warning(
                 "Could not finish audit record %s as %s (%s)", record_id, outcome, _reason(exc)
             )
-            return
+            return False
         if result.rowcount == 0:
             log.warning("Audit record %s isn't open; not finished as %s", record_id, outcome)
+            return False
+        return True
 
     async def finish_open(
         self,

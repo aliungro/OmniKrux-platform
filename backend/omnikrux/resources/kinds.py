@@ -71,13 +71,43 @@ def kind_key(group: str, plural: str) -> str:
     return f"{plural}.{group}" if group else plural
 
 
-def namespace_problem(spec: KindSpec, name: str, namespace: str | None) -> str | None:
-    """Why `namespace` doesn't fit the kind, in words; None when it does."""
+def target_problem(spec: KindSpec, name: str, namespace: str | None) -> str | None:
+    """Why the name or namespace doesn't fit the kind (or any object), in words; None when they
+    do."""
     if spec.namespaced and not namespace:
         return f"Choose the namespace of {spec.kind} {name}."
     if not spec.namespaced and namespace:
         return f"{spec.kind} objects have no namespace."
+    return object_name_problem(name, namespace)
+
+
+# Names are joined into API paths unencoded, so only what Kubernetes names use is let through:
+# a DNS subdomain, plus upper case and ':' (RBAC names such as system:controller:...). Never
+# '/', '?', '#', '%', spaces, '.' or '..'. Namespaces are DNS labels.
+_OBJECT_NAME = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9.:]*[A-Za-z0-9])?$")
+_NAMESPACE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
+
+def object_name_problem(name: str, namespace: str | None) -> str | None:
+    """Why `name` or `namespace` can't be an object's, in words; None when both can."""
+    if len(name) > 253 or not _OBJECT_NAME.match(name):
+        return f"{name} isn't a valid object name: names use letters, digits, '-', '.' and ':'."
+    if namespace is not None and (len(namespace) > 63 or not _NAMESPACE.match(namespace)):
+        return (
+            f"{namespace} isn't a valid namespace: namespaces use lower-case letters, digits "
+            "and '-'."
+        )
     return None
+
+
+def matches_selector(spec: KindSpec, obj: dict) -> bool:
+    """Whether `obj` carries the labels of the spec's equality selector (`k=v,k2=v2`), as
+    helm-releases' owner=helm; True for a spec without one."""
+    if not spec.label_selector:
+        return True
+    labels = (obj.get("metadata") or {}).get("labels") or {}
+    terms = [t.partition("=") for t in spec.label_selector.split(",") if t]
+    return all(labels.get(key) == value for key, _, value in terms)
 
 
 def is_kind_key(key: str) -> bool:

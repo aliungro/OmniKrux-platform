@@ -41,8 +41,14 @@ from omnikrux.exec.debug import finish_even_if_cancelled
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.kube.http import KUBE_ERRORS
 from omnikrux.resources.catalog import KindNotServed
-from omnikrux.resources.kinds import HELM_RELEASES, KindSpec, is_kind_key, namespace_problem
-from omnikrux.resources.yaml_out import diff_text
+from omnikrux.resources.kinds import (
+    HELM_RELEASES,
+    KindSpec,
+    is_kind_key,
+    object_name_problem,
+    target_problem,
+)
+from omnikrux.resources.yaml_out import diff_text, is_secret_resource, to_yaml
 
 log = logging.getLogger(__name__)
 
@@ -151,7 +157,12 @@ class Planned:
     summary: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     blocked: list[str] = field(default_factory=list)
-    diff: Diff | None = None
+    # The object as it is now and as the change leaves it (None: it doesn't exist then). The
+    # pipeline renders both sides itself with `to_yaml`, masking a Secret by the kind's resource
+    # (whatever the dicts carry), so no handler hands over YAML text and no value reaches a plan
+    # or an audit diff. Both None: the plan has no diff.
+    before: dict | None = None
+    after: dict | None = None
     typed: bool = False  # the handler asks for the name to be typed, whatever the rule says
     apply_label: str
     # The handler's own precondition data (uid, resourceVersion, the body to PUT, ...): kept on
@@ -216,6 +227,7 @@ class StoredPlan:
     cluster: ClusterRef
     spec: KindSpec
     planned: Planned
+    diff: Diff | None  # rendered from `planned` by `render_diff`: what the user reviewed
     confirm_text: str | None
     actor: str
 
@@ -254,6 +266,22 @@ class PlanStore:
         with self._lock:
             entry = self._plans.pop(plan_id, None)
             return entry[1] if entry is not None and entry[0] > self._clock() else None
+
+
+# --- diffs --------------------------------------------------------------------------------
+
+
+def render_diff(spec: KindSpec, planned: Planned) -> Diff | None:
+    """Both sides of the change as the user reviews them; a Secret's values masked because the
+    kind's resource is secrets, even when the handler's dicts don't say they are Secrets."""
+    if planned.before is None and planned.after is None:
+        return None
+    secret = is_secret_resource(spec)
+
+    def side(obj: dict | None) -> str:
+        return "" if obj is None else to_yaml(obj, secret=secret)
+
+    return Diff(before=side(planned.before), after=side(planned.after))
 
 
 # --- rules --------------------------------------------------------------------------------
@@ -356,6 +384,9 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         raise HTTPException(status_code=422, detail=HELM_READ_ONLY)
     if body.action == "edit" and target.kind_key == "secrets":
         raise HTTPException(status_code=422, detail=SECRET_EDIT)
+    # Handlers join names into API paths: nothing but a Kubernetes name gets that far.
+    if (problem := object_name_problem(target.name, target.namespace)) is not None:
+        raise HTTPException(status_code=422, detail=problem)
     actor = actor_of(request)
     await _authorize(actor, body.action, target)
     try:
@@ -368,7 +399,7 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
     except Exception as exc:  # unreachable, or discovery failed: said in words
         detail = kube_error_message(exc, "read which kinds the cluster serves")
         raise HTTPException(status_code=502, detail=detail) from exc
-    if (problem := namespace_problem(spec, target.name, target.namespace)) is not None:
+    if (problem := target_problem(spec, target.name, target.namespace)) is not None:
         raise HTTPException(status_code=422, detail=problem)
 
     async with AsyncExitStack() as stack:
@@ -392,6 +423,7 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         cluster=cluster,
         spec=spec,
         planned=planned,
+        diff=render_diff(spec, planned),
         confirm_text=target.name if typed else None,
         actor=actor,
     )
@@ -406,7 +438,7 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         summary=list(planned.summary),
         warnings=warnings,
         blocked=list(planned.blocked),
-        diff=planned.diff,
+        diff=stored.diff,
         confirm_text=stored.confirm_text,
         apply_label=planned.apply_label,
         expires_at=datetime.now(UTC) + timedelta(seconds=plans.ttl),
@@ -443,7 +475,7 @@ async def apply_action(plan_id: str, body: ApplyIn, request: Request) -> ApplyOu
         kind=target.kind_key,
         name=target.name,
         details={"title": planned.title, "summary": list(planned.summary)},
-        diff=diff_text(planned.diff.before, planned.diff.after) if planned.diff else None,
+        diff=diff_text(stored.diff.before, stored.diff.after) if stored.diff else None,
     )
     try:
         audit_id = await audit.begin(entry)
