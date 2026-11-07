@@ -4,7 +4,7 @@ import math
 import re
 from decimal import Decimal
 
-_NUMBER = r"(?P<num>(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+_NUMBER = r"(?P<num>(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d{1,3})?)"
 _CPU = re.compile(rf"^{_NUMBER}(?P<suffix>[num])?$")
 _BYTES = re.compile(rf"^{_NUMBER}(?P<suffix>Ki|Mi|Gi|Ti|Pi|Ei|[kMGTPEm])?$")
 
@@ -36,7 +36,10 @@ def _parse(q: str, pattern: re.Pattern[str], units: dict[str | None, Decimal], w
     match = pattern.match(q.strip()) if isinstance(q, str) else None
     if match is None:
         raise ValueError(f"not a {what} quantity: {q!r}")
-    return math.ceil(Decimal(match["num"]) * units[match["suffix"]])
+    try:
+        return math.ceil(Decimal(match["num"]) * units[match["suffix"]])
+    except ArithmeticError as exc:  # an exponent too big or too small to be a quantity
+        raise ValueError(f"not a {what} quantity: {q!r}") from exc
 
 
 def parse_cpu_m(q: str) -> int:

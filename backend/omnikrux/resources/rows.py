@@ -98,23 +98,19 @@ def _quantity(value: Any, parse: Callable[[str], int]) -> int | None:
 
 def _resources(pod: dict) -> dict[str, Any]:
     """Requests and limits summed over the regular containers (init containers run first and
-    don't add up). A limit is None when any container has none; so is an unreadable one."""
+    don't add up). A container without a request adds nothing; without a limit, the pod has no
+    limit (None). A quantity that can't be read makes its sum None: never a made-up number."""
     containers = (pod.get("spec") or {}).get("containers") or []
-    out: dict[str, Any] = {
-        "images": [c["image"] for c in containers if c.get("image")],
-    }
-    for prefix, resource, parse in (
-        ("cpu", "cpu", parse_cpu_m),
-        ("memory", "memory", parse_bytes),
-    ):
-        suffix = "m" if prefix == "cpu" else "b"
+    out: dict[str, Any] = {"images": [c["image"] for c in containers if c.get("image")]}
+    for prefix, suffix, parse in (("cpu", "m", parse_cpu_m), ("memory", "b", parse_bytes)):
         for field in ("requests", "limits"):
-            values = [
-                _quantity(((c.get("resources") or {}).get(field) or {}).get(resource), parse)
-                for c in containers
-            ]
+            raw = [((c.get("resources") or {}).get(field) or {}).get(prefix) for c in containers]
+            values = [None if v is None else _quantity(v, parse) for v in raw]
             if field == "requests":
-                out[f"{prefix}_request_{suffix}"] = sum(v or 0 for v in values)
+                unreadable = any(v is None and r is not None for v, r in zip(values, raw))
+                out[f"{prefix}_request_{suffix}"] = (
+                    None if unreadable else sum(v or 0 for v in values)
+                )
             else:
                 out[f"{prefix}_limit_{suffix}"] = (
                     None if not values or None in values else sum(values)

@@ -35,3 +35,11 @@ def test_junk_quantities_raise(junk):
         parse_bytes(junk)
     with pytest.raises(ValueError):
         parse_cpu_m(junk)
+
+
+@pytest.mark.parametrize("huge", ["1e999999999", "1e-999999999", "9" * 40 + "e99999999999"])
+def test_absurd_exponents_raise_value_error(huge):
+    with pytest.raises(ValueError):
+        parse_bytes(huge)
+    with pytest.raises(ValueError):
+        parse_cpu_m(huge)

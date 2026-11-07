@@ -336,3 +336,23 @@ def test_every_curated_kind_has_columns_and_a_row_builder(key):
         ):
             assert column.key in row.columns, (key, column.key)
     assert spec.to_row({}, "c1").name == ""  # a bare object never crashes a builder
+
+
+def test_daemonset_with_no_status_is_unknown_not_finished():
+    row = kr.daemonset_row(obj(), "c1")
+    assert status_of(row) == ("Unknown", "warn")
+    assert row.columns["desired"] is None and row.columns["ready"] is None
+    none_yet = obj(status={"desiredNumberScheduled": 0, "numberReady": 0})
+    assert status_of(kr.daemonset_row(none_yet, "c1")) == ("No nodes", "warn")
+
+
+def test_missing_data_shows_as_missing_never_invented():
+    assert kr.job_row(obj(status={"succeeded": 2}), "c1").columns["completions"] == "2/—"
+    hpa = obj(spec={"minReplicas": 2, "maxReplicas": 10})
+    assert kr.hpa_row(hpa, "c1").columns["replicas"] == "— (2–10)"
+    svc = obj(spec={"ports": [{"protocol": "UDP"}, {"port": 53, "protocol": "UDP"}]})
+    assert kr.service_row(svc, "c1").columns["ports"] == "53/UDP"
+    pv = obj(spec={"claimRef": {"name": "data"}})
+    assert kr.pv_row(pv, "c1").columns["claim"] == "data"
+    node_taint = node(taints=[{"key": "k"}, {"key": "a", "value": "b", "effect": "NoSchedule"}])
+    assert kr.node_row(node_taint, "c1").columns["taints_title"] == "k\na=b:NoSchedule"

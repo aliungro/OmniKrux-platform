@@ -161,17 +161,20 @@ def replicaset_row(obj: dict, cluster_id: str) -> ResourceRow:
 def daemonset_row(obj: dict, cluster_id: str) -> ResourceRow:
     row = base_row(obj, cluster_id, "DaemonSet")
     st = obj.get("status") or {}
+    selector = _pod_template(obj).get("nodeSelector") or {}
+    known = isinstance(st.get("desiredNumberScheduled"), int)
     desired, ready = _num(st.get("desiredNumberScheduled")), _num(st.get("numberReady"))
     updated = _num(st.get("updatedNumberScheduled"))
-    selector = _pod_template(obj).get("nodeSelector") or {}
     row.columns.update(
-        desired=desired,
-        ready=f"{ready}/{desired}",
-        up_to_date=updated,
+        desired=desired if known else None,
+        ready=f"{ready}/{desired}" if known else None,
+        up_to_date=updated if known else None,
         node_selector=",".join(f"{k}={v}" for k, v in selector.items()) or None,
     )
-    if desired == 0:
-        _status(row, "Scaled to 0", "done")
+    if not known:  # the controller hasn't reported yet
+        _status(row, "Unknown", "warn")
+    elif desired == 0:  # a DaemonSet has no replicas to scale: no node matches it
+        _status(row, "No nodes", "warn")
     elif updated < desired:
         _status(row, "Updating", "warn")
     elif ready < desired:
@@ -196,7 +199,9 @@ def job_row(obj: dict, cluster_id: str) -> ResourceRow:
     row = base_row(obj, cluster_id, "Job")
     spec, st = obj.get("spec") or {}, obj.get("status") or {}
     row.columns.update(
-        completions=f"{_num(st.get('succeeded'))}/{_num(spec.get('completions'), 1)}",
+        completions=f"{_num(st.get('succeeded'))}/{spec['completions']}"
+        if isinstance(spec.get("completions"), int)
+        else f"{_num(st.get('succeeded'))}/—",
         # Only a finished job has a duration: a running one would be stale by the next render.
         duration=_duration(_ts(st.get("startTime")), _ts(st.get("completionTime"))),
     )
@@ -244,7 +249,9 @@ def service_row(obj: dict, cluster_id: str) -> ResourceRow:
         external.append(spec["externalName"])
     ports = []
     for p in spec.get("ports") or []:
-        port = str(p.get("port"))
+        if p.get("port") is None:
+            continue
+        port = str(p["port"])
         if p.get("nodePort"):
             port += f":{p['nodePort']}"
         ports.append(f"{port}/{p.get('protocol') or 'TCP'}")
@@ -305,7 +312,9 @@ def pv_row(obj: dict, cluster_id: str) -> ResourceRow:
     spec = obj.get("spec") or {}
     claim = spec.get("claimRef") or {}
     row.columns.update(
-        claim=f"{claim.get('namespace')}/{claim['name']}" if claim.get("name") else None,
+        claim=(
+            f"{claim['namespace']}/{claim['name']}" if claim.get("namespace") else claim.get("name")
+        ),
         capacity=(spec.get("capacity") or {}).get("storage"),
         reclaim=spec.get("persistentVolumeReclaimPolicy"),
         storage_class=spec.get("storageClassName"),
@@ -362,7 +371,8 @@ def node_row(obj: dict, cluster_id: str) -> ResourceRow:
         pressure=pressure,
         taints=len(taints),
         taints_title="\n".join(
-            f"{t.get('key')}{'=' + t['value'] if t.get('value') else ''}:{t.get('effect')}"
+            f"{t.get('key')}{'=' + t['value'] if t.get('value') else ''}"
+            f"{':' + t['effect'] if t.get('effect') else ''}"
             for t in taints
         ),
         allocatable_cpu_m=_allocatable(alloc, "cpu", parse_cpu_m),
@@ -411,7 +421,7 @@ def hpa_row(obj: dict, cluster_id: str) -> ResourceRow:
             target.get("apiVersion"), target.get("kind"), target.get("name"), row.namespace
         ),
         replicas=(
-            f"{_num(st.get('currentReplicas'))} "
+            f"{st['currentReplicas'] if isinstance(st.get('currentReplicas'), int) else '—'} "
             f"({_num(spec.get('minReplicas'), 1)}–{high if high is not None else '—'})"
         ),
     )

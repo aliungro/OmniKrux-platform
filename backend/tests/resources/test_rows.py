@@ -151,3 +151,26 @@ def test_pod_row_requests_limits_labels_images():
     bare = pod_row(pod(), "c1")
     assert bare.columns["cpu_request_m"] == 0 and bare.columns["cpu_limit_m"] is None
     assert bare.columns["images"] == []
+
+
+def test_pod_row_unreadable_quantities_are_none_not_zero():
+    p = pod()
+    p["spec"]["containers"] = [
+        {
+            "name": "a",
+            "image": "x",
+            "resources": {"requests": {"cpu": "1e999999999", "memory": "junk"}},
+        },
+        {"name": "b", "image": "y", "resources": {"requests": {"cpu": "100m", "memory": "1Mi"}}},
+    ]
+    row = pod_row(p, "c1")
+    assert row.columns["cpu_request_m"] is None and row.columns["memory_request_b"] is None
+    assert row.columns["images"] == ["x", "y"]
+
+
+def test_node_row_survives_an_absurd_allocatable():
+    from omnikrux.resources.kind_rows import node_row
+
+    n = {"metadata": {"name": "n"}, "status": {"allocatable": {"cpu": "1e999999999", "pods": "x"}}}
+    row = node_row(n, "c1")
+    assert row.columns["allocatable_cpu_m"] is None and row.columns["allocatable_pods"] is None
