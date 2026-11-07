@@ -25,7 +25,7 @@ export function watchUrl(kind: string): string {
 }
 
 /** Runs `cb` on the next animation frame (or after ~16 ms), and at the latest after 1 s. Returns a cancel. */
-function scheduleFrame(cb: () => void): () => void {
+export function scheduleFrame(cb: () => void): () => void {
   let done = false;
   let raf: number | null = null;
   const run = () => {

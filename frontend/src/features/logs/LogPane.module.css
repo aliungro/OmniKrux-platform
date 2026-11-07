@@ -1,0 +1,450 @@
+/* The log pane, after the dock in the Territories mockup: quiet chrome, mono lines, one warm
+   accent for search hits, and the match rail as the thing the eye finds first. */
+.pane {
+  --log-bg: #100E18;
+  --log-ink: #C2BDD8;
+  --log-rail: #13111C;
+  --log-thumb: #2E2942;
+  --hit: rgba(242, 193, 78, 0.28);
+  --hit-ink: #FFE3A0;
+  --mono: "Geist Mono", ui-monospace, Consolas, monospace;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--log-bg);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+/* ---------- identity: provider, cluster / namespace / pod (container) ---------- */
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 12px 0;
+  white-space: nowrap;
+}
+
+.where {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-2);
+}
+
+.one {
+  color: var(--ink-3);
+}
+
+.pick {
+  flex: none;
+  height: 26px;
+  max-width: 220px;
+  padding: 0 6px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn {
+  flex: none;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.btn:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+
+/* ---------- toolbar: search, then the toggles ---------- */
+.bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px 8px;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+/* In a narrow pane the toggles wrap under a full-width search box. */
+.search {
+  flex: 1 1 260px;
+  min-width: 0;
+  height: 28px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+}
+
+.search:focus-within,
+.searching {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px rgba(201, 184, 255, 0.12);
+}
+
+.search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.search input::placeholder {
+  color: var(--ink-3);
+  font-family: "Bricolage Grotesque Variable", system-ui, sans-serif;
+  font-size: 13px;
+}
+
+.search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.hits {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.case,
+.nav button {
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: var(--surf-2);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.case {
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.case[aria-pressed="true"] {
+  background: var(--ink-2);
+  color: var(--bg);
+}
+
+.nav {
+  display: flex;
+  gap: 2px;
+}
+
+.nav button {
+  width: 20px;
+  padding: 0;
+}
+
+.case:hover,
+.nav button:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.nav button:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.tgl {
+  flex: none;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tgl:hover {
+  border-color: var(--ink-3);
+}
+
+.tgl[aria-pressed="true"] {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+.tgl[aria-pressed="true"]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+/* Previous logs are a different run: amber, so it never passes for the live log. */
+.warn[aria-pressed="true"]::before {
+  background: var(--warn);
+}
+
+.k {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+
+/* ---------- the log itself ---------- */
+.notice {
+  flex: none;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.wrapArea {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.logs {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--log-ink);
+  scrollbar-width: thin;
+  scrollbar-color: var(--log-thumb) var(--log-rail);
+}
+
+.logs:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.body {
+  position: relative;
+  min-width: 100%;
+}
+
+.line,
+.sep {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  min-width: 100%;
+}
+
+/* Keep the height in step with LINE_HEIGHT in LogPane.tsx. */
+.line {
+  display: flex;
+  gap: 10px;
+  width: max-content;
+  padding: 0 18px 0 12px;
+  line-height: 20px;
+  white-space: pre;
+}
+
+.ts {
+  flex: none;
+  width: 88px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.pod {
+  flex: none;
+  width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-3);
+}
+
+.text {
+  min-width: 0;
+}
+
+.wrapped .line {
+  width: 100%;
+}
+
+.wrapped .text {
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.line mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--hit);
+  color: var(--hit-ink);
+}
+
+.cur {
+  background: rgba(201, 184, 255, 0.08);
+  box-shadow: inset 2px 0 0 var(--focus);
+}
+
+.cur mark {
+  background: var(--warn);
+  color: #1B1406;
+}
+
+/* What happened to the stream (a restart, a reconnect, dropped lines): a rule, not a line.
+   Keep the height in step with MARKER_HEIGHT in LogPane.tsx. */
+.sep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  width: 100%;
+  padding: 0 18px 0 12px;
+  color: var(--ink-2);
+  font-family: "Bricolage Grotesque Variable", system-ui, sans-serif;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sep::before,
+.sep::after {
+  content: "";
+  height: 1px;
+  background: var(--rule);
+}
+
+.sep::before {
+  flex: none;
+  width: 24px;
+}
+
+.sep::after {
+  flex: 1;
+  min-width: 24px;
+}
+
+.sepText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Match ticks laid over the scrollbar track; the scrollbar itself still takes the pointer. */
+.rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  pointer-events: none;
+}
+
+.hit {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--warn);
+  opacity: 0.85;
+}
+
+.hitCur {
+  height: 4px;
+  background: var(--hit-ink);
+  opacity: 1;
+}
+
+.jump {
+  position: absolute;
+  right: 22px;
+  bottom: 12px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: var(--surf-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(8, 6, 14, 0.5);
+  cursor: pointer;
+}
+
+.jump:hover {
+  border-color: var(--ink-3);
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0 24px;
+  color: var(--ink-3);
+  text-align: center;
+  pointer-events: none;
+}
+
+/* ---------- how the stream stands ---------- */
+.foot {
+  flex: none;
+  padding: 7px 12px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.footWarn {
+  color: var(--warn);
+}
+
+.footBad {
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+}

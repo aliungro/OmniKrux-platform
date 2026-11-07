@@ -117,3 +117,46 @@ export interface PodDescribe {
 export interface PodYaml {
   yaml: string;
 }
+
+/* Logs — mirrors backend/omnikrux/logs (stream.py LogLine / Marker, api.py messages). */
+
+export interface LogLine {
+  pod: string;
+  container: string;
+  /** RFC 3339 as the kubelet stamped it; null for a line without a stamp. */
+  ts: string | null;
+  text: string;
+}
+
+/** Something that happened to the stream, e.g. "Container restarted at …"; prefixed "{pod}: " in selector mode. */
+export interface LogMarker {
+  marker: string;
+}
+
+export type LogMessage =
+  | { type: "lines"; lines: (LogLine | LogMarker)[] }
+  /** Lines the server dropped because the page read them too slowly. */
+  | { type: "dropped"; count: number }
+  | { type: "status"; state: "streaming" | "ended" | "error"; message: string | null };
+
+/**
+ * What a log pane shows. The dock (Task 13) builds one per logs session and renders
+ * `<LogPane key={sessionId} session={…} />`; the pane keeps its own toggles, so a new session
+ * needs a new key.
+ */
+export interface LogSession {
+  clusterId: string;
+  /** For the pane header, which names the cluster as "cluster / namespace / pod (container)". */
+  clusterName: string;
+  provider: Provider;
+  namespace: string;
+  /** Exactly one of `pod` and `selector` is set: one pod's log, or every pod a label selector matches. */
+  pod?: string;
+  selector?: string;
+  /** The container to show first; null lets the server pick the pod's first container. */
+  container: string | null;
+  /** Every container the picker offers (init, regular and ephemeral); may be empty. */
+  containers: string[];
+  /** Open on the previous run's log (the `p` shortcut). */
+  previous?: boolean;
+}
