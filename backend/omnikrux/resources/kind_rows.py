@@ -435,10 +435,10 @@ def hpa_row(obj: dict, cluster_id: str) -> ResourceRow:
 
 
 def helm_release_row(obj: dict, cluster_id: str) -> ResourceRow:
-    """From the labels of Helm's release Secret only; `data.release` is never read."""
+    """From the labels of Helm's release Secret only; `data.release` is never read. The row keeps
+    the Secret's name (describe and YAML read the object by it); the release is its own column."""
     row = base_row(obj, cluster_id, "HelmRelease")
     labels = row.labels
-    row.name = labels.get("name") or row.name
     modified, revision, status = (
         labels.get("modifiedAt"),
         labels.get("version"),
@@ -449,7 +449,9 @@ def helm_release_row(obj: dict, cluster_id: str) -> ResourceRow:
     except (ValueError, OverflowError, OSError):
         updated = None
     row.columns.update(
-        revision=int(revision) if revision and revision.isdigit() else revision, updated=updated
+        release=labels.get("name"),
+        revision=int(revision) if revision and revision.isdigit() else revision,
+        updated=updated,
     )
     cls: StatusClass = {"deployed": "ok", "failed": "bad", "superseded": "done"}.get(
         status or "", "warn"

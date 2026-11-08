@@ -148,6 +148,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings if settings is not None else get_settings()
     try:
         forward_ports = settings.forward_ports
+        forward_bind = settings.forward_bind
     except ValueError as exc:  # said in plain words, without a traceback
         raise SystemExit(f"Omnikrux can't start: {exc}") from None
 
@@ -168,7 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         audit = AuditLog(sessionmaker, registry)
         forwards = PortForwardManager(
-            connections, registry, audit, ports=forward_ports, bind=settings.forward_bind
+            connections, registry, audit, ports=forward_ports, bind=forward_bind
         )
 
         async def on_forget(cluster_id: str) -> None:

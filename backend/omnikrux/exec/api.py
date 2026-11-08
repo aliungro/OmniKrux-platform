@@ -250,11 +250,17 @@ async def _session(
         await audit.finish(audit_id, "failed", exc.message)
         await _fail(websocket, exc.message, 1011)
         return
-    except BaseException:  # cancelled while opening: the console is stopping
+    except asyncio.CancelledError:  # cancelled while opening: the console is stopping
         await finish_even_if_cancelled(
             audit.finish(audit_id, CONSOLE_STOPPED.outcome, CONSOLE_STOPPED.message)
         )
         raise
+    except Exception as exc:  # not a refusal _open_channel knows: still said in words
+        log.warning("exec failed to open", exc_info=exc)
+        message = f"The shell couldn't be opened ({type(exc).__name__}). Try again."
+        await finish_even_if_cancelled(audit.finish(audit_id, "failed", message))
+        await _fail(websocket, message, 1011)
+        return
     where = f"cluster={cluster} ns={namespace} pod={pod} container={container}"
     log.info("exec opened %s", where)
     try:

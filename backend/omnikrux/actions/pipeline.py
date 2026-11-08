@@ -126,6 +126,7 @@ class PlanOut(BaseModel):
     plan_id: str
     action: str
     target: Target
+    kind: str  # the target's Kind on the plan's cluster ("Deployment"), for the dialog to name
     cluster: ClusterRef  # the plan's cluster: what the dialog names, whatever is selected
     title: str
     summary: list[str]
@@ -484,6 +485,7 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         plan_id=plan_id,
         action=body.action,
         target=target,
+        kind=spec.kind,
         cluster=cluster,
         title=planned.title,
         summary=list(planned.summary),

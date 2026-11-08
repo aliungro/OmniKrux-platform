@@ -290,6 +290,9 @@ def test_object_name_problem_allows_kubernetes_names_only():
         assert object_name_problem(name, "demo") is not None, name
     for namespace in ("Demo", "de mo", "de.mo", "", "-demo", "d" * 64):
         assert object_name_problem("web", namespace) is not None, namespace
+    # `$` would let a trailing newline through: the name would then not be the object's.
+    assert object_name_problem("web\n", "demo") is not None
+    assert object_name_problem("web", "demo\n") is not None
 
 
 def seed_web(fake_api) -> None:

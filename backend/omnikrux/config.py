@@ -1,3 +1,4 @@
+import ipaddress
 import os
 import re
 from functools import lru_cache
@@ -27,6 +28,17 @@ def parse_port_range(value: str) -> range:
     )
 
 
+def parse_bind_address(value: str) -> str:
+    """An IPv4 or IPv6 address to listen on; ValueError in plain words otherwise."""
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        raise ValueError(
+            "OMNIKRUX_PORT_FORWARD_BIND must be an IP address like 127.0.0.1 or 0.0.0.0, "
+            f"not {value!r}."
+        ) from None
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OMNIKRUX_")
 
@@ -45,6 +57,9 @@ class Settings(BaseSettings):
     allowed_hosts: Annotated[list[str], NoDecode] = list(DEFAULT_ALLOWED_HOSTS)
     # OMNIKRUX_PORT_FORWARD_PORTS: the local ports port-forwards listen on, first-last.
     port_forward_ports: str = "30000-30019"
+    # OMNIKRUX_PORT_FORWARD_BIND: the address port-forwards listen on. 127.0.0.1 everywhere, also
+    # in the container (safe with --network host); Docker's bridge publishing needs 0.0.0.0.
+    port_forward_bind: str = "127.0.0.1"
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod
@@ -68,9 +83,8 @@ class Settings(BaseSettings):
 
     @property
     def forward_bind(self) -> str:
-        """Inside the container every interface, so the published ports reach the listeners
-        (the README publishes them on 127.0.0.1 only); otherwise this machine only."""
-        return "0.0.0.0" if self.in_container else "127.0.0.1"
+        """ValueError in plain words for something that isn't an IP (the app refuses to start)."""
+        return parse_bind_address(self.port_forward_bind)
 
     @property
     def kubeconfig_paths(self) -> list[Path]:

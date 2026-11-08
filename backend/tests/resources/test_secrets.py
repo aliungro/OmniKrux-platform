@@ -16,6 +16,7 @@ from omnikrux.actions.authz import NotAllowed
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.main import create_app
+from omnikrux.resources import kind_rows as kr
 from omnikrux.resources.yaml_out import (
     LAST_APPLIED,
     MASK,
@@ -288,3 +289,30 @@ async def test_helm_release_describe_and_yaml_need_the_helm_label(env, fake_api)
             params={"namespace": "demo"},
         )
         assert r.status_code == 200 and leaks(r.text) == []
+
+
+async def test_helm_release_row_identity_opens_its_describe_and_yaml(env, fake_api):
+    """The row the table shows is the one the inspector asks for: its name is the Secret's."""
+    _, http, cluster_id = env
+    release = stored_secret()
+    release["type"] = "helm.sh/release.v1"
+    release["data"] = {"release": "H4sIAAAAAAAA-RELEASE-PAYLOAD"}
+    release["metadata"].update(
+        name="sh.helm.release.v1.web.v3",
+        labels={"owner": "helm", "name": "web", "version": "3", "status": "deployed"},
+    )
+    fake_api.objects["secrets"][("demo", "sh.helm.release.v1.web.v3")] = release
+    row = kr.helm_release_row(release, cluster_id)
+    assert row.columns["release"] == "web"
+    for what in ("describe", "yaml"):
+        r = await http.get(
+            f"/api/clusters/{cluster_id}/resources/helm-releases/{row.name}/{what}",
+            params={"namespace": row.namespace},
+        )
+        assert r.status_code == 200, (what, r.text)
+        assert "RELEASE-PAYLOAD" not in r.text
+    r = await http.get(
+        f"/api/clusters/{cluster_id}/resources/helm-releases/{row.name}/describe",
+        params={"namespace": row.namespace},
+    )
+    assert (r.json()["kind"], r.json()["name"]) == ("HelmRelease", "sh.helm.release.v1.web.v3")

@@ -323,6 +323,9 @@ async def test_restart_sets_restarted_at_annotation(env, monkeypatch):
     assert r.json()["summary"] == [
         "Restart every pod of StatefulSet demo/web, following its update strategy (OnDelete)."
     ]
+    assert r.json()["warnings"] == [
+        "With the OnDelete update strategy, pods restart only when you delete them."
+    ]
     assert (await apply(env, r.json()["plan_id"])).status_code == 200
     test_uid, test_generation, add = patches(env)[-1]["body"]
     assert test_uid["path"] == "/metadata/uid"

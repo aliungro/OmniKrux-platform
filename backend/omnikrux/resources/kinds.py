@@ -22,7 +22,7 @@ Width = Literal["s", "m", "l"]
 HELM_RELEASES = "helm-releases"
 
 # A DNS subdomain (RFC 1123), which every kubectl resource name is: lower case, dot-separated.
-_KIND_KEY = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+_KIND_KEY = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*")
 
 
 @dataclass(frozen=True)
@@ -83,16 +83,17 @@ def target_problem(spec: KindSpec, name: str, namespace: str | None) -> str | No
 
 # Names are joined into API paths unencoded, so only what Kubernetes names use is let through:
 # a DNS subdomain, plus upper case and ':' (RBAC names such as system:controller:...). Never
-# '/', '?', '#', '%', spaces, '.' or '..'. Namespaces are DNS labels.
-_OBJECT_NAME = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9.:]*[A-Za-z0-9])?$")
-_NAMESPACE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+# '/', '?', '#', '%', spaces, '.' or '..'. Namespaces are DNS labels. `fullmatch`, never
+# `match` with `$`, which would let a trailing newline through.
+_OBJECT_NAME = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9.:]*[A-Za-z0-9])?")
+_NAMESPACE = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
 
 
 def object_name_problem(name: str, namespace: str | None) -> str | None:
     """Why `name` or `namespace` can't be an object's, in words; None when both can."""
-    if len(name) > 253 or not _OBJECT_NAME.match(name):
+    if len(name) > 253 or not _OBJECT_NAME.fullmatch(name):
         return f"{name} isn't a valid object name: names use letters, digits, '-', '.' and ':'."
-    if namespace is not None and (len(namespace) > 63 or not _NAMESPACE.match(namespace)):
+    if namespace is not None and (len(namespace) > 63 or not _NAMESPACE.fullmatch(namespace)):
         return (
             f"{namespace} isn't a valid namespace: namespaces use lower-case letters, digits "
             "and '-'."
@@ -111,7 +112,7 @@ def matches_selector(spec: KindSpec, obj: dict) -> bool:
 
 
 def is_kind_key(key: str) -> bool:
-    return key == HELM_RELEASES or (len(key) <= 253 and _KIND_KEY.match(key) is not None)
+    return key == HELM_RELEASES or (len(key) <= 253 and _KIND_KEY.fullmatch(key) is not None)
 
 
 def _col(key: str, label: str, type: ColumnType = "text", width: Width = "m") -> Column:
@@ -428,12 +429,14 @@ _CURATED = (
         kind="HelmRelease",
         namespaced=True,
         label="Helm release",
+        # One row per revision: the release first, its Secret (the object's own name) last.
         columns=(
-            NAME,
+            _col("release", "Release", width="l"),
             NAMESPACE,
             _col("revision", "Revision", "number", "s"),
             STATUS,
             _col("updated", "Updated", "time", "s"),
+            _col("name", "Secret", width="l"),
         ),
         to_row=kr.helm_release_row,
         sort="recent",

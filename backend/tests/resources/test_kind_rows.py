@@ -298,7 +298,14 @@ def test_helm_release_row_from_labels_only():
         },
     )
     row = kr.helm_release_row(release, "c1")
-    assert (row.kind, row.name, row.namespace) == ("HelmRelease", "web", "demo")
+    # The row names the Secret, so describe and YAML read the right object; the release is a
+    # column of its own, shown first.
+    assert (row.kind, row.name, row.namespace) == (
+        "HelmRelease",
+        "sh.helm.release.v1.web.v3",
+        "demo",
+    )
+    assert row.columns["release"] == "web"
     assert row.columns["revision"] == 3
     assert row.columns["updated"] == datetime.fromtimestamp(1762423200, UTC)
     assert status_of(row) == ("deployed", "ok")
@@ -317,6 +324,8 @@ def test_helm_release_row_from_labels_only():
     spec = KINDS[HELM_RELEASES]
     assert (spec.plural, spec.label_selector, spec.sort) == ("secrets", "owner=helm", "recent")
     assert spec.plural_label == "Helm releases"
+    assert (spec.columns[0].key, spec.columns[0].label) == ("release", "Release")
+    assert ("name", "Secret") in [(c.key, c.label) for c in spec.columns]
 
 
 @pytest.mark.parametrize("key", list(KINDS))

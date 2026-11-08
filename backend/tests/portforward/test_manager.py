@@ -162,8 +162,8 @@ async def test_error_frame_sets_error_state_until_a_connection_works(env):
     assert (listed.state, listed.message) == ("listening", None)
 
 
-async def test_bind_address_container_vs_host(env):
-    assert Settings(in_container=True).forward_bind == "0.0.0.0"
+async def test_bind_address_defaults_to_loopback(env):
+    assert Settings(in_container=True).forward_bind == "127.0.0.1"
     assert Settings(in_container=False).forward_bind == "127.0.0.1"
     assert Settings().forward_ports == range(30000, 30020)
     assert Settings(port_forward_ports=" 30005 ").forward_ports == range(30005, 30006)

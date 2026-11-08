@@ -111,6 +111,7 @@ async def test_plan_out_names_the_cluster_and_hides_handler_state(env, scale):
         "environment": "development",
     }
     assert body["title"] == "Change Deployment web"
+    assert body["kind"] == "Deployment"  # the Kind the dialog names, from the plan's cluster
     assert body["summary"] == ["Scale web to 5."]
     assert (body["warnings"], body["blocked"], body["confirm_text"]) == ([], [], None)
     assert body["apply_label"] == "Apply"

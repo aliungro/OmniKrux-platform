@@ -40,6 +40,7 @@ SCALE_TO_ZERO = "Scaling to 0 stops every pod of {name}."
 HPA_MANAGES = "HorizontalPodAutoscaler {hpa} manages these replicas and may change them back."
 SAME_COUNT = "Nothing changes: {name} already runs {n} replicas."
 PAUSED = "This deployment is paused: the restart happens once it's resumed."
+ON_DELETE = "With the OnDelete update strategy, pods restart only when you delete them."
 PAUSED_ROLLBACK = "Deployment {name} is paused: resume it before rolling back."
 NO_EARLIER = "Deployment {name} has no earlier revision to roll back to."
 NO_SUCH_REVISION = "Deployment {name} has no revision {revision}. Pick one from its revisions."
@@ -190,15 +191,16 @@ class RestartAction:
             stamp
         )
         paused = spec.kind == "Deployment" and (live.get("spec") or {}).get("paused") is True
+        strategy = _strategy(spec, live)
         return Planned(
             title=f"Restart {spec.kind} {target.name}",
             summary=[
                 (
                     f"Restart every pod of {spec.kind} {_where(target)}, following its update "
-                    f"strategy ({_strategy(spec, live)})."
+                    f"strategy ({strategy})."
                 )
             ],
-            warnings=[PAUSED] if paused else [],
+            warnings=[w for w, on in ((PAUSED, paused), (ON_DELETE, strategy == "OnDelete")) if on],
             before=live,
             after=after,
             apply_label="Restart",

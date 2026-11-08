@@ -212,6 +212,41 @@ async def test_exec_audited_before_the_channel_opens(app, fake_api, monkeypatch)
     assert (record.outcome, record.message) == ("failed", message)
 
 
+async def test_exec_open_failure_is_failed_and_cancel_is_console_stopped(
+    app, fake_api, monkeypatch
+):
+    """Only cancellation reads as the console closing the shell; anything else unexpected while
+    opening finishes the record `failed`, in words the browser gets too."""
+    fake_api.pods[("demo", "web-a")] = pod("web-a")
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(exec_api, "_open_channel", broken)
+    ws = BrowserSocket(app[0])
+    await start(app, ws, "web-a")
+
+    message = "The shell couldn't be opened (RuntimeError). Try again."
+    assert ws.sent == [{"type": "error", "message": message}] and ws.closed == (1011, None)
+    [record] = await records(app)
+    assert (record.outcome, record.message) == ("failed", message)
+
+    opening = asyncio.Event()
+
+    async def hang(*args, **kwargs):
+        opening.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(exec_api, "_open_channel", hang)
+    handler = start(app, BrowserSocket(app[0]), "web-a")
+    await asyncio.wait_for(opening.wait(), 5)
+    handler.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await handler
+    stopped = [r for r in await records(app) if r.message != message]
+    assert [(r.outcome, r.message) for r in stopped] == [("ended", "The console closed the shell.")]
+
+
 async def test_exec_into_stopped_container_writes_no_record(app, fake_api, fake_channel):
     fake_api.pods[("demo", "web-a")] = pod("web-a", state={"waiting": {"reason": "Error"}})
     ws = BrowserSocket(app[0])

@@ -49,7 +49,17 @@ def test_kind_key_rules():
     assert kind_key("example.omnikrux.dev", "widgets") == WIDGETS
     for key in ("pods", "deployments.apps", WIDGETS, HELM_RELEASES):
         assert is_kind_key(key), key
-    for key in ("Deployments", "", "pods/log", "a..b", ".pods", "pods.", "x" * 254, "po ds"):
+    for key in (
+        "Deployments",
+        "",
+        "pods/log",
+        "a..b",
+        ".pods",
+        "pods.",
+        "x" * 254,
+        "po ds",
+        "pods\n",
+    ):
         assert not is_kind_key(key), key
 
 
