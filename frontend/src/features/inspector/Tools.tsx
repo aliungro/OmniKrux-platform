@@ -11,9 +11,12 @@ import { textColumn } from "../territories/model";
 import k from "../chrome/key.module.css";
 import s from "./Inspector.module.css";
 
-/** A key press on the row that asks the details for a tool; `seq` tells two presses apart. */
+/**
+ * A key press on the row (or a palette command) that asks the details for something: a change tool,
+ * the YAML tab or a workload's pods' logs (the last two are the inspector's). `seq` tells two apart.
+ */
 export interface ToolIntent {
-  tool: ToolId;
+  tool: ToolId | "yaml" | "workloadLogs";
   seq: number;
 }
 
@@ -138,7 +141,7 @@ export function useTools({
 
   // A tool's key pressed on the row: run it once the details are open.
   useEffect(() => {
-    if (!intent) return;
+    if (!intent || intent.tool === "yaml" || intent.tool === "workloadLogs") return;
     runRef.current(intent.tool);
     onIntentDone?.();
   }, [intent, onIntentDone]);

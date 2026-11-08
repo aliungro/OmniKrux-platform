@@ -50,7 +50,7 @@ function ForwardItem({
  * reaches, the address on this computer, why it failed if it did, and a way to stop it. The list is
  * read every 5 s; when a read fails it says the list may be out of date rather than pass it off as live.
  */
-export function ForwardsMenu() {
+export function ForwardsMenu({ openRequest = 0 }: { openRequest?: number } = {}) {
   const { query, stop } = usePortForwards();
   const [open, setOpen] = useState(false);
   const [stopping, setStopping] = useState<string | null>(null);
@@ -72,6 +72,16 @@ export function ForwardsMenu() {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
+
+  // Asked for from elsewhere (the command palette): open, with focus on the menu's button so
+  // Escape and Tab work from there.
+  const asked = useRef(openRequest);
+  useEffect(() => {
+    if (openRequest === asked.current) return;
+    asked.current = openRequest;
+    setOpen(true);
+    button.current?.focus();
+  }, [openRequest]);
 
   // The last one stopped: nothing left to show.
   useEffect(() => {

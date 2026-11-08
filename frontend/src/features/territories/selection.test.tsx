@@ -1,12 +1,14 @@
 // frontend/src/features/territories/selection.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
 import type { TerritoryTableProps } from "./TerritoryTable";
-import { DEPLOYMENTS, PODS } from "../../test/kinds";
+import { resourceDescribe } from "../../test/describe";
+import { DEPLOYMENTS, NODES, PODS } from "../../test/kinds";
 import { Table } from "../../test/table";
+import { ActionsProvider } from "../actions/ActionDialog";
 
 const describeBody = {
   pod: {
@@ -229,5 +231,97 @@ describe("selection", () => {
     expect(inspector()).toBeNull();
     fireEvent.keyDown(r, { key: "ArrowDown" });
     expect(podRow("web-2").getAttribute("aria-selected")).toBe("true");
+  });
+});
+
+describe("keys per kind", () => {
+  const VERBS = ["get", "list", "watch", "update", "patch", "delete"];
+  const asKind = (kind: string, name: string) => rows(2).map((r, i) => ({ ...r, kind, name: `${name}-${i}`, columns: { ...r.columns, ready: "2/3" } }));
+  const json = (body: unknown) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+  function renderKind(kind: typeof PODS, rs: ResourceRow[], props: Partial<TerritoryTableProps> = {}) {
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ActionsProvider>
+          <div style={{ height: 600 }}>
+            <Table territories={[territory(rs)]} kind={{ ...kind, verbs: VERBS }} onRetry={() => {}} {...props} />
+          </div>
+        </ActionsProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("same key acts per kind", async () => {
+    const onOpenShell = vi.fn();
+    const onNodeShell = vi.fn();
+    const pods = renderKind(PODS, rows(2), { onOpenShell });
+    fireEvent.keyDown(podRow("pod-1"), { key: "s" });
+    expect(onOpenShell).toHaveBeenCalledWith(expect.objectContaining({ uid: "1" }));
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    pods.unmount();
+
+    vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe())));
+    const deps = renderKind(DEPLOYMENTS, asKind("Deployment", "web"), { onOpenShell });
+    fireEvent.keyDown(podRow("web-1"), { key: "s" });
+    expect(((await screen.findByLabelText("Replicas")) as HTMLInputElement).value).toBe("3");
+    expect(onOpenShell).toHaveBeenCalledTimes(1);
+    deps.unmount();
+
+    const nodes = renderKind(NODES, asKind("Node", "node").map((r) => ({ ...r, namespace: null })), { onOpenShell, onNodeShell });
+    fireEvent.keyDown(podRow("node-0"), { key: "s" });
+    await waitFor(() => expect(onNodeShell).toHaveBeenCalledWith(expect.objectContaining({ name: "node-0" }), "node-0"));
+    expect(onOpenShell).toHaveBeenCalledTimes(1);
+    nodes.unmount();
+  });
+
+  it("ctrl d opens delete review", async () => {
+    const plan = {
+      plan_id: "p1", action: "delete", target: { cluster_id: "c1", kind_key: "pods", namespace: "n", name: "pod-1" },
+      cluster: { id: "c1", name: "big", provider: "gke", environment: "development" }, title: "Delete Pod pod-1",
+      summary: ["Delete Pod n/pod-1."], warnings: [], blocked: [], diff: null, confirm_text: null, apply_label: "Delete",
+      expires_at: "2026-11-08T10:05:00Z",
+    };
+    const fetch = vi.fn((_url: string, init?: RequestInit) => json(init?.method === "POST" ? plan : describeBody));
+    vi.stubGlobal("fetch", fetch);
+    renderKind(PODS, rows(2));
+    const event = new KeyboardEvent("keydown", { key: "d", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      podRow("pod-1").dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true); // not the browser's bookmark
+    expect(await screen.findByRole("dialog", { name: "Delete Pod pod-1" })).toBeTruthy();
+    const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts.map(([url]) => url)).toEqual(["/api/actions/plan"]);
+    expect(JSON.parse(posts[0][1]!.body as string)).toMatchObject({ action: "delete", target: { name: "pod-1", kind_key: "pods" } });
+  });
+
+  it("y opens the details on the YAML tab", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => json(url.endsWith("/yaml") || url.includes("/yaml?") ? { yaml: "kind: Deployment" } : resourceDescribe())));
+    renderKind(DEPLOYMENTS, asKind("Deployment", "web"));
+    fireEvent.keyDown(podRow("web-0"), { key: "y" });
+    expect(inspector()!.getAttribute("aria-label")).toBe("Details for web-0");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true"));
+  });
+
+  it("l on a workload opens the logs of all its pods", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe({ pod_selector: "app=web" }))));
+    const onWorkloadLogs = vi.fn();
+    const onOpenLogs = vi.fn();
+    renderKind(DEPLOYMENTS, asKind("Deployment", "web"), { onWorkloadLogs, onOpenLogs });
+    fireEvent.keyDown(podRow("web-1"), { key: "l" });
+    await waitFor(() => expect(onWorkloadLogs).toHaveBeenCalledWith(expect.objectContaining({ name: "web-1" }), "app=web", { focus: true }));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("a workload that selects its pods with expressions says why its logs can't open", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe({ pod_selector: null }))));
+    const onWorkloadLogs = vi.fn();
+    renderKind(DEPLOYMENTS, asKind("Deployment", "web"), { onWorkloadLogs });
+    fireEvent.keyDown(podRow("web-1"), { key: "l" });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Deployment web-1 picks its pods with expressions, so their logs can't be opened together. Open one of its pods' logs instead.",
+    );
+    expect(onWorkloadLogs).not.toHaveBeenCalled();
   });
 });

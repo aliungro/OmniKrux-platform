@@ -261,6 +261,8 @@ export interface ResourceDescribe {
   events_error: string | null;
   /** Secrets only: key names and sizes, never values. */
   secret_keys: SecretKey[] | null;
+  /** A workload's matchLabels as "k=v,k2=v2", for its pods' logs; null for other kinds, or when it selects with expressions. */
+  pod_selector: string | null;
 }
 
 /** `GET …/resources/{kind}/{name}/yaml`: a Secret's values are masked by the server. */

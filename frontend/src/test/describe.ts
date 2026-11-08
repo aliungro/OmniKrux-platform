@@ -74,6 +74,7 @@ export const resourceDescribe = (over: Partial<ResourceDescribe> = {}): Resource
   events: [],
   events_error: null,
   secret_keys: null,
+  pod_selector: null,
   ...over,
 });
 

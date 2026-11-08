@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import type { ChipDef, FilterCounts, Filters } from "../territories/model";
-import { isEditable, keysOf } from "./shortcuts";
+import { pageKey, pressed } from "./shortcuts";
 import k from "./key.module.css";
 import s from "./FilterBar.module.css";
 
@@ -138,8 +138,7 @@ export function FilterBar({
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!keysOf("filter").includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
-      if (isEditable(e.target) || isEditable(document.activeElement)) return;
+      if (!pressed("filter", e) || !pageKey(e)) return;
       e.preventDefault();
       inputRef.current?.focus();
     };

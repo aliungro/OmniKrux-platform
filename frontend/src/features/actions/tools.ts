@@ -1,5 +1,5 @@
 import type { ResourceRow } from "../../api/types";
-import type { ShortcutId } from "../chrome/shortcuts";
+import { shortcutsFor, type ShortcutId } from "../chrome/shortcuts";
 import { textColumn } from "../territories/model";
 
 /** The change tools the details offer; each but rollback has a key in the shortcuts registry. */
@@ -60,4 +60,30 @@ export function toolsFor(kindKey: string, verbs: readonly string[], row?: Resour
 /** The tools with a key, as registry ids (rollback has none). */
 export function keyedTools(tools: readonly ToolId[]): ShortcutId[] {
   return tools.filter((t): t is Exclude<ToolId, "rollback"> => t !== "rollback");
+}
+
+/** Everything a row offers besides its change tools: its details, and the dock's logs and shells. */
+export type RowAction = ToolId | Extract<ShortcutId, "details" | "yaml" | "logs" | "previousLogs" | "shell" | "workloadLogs">;
+
+/** What the page can do for a row: plan changes (inside the actions provider), open logs or shells. */
+export interface RowCan {
+  change: boolean;
+  logs: boolean;
+  shell: boolean;
+  workloadLogs: boolean;
+}
+
+/**
+ * The actions a row offers, in the order the palette lists them: the details, the kind's logs and
+ * shells (as the shortcuts registry gives them to it), then its change tools. Port-forwards need no
+ * plan, so they're offered outside the actions provider too.
+ */
+export function rowActions(kindKey: string, verbs: readonly string[], row: ResourceRow, can: RowCan): RowAction[] {
+  const keyed = new Set(shortcutsFor(kindKey).map((x) => x.id));
+  const out: RowAction[] = ["details", "yaml"];
+  if (can.logs && keyed.has("logs")) out.push("logs", "previousLogs");
+  if (can.shell && keyed.has("shell")) out.push("shell");
+  if (can.workloadLogs && keyed.has("workloadLogs")) out.push("workloadLogs");
+  out.push(...toolsFor(kindKey, verbs, row).filter((t) => can.change || t === "portForward"));
+  return out;
 }

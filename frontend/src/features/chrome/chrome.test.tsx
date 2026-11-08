@@ -74,14 +74,18 @@ describe("TopBar", () => {
     const tokens = screen.getAllByTestId("scope-token");
     expect(tokens.map((t) => t.textContent)).toEqual(["AKSaks-prod-weu1 failing", "KINDkind-dev"]);
   });
-  it("the command-palette placeholder is quiet: no keycap, no prompt, nothing to focus", () => {
-    const { container } = render(<TopBar clusters={[]} />);
-    expect(container.textContent).not.toContain("Ctrl K");
-    expect(container.querySelector("b")).toBeNull();
-    expect(screen.queryByRole("textbox")).toBeNull();
+  it("the command box opens the palette, with its colon prompt and Ctrl K keycap", () => {
+    const onPalette = vi.fn();
+    render(<TopBar clusters={[]} onPalette={onPalette} />);
+    const box = screen.getByRole("button", { name: "Commands and kinds" });
+    expect(box.textContent).toBe(":pods, deploy, svc, helm…Ctrl K");
+    expect(box.getAttribute("aria-keyshortcuts")).toBe("Control+K :");
+    fireEvent.click(box);
+    expect(onPalette).toHaveBeenCalled();
+  });
+  it("without a palette the box stays a quiet placeholder", () => {
+    render(<TopBar clusters={[]} />);
     expect(screen.queryByRole("button")).toBeNull();
-    const placeholder = container.querySelector('[aria-hidden="true"]:not(svg)');
-    expect(placeholder?.textContent).toBe("pods, deploy, svc, helm…");
   });
   it("error token carries the message", () => {
     render(<TopBar clusters={[{ cluster: cluster(), state: "error", message: "Can't reach this cluster: timeout", failing: 0 }]} />);
@@ -111,11 +115,19 @@ describe("KindTabs", () => {
     expect(tabs.map((t) => t.textContent)).toEqual(["Pods131", "Deployments", "StatefulSets", "Services", "Nodes", "Events", "Helm releases"]);
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
     expect(tabs[1].getAttribute("aria-selected")).toBe("false");
-    // Ruling R35: no "All {n} kinds" or ":" keycap until the palette (Task 15) opens from them.
-    expect(screen.queryByTestId("all-kinds")).toBeNull();
-    expect(screen.queryByText(/kinds/)).toBeNull();
     fireEvent.click(tabs[1]);
     expect(onSelect).toHaveBeenCalledWith("deployments.apps");
+  });
+  it("all kinds, with its colon keycap, opens the palette's kind mode", () => {
+    const onAllKinds = vi.fn();
+    const { rerender } = render(<KindTabs kinds={served} active="pods" count={1} onSelect={() => {}} onAllKinds={onAllKinds} />);
+    const all = screen.getByRole("button", { name: "All 8 kinds" });
+    expect(all.textContent).toBe("All 8 kinds:");
+    fireEvent.click(all);
+    expect(onAllKinds).toHaveBeenCalled();
+    // Before the kinds load there is no number to show, so no button.
+    rerender(<KindTabs kinds={undefined} active="pods" count={1} onSelect={() => {}} onAllKinds={onAllKinds} />);
+    expect(screen.queryByRole("button", { name: /kinds/ })).toBeNull();
   });
   it("shows no count while no cluster has reported", () => {
     render(<KindTabs kinds={served} active="deployments.apps" count={null} onSelect={() => {}} />);
@@ -208,15 +220,36 @@ describe("FilterBar counts", () => {
 
 describe("ShortcutBar per kind", () => {
   const strip = () => Array.from(within(screen.getByRole("navigation", { name: "Keyboard shortcuts" })).getAllByRole("listitem")).map((li) => li.textContent);
-  it("pod-only keys appear only on pods; every kind opens details", () => {
+  it("shortcut bar follows the active kind", () => {
     const { rerender } = render(<ShortcutBar kind="pods" />);
-    expect(strip()).toContain("l logs");
+    expect(strip()).toEqual([
+      "↑↓ move", "Enter details", "l logs", "p previous logs", "s shell", "f port-forward", "Ctrl F search logs", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
+    ]);
     rerender(<ShortcutBar kind="deployments.apps" />);
-    expect(strip()).toEqual(["↑↓ move", "Enter details", "Ctrl F search logs", "Ctrl \\ layout", "/ filter", "? all shortcuts"]);
+    expect(strip()).toEqual([
+      "↑↓ move", "Enter details", "s scale", "r restart", "l logs", "Ctrl F search logs", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
+    ]);
+    rerender(<ShortcutBar kind="nodes" />);
+    expect(strip()).toEqual(expect.arrayContaining(["c cordon", "r drain", "s node shell"]));
+    expect(strip()).not.toContain("s shell");
+    rerender(<ShortcutBar kind="secrets" />);
+    expect(strip()).toContain("x reveal");
+    rerender(<ShortcutBar kind="widgets.example.omnikrux.dev" />);
+    expect(strip()).toEqual(["↑↓ move", "Enter details", "Ctrl F search logs", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts"]);
+  });
+  it("the ? sheet lists the active kind's row keys and every other key", () => {
+    render(<ShortcutBar kind="deployments.apps" />);
     fireEvent.click(screen.getByRole("button", { name: /all shortcuts/ }));
     const sheet = screen.getByRole("dialog", { name: "All shortcuts" });
-    expect(sheet.textContent).not.toContain("Logs for the selected pod");
-    expect(sheet.textContent).toContain("Move between rows");
-    expect(within(sheet).getByRole("region", { name: "Details" }).textContent).toContain("Reveal the focused secret key");
+    const rows = within(sheet).getByRole("region", { name: "Rows" }).textContent;
+    expect(rows).toContain("Scale");
+    expect(rows).toContain("Delete");
+    expect(rows).not.toContain("Shell in the selected pod");
+    expect(rows).not.toContain("Reveal");
+    const anywhere = within(sheet).getByRole("region", { name: "Anywhere" }).textContent;
+    expect(anywhere).toContain("Jump to any kind");
+    expect(anywhere).toContain("Ctrl K");
+    expect(within(sheet).getByRole("region", { name: "Logs" }).textContent).toContain("Jump to live");
+    expect(within(sheet).getByRole("region", { name: "Dock" }).textContent).toContain("Ctrl \\");
   });
 });

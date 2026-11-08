@@ -86,3 +86,29 @@
 .retry:hover {
   border-color: var(--ink-3);
 }
+
+/* Every kind, through the palette's kind mode: pushed to the right end, as in the mockup. */
+.more {
+  flex: none;
+  margin-left: auto;
+  padding: 6px 4px 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.more:hover {
+  color: var(--ink);
+}
+
+.more:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}

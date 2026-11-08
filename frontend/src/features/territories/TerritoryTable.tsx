@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -13,10 +14,11 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/types";
-import { keyedTools, toolsFor, type ToolId } from "../actions/tools";
+import { rowActions, type RowAction } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
-import { rowShortcut, toolShortcut } from "../chrome/shortcuts";
-import { Inspector } from "../inspector/Inspector";
+import { pressed, rowShortcut } from "../chrome/shortcuts";
+import { Inspector, type WorkloadLogs } from "../inspector/Inspector";
+import type { ToolIntent } from "../inspector/Tools";
 import { flatten, kindTitle, rowKey, type RowRef, type Selection, type Territory } from "./model";
 import { gridTemplate, minTableWidth } from "./cells";
 import { ClusterBand } from "./ClusterBand";
@@ -48,11 +50,25 @@ export interface TerritoryTableProps {
   onOpenShell?: (row: ResourceRow) => void;
   onNodeShell?: (row: ResourceRow, node: string) => void;
   onOwnerLogs?: (row: ResourceRow, owner: OwnerRef) => void;
+  /** Logs of every pod a workload row selects (deployments, stateful sets, daemon sets). */
+  onWorkloadLogs?: WorkloadLogs;
+  /**
+   * An action asked for elsewhere (the command palette) on a row: run as its key would, once per
+   * `seq`, if the row is still on screen.
+   */
+  request?: RowRequest | null;
   /**
    * Goes up by one when a link lands on the selected row: the table scrolls it (and its details)
    * into view, and focuses it unless you've moved focus outside the table meanwhile.
    */
   reveal?: number;
+}
+
+/** An action on a row, by its `rowKey`; `seq` tells two asks apart. */
+export interface RowRequest {
+  key: string;
+  action: RowAction;
+  seq: number;
 }
 
 function sameRef(a: RowRef | null, b: RowRef): boolean {
@@ -78,6 +94,8 @@ export const TerritoryTable = memo(function TerritoryTable({
   onOpenShell,
   onNodeShell,
   onOwnerLogs,
+  onWorkloadLogs,
+  request = null,
   reveal = 0,
 }: TerritoryTableProps) {
   const { selected, open } = selection;
@@ -101,10 +119,15 @@ export const TerritoryTable = memo(function TerritoryTable({
   /** How the pending scroll lines the row up: a link's target goes to the top, so its details show. */
   const scrollAlign = useRef<"auto" | "start">("auto");
   const revealed = useRef(reveal);
-  /** A change tool's key pressed on a row: its details open and run it (see `useTools`). */
-  const [intent, setIntent] = useState<{ key: string; tool: ToolId; seq: number } | null>(null);
+  /** A key pressed on a row that its details carry out: a change tool, the YAML tab, a workload's logs. */
+  const [intent, setIntent] = useState<(ToolIntent & { key: string }) | null>(null);
   const intentDone = useCallback(() => setIntent(null), []);
-  const canChange = useStartAction() !== null;
+  const can = {
+    change: useStartAction() !== null,
+    logs: onOpenLogs !== undefined,
+    shell: onOpenShell !== undefined,
+    workloadLogs: onWorkloadLogs !== undefined,
+  };
 
   const estimateSize = useCallback((i: number) => {
     const t = items[i].type;
@@ -143,73 +166,78 @@ export const TerritoryTable = memo(function TerritoryTable({
     focusPending.current = true;
   }, [onSelection]);
 
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    // A change tool's key on a row (`e`, `s`, `r`, Ctrl D, … as its kind has them): open its
-    // details and run the tool there, where its form or error shows.
-    // A node offers the one of Cordon and Uncordon that applies, so the tools are the row's own.
-    const focusedKey = (e.target as HTMLElement).dataset?.rowKey;
-    const focusedAt = focusedKey === undefined ? undefined : indexByKey.get(focusedKey);
-    const focused = focusedAt === undefined ? undefined : items[focusedAt];
-    if (canChange && focusedKey !== undefined && focused?.type === "row") {
-      const tool = toolShortcut(e, keyedTools(toolsFor(kind.key, kind.verbs, focused.row)));
-      if (tool !== undefined) {
-        e.preventDefault();
-        onSelection({ selected: { clusterId: focused.row.cluster_id, uid: focused.row.uid }, open: true });
-        setIntent((prev) => ({ key: focusedKey, tool: tool as ToolId, seq: (prev?.seq ?? 0) + 1 }));
+  /**
+   * Runs what a row's key means (or the palette asked for): the details, the dock's logs and
+   * shells, or, through the details, the YAML tab and the change tools, each reviewed first.
+   */
+  const act = (row: ResourceRow, action: RowAction, from: "key" | "palette") => {
+    const ref = { clusterId: row.cluster_id, uid: row.uid };
+    switch (action) {
+      case "details":
+        if (from === "key") toggle(row);
+        else onSelection({ selected: ref, open: true });
         return;
+      case "logs":
+      case "previousLogs":
+        select(row);
+        onOpenLogs?.(row, action === "previousLogs");
+        return;
+      case "shell":
+        select(row);
+        onOpenShell?.(row);
+        return;
+      default: {
+        const key = rowKey(row.cluster_id, row.uid);
+        onSelection({ selected: ref, open: true });
+        setIntent((prev) => ({ key, tool: action, seq: (prev?.seq ?? 0) + 1 }));
       }
     }
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    const shortcut = rowShortcut(e.key);
-    if (!shortcut) return;
-    if (shortcut.id === "close") {
+  };
+  const actRef = useRef(act);
+  actRef.current = act;
+
+  // The palette's ask, once, on the row as it is now (never one that has gone meanwhile).
+  const asked = useRef(request?.seq ?? 0);
+  useEffect(() => {
+    if (request === null || request.seq === asked.current) return;
+    asked.current = request.seq;
+    const at = indexByKey.get(request.key);
+    const it = at === undefined ? undefined : items[at];
+    if (it?.type === "row") actRef.current(it.row, request.action, "palette");
+  }, [request, indexByKey, items]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Escape closes the details from the row or from inside them.
+    if (pressed("close", e)) {
       if (!open) return;
       e.preventDefault();
       close();
       return;
     }
-    // Everything else acts on a focused row, never on keys typed inside the inspector.
+    // Everything else acts on a focused row, never on keys typed inside the details.
     const key = (e.target as HTMLElement).dataset?.rowKey;
     const at = key === undefined ? undefined : indexByKey.get(key);
     if (at === undefined) return;
     const it = items[at];
     if (it.type !== "row") return;
-    // Ruling R14: logs and shells are pods' only, until per-kind meanings arrive.
-    if (shortcut.podsOnly && kind.key !== "pods") return;
-    switch (shortcut.id) {
-      case "move": {
-        e.preventDefault();
-        const step = e.key === "ArrowDown" ? 1 : -1;
-        let i = at + step;
-        while (i >= 0 && i < items.length && items[i].type !== "row") i += step;
-        const next = items[i];
-        if (next?.type !== "row") return;
-        select(next.row);
-        focusPending.current = true;
-        scrollPending.current = true;
-        scrollAlign.current = "auto";
-        return;
-      }
-      case "details":
-        e.preventDefault();
-        toggle(it.row);
-        return;
-      case "logs":
-      case "previousLogs":
-        if (onOpenLogs) {
-          e.preventDefault();
-          select(it.row);
-          onOpenLogs(it.row, shortcut.id === "previousLogs");
-        }
-        return;
-      case "shell":
-        if (onOpenShell) {
-          e.preventDefault();
-          select(it.row);
-          onOpenShell(it.row);
-        }
-        return;
+    // The key means what this kind gives it (`s`: a pod's shell, a deployment's scale, a node's
+    // shell), among what this row offers (a node has the one of cordon and uncordon that applies).
+    const id = rowShortcut(e, kind.key, rowActions(kind.key, kind.verbs, it.row, can));
+    if (id === undefined) return;
+    e.preventDefault();
+    if (id === "move") {
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      let i = at + step;
+      while (i >= 0 && i < items.length && items[i].type !== "row") i += step;
+      const next = items[i];
+      if (next?.type !== "row") return;
+      select(next.row);
+      focusPending.current = true;
+      scrollPending.current = true;
+      scrollAlign.current = "auto";
+      return;
     }
+    act(it.row, id as RowAction, "key");
   };
 
   // Bring the selected row into view, then focus it once the virtualizer has rendered it.
@@ -299,6 +327,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                       onOpenShell={onOpenShell}
                       onNodeShell={onNodeShell}
                       onOwnerLogs={onOwnerLogs}
+                      onWorkloadLogs={onWorkloadLogs}
                       onClose={close}
                     />
                   </div>

@@ -79,6 +79,9 @@ class ResourceDescribe(BaseModel):
     events: list[EventInfo]
     events_error: str | None = None  # why `events` is empty when listing them failed
     secret_keys: list[SecretKey] | None = None  # Secrets only: names and sizes, never values
+    # A workload's matchLabels as "k=v,k2=v2", for its pods' logs; None for other kinds, or
+    # when it selects its pods with expressions.
+    pod_selector: str | None = None
 
 
 # --- what to read besides the object -------------------------------------------------------
@@ -191,6 +194,7 @@ def describe_resource(
         owner=owner,
         events=group_events(events),
         secret_keys=_secret_keys(obj) if secret else None,
+        pod_selector=match_labels(shown) if ctx.resource in WORKLOADS else None,
     )
 
 

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { BAR, GROUPS, isEditable, keysOf, type Shortcut } from "./shortcuts";
+import { allGroups, barFor, pageKey, pressed, type ShortcutGroup } from "./shortcuts";
 import k from "./key.module.css";
 import s from "./ShortcutBar.module.css";
 
@@ -13,7 +13,7 @@ function Keys({ keys }: { keys: string[] }) {
   );
 }
 
-function AllShortcuts({ applies, onClose }: { applies: (x: Shortcut) => boolean; onClose: () => void }) {
+function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGroup[]; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const back = document.activeElement;
@@ -39,11 +39,11 @@ function AllShortcuts({ applies, onClose }: { applies: (x: Shortcut) => boolean;
           </button>
         </div>
         <div className={s.groups}>
-          {GROUPS.map(([group, rows]) => (
+          {groups.map(([group, rows]) => (
             <section key={group} className={s.group} aria-label={group}>
               <h3 className={s.groupTitle}>{group}</h3>
               <dl className={s.list}>
-                {rows.filter(applies).map((x) => (
+                {rows.map((x) => (
                   <Fragment key={x.id}>
                     <dt><Keys keys={x.keys} /></dt>
                     <dd>{x.label}</dd>
@@ -58,17 +58,18 @@ function AllShortcuts({ applies, onClose }: { applies: (x: Shortcut) => boolean;
   );
 }
 
-/** `kind`: the kind on screen; keys that act on pods only are left out elsewhere (Ruling R14). */
+/**
+ * The key strip along the bottom and the "?" sheet, both for the kind on screen: `s` reads "shell"
+ * on pods and "scale" on deployments, as the registry says.
+ */
 export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
-  const applies = (x: Shortcut) => !x.podsOnly || kind === "pods";
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!keysOf("help").includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
-      if (isEditable(e.target) || isEditable(document.activeElement)) return;
+      if (!pressed("help", e) || !pageKey(e)) return;
       e.preventDefault();
-      setOpen((o) => !o);
+      setOpen(true);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -78,7 +79,7 @@ export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
     <>
       <nav className={s.keys} aria-label="Keyboard shortcuts">
         <ul className={s.strip}>
-          {BAR.filter(applies).map((x) => (
+          {barFor(kind).map((x) => (
             <li key={x.id} className={s.item}>
               <Keys keys={x.keys} /> {x.bar}
             </li>
@@ -90,7 +91,7 @@ export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
           </li>
         </ul>
       </nav>
-      {open && <AllShortcuts applies={applies} onClose={() => setOpen(false)} />}
+      {open && <AllShortcuts groups={allGroups(kind)} onClose={() => setOpen(false)} />}
     </>
   );
 }

@@ -37,6 +37,11 @@ export interface DockApi {
   openPod: (row: ResourceRow, kind: SessionKind, opts?: { previous?: boolean }) => void;
   /** Logs of every pod the row's owner selects. */
   openOwnerLogs: (row: ResourceRow, owner: OwnerRef) => void;
+  /**
+   * Logs of every pod a workload row (a deployment, stateful set, daemon set) selects. `focus: false`
+   * opens it without taking focus (asked a while ago, and you've moved on since).
+   */
+  openWorkloadLogs: (row: ResourceRow, selector: string, opts?: { focus?: boolean }) => void;
   askNodeShell: (clusterId: string, node: string) => void;
   /** For a shell whose container isn't running: a debug container targeting it. */
   askDebug: (session: Session) => void;
@@ -146,6 +151,22 @@ export function useDock(clusters: Cluster[]): DockApi {
       });
     },
     [containersOf, newId, dispatch],
+  );
+
+  const openWorkloadLogs = useCallback(
+    (row: ResourceRow, selector: string, opts: { focus?: boolean } = {}) => {
+      const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
+      if (!cluster) return;
+      const focus = opts.focus ?? true;
+      if (focus) ++latestOpen.current;
+      // Nothing to wait for: the server starts each pod on its first container.
+      dispatch({
+        type: "open",
+        focus,
+        session: { id: newId(), kind: "logs", cluster, namespace: row.namespace ?? "", pod: row.name, selector, container: null, containers: [] },
+      });
+    },
+    [newId, dispatch],
   );
 
   /** Shows the question; `act` runs on yes, and its failure stays in the dialog in plain words. */
@@ -260,7 +281,7 @@ export function useDock(clusters: Cluster[]): DockApi {
   );
 
   return useMemo(
-    () => ({ state, dispatch, openPod, openOwnerLogs, ask, ...fns }),
-    [state, dispatch, openPod, openOwnerLogs, ask, fns],
+    () => ({ state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, ...fns }),
+    [state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, fns],
   );
 }

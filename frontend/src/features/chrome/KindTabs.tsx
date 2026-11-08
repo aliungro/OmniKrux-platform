@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { KindInfo } from "../../api/types";
 import { kindTitle } from "../territories/model";
+import { capsOf } from "./shortcuts";
+import k from "./key.module.css";
 import s from "./KindTabs.module.css";
 
 /** Arrow keys show a kind once they rest this long, so moving across tabs opens one watch, not one per tab. */
@@ -47,6 +49,7 @@ export function KindTabs({
   onSelect,
   error = null,
   onRetry,
+  onAllKinds,
 }: {
   /** Every kind some cluster serves; undefined until GET /api/kinds has answered. */
   kinds: KindInfo[] | undefined;
@@ -58,6 +61,8 @@ export function KindTabs({
   /** Why the kinds couldn't be loaded, in plain words; null when they could (or are loading). */
   error?: string | null;
   onRetry?: () => void;
+  /** Opens the palette on every kind (its `:` mode). */
+  onAllKinds?: () => void;
 }) {
   /** Where the arrow keys have moved to, before that kind is shown. */
   const [moving, setMoving] = useState<string | null>(null);
@@ -120,7 +125,12 @@ export function KindTabs({
           );
         })}
       </div>
-      {/* Ruling R35: "All {n} kinds" and its ":" keycap arrive with the palette (Task 15). */}
+      {kinds !== undefined && onAllKinds && (
+        <button type="button" className={s.more} aria-haspopup="dialog" aria-keyshortcuts=":" onClick={onAllKinds}>
+          All {kinds.length} kinds
+          <span className={k.k} aria-hidden="true">{capsOf("kinds")[0]}</span>
+        </button>
+      )}
       {error !== null && (
         <span className={s.err}>
           <span role="alert">Can't load the list of kinds: {error}</span>

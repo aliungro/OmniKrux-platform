@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import type { Territory } from "../territories/model";
 import { ProviderBadge } from "../territories/ProviderBadge";
+import { capsOf } from "./shortcuts";
+import k from "./key.module.css";
 import s from "./TopBar.module.css";
 
 /** What a scope token needs: the cluster plus its live state and failing count. */
@@ -29,6 +31,7 @@ export function TopBar({
   forwards,
   onAudit,
   auditOpen = false,
+  onPalette,
 }: {
   clusters: ScopeCluster[];
   /** The port-forwards control, drawn while any forward exists. */
@@ -36,6 +39,8 @@ export function TopBar({
   /** Opens the audit log view; without it there is no button. */
   onAudit?: () => void;
   auditOpen?: boolean;
+  /** Opens the command palette; without it the box is a quiet placeholder. */
+  onPalette?: () => void;
 }) {
   return (
     <header className={s.top}>
@@ -74,10 +79,24 @@ export function TopBar({
           </button>
         )}
       </div>
-      {/* Quiet placeholder for the command palette (Plan 3): no prompt or shortcut until it works. */}
-      <div className={s.cmd} aria-hidden="true">
-        pods, deploy, svc, helm…
-      </div>
+      {onPalette ? (
+        <button
+          type="button"
+          className={`${s.cmd} ${s.live}`}
+          aria-label="Commands and kinds"
+          aria-haspopup="dialog"
+          aria-keyshortcuts="Control+K :"
+          onClick={onPalette}
+        >
+          <b className={s.prompt} aria-hidden="true">{capsOf("kinds")[0]}</b>
+          <span className={s.hint}>pods, deploy, svc, helm…</span>
+          <span className={`${k.k} ${s.cap}`} aria-hidden="true">{capsOf("palette")[0]}</span>
+        </button>
+      ) : (
+        <div className={s.cmd} aria-hidden="true">
+          pods, deploy, svc, helm…
+        </div>
+      )}
     </header>
   );
 }

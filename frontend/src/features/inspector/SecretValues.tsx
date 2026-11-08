@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { failure, postJson } from "../../api/http";
 import type { RevealIn, RevealOut, SecretKey } from "../../api/types";
-import { isEditable, keysOf } from "../chrome/shortcuts";
+import { isEditable, pressed } from "../chrome/shortcuts";
 import k from "../chrome/key.module.css";
 import { CopyButton } from "./CopyButton";
 import s from "./SecretValues.module.css";
@@ -84,8 +84,7 @@ export function SecretValues({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLLIElement>, key: string) => {
-    if (!canReveal || e.ctrlKey || e.metaKey || e.altKey || isEditable(e.target)) return;
-    if (!keysOf("reveal").includes(e.key)) return;
+    if (!canReveal || !pressed("reveal", e) || isEditable(e.target)) return;
     e.preventDefault();
     if (busy !== key && shown?.key !== key) void reveal(key);
   };

@@ -577,3 +577,18 @@ def test_event_links_involved_object():
 
 def test_cells_default_without_link_or_class():
     assert Cell(text="x") == Cell(text="x", link=None, cls=None)
+
+
+def test_workload_describe_carries_its_pod_selector():
+    """A workload's matchLabels, for its pods' logs (the `l` key); none when it selects with
+    expressions, and none for kinds that aren't workloads."""
+    d = describe_resource(KINDS["deployments.apps"], deployment(), [], {})
+    assert d.pod_selector == "app=web"
+
+    by_expression = deployment()
+    by_expression["spec"]["selector"] = {
+        "matchLabels": {"app": "web"},
+        "matchExpressions": [{"key": "tier", "operator": "In", "values": ["a"]}],
+    }
+    assert describe_resource(KINDS["deployments.apps"], by_expression, [], {}).pod_selector is None
+    assert describe_resource(KINDS["services"], service(), [], {}).pod_selector is None

@@ -1,4 +1,5 @@
 import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { pressed } from "../chrome/shortcuts";
 import { LogPane } from "../logs/LogPane";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -86,7 +87,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
   // Ctrl \ switches between one pane and side by side, even from inside a terminal.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey || e.metaKey || (e.key !== "\\" && e.code !== "Backslash")) return;
+      if (!pressed("layout", e)) return;
       e.preventDefault();
       e.stopPropagation();
       dispatch({ type: "toggleLayout" });

@@ -1,7 +1,8 @@
-import { useCallback, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { failure } from "../../api/http";
-import type { Link, OwnerRef, Provider, ResourceRow } from "../../api/types";
+import type { Link, OwnerRef, Provider, ResourceDescribe, ResourceRow } from "../../api/types";
+import { capsOf, shortcutsFor } from "../chrome/shortcuts";
 import { useGoTo } from "../navigation/navigation";
 import { textColumn } from "../territories/model";
 import { DescribeView } from "./DescribeView";
@@ -52,10 +53,102 @@ interface Props {
   onNodeShell?: (row: ResourceRow, node: string) => void;
   /** Logs of every pod the owner selects. */
   onOwnerLogs?: (row: ResourceRow, owner: OwnerRef) => void;
+  /** Logs of every pod a workload (this row) selects, by its matchLabels; `focus: false` opens it quietly. */
+  onWorkloadLogs?: WorkloadLogs;
   onClose?: () => void;
 }
 
+/**
+ * The details' own part of a key pressed on the row: show the YAML tab, or open a workload's pods'
+ * logs. Change tools are `useTools`' part.
+ */
+function useViewIntent(
+  intent: ToolIntent | null | undefined,
+  onIntentDone: (() => void) | undefined,
+  on: { yaml: () => void; workloadLogs?: () => void },
+) {
+  const onRef = useRef(on);
+  onRef.current = on;
+  useEffect(() => {
+    if (!intent) return;
+    if (intent.tool === "yaml") onRef.current.yaml();
+    else if (intent.tool === "workloadLogs") onRef.current.workloadLogs?.();
+    else return;
+    onIntentDone?.();
+  }, [intent, onIntentDone]);
+}
+
+/**
+ * A workload's "Logs" (its `l` key): every pod it selects, by the matchLabels its describe carries.
+ * Asked before the describe has loaded, it opens once it has; a workload that selects its pods with
+ * expressions says so instead.
+ */
+function useWorkloadLogs(
+  row: ResourceRow,
+  kindKey: string,
+  describe: UseQueryResult<ResourceDescribe>,
+  onWorkloadLogs: WorkloadLogs | undefined,
+) {
+  const offered = onWorkloadLogs !== undefined && shortcutsFor(kindKey).some((x) => x.id === "workloadLogs");
+  const [waiting, setWaiting] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const why = `${row.kind} ${row.name} picks its pods with expressions, so their logs can't be opened together. Open one of its pods' logs instead.`;
+  const loaded = describe.data !== undefined && !describe.isError ? describe.data : undefined;
+  const selector = loaded?.pod_selector ?? null;
+
+  /** Where focus was when the logs were asked for before the describe had answered. */
+  const askedFrom = useRef<Element | null>(null);
+
+  const openWith = (d: ResourceDescribe, focus: boolean) => {
+    if (d.pod_selector) {
+      setNote(null);
+      onWorkloadLogs?.(row, d.pod_selector, { focus });
+    } else {
+      setNote(why);
+    }
+  };
+  const open = () => {
+    if (!offered) return;
+    if (loaded) {
+      openWith(loaded, true);
+    } else {
+      askedFrom.current = document.activeElement;
+      setWaiting(true);
+    }
+  };
+
+  // Asked before the describe answered: open once it has, taking focus only if you haven't moved
+  // on meanwhile (Plan 2 R16); a describe that failed says so itself.
+  useEffect(() => {
+    if (!waiting) return;
+    if (describe.isError) setWaiting(false);
+    else if (loaded) {
+      setWaiting(false);
+      openWith(loaded, document.activeElement === askedFrom.current);
+    }
+  });
+
+  const button: ReactNode = offered ? (
+    <button
+      type="button"
+      className={s.btn}
+      disabled={loaded !== undefined && selector === null}
+      title={loaded !== undefined && selector === null ? why : `Logs of every pod matching ${selector ?? "its selector"}`}
+      onClick={open}
+    >
+      Logs
+      {capsOf("workloadLogs").map((c) => (
+        <span key={c} className={`${k.k} ${s.k}`} aria-hidden="true">{c}</span>
+      ))}
+    </button>
+  ) : null;
+  const line: ReactNode = note ? <p className={s.toolError} role="alert">{note}</p> : null;
+  return { button, line, open };
+}
+
 const NO_VERBS: readonly string[] = [];
+
+export type WorkloadLogs = (row: ResourceRow, selector: string, opts?: { focus?: boolean }) => void;
 
 /**
  * The details under a row, for every kind: Describe, YAML and Events, plus Metrics for pods and
@@ -76,6 +169,7 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
   const describe = useDescribe(row.cluster_id, ns, row.name, rv);
   const yaml = usePodYaml(row.cluster_id, ns, row.name, rv, tab === "YAML");
   const change = useTools({ row, kindKey: "pods", verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone });
+  useViewIntent(intent, onIntentDone, { yaml: () => setTab("YAML") });
   const editor = change.editor(yaml.data);
   const tools = (
     <>
@@ -113,7 +207,7 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
   );
 }
 
-function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, onIntentDone, onNodeShell, onClose, onLink }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
+function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, onIntentDone, onNodeShell, onWorkloadLogs, onClose, onLink }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
   const [tab, setTab] = useState<Tab>("Describe");
   // Every row carries its resource version (backend `base_row`): a change reloads the details.
   const version = textColumn(row, "resource_version") ?? "";
@@ -121,6 +215,8 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
   const yaml = useResourceYaml(row.cluster_id, kindKey, row.namespace, row.name, version, tab === "YAML");
   const nodes = kindKey === "nodes";
   const change = useTools({ row, kindKey, verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone });
+  const logs = useWorkloadLogs(row, kindKey, describe, onWorkloadLogs);
+  useViewIntent(intent, onIntentDone, { yaml: () => setTab("YAML"), workloadLogs: logs.open });
   const editor = change.editor(yaml.data);
   return (
     <Frame
@@ -129,8 +225,18 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
       tabs={nodes ? WITH_METRICS : BASE_TABS}
       tab={tab}
       onTab={setTab}
-      tools={change.buttons}
-      strip={change.strip}
+      tools={
+        <>
+          {logs.button}
+          {change.buttons}
+        </>
+      }
+      strip={
+        <>
+          {logs.line}
+          {change.strip}
+        </>
+      }
       onKey={change.onKey}
       onClose={onClose}
     >

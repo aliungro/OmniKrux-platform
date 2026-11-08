@@ -173,8 +173,10 @@ describe("Shortcut bar", () => {
       "l logs",
       "p previous logs",
       "s shell",
+      "f port-forward",
       "Ctrl F search logs",
-      "Ctrl \\ layout",
+      ": kinds",
+      "Ctrl K commands",
       "/ filter",
       "? all shortcuts",
     ]);

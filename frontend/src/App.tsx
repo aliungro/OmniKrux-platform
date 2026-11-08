@@ -8,11 +8,14 @@ import { failure } from "./api/http";
 import type { Cluster, ClusterState, KindInfo, KindsResponse, OwnerRef, ResourceRow } from "./api/types";
 import { AuditView } from "./features/audit/AuditView";
 import { ActionsProvider } from "./features/actions/ActionDialog";
+import type { RowAction } from "./features/actions/tools";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
 import { ShortcutBar } from "./features/chrome/ShortcutBar";
 import { TopBar } from "./features/chrome/TopBar";
 import { ForwardsMenu } from "./features/portforward/ForwardsMenu";
+import { usePortForwards } from "./features/portforward/usePortForwards";
+import { CommandPalette, usePaletteKeys, type PaletteMode, type PaletteSelection } from "./features/palette/CommandPalette";
 import { Dock } from "./features/dock/Dock";
 import { useDock } from "./features/dock/useDock";
 import { NavigationNotice, NavigationProvider, useNavigator } from "./features/navigation/navigation";
@@ -27,11 +30,12 @@ import {
   NO_FILTER,
   NO_SELECTION,
   podsPerNode,
+  rowKey,
   withDiscoveryFailures,
   type Filters,
   type Selection,
 } from "./features/territories/model";
-import { TerritoryTable } from "./features/territories/TerritoryTable";
+import { TerritoryTable, type RowRequest } from "./features/territories/TerritoryTable";
 import { useNow } from "./hooks/useNow";
 import { useRoute } from "./route";
 import s from "./App.module.css";
@@ -51,6 +55,7 @@ function discovery(data: unknown): KindsResponse["clusters"] | undefined {
 }
 
 const NO_CLUSTERS: Cluster[] = [];
+const NO_KINDS: KindInfo[] = [];
 
 /** The whole console page; expects a QueryClientProvider above it. */
 export function Console() {
@@ -90,11 +95,14 @@ export function Console() {
 
   const [filters, setFilters] = useState<Filters>(NO_FILTER);
   const [selection, setSelection] = useState<Selection>(NO_SELECTION);
+  /** An action the palette asked for on the selected row; the table runs it as the row's key would. */
+  const [rowRequest, setRowRequest] = useState<RowRequest | null>(null);
   // Another kind starts with nothing selected, and without a status chip it may not offer.
   const [shownKind, setShownKind] = useState(kindKey);
   if (shownKind !== kindKey) {
     setShownKind(kindKey);
     setSelection(NO_SELECTION);
+    setRowRequest(null);
     if (filters.status !== "all") setFilters({ ...filters, status: "all" });
   }
   // A kind without namespaces ignores the namespace you picked for another one (and keeps it for later).
@@ -121,7 +129,7 @@ export function Console() {
   const namespaces = useMemo(() => (kind.namespaced ? namespacesIn(all) : null), [kind.namespaced, all]);
 
   const dock = useDock(list ?? []);
-  const { openPod, openOwnerLogs, askNodeShell } = dock;
+  const { openPod, openOwnerLogs, openWorkloadLogs, askNodeShell } = dock;
   const onOpenLogs = useCallback(
     (row: ResourceRow, previous?: boolean) => openPod(row, "logs", { previous }),
     [openPod],
@@ -129,6 +137,10 @@ export function Console() {
   const onOpenShell = useCallback((row: ResourceRow) => openPod(row, "shell"), [openPod]);
   const onNodeShell = useCallback((row: ResourceRow, node: string) => askNodeShell(row.cluster_id, node), [askNodeShell]);
   const onOwnerLogs = useCallback((row: ResourceRow, owner: OwnerRef) => openOwnerLogs(row, owner), [openOwnerLogs]);
+  const onWorkloadLogs = useCallback(
+    (row: ResourceRow, selector: string, opts?: { focus?: boolean }) => openWorkloadLogs(row, selector, opts),
+    [openWorkloadLogs],
+  );
 
   const onRetry = useCallback((id: string, state: ClusterState) => {
     // An absent kind may have been installed since: ask the clusters for their kinds again first
@@ -177,6 +189,42 @@ export function Console() {
     [setRoute, route.view, onBackFromAudit],
   );
 
+  // The command palette: Ctrl K for everything, ":" for kinds. It runs nothing itself: a kind
+  // switches the view, an action goes to the table as the row's key would (the same forms and
+  // reviews), a view opens it.
+  const [palette, setPalette] = useState<PaletteMode | null>(null);
+  usePaletteKeys(setPalette);
+  const onClosePalette = useCallback(() => setPalette(null), []);
+  const onPalette = useCallback(() => setPalette("all"), []);
+  const onAllKinds = useCallback(() => setPalette("kinds"), []);
+  const selectedRow = useMemo(() => {
+    const sel = selection.selected;
+    if (route.view !== "resources" || sel === null) return null;
+    for (const t of shown) {
+      if (t.cluster.id !== sel.clusterId) continue;
+      const row = t.rows.find((r) => r.uid === sel.uid);
+      return row ? { row, cluster: t.cluster } : null;
+    }
+    return null;
+  }, [route.view, selection.selected, shown]);
+  const paletteSelection = useMemo<PaletteSelection | null>(
+    () => (selectedRow ? { ...selectedRow, kind } : null),
+    [selectedRow, kind],
+  );
+  const onRowAction = useCallback(
+    (action: RowAction) => {
+      if (!selectedRow) return;
+      cancelJump();
+      const key = rowKey(selectedRow.row.cluster_id, selectedRow.row.uid);
+      setRowRequest((prev) => ({ key, action, seq: (prev?.seq ?? 0) + 1 }));
+    },
+    [selectedRow, cancelJump],
+  );
+  const onAuditView = useCallback(() => setRoute({ view: "audit" }), [setRoute]);
+  const forwardCount = usePortForwards().query.data?.length ?? 0;
+  const [forwardsAsk, setForwardsAsk] = useState(0);
+  const onForwards = useMemo(() => (forwardCount > 0 ? () => setForwardsAsk((n) => n + 1) : undefined), [forwardCount]);
+
   let body;
   if (route.view === "audit") {
     // The audit log needs no cluster to read: it is the record of what was done.
@@ -210,6 +258,7 @@ export function Console() {
           onSelect={onSelectKind}
           error={kindsError}
           onRetry={onRetryKinds}
+          onAllKinds={onAllKinds}
         />
         <FilterBar value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} />
         <NavigationNotice text={nav.notice} waiting={nav.waiting} />
@@ -227,6 +276,8 @@ export function Console() {
             onOpenShell={onOpenShell}
             onNodeShell={onNodeShell}
             onOwnerLogs={onOwnerLogs}
+            onWorkloadLogs={onWorkloadLogs}
+            request={rowRequest}
           />
         </main>
       </>
@@ -241,10 +292,28 @@ export function Console() {
     <NavigationProvider goTo={nav.goTo}>
       <ActionsProvider>
         <div className={s.app}>
-          <TopBar clusters={all} forwards={<ForwardsMenu />} onAudit={onAudit} auditOpen={route.view === "audit"} />
+          <TopBar
+            clusters={all}
+            forwards={<ForwardsMenu openRequest={forwardsAsk} />}
+            onAudit={onAudit}
+            auditOpen={route.view === "audit"}
+            onPalette={onPalette}
+          />
           {body}
           {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
           {hasTable && route.view !== "audit" && <ShortcutBar kind={kindKey} />}
+          {palette !== null && (
+            <CommandPalette
+              mode={palette}
+              kinds={served ?? NO_KINDS}
+              selection={paletteSelection}
+              onKind={onSelectKind}
+              onRowAction={onRowAction}
+              onAudit={onAuditView}
+              onForwards={onForwards}
+              onClose={onClosePalette}
+            />
+          )}
         </div>
       </ActionsProvider>
     </NavigationProvider>
