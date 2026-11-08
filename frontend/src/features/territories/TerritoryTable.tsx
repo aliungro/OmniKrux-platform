@@ -105,7 +105,6 @@ export const TerritoryTable = memo(function TerritoryTable({
   const [intent, setIntent] = useState<{ key: string; tool: ToolId; seq: number } | null>(null);
   const intentDone = useCallback(() => setIntent(null), []);
   const canChange = useStartAction() !== null;
-  const rowTools = useMemo(() => (canChange ? keyedTools(toolsFor(kind.key, kind.verbs)) : []), [canChange, kind.key, kind.verbs]);
 
   const estimateSize = useCallback((i: number) => {
     const t = items[i].type;
@@ -147,16 +146,16 @@ export const TerritoryTable = memo(function TerritoryTable({
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     // A change tool's key on a row (`e`, `s`, `r`, Ctrl D, … as its kind has them): open its
     // details and run the tool there, where its form or error shows.
-    const tool = toolShortcut(e, rowTools);
-    const rowKeyOf = (e.target as HTMLElement).dataset?.rowKey;
-    if (tool !== undefined && rowKeyOf !== undefined) {
-      const at = indexByKey.get(rowKeyOf);
-      const it = at === undefined ? undefined : items[at];
-      if (it?.type === "row") {
+    // A node offers the one of Cordon and Uncordon that applies, so the tools are the row's own.
+    const focusedKey = (e.target as HTMLElement).dataset?.rowKey;
+    const focusedAt = focusedKey === undefined ? undefined : indexByKey.get(focusedKey);
+    const focused = focusedAt === undefined ? undefined : items[focusedAt];
+    if (canChange && focusedKey !== undefined && focused?.type === "row") {
+      const tool = toolShortcut(e, keyedTools(toolsFor(kind.key, kind.verbs, focused.row)));
+      if (tool !== undefined) {
         e.preventDefault();
-        const ref = { clusterId: it.row.cluster_id, uid: it.row.uid };
-        onSelection({ selected: ref, open: true });
-        setIntent((prev) => ({ key: rowKeyOf, tool: tool as ToolId, seq: (prev?.seq ?? 0) + 1 }));
+        onSelection({ selected: { clusterId: focused.row.cluster_id, uid: focused.row.uid }, open: true });
+        setIntent((prev) => ({ key: focusedKey, tool: tool as ToolId, seq: (prev?.seq ?? 0) + 1 }));
         return;
       }
     }

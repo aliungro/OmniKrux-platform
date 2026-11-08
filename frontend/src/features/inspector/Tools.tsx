@@ -3,7 +3,7 @@ import { failure } from "../../api/http";
 import type { ActionName, ResourceRow } from "../../api/types";
 import { ScaleForm, RollbackForm } from "../actions/forms";
 import { keyedTools, toolsFor, TOOL_LABEL, type ToolId } from "../actions/tools";
-import { useStartAction } from "../actions/useActions";
+import { useStartAction, type ActionOutcome } from "../actions/useActions";
 import { YamlEditor } from "../actions/YamlEditor";
 import { capsOf, isEditable, toolShortcut } from "../chrome/shortcuts";
 import { textColumn } from "../territories/model";
@@ -25,8 +25,10 @@ export function desiredReplicas(row: ResourceRow): number {
 
 /**
  * The change tools of one object's details: the buttons (with their keys), the inline forms (scale,
- * rollback), the YAML editor, and where a plan that couldn't be made says why. A change is planned
- * through the actions provider, which opens the review dialog on the plan.
+ * rollback), the YAML editor, and a line under the tab bar saying why a plan couldn't be made or
+ * what an applied change did (kept until you start another tool or leave the row). A change is
+ * planned through the actions provider, which opens the review dialog on the plan; a plan that
+ * comes back after these details went, or moved to another object, never opens.
  */
 export function useTools({
   row,
@@ -47,30 +49,66 @@ export function useTools({
   onIntentDone?: () => void;
 }) {
   const start = useStartAction();
-  const tools = start ? toolsFor(kindKey, verbs) : [];
+  const tools = start ? toolsFor(kindKey, verbs, row) : [];
   const [open, setOpen] = useState<"edit" | "scale" | "rollback" | null>(null);
   const [busy, setBusy] = useState<ToolId | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<ActionOutcome | null>(null);
+  const said = useRef<HTMLParagraphElement>(null);
 
-  /** Plans a change on this object; true when it was applied. */
+  // Requests belong to one object while these details show it: leaving (unmount) or another object
+  // makes any plan still on its way stale.
+  const identity = `${row.cluster_id}\n${kindKey}\n${row.namespace ?? ""}\n${row.name}`;
+  const generation = useRef(0);
+  useEffect(() => () => {
+    generation.current += 1;
+  }, [identity]);
+  // Another object in the same details starts clean: no form, line or wait of the last one's.
+  const [shownIdentity, setShownIdentity] = useState(identity);
+  if (shownIdentity !== identity) {
+    setShownIdentity(identity);
+    setOpen(null);
+    setBusy(null);
+    setError(null);
+    setOutcome(null);
+  }
+
+  /** Plans a change on this object; true when it was applied (and what it did is shown). */
   const request = async (tool: ToolId, action: ActionName, params: Record<string, unknown> = {}): Promise<boolean> => {
     if (!start) return false;
+    const mine = generation.current;
+    const current = () => generation.current === mine;
     setBusy(tool);
     setError(null);
     try {
       const target = { cluster_id: row.cluster_id, kind_key: kindKey, namespace: row.namespace, name: row.name };
-      return (await start({ action, target, params })) !== null;
+      const done = await start({ action, target, params }, { isCurrent: current });
+      if (done === null || !current()) return false;
+      setOutcome(done);
+      return true;
     } catch (err) {
-      setError(failure(err));
+      if (current()) setError(failure(err));
       return false;
     } finally {
-      setBusy(null);
+      if (current()) setBusy(null);
     }
   };
+
+  // What a change did takes focus only when focus was lost with the dialog or form that went (the
+  // button that started it is gone): never pulled from wherever you have moved since.
+  // Checked once the line is shown (a form closing after the apply shows it a render later).
+  const focusedFor = useRef<ActionOutcome | null>(null);
+  useEffect(() => {
+    if (outcome === null || said.current === null || focusedFor.current === outcome) return;
+    focusedFor.current = outcome;
+    const active = document.activeElement;
+    if (active === null || active === document.body || !active.isConnected) said.current.focus();
+  }, [outcome, open]);
 
   const run = (tool: ToolId) => {
     if (busy !== null || !tools.includes(tool)) return;
     setError(null);
+    setOutcome(null);
     switch (tool) {
       case "edit":
         setOpen("edit");
@@ -134,7 +172,7 @@ export function useTools({
     );
   });
 
-  // Under the tab bar: a scale or rollback form, or why a change couldn't be planned.
+  // Under the tab bar: a scale or rollback form, why a change couldn't be planned, or what it did.
   let strip: ReactNode = null;
   if (open === "scale") {
     strip = (
@@ -163,6 +201,12 @@ export function useTools({
     strip = (
       <p className={s.toolError} role="alert">
         {error}
+      </p>
+    );
+  } else if (outcome && open === null) {
+    strip = (
+      <p ref={said} className={s.outcome} data-tone={outcome.tone} role="status" tabIndex={-1}>
+        {outcome.message}
       </p>
     );
   }

@@ -109,7 +109,7 @@ const deployment = (over: Partial<ResourceRow> = {}): ResourceRow => ({
   ...over,
 });
 
-const node = (): ResourceRow => ({
+const node = (status = "Ready"): ResourceRow => ({
   uid: "n-1",
   cluster_id: "c1",
   kind: "Node",
@@ -117,7 +117,7 @@ const node = (): ResourceRow => ({
   name: "kind-worker",
   created_at: null,
   labels: {},
-  columns: { resource_version: "55", status_class: "ok" },
+  columns: { resource_version: "55", status, status_class: "ok" },
 });
 
 const VERBS = ["get", "list", "watch", "update", "patch", "delete"];
@@ -369,9 +369,151 @@ describe("changes from the details", () => {
         <Inspector row={node()} provider="kind" kindKey="nodes" verbs={VERBS} />
       </ActionsProvider>,
     );
-    // Each button's own words, without its keycap.
+    // Each button's own words, without its keycap; a schedulable node offers Cordon only.
     const names = within(tools()).getAllByRole("button").map((b) => b.childNodes[0].textContent);
-    expect(names).toEqual(["Edit", "Cordon", "Uncordon", "Drain", "Node shell", "Delete"]);
+    expect(names).toEqual(["Edit", "Cordon", "Drain", "Node shell", "Delete"]);
+  });
+
+  it("only the cordon or uncordon that applies is offered", () => {
+    serve({ [NODE_DESCRIBE]: [ok(resourceDescribe({ kind_key: "nodes", kind: "Node", name: "kind-worker", namespace: null }))] });
+    const out = wrap(
+      <ActionsProvider>
+        <Inspector row={node("Ready, SchedulingDisabled")} provider="kind" kindKey="nodes" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    expect(within(tools()).queryByRole("button", { name: /^Cordon/ })).toBeNull();
+    expect(button("Uncordon", tools())).toBeTruthy();
+    // A node that isn't Ready doesn't say whether it is cordoned: both are offered.
+    out.rerender(
+      <ActionsProvider>
+        <Inspector row={node("NotReady")} provider="kind" kindKey="nodes" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    expect(button("Cordon", tools())).toBeTruthy();
+    expect(button("Uncordon", tools())).toBeTruthy();
+  });
+
+  it("a successful change says what the server did, until you move on", async () => {
+    serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan())],
+      "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Restarting every pod of Deployment demo/web.", job_id: null, audit_id: 1 })],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Restart", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Restart", dialog()));
+    const said = await screen.findByText("Restarting every pod of Deployment demo/web.");
+    expect(said.getAttribute("data-tone")).toBe("ok");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Still there after the page re-renders; gone once another tool starts.
+    fireEvent.click(screen.getByRole("tab", { name: "Events" }));
+    expect(screen.getByText("Restarting every pod of Deployment demo/web.")).toBeTruthy();
+    fireEvent.click(button("Scale", tools()));
+    expect(screen.queryByText("Restarting every pod of Deployment demo/web.")).toBeNull();
+  });
+
+  it("a cancelled change says nothing", async () => {
+    serve({ [DESCRIBE]: [ok(resourceDescribe())], "POST /api/actions/plan": [ok(plan())] });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Restart", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Cancel", dialog()));
+    await waitFor(() => expect(button("Restart", tools()).disabled).toBe(false));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("a scale applied keeps focus in the details and says so", async () => {
+    serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan({ action: "scale", apply_label: "Scale" }))],
+      "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Scaled Deployment demo/web to 5 replicas.", job_id: null, audit_id: 1 })],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Scale", tools()));
+    fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "5" } });
+    const review = button("Review");
+    review.focus();
+    fireEvent.click(review);
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Scale", dialog()));
+    await screen.findByText("Scaled Deployment demo/web to 5 replicas.");
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    const details = screen.getByRole("region", { name: "Details for web" });
+    await waitFor(() => expect(details.contains(document.activeElement)).toBe(true));
+  });
+
+  it("a drain closed after it ended leaves its message in the details", async () => {
+    const ended = "Drain stopped after 5m: 1 pods are still protected by a PodDisruptionBudget (demo/web-1). kind-worker stays cordoned.";
+    serve({
+      [NODE_DESCRIBE]: [ok(resourceDescribe({ kind_key: "nodes", kind: "Node", name: "kind-worker", namespace: null }))],
+      "POST /api/actions/plan": [
+        ok(plan({ action: "drain", target: { cluster_id: "c1", kind_key: "nodes", namespace: null, name: "kind-worker" }, apply_label: "Drain" })),
+      ],
+      "POST /api/actions/p1/apply": [ok({ outcome: "started", message: "Cordoned kind-worker; evicting 2 pods.", job_id: "j1", audit_id: 9 })],
+      "GET /api/actions/jobs/j1": [
+        ok({ id: "j1", action: "drain", state: "failed", message: ended, total: 2, done: 1, blocked: [], started_at: "", finished_at: "" }),
+      ],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={node()} provider="kind" kindKey="nodes" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Drain", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Drain", dialog()));
+    await within(dialog()).findByText(ended);
+    fireEvent.click(button("Close", dialog()));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect((await screen.findByText(ended)).getAttribute("data-tone")).toBe("warn");
+  });
+
+  it("the editor takes focus on load only if you haven't moved on", async () => {
+    serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment" })] });
+    let resolve!: (k: typeof kit) => void;
+    vi.mocked(loadCodeMirror).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+    wrap(
+      <>
+        <input aria-label="Elsewhere" />
+        <ActionsProvider>
+          <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+        </ActionsProvider>
+      </>,
+    );
+    fireEvent.click(button("Edit", tools()));
+    await screen.findByText("Loading the editor…");
+    const elsewhere = screen.getByLabelText("Elsewhere");
+    elsewhere.focus();
+    await act(async () => resolve(kit));
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBeTruthy();
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it("the editor takes focus on load when you're still at Edit", async () => {
+    serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment" })] });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.click(edit);
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
   });
 
   it("scale form plans with replicas", async () => {
@@ -564,6 +706,48 @@ describe("tool keys on rows", () => {
   });
 });
 
+describe("late plans", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([["Escape"], ["ArrowDown"]])("a plan that comes back after %s left its details never opens", async (away) => {
+    let answer!: (r: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return new Promise<Response>((r) => { answer = r; });
+      return json(resourceDescribe());
+    }));
+    const territory = {
+      cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", original_server: null, provider: "aks" as const,
+        region: null, environment: "development" as const, state: "ready" as const, message: null },
+      state: "ready" as const, message: null, rows: [deployment(), deployment({ uid: "d-2", name: "worker" })], total: 2, failing: 0, pending: 0,
+    };
+    wrap(
+      <ActionsProvider>
+        <div style={{ height: 600 }}>
+          <Table territories={[territory]} kind={{ ...DEPLOYMENTS, verbs: VERBS }} onRetry={() => {}} />
+        </div>
+      </ActionsProvider>,
+    );
+    const web = () => Array.from(document.querySelectorAll<HTMLElement>("[data-row-key]")).find((r) => r.textContent?.includes("web"))!;
+    web().focus();
+    fireEvent.keyDown(web(), { key: "r" });
+    await waitFor(() => expect(screen.getByRole("region", { name: "Details for web" })).toBeTruthy());
+    fireEvent.keyDown(web(), { key: away });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Details for web" })).toBeNull());
+    const focused = document.activeElement;
+    await act(async () => answer(new Response(JSON.stringify(plan()), { status: 200, headers: { "Content-Type": "application/json" } })));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(focused);
+  });
+});
+
 describe("drain progress", () => {
   const job = (over: Partial<Job>): Job => ({
     id: "j1",
@@ -602,6 +786,55 @@ describe("drain progress", () => {
     expect(calls.length).toBe(polls);
     fireEvent.click(button("Close"));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("a job the server no longer knows says so, without a live cancel", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    serve({
+      "GET /api/actions/jobs/j1": [
+        ok(job({ done: 2, total: 5 })),
+        { status: 404, body: { detail: "This job isn't known: it ended more than an hour ago, or the console restarted." } },
+      ],
+    });
+    wrap(<DrainProgress jobId="j1" onClose={vi.fn()} />);
+    expect(await screen.findByText("2 of 5 pods evicted")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(await screen.findByText(/This job isn't known/)).toBeTruthy();
+    expect(screen.getByText(/check the audit log/)).toBeTruthy();
+    expect(screen.queryByText("2 of 5 pods evicted")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel drain" })).toBeNull();
+    expect(screen.queryByText("The drain carries on if you close this.")).toBeNull();
+  });
+
+  it("a failed poll never shows the last numbers as live", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    serve({
+      "GET /api/actions/jobs/j1": [
+        ok(job({ done: 1 })),
+        { status: 502, body: { detail: "The cluster didn't answer." } },
+        ok(job({ done: 2 })),
+      ],
+    });
+    wrap(<DrainProgress jobId="j1" onClose={vi.fn()} />);
+    expect(await screen.findByText("1 of 3 pods evicted")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(await screen.findByText(/Can't read the drain's progress/)).toBeTruthy();
+    expect(screen.queryByText("1 of 3 pods evicted")).toBeNull();
+    // It keeps asking, and shows the numbers again once the server answers.
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(await screen.findByText("2 of 3 pods evicted")).toBeTruthy();
+    expect(screen.queryByText(/Can't read the drain's progress/)).toBeNull();
+  });
+
+  it("a drain's end reloads the audit log and the details", async () => {
+    serve({ "GET /api/actions/jobs/j1": [ok(job({ done: 3, state: "succeeded", message: "Drained kind-worker." }))] });
+    const out = wrap(<DrainProgress jobId="j1" onClose={vi.fn()} />);
+    const invalidate = vi.spyOn(out.client, "invalidateQueries");
+    await screen.findByText("Drained kind-worker.");
+    await waitFor(() => {
+      const keys = invalidate.mock.calls.map(([f]) => (f as { queryKey: unknown[] }).queryKey[0]);
+      expect(keys).toEqual(expect.arrayContaining(["audit", "resource-describe", "describe"]));
+    });
   });
 
   it("cancel stops the drain and shows how it ended", async () => {

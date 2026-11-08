@@ -140,6 +140,31 @@
   line-height: 1.45;
 }
 
+/* What an applied change did, in the server's words: green when it did what it set out to do,
+   amber when it ended short (a drain that stopped). */
+.outcome {
+  margin: 0;
+  padding: 9px 16px 9px 18px;
+  border-bottom: 1px solid var(--rule);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.outcome[data-tone="ok"] {
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  color: color-mix(in srgb, var(--ok) 70%, var(--ink));
+}
+
+.outcome[data-tone="warn"] {
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  color: color-mix(in srgb, var(--warn) 60%, var(--ink));
+}
+
+.outcome:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
 .btn[aria-pressed="true"] {
   border-color: var(--focus);
 }

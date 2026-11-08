@@ -26,6 +26,10 @@ export function YamlEditor({
   const text = useRef(yaml);
   const [changed, setChanged] = useState(false);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
+  const box = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<MountedEditor | null>(null);
+  // What had focus when editing began (the Edit button, or the row whose `e` started it).
+  const [trigger] = useState(() => document.activeElement);
 
   // Mounted once: the text being edited is the editor's own, whatever the cluster does meanwhile
   // (the edit plan says so if the object moved on).
@@ -45,8 +49,8 @@ export function YamlEditor({
           },
           label,
         );
+        editorRef.current = editor;
         setState("ready");
-        editor.focus();
       },
       () => {
         if (!gone) setState("failed");
@@ -54,9 +58,20 @@ export function YamlEditor({
     );
     return () => {
       gone = true;
+      editorRef.current = null;
       editor?.destroy();
     };
   }, [label]);
+
+  // Once shown, the editor takes focus, but only if focus is still where editing began (or inside
+  // this box, or lost with the button that went): never pulled from wherever you moved meanwhile.
+  useEffect(() => {
+    if (state !== "ready") return;
+    const active = document.activeElement;
+    const stayed =
+      active === null || active === document.body || active === trigger || !active.isConnected || (box.current?.contains(active) ?? false);
+    if (stayed) editorRef.current?.focus();
+  }, [state, trigger]);
 
   // Escape stays in the editor: it never closes the details with your edits in them.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -64,7 +79,7 @@ export function YamlEditor({
   };
 
   return (
-    <div className={s.box} onKeyDown={onKey}>
+    <div ref={box} className={s.box} onKeyDown={onKey}>
       <div className={s.bar}>
         <span className={s.what}>{changed ? "Edited, not saved" : "Editing"}</span>
         <span className={s.push} />

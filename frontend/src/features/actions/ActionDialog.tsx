@@ -1,13 +1,13 @@
 import { useCallback, useId, useRef, useState, type ReactNode } from "react";
 import { failure, HttpError } from "../../api/http";
-import type { ApplyResult, Plan, PlanRequest } from "../../api/types";
+import type { Plan, PlanRequest } from "../../api/types";
 import { DialogShell } from "../dock/ConfirmDialog";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import cd from "../dock/ConfirmDialog.module.css";
 import { DiffView } from "./DiffView";
 import { DrainOptions, type DrainFlags } from "./forms";
 import { DrainProgress } from "./DrainProgress";
-import { StartActionContext, useActions, type StartAction } from "./useActions";
+import { StartActionContext, useActions, type ActionOutcome, type StartAction } from "./useActions";
 import s from "./ActionDialog.module.css";
 
 /** pipeline.py PRODUCTION and TYPE_TO_CONFIRM, word for word. */
@@ -23,7 +23,8 @@ type Failure = { message: string; review: boolean };
  * Reviews one plan and applies it. Everything it names comes from the plan, never from what is
  * selected now: the provider, `cluster / namespace / kind name`, the environment. Apply sends the
  * plan id and, where the plan asks for it, the typed name; nothing else. A conflict (409) or a
- * plan that expired or was used (404) keeps the dialog open with "Review again".
+ * plan that expired or was used (404) keeps the dialog open with "Review again". It closes with
+ * what the change did in the server's words (`onDone(outcome)`), or with nothing when cancelled.
  */
 export function ActionDialog({
   plan,
@@ -31,7 +32,7 @@ export function ActionDialog({
   onReview,
 }: {
   plan: Plan;
-  onDone: (result?: ApplyResult) => void;
+  onDone: (outcome?: ActionOutcome) => void;
   /** Plans the same change again, with `params` changed (a drain's options); rejects with the server's words. */
   onReview: (params?: Record<string, unknown>) => Promise<void>;
 }) {
@@ -41,7 +42,10 @@ export function ActionDialog({
   const [typed, setTyped] = useState("");
   const [phase, setPhase] = useState<"idle" | "applying" | "reviewing">("idle");
   const [error, setError] = useState<Failure | null>(null);
-  const [jobId, setJobId] = useState<string | null>(null);
+  /** A drain under way: its job, and what the apply said when it started it. */
+  const [started, setStarted] = useState<{ jobId: string; message: string } | null>(null);
+  /** How the drain ended (or that it is lost), once its progress says so. */
+  const ended = useRef<ActionOutcome | null>(null);
 
   // A new plan (reviewed again) starts clean: the name is typed again for it.
   const [shown, setShown] = useState(plan.plan_id);
@@ -65,11 +69,11 @@ export function ActionDialog({
     try {
       const out = await actions.apply(plan.plan_id, plan.confirm_text === null ? undefined : typed);
       if (out.outcome === "started" && out.job_id) {
-        setJobId(out.job_id);
+        setStarted({ jobId: out.job_id, message: out.message });
         setPhase("idle");
         return;
       }
-      onDone(out);
+      onDone({ message: out.message, tone: "ok" });
     } catch (err) {
       const review = err instanceof HttpError && (err.status === 409 || err.status === 404);
       setError({ message: failure(err), review });
@@ -92,9 +96,15 @@ export function ActionDialog({
     }
   };
 
+  // Closing a drain's progress, however: say how it ended, or that it was started and carries on.
+  const close = () => {
+    if (started === null) onDone();
+    else onDone(ended.current ?? { message: started.message, tone: "ok" });
+  };
+
   let body: ReactNode;
-  if (jobId !== null) {
-    body = <DrainProgress jobId={jobId} onClose={() => onDone()} />;
+  if (started !== null) {
+    body = <DrainProgress jobId={started.jobId} onClose={close} onOutcome={(o) => { ended.current = o; }} />;
   } else {
     body = (
       <>
@@ -179,7 +189,7 @@ export function ActionDialog({
       provider={cluster.provider}
       role="dialog"
       busy={busy}
-      onCancel={() => onDone()}
+      onCancel={close}
       first={cancelRef}
       labelledBy={`${id}-t`}
       describedBy={plan.summary.length > 0 ? `${id}-b` : undefined}
@@ -216,23 +226,24 @@ export function ActionDialog({
 
 /**
  * Holds the change being reviewed and draws its dialog over the page. `start` plans a change and
- * opens the dialog on it; it resolves when the dialog closes, with what was applied (null when
+ * opens the dialog on it; it resolves when the dialog closes, with what the change did (null when
  * cancelled), and rejects with the server's words when the plan can't be made. Only the newest
- * start opens: a plan that comes back after another was asked for is dropped.
+ * start opens, and only while its caller still wants it (`isCurrent`): a plan that comes back after
+ * you moved on is dropped, so it never opens a dialog or takes focus.
  */
 export function ActionsProvider({ children }: { children: ReactNode }) {
   const actions = useActions();
   const [open, setOpen] = useState<{ req: PlanRequest; plan: Plan } | null>(null);
   const latest = useRef(0);
-  const settle = useRef<((result: ApplyResult | null) => void) | null>(null);
+  const settle = useRef<((outcome: ActionOutcome | null) => void) | null>(null);
 
   const start = useCallback<StartAction>(
-    async (req) => {
+    async (req, opts) => {
       const seq = ++latest.current;
       const plan = await actions.plan(req);
-      if (seq !== latest.current) return null;
+      if (seq !== latest.current || (opts?.isCurrent && !opts.isCurrent())) return null;
       settle.current?.(null);
-      return new Promise<ApplyResult | null>((resolve) => {
+      return new Promise<ActionOutcome | null>((resolve) => {
         settle.current = resolve;
         setOpen({ req, plan });
       });
@@ -251,10 +262,10 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     [actions, open],
   );
 
-  const done = useCallback((result?: ApplyResult) => {
+  const done = useCallback((outcome?: ActionOutcome) => {
     latest.current += 1;
     setOpen(null);
-    settle.current?.(result ?? null);
+    settle.current?.(outcome ?? null);
     settle.current = null;
   }, []);
 
