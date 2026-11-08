@@ -20,6 +20,7 @@ export type ShortcutId =
   | "uncordon"
   | "drain"
   | "nodeShell"
+  | "portForward"
   | "delete"
   | "searchLogs"
   | "nextMatch"
@@ -64,6 +65,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "uncordon", group: "Details", keys: ["u"], match: ["u"], label: "Uncordon the node" },
   { id: "drain", group: "Details", keys: ["r"], match: ["r"], label: "Drain the node" },
   { id: "nodeShell", group: "Details", keys: ["s"], match: ["s"], label: "Shell on the node" },
+  { id: "portForward", group: "Details", keys: ["f"], match: ["f"], label: "Port-forward a pod or service" },
   { id: "delete", group: "Details", keys: ["Ctrl D"], match: ["d", "D"], ctrl: true, label: "Delete" },
   { id: "searchLogs", group: "Logs", keys: ["Ctrl F"], label: "Search logs", bar: "search logs" },
   { id: "nextMatch", group: "Logs", keys: ["Enter"], label: "Next match" },

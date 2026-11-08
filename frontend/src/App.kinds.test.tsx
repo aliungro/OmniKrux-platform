@@ -28,7 +28,7 @@ beforeEach(() => {
     { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
-  vi.stubGlobal("fetch", vi.fn((url: string) => json(url.startsWith("/api/kinds") ? KINDS : [cluster])));
+  vi.stubGlobal("fetch", vi.fn((url: string) => json(url.startsWith("/api/kinds") ? KINDS : url === "/api/port-forwards" ? [] : [cluster])));
 });
 afterEach(() => {
   cleanup();

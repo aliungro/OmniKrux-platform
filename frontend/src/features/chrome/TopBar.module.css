@@ -73,9 +73,40 @@
   white-space: nowrap;
 }
 
-.cmd {
+.tools {
   flex: none;
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audit {
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.audit:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+
+.audit[aria-pressed="true"] {
+  border-color: var(--focus);
+  color: var(--ink);
+}
+
+.cmd {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 10px;

@@ -1,0 +1,169 @@
+/* The port-forwards control in the top bar: a pill with a live dot, and a popover under it. */
+.menu {
+  position: relative;
+  flex: none;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surf-2);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trigger:hover,
+.trigger[aria-expanded="true"] {
+  border-color: var(--ink-3);
+}
+
+.pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(420px, 70vh);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--surf);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.45);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The provider's colour runs down the left edge, as it does on a cluster's rows. */
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 10px 9px 12px;
+  border-left: 3px solid var(--c);
+  border-radius: 4px 8px 8px 4px;
+}
+
+.item + .item {
+  margin-top: 4px;
+}
+
+.item:hover {
+  background: var(--surf-2);
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.addr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ports {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.btn {
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+
+.btn:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.stop {
+  color: #ff8cc0;
+}
+
+.state {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  color: var(--ink-2);
+  line-height: 1.4;
+}
+
+.state[data-state="error"] {
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+}
+
+.shape {
+  flex: none;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+/* Failing: a rotated square, so it never reads by colour alone. */
+.shape[data-shape="diamond"] {
+  border-radius: 2px;
+  background: var(--bad);
+  transform: rotate(45deg);
+}
+
+.warn {
+  margin: 0 4px 6px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: color-mix(in srgb, var(--warn) 55%, var(--ink));
+  font-weight: 600;
+  line-height: 1.4;
+}

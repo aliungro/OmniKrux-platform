@@ -50,7 +50,7 @@ const pod = (uid: string, status: string, cls: string) => ({ uid, cluster_id: "c
 
 /** Answers /api/kinds with the test kinds and everything else with `other`. */
 function routes(other: (url: string) => unknown) {
-  return vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(KINDS) : json(other(url))));
+  return vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(KINDS) : url === "/api/port-forwards" ? json([]) : json(other(url))));
 }
 const clusterCalls = (fetch: { mock: { calls: unknown[][] } }) => fetch.mock.calls.filter(([url]) => url === "/api/clusters").length;
 
@@ -87,6 +87,7 @@ describe("Console page states", () => {
     let first = true;
     const fetch = vi.fn((url: string) => {
       if (url.startsWith("/api/kinds")) return json(KINDS);
+      if (url === "/api/port-forwards") return json([]);
       if (first) {
         first = false;
         return json({ detail: "database is locked" }, 500);
@@ -104,6 +105,20 @@ describe("Console page states", () => {
     vi.stubGlobal("fetch", routes(() => []));
     renderConsole();
     expect(await screen.findByText("No clusters yet. Mount your kubeconfig at /kube/config and restart the console.")).toBeTruthy();
+  });
+});
+
+describe("Audit log route", () => {
+  it("the Audit log button opens the full view and back returns to the resources", async () => {
+    vi.stubGlobal("fetch", routes((url) => (url.startsWith("/api/audit") ? { records: [], next_before: null } : [cluster])));
+    renderConsole();
+    fireEvent.click(await screen.findByRole("button", { name: "Audit log" }));
+    expect(window.location.hash).toBe("#audit");
+    expect(await screen.findByText("Nothing has been changed from Omnikrux yet.")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Pods" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Back to resources" }));
+    expect(window.location.hash).toBe("#kind=pods");
+    expect(await screen.findByRole("tab", { name: "Pods" })).toBeTruthy();
   });
 });
 
@@ -334,7 +349,7 @@ describe("Console kinds", () => {
     window.location.hash = "#kind=certificates.cert-manager.io";
     watch.state = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "absent", message: "This cluster doesn't serve certificates.cert-manager.io." });
     const fetch = vi.fn((url: string) =>
-      url.startsWith("/api/kinds") ? json(KINDS) : url.endsWith("/retry") ? Promise.resolve(new Response(null, { status: 204 })) : json([cluster]));
+      url.startsWith("/api/kinds") ? json(KINDS) : url === "/api/port-forwards" ? json([]) : url.endsWith("/retry") ? Promise.resolve(new Response(null, { status: 204 })) : json([cluster]));
     vi.stubGlobal("fetch", fetch);
     renderConsole();
     expect(await screen.findByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeTruthy();
@@ -362,7 +377,7 @@ describe("Console kinds, more", () => {
     watch.state = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "absent", message: "This cluster doesn't serve certificates.cert-manager.io." });
     const reason = "The cert-manager.io API didn't answer (503: the server is currently unable to handle the request); its kinds are hidden until it does.";
     const kinds = { kinds: KINDS.kinds.filter((k) => k.key !== "certificates.cert-manager.io"), clusters: { c1: { state: "ok", message: null, failed_groups: { "cert-manager.io": reason } } } };
-    vi.stubGlobal("fetch", vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(kinds) : json([cluster]))));
+    vi.stubGlobal("fetch", vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(kinds) : url === "/api/port-forwards" ? json([]) : json([cluster]))));
     renderConsole();
     expect(await screen.findByText(`Can't list certificates on this cluster right now: ${reason}`)).toBeTruthy();
     expect(screen.queryByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeNull();
@@ -372,6 +387,7 @@ describe("Console kinds, more", () => {
   it("says when the kinds can't be loaded and tries again", async () => {
     let fail = true;
     vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/port-forwards") return json([]);
       if (!url.startsWith("/api/kinds")) return json([cluster]);
       return fail ? json({ detail: "The console's database is locked." }, 500) : json(KINDS);
     }));

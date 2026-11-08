@@ -496,3 +496,78 @@ export interface Revision {
   images: string[];
   current: boolean;
 }
+
+/* Port-forwards — mirrors backend/omnikrux/portforward/manager.py ForwardIn / ForwardOut. */
+
+export interface ForwardIn {
+  cluster_id: string;
+  namespace: string;
+  kind: "pod" | "service";
+  name: string;
+  port: number;
+}
+
+export interface ForwardOut {
+  id: string;
+  cluster_id: string;
+  cluster_name: string;
+  provider: string;
+  namespace: string;
+  kind: "pod" | "service";
+  name: string;
+  remote_port: number;
+  local_port: number;
+  /** "127.0.0.1:30001": the listener is IPv4 only. */
+  address: string;
+  /** The pod the latest connection went to. */
+  pod: string | null;
+  state: "listening" | "error";
+  /** Why it is in error, in the server's words. */
+  message: string | null;
+  connections: number;
+  started_at: string;
+}
+
+/* The audit log — mirrors backend/omnikrux/audit/store.py AuditOut / AuditPage. */
+
+export type AuditAction =
+  | "edit"
+  | "scale"
+  | "restart"
+  | "rollback"
+  | "delete"
+  | "cordon"
+  | "uncordon"
+  | "drain"
+  | "shell"
+  | "debug_container"
+  | "node_shell"
+  | "port_forward"
+  | "secret_reveal";
+
+export type AuditOutcome = "started" | "succeeded" | "failed" | "ended" | "unknown";
+
+export interface AuditRecord {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  actor: string;
+  action: AuditAction | string;
+  cluster_id: string;
+  cluster_name: string;
+  provider: string;
+  namespace: string | null;
+  kind: string;
+  name: string | null;
+  outcome: AuditOutcome | string;
+  message: string | null;
+  diff: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface AuditPage {
+  /** Newest first. */
+  records: AuditRecord[];
+  /** Pass as `before` for the next (older) page; null on the last. */
+  next_before: number | null;
+}

@@ -54,3 +54,9 @@ export async function postJson<T>(path: string, body?: unknown, opts: Pick<Reque
   if (!res.ok) return fail(res);
   return (await res.json()) as T;
 }
+
+/** DELETEs and expects an empty answer (204). */
+export async function deleteEmpty(path: string): Promise<void> {
+  const res = await fetch(path, { method: "DELETE" });
+  if (!res.ok) return fail(res);
+}

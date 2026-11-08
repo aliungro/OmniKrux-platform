@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "./api/useClusters";
 import { refreshKinds, useKinds } from "./api/useKinds";
@@ -6,11 +6,13 @@ import { useLiveMetrics } from "./api/useMetrics";
 import { useWatch } from "./api/useWatch";
 import { failure } from "./api/http";
 import type { Cluster, ClusterState, KindInfo, KindsResponse, OwnerRef, ResourceRow } from "./api/types";
+import { AuditView } from "./features/audit/AuditView";
 import { ActionsProvider } from "./features/actions/ActionDialog";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
 import { ShortcutBar } from "./features/chrome/ShortcutBar";
 import { TopBar } from "./features/chrome/TopBar";
+import { ForwardsMenu } from "./features/portforward/ForwardsMenu";
 import { Dock } from "./features/dock/Dock";
 import { useDock } from "./features/dock/useDock";
 import { NavigationNotice, NavigationProvider, useNavigator } from "./features/navigation/navigation";
@@ -59,8 +61,11 @@ export function Console() {
   const knownClusterIds = useMemo(() => (list ? new Set(list.map((c) => c.id)) : undefined), [list]);
 
   const [route, setRoute] = useRoute();
-  // The audit log (Task 14) has its own view; until then the pods view stands in.
-  const kindKey = route.view === "resources" ? route.kind : "pods";
+  // The audit log is its own view; the resources behind it keep the kind you were on, so coming
+  // back lands there and nothing is re-watched while the log is open.
+  const lastKind = useRef("pods");
+  if (route.view === "resources") lastKind.current = route.kind;
+  const kindKey = lastKind.current;
   const kinds = useKinds();
   const served = servedKinds(kinds.data);
   const discovered = discovery(kinds.data);
@@ -166,8 +171,21 @@ export function Console() {
     [setRoute, cancelJump],
   );
 
+  const onBackFromAudit = useCallback(() => setRoute({ view: "resources", kind: lastKind.current }), [setRoute]);
+  const onAudit = useCallback(
+    () => (route.view === "audit" ? onBackFromAudit() : setRoute({ view: "audit" })),
+    [setRoute, route.view, onBackFromAudit],
+  );
+
   let body;
-  if (list === undefined) {
+  if (route.view === "audit") {
+    // The audit log needs no cluster to read: it is the record of what was done.
+    body = (
+      <main className={s.main}>
+        <AuditView onBack={onBackFromAudit} />
+      </main>
+    );
+  } else if (list === undefined) {
     body = clusters.isError ? (
       <div className={s.note} role="alert">
         <span>Can't load clusters: {clusters.error.message}</span>
@@ -223,10 +241,10 @@ export function Console() {
     <NavigationProvider goTo={nav.goTo}>
       <ActionsProvider>
         <div className={s.app}>
-          <TopBar clusters={all} />
+          <TopBar clusters={all} forwards={<ForwardsMenu />} onAudit={onAudit} auditOpen={route.view === "audit"} />
           {body}
           {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
-          {hasTable && <ShortcutBar kind={kindKey} />}
+          {hasTable && route.view !== "audit" && <ShortcutBar kind={kindKey} />}
         </div>
       </ActionsProvider>
     </NavigationProvider>

@@ -6,6 +6,7 @@ import { keyedTools, toolsFor, TOOL_LABEL, type ToolId } from "../actions/tools"
 import { useStartAction, type ActionOutcome } from "../actions/useActions";
 import { YamlEditor } from "../actions/YamlEditor";
 import { capsOf, isEditable, toolShortcut } from "../chrome/shortcuts";
+import { ForwardDialog } from "../portforward/ForwardDialog";
 import { textColumn } from "../territories/model";
 import k from "../chrome/key.module.css";
 import s from "./Inspector.module.css";
@@ -49,8 +50,10 @@ export function useTools({
   onIntentDone?: () => void;
 }) {
   const start = useStartAction();
-  const tools = start ? toolsFor(kindKey, verbs, row) : [];
-  const [open, setOpen] = useState<"edit" | "scale" | "rollback" | null>(null);
+  // Port-forwards need no plan, so they don't wait for the actions provider.
+  const tools = toolsFor(kindKey, verbs, row).filter((t) => start || t === "portForward");
+  const [open, setOpen] = useState<"edit" | "scale" | "rollback" | "forward" | null>(null);
+  const forwardGeneration = useRef(0);
   const [busy, setBusy] = useState<ToolId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<ActionOutcome | null>(null);
@@ -120,6 +123,10 @@ export function useTools({
         return;
       case "nodeShell":
         onNodeShell?.(row, row.name);
+        return;
+      case "portForward":
+        forwardGeneration.current = generation.current;
+        setOpen("forward");
         return;
       default:
         setOpen(null);
@@ -211,6 +218,30 @@ export function useTools({
     );
   }
 
+  // The port-forward dialog: a start that finishes after you moved to another object is not said here
+  // (the forward itself is listed in the top bar either way).
+  const dialog: ReactNode =
+    open === "forward" && (kindKey === "pods" || kindKey === "services") ? (
+      <ForwardDialog
+        target={{
+          clusterId: row.cluster_id,
+          namespace: row.namespace ?? "",
+          kind: kindKey === "pods" ? "pod" : "service",
+          name: row.name,
+          version: textColumn(row, "resource_version") ?? "",
+        }}
+        onCancel={close}
+        onStarted={(forward) => {
+          if (forwardGeneration.current !== generation.current) return;
+          setOpen(null);
+          setOutcome({
+            message: `Forwarding localhost:${forward.local_port} to port ${forward.remote_port} of ${forward.kind} ${forward.name}. Stop it from the port-forwards menu at the top.`,
+            tone: "ok",
+          });
+        }}
+      />
+    ) : null;
+
   /** The YAML tab while editing; null otherwise. */
   const editor = (yaml: string | undefined): ReactNode =>
     open === "edit" && yaml !== undefined ? (
@@ -226,7 +257,12 @@ export function useTools({
 
   return {
     buttons,
-    strip,
+    strip: (
+      <>
+        {strip}
+        {dialog}
+      </>
+    ),
     editor,
     onKey,
     canEdit: tools.includes("edit"),

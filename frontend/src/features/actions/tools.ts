@@ -3,7 +3,7 @@ import type { ShortcutId } from "../chrome/shortcuts";
 import { textColumn } from "../territories/model";
 
 /** The change tools the details offer; each but rollback has a key in the shortcuts registry. */
-export type ToolId = Extract<ShortcutId, "edit" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "nodeShell" | "delete"> | "rollback";
+export type ToolId = Extract<ShortcutId, "edit" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "nodeShell" | "portForward" | "delete"> | "rollback";
 
 const SCALABLE = new Set(["deployments.apps", "statefulsets.apps", "replicasets.apps"]);
 const RESTARTABLE = new Set(["deployments.apps", "statefulsets.apps", "daemonsets.apps"]);
@@ -19,6 +19,7 @@ export const TOOL_LABEL: Record<ToolId, string> = {
   uncordon: "Uncordon",
   drain: "Drain",
   nodeShell: "Node shell",
+  portForward: "Port-forward",
   delete: "Delete",
 };
 
@@ -50,6 +51,8 @@ export function toolsFor(kindKey: string, verbs: readonly string[], row?: Resour
     if (state !== false) tools.push("uncordon");
     tools.push("drain", "nodeShell");
   }
+  // Port-forwards read the cluster only (no plan, no diff); each start is audited.
+  if (kindKey === "pods" || kindKey === "services") tools.push("portForward");
   if (verbs.includes("delete")) tools.push("delete");
   return tools;
 }

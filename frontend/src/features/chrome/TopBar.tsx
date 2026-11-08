@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Territory } from "../territories/model";
 import { ProviderBadge } from "../territories/ProviderBadge";
 import s from "./TopBar.module.css";
@@ -23,7 +24,19 @@ function Logo() {
   );
 }
 
-export function TopBar({ clusters }: { clusters: ScopeCluster[] }) {
+export function TopBar({
+  clusters,
+  forwards,
+  onAudit,
+  auditOpen = false,
+}: {
+  clusters: ScopeCluster[];
+  /** The port-forwards control, drawn while any forward exists. */
+  forwards?: ReactNode;
+  /** Opens the audit log view; without it there is no button. */
+  onAudit?: () => void;
+  auditOpen?: boolean;
+}) {
   return (
     <header className={s.top}>
       <div className={s.logo}>
@@ -53,6 +66,14 @@ export function TopBar({ clusters }: { clusters: ScopeCluster[] }) {
           ))}
         </div>
       )}
+      <div className={s.tools}>
+        {forwards}
+        {onAudit && (
+          <button type="button" className={s.audit} aria-pressed={auditOpen} onClick={onAudit}>
+            Audit log
+          </button>
+        )}
+      </div>
       {/* Quiet placeholder for the command palette (Plan 3): no prompt or shortcut until it works. */}
       <div className={s.cmd} aria-hidden="true">
         pods, deploy, svc, helm…
