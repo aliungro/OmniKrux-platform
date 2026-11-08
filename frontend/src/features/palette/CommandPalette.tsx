@@ -3,6 +3,7 @@ import type { Cluster, KindInfo, ResourceRow } from "../../api/types";
 import { rowActions, type RowAction } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
 import { capsOf, pageKey, pressed } from "../chrome/shortcuts";
+import { rowTitle } from "../territories/model";
 import { ProviderBadge } from "../territories/ProviderBadge";
 import { GROUP_ORDER, KIND_GROUPS, MAX_RESULTS, buildCommands, rankCommands, type Command, type CommandGroup } from "./commands";
 import k from "../chrome/key.module.css";
@@ -204,8 +205,9 @@ export function CommandPalette({
         onMouseDown={(e) => e.target !== inputRef.current && e.preventDefault()}
       >
         <div className={s.field}>
-          <span className={s.prompt} data-kinds={kindsOnly || undefined} aria-hidden="true">
-            {kindsOnly ? ":" : "›"}
+          {/* A typed leading colon is already in the field, so only kind mode shows it here. */}
+          <span className={s.prompt} data-kinds={mode === "kinds" || undefined} aria-hidden="true">
+            {mode === "kinds" ? ":" : "›"}
           </span>
           <input
             ref={inputRef}
@@ -239,7 +241,7 @@ export function CommandPalette({
                       on
                       <ProviderBadge provider={selection.cluster.provider} />
                       <span className={s.path}>
-                        {[selection.cluster.name, selection.row.namespace, selection.row.name].filter(Boolean).join(" / ")}
+                        {[selection.cluster.name, selection.row.namespace, rowTitle(selection.row)].filter(Boolean).join(" / ")}
                       </span>
                     </span>
                   )}

@@ -18,7 +18,7 @@ const VERBS = ["get", "list", "watch", "update", "patch", "delete"];
 const SERVED: KindsResponse = { ...KINDS, kinds: KINDS.kinds.map((k) => (k.key === "pods" ? { ...PODS, verbs: VERBS, short_names: ["po"] } : k)) };
 
 const plan: Plan = {
-  plan_id: "p1", action: "delete", target: { cluster_id: "c1", kind_key: "pods", namespace: "demo", name: "crasher-1" },
+  plan_id: "p1", action: "delete", target: { cluster_id: "c1", kind_key: "pods", namespace: "demo", name: "crasher-1" }, kind: "Pod",
   cluster: { id: "c1", name: "kind-omnikrux-dev", provider: "kind", environment: "development" },
   title: "Delete Pod crasher-1", summary: ["Delete Pod demo/crasher-1."], warnings: [], blocked: [], diff: null,
   confirm_text: null, apply_label: "Delete", expires_at: "2026-11-08T10:05:00Z",
@@ -113,6 +113,7 @@ describe("command palette", () => {
     await renderConsole();
     fireEvent.keyDown(document.body, { key: ":" });
     expect(palette()!.getAttribute("aria-label")).toBe("Jump to a kind");
+    expect(palette()!.querySelector("[class*=prompt]")!.textContent).toBe(":");
     // Kind mode lists kinds only.
     expect(options()).toContain("Deployments");
     expect(options()).not.toContain("Audit log");
@@ -174,6 +175,9 @@ describe("command palette", () => {
     ctrlK();
     fireEvent.change(input(), { target: { value: ":s" } });
     expect(options().every((o) => !/Audit/.test(o ?? ""))).toBe(true);
+    // The typed colon is in the field already: the prompt doesn't show a second one.
+    const prompt = () => palette()!.querySelector("[class*=prompt]")!.textContent;
+    expect(prompt()).toBe("›");
     fireEvent.change(input(), { target: { value: "audit" } });
     expect(options()[0]).toBe("Audit log");
     fireEvent.change(input(), { target: { value: "e" } });

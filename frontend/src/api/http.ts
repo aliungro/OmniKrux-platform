@@ -18,11 +18,28 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * FastAPI's request-validation answer (a 422 whose `detail` is a list of `{loc, msg}`) in words:
+ * "key: Field required; extra: Extra inputs are not permitted". Undefined when nothing is usable.
+ */
+function validationWords(detail: unknown): string | undefined {
+  if (!Array.isArray(detail)) return undefined;
+  const parts = detail.flatMap((d: unknown) => {
+    if (typeof d !== "object" || d === null || typeof (d as { msg?: unknown }).msg !== "string") return [];
+    const { loc, msg } = d as { loc?: unknown; msg: string };
+    // "body" and "query" say where the field was, which isn't the reader's concern.
+    const field = Array.isArray(loc) ? loc.filter((p, i) => !(i === 0 && (p === "body" || p === "query" || p === "path"))).join(".") : "";
+    return [field ? `${field}: ${msg}` : msg];
+  });
+  return parts.length > 0 ? `The console's server refused the request: ${parts.join("; ")}.` : undefined;
+}
+
 async function fail(res: Response): Promise<never> {
   let detail: string | undefined;
   try {
     const body = await res.json();
     if (body && typeof body.detail === "string") detail = body.detail;
+    else if (body) detail = validationWords(body.detail);
   } catch {
     // body was not JSON
   }

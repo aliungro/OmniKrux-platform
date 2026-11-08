@@ -1,6 +1,6 @@
 // frontend/src/features/territories/model.test.ts
 import { describe, it, expect } from "vitest";
-import { buildTerritories, chipsFor, countFilters, flatten, formatAge, kindCount, matchesFilter, namespacesIn, podsPerNode, withDiscoveryFailures, type Filters } from "./model";
+import { buildTerritories, chipsFor, countFilters, flatten, formatAge, kindCount, matchesFilter, namespacesIn, podsPerNode, kindTitle, rowTitle, titleColumn, withDiscoveryFailures, type Filters } from "./model";
 import type { KindInfo, ResourceRow } from "../../api/types";
 import { applyMessage, emptyWatchState } from "../../api/watchState";
 const now = new Date("2026-11-06T16:00:00");
@@ -269,5 +269,36 @@ describe("discovery failures", () => {
     // Nothing failed anywhere: the same array, so memoized views stay put.
     expect(withDiscoveryFailures(ts, { c1: clusters.c2 }, widgets)).toBe(ts);
     expect(withDiscoveryFailures(ts, undefined, widgets)).toBe(ts);
+  });
+});
+
+describe("row titles", () => {
+  const base: ResourceRow = { uid: "u", cluster_id: "c1", kind: "Deployment", namespace: "demo", name: "web", created_at: null, labels: {}, columns: {} };
+  it("a row is titled by its name, a helm release by its release", () => {
+    expect([rowTitle(base), titleColumn(base)]).toEqual(["web", "name"]);
+    const helm = { ...base, kind: "HelmRelease", name: "sh.helm.release.v1.web.v3", columns: { release: "web" } };
+    expect([rowTitle(helm), titleColumn(helm)]).toEqual(["web", "release"]);
+    // Without the label Helm writes, the Secret's own name is the best there is.
+    expect(rowTitle({ ...helm, columns: {} })).toBe("sh.helm.release.v1.web.v3");
+  });
+});
+
+describe("kind titles", () => {
+  const t = (key: string, kind: string, plural_label: string) => kindTitle({ key, kind, plural_label });
+  it("keep the API Kind's casing when the plural is a regular plural of it", () => {
+    expect(t("configmaps", "ConfigMap", "configmaps")).toBe("ConfigMaps");
+    expect(t("cronjobs.batch", "CronJob", "cronjobs")).toBe("CronJobs");
+    expect(t("horizontalpodautoscalers.autoscaling", "HorizontalPodAutoscaler", "horizontalpodautoscalers")).toBe("HorizontalPodAutoscalers");
+    expect(t("networkpolicies.networking.k8s.io", "NetworkPolicy", "networkpolicies")).toBe("NetworkPolicies");
+    expect(t("ingressclasses.networking.k8s.io", "IngressClass", "ingressclasses")).toBe("IngressClasses");
+    expect(t("endpoints", "Endpoints", "endpoints")).toBe("Endpoints");
+    expect(t("certificates.cert-manager.io", "Certificate", "certificates")).toBe("Certificates");
+  });
+  it("otherwise capitalise the plural, as before", () => {
+    expect(t("helm-releases", "HelmRelease", "Helm releases")).toBe("Helm releases");
+    expect(t("people.example.com", "Person", "people")).toBe("People");
+    expect(kindTitle({ key: "widgets.example.omnikrux.dev", plural_label: "widgets" })).toBe("Widgets");
+    // A kind the catalog hasn't named yet reads as its plural.
+    expect(t("gizmos.example.com", "gizmos", "gizmos")).toBe("Gizmos");
   });
 });

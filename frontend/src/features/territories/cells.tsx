@@ -3,7 +3,7 @@ import type { Live } from "../../api/useMetrics";
 import { formatCpu, formatMemory, formatWindow, fraction, HOT_AT } from "../metrics/format";
 import { Meter } from "../metrics/Meter";
 import { LinkButton, useGoTo } from "../navigation/navigation";
-import { formatAge, formatAgo, statusClass, textColumn } from "./model";
+import { formatAge, formatAgo, statusClass, textColumn, titleColumn } from "./model";
 import { Status } from "./Status";
 import s from "./ResourceRowView.module.css";
 
@@ -70,8 +70,11 @@ export function Cell({
   // A `{key}_title` column carries the details for this one's tooltip (Ruling R23: node taints).
   const detail = textColumn(row, `${col.key}_title`) || undefined;
 
-  if (col.key === "name") {
-    return <span role="gridcell" className={`${s.cell} ${s.name}`} title={row.name}>{row.name}</span>;
+  if (col.key === "name" || col.key === titleColumn(row)) {
+    // The row's title is prominent; a Helm release's Secret name, shown beside it, is not.
+    const text = col.key === "name" ? row.name : plain(v);
+    const cls = col.key === titleColumn(row) ? s.name : s.dim;
+    return <span role="gridcell" className={`${s.cell} ${cls}`} title={text}>{text}</span>;
   }
   if (col.key === "namespace") {
     return <span role="gridcell" className={`${s.cell} ${s.dim}`}>{row.namespace ?? UNKNOWN}</span>;

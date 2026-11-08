@@ -225,6 +225,8 @@ export const TerritoryTable = memo(function TerritoryTable({
     const id = rowShortcut(e, kind.key, rowActions(kind.key, kind.verbs, it.row, can));
     if (id === undefined) return;
     e.preventDefault();
+    // A held `x` must not walk on into the secret's keys and reveal one (audited) by itself.
+    if (id === "reveal" && e.repeat) return;
     if (id === "move") {
       const step = e.key === "ArrowDown" ? 1 : -1;
       let i = at + step;

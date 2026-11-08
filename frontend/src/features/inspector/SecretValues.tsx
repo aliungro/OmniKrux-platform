@@ -110,6 +110,8 @@ export function SecretValues({
   const onKeyDown = (e: KeyboardEvent<HTMLLIElement>, key: string) => {
     if (!canReveal || !pressed("reveal", e) || isEditable(e.target)) return;
     e.preventDefault();
+    // A held `x` repeats: only a fresh press reveals (the row's `x` has just focused this key).
+    if (e.repeat) return;
     if (busy !== key && shown?.key !== key) void reveal(key);
   };
 

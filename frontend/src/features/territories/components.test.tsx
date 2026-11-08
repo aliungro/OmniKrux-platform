@@ -159,6 +159,14 @@ describe("kinds in the table", () => {
       render(<Table territories={[terr({ rows: [ev], total: 1 })]} kind={EVENTS} onRetry={() => {}} />);
       const e = screen.getByText("BackOff").closest<HTMLElement>('[role="row"]')!;
       expect(cells(e)).toEqual(["shop", "Warning", "BackOff", "Pod/web-1", "Back-off restarting", "5", "2m ago"]);
+      cleanup();
+
+      // A Helm release row is its revision's Secret: the release comes first, the Secret's name last.
+      const helm = row({ kind: "HelmRelease", name: "sh.helm.release.v1.web.v3" }, { release: "web", revision: 3, status: "deployed", status_class: "ok", updated: "2026-11-06T15:00:00Z" });
+      render(<Table territories={[terr({ rows: [helm], total: 1 })]} kind={HELM} onRetry={() => {}} />);
+      expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Release", "Namespace", "Revision", "Status", "Updated", "Secret"]);
+      const h = screen.getByText("deployed").closest<HTMLElement>('[role="row"]')!;
+      expect(cells(h)).toEqual(["web", "shop", "3", "deployed", "1h ago", "sh.helm.release.v1.web.v3"]);
     } finally {
       vi.useRealTimers();
     }

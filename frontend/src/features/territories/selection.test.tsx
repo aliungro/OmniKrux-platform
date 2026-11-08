@@ -277,7 +277,7 @@ describe("keys per kind", () => {
 
   it("ctrl d opens delete review", async () => {
     const plan = {
-      plan_id: "p1", action: "delete", target: { cluster_id: "c1", kind_key: "pods", namespace: "n", name: "pod-1" },
+      plan_id: "p1", action: "delete", target: { cluster_id: "c1", kind_key: "pods", namespace: "n", name: "pod-1" }, kind: "Pod",
       cluster: { id: "c1", name: "big", provider: "gke", environment: "development" }, title: "Delete Pod pod-1",
       summary: ["Delete Pod n/pod-1."], warnings: [], blocked: [], diff: null, confirm_text: null, apply_label: "Delete",
       expires_at: "2026-11-08T10:05:00Z",
@@ -349,5 +349,26 @@ describe("keys per kind", () => {
     const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(posts.map(([url]) => url)).toEqual(["/api/clusters/c1/secrets/n/db-0/reveal"]);
     expect(JSON.parse(posts[0][1]!.body as string)).toEqual({ key: "password" });
+  });
+
+  it("holding x on a secret row never reveals: key repeats are ignored on the row and on the key", async () => {
+    const SECRETS = { ...SERVICES, key: "secrets", kind: "Secret", plural: "secrets", label: "Secret", plural_label: "secrets" };
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return json({ key: "password", value: "hunter2", encoding: "utf-8" });
+      return json(url.includes("/yaml") ? { yaml: "kind: Secret" } : secretDescribe({ name: "db-0", namespace: "n" }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    renderKind(SECRETS, asKind("Secret", "db"));
+    const row = podRow("db-0");
+    row.focus();
+    fireEvent.keyDown(row, { key: "x" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("secret-key-password")));
+    // The held key keeps repeating, wherever focus is now.
+    fireEvent.keyDown(document.activeElement!, { key: "x", repeat: true });
+    fireEvent.keyDown(row, { key: "x", repeat: true });
+    fireEvent.keyDown(document.activeElement!, { key: "x", repeat: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    expect(screen.queryByText("hunter2")).toBeNull();
   });
 });

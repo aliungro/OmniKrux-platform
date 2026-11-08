@@ -206,7 +206,7 @@ export function ActionDialog({
               <span className={s.sep}> / </span>
             </>
           )}
-          <span className={s.kind}>{target.kind_key}</span> <span className={s.name}>{target.name}</span>
+          <span className={s.kind}>{plan.kind}</span> <span className={s.name}>{target.name}</span>
         </span>
         {production && <span className={`${s.env} ${s.prod}`}>Production</span>}
         {cluster.environment === "development" && <span className={`${s.env} ${s.dev}`}>Development</span>}

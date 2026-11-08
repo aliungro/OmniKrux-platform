@@ -108,12 +108,25 @@ const TITLES: Record<string, string> = {
   "helm-releases": "Helm releases",
 };
 
-/** The kind's plural name as a title: "Deployments", "Helm releases", "Certificates". */
-export function kindTitle(kind: Pick<KindInfo, "key" | "plural_label">): string {
+const capitalised = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/**
+ * The kind's plural name as a title: "Deployments", "Helm releases", "Certificates". When the plural
+ * is a regular plural of the API Kind, the Kind's casing is kept ("ConfigMaps", "NetworkPolicies").
+ */
+export function kindTitle(kind: Pick<KindInfo, "key" | "plural_label"> & Partial<Pick<KindInfo, "kind">>): string {
   const known = TITLES[kind.key];
   if (known) return known;
   const p = kind.plural_label;
-  return p.charAt(0).toUpperCase() + p.slice(1);
+  const k = kind.kind;
+  if (k) {
+    const lower = k.toLowerCase();
+    if (p === lower) return capitalised(k);
+    if (p === `${lower}s`) return `${capitalised(k)}s`;
+    if (p === `${lower}es`) return `${capitalised(k)}es`;
+    if (lower.endsWith("y") && p === `${lower.slice(0, -1)}ies`) return `${capitalised(k).slice(0, -1)}ies`;
+  }
+  return capitalised(p);
 }
 
 /** "1 pod", "48 pods", "1 Helm release", "3 deployments". */
@@ -134,6 +147,19 @@ export function hasStatus(kind: Pick<KindInfo, "columns">): boolean {
 export function textColumn(row: ResourceRow, key: string): string | null {
   const v = row.columns[key];
   return typeof v === "string" ? v : null;
+}
+
+/**
+ * The column that names a row to people: `name`, except for a Helm release, whose row is its
+ * revision's Secret (the name the API knows it by) and whose `release` column names the release.
+ */
+export function titleColumn(row: ResourceRow): "name" | "release" {
+  return row.kind === "HelmRelease" && textColumn(row, "release") ? "release" : "name";
+}
+
+/** What a row is called in titles and labels; API paths always use `row.name`. */
+export function rowTitle(row: ResourceRow): string {
+  return titleColumn(row) === "release" ? (textColumn(row, "release") ?? row.name) : row.name;
 }
 
 const STATUS_CLASSES: readonly string[] = ["ok", "warn", "bad", "done"];

@@ -450,6 +450,8 @@ export interface Plan {
   plan_id: string;
   action: ActionName;
   target: ActionTarget;
+  /** The target's Kind on the plan's cluster, e.g. "Deployment". */
+  kind: string;
   cluster: PlanCluster;
   title: string;
   summary: string[];

@@ -85,6 +85,7 @@ const plan = (over: Partial<Plan> = {}): Plan => ({
   plan_id: "p1",
   action: "restart",
   target: { cluster_id: "c1", kind_key: "deployments.apps", namespace: "demo", name: "web" },
+  kind: "Deployment",
   cluster: { id: "c1", name: "aks-prod-east", provider: "aks", environment: "development" },
   title: "Restart Deployment web",
   summary: ["Restart every pod of Deployment demo/web, following its update strategy (RollingUpdate)."],
@@ -157,7 +158,7 @@ describe("action dialog", () => {
       </ActionsProvider>,
     );
     const where = within(dialog()).getByTestId("action-where");
-    expect(where.textContent).toBe("aks-prod-east / demo / deployments.apps web");
+    expect(where.textContent).toBe("aks-prod-east / demo / Deployment web");
     expect(dialog().getAttribute("data-provider")).toBe("aks");
 
     fireEvent.click(button("Restart", dialog()));
@@ -577,6 +578,7 @@ describe("changes from the details", () => {
             plan_id: force ? "p2" : "p1",
             action: "drain",
             target: { cluster_id: "c1", kind_key: "nodes", namespace: null, name: "kind-worker" },
+            kind: "Node",
             cluster: { id: "c1", name: "kind-omnikrux-dev", provider: "kind", environment: "development" },
             title: "Drain kind-worker",
             summary: ["Cordon kind-worker, then evict 2 pods. 1 DaemonSet pods stay.", "demo/loner", "demo/web-1"],
@@ -598,7 +600,7 @@ describe("changes from the details", () => {
     fireEvent.click(button("Drain", tools()));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
     expect(within(dialog()).getByText(unmanaged).closest("[data-tone]")?.getAttribute("data-tone")).toBe("bad");
-    expect(within(dialog()).getByTestId("action-where").textContent).toBe("kind-omnikrux-dev / nodes kind-worker");
+    expect(within(dialog()).getByTestId("action-where").textContent).toBe("kind-omnikrux-dev / Node kind-worker");
     fireEvent.change(within(dialog()).getByLabelText("Type kind-worker to confirm"), { target: { value: "kind-worker" } });
     expect(button("Drain", dialog()).disabled).toBe(true);
 

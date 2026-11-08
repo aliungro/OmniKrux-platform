@@ -37,8 +37,8 @@ export const EVENTS = kind("events", "Event", [
   NAMESPACE, col("status", "Type", "status", "s"), col("reason", "Reason"), col("object", "Object", "object", "l"),
   col("message", "Message", "text", "l"), col("count", "Count", "number", "s"), col("last_seen", "Last seen", "time", "s"),
 ], { sort: "recent" });
-export const HELM = kind("helm-releases", "HelmRelease", [NAME, NAMESPACE, col("revision", "Revision", "number", "s"), STATUS,
-  col("updated", "Updated", "time", "s")], { label: "Helm release", plural_label: "Helm releases", sort: "recent" });
+export const HELM = kind("helm-releases", "HelmRelease", [col("release", "Release", "text", "l"), NAMESPACE, col("revision", "Revision", "number", "s"), STATUS,
+  col("updated", "Updated", "time", "s"), col("name", "Secret", "text", "l")], { label: "Helm release", plural_label: "Helm releases", sort: "recent" });
 export const CERTIFICATES = kind("certificates.cert-manager.io", "Certificate", [NAME, NAMESPACE, col("pc_ready", "Ready", "status", "s"), AGE],
   { builtin: false });
 

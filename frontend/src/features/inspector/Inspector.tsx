@@ -4,7 +4,7 @@ import { failure } from "../../api/http";
 import type { Link, OwnerRef, Provider, ResourceDescribe, ResourceRow } from "../../api/types";
 import { capsOf, shortcutsFor } from "../chrome/shortcuts";
 import { useGoTo } from "../navigation/navigation";
-import { textColumn } from "../territories/model";
+import { rowTitle, textColumn } from "../territories/model";
 import { DescribeView } from "./DescribeView";
 import { EventsTable } from "./EventsTable";
 import { MetricsView, NodeMetricsView } from "./MetricsView";
@@ -329,7 +329,7 @@ function Frame({
   };
 
   return (
-    <section className={`${s.insp} ${pc[knownProvider(provider)]}`} aria-label={`Details for ${row.name}`} onKeyDown={onKey}>
+    <section className={`${s.insp} ${pc[knownProvider(provider)]}`} aria-label={`Details for ${rowTitle(row)}`} onKeyDown={onKey}>
       <div className={s.bar}>
         <div role="tablist" aria-label="Details" className={s.tabs} onKeyDown={onTabKey}>
           {tabs.map((t, i) => (

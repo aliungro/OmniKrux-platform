@@ -581,6 +581,23 @@ describe("secret values", () => {
     expect(within(password).queryByRole("button", { name: "Reveal" })).toBeNull();
   });
 
+  it("a helm release row asks for its Secret by the Secret's name and is titled by the release", async () => {
+    const fetch = vi.fn((_u: string) => json(secretDescribe({ kind_key: "helm-releases", kind: "HelmRelease", name: "sh.helm.release.v1.web.v3" })));
+    vi.stubGlobal("fetch", fetch);
+    const helmRow: ResourceRow = {
+      uid: "h-1", cluster_id: "c1", kind: "HelmRelease", namespace: "demo", name: "sh.helm.release.v1.web.v3", created_at: null,
+      labels: { owner: "helm", name: "web" }, columns: { release: "web", revision: 3, status: "deployed", status_class: "ok", resource_version: "4" },
+    };
+    wrap(<Inspector row={helmRow} provider="kind" kindKey="helm-releases" />);
+    expect(screen.getByRole("region", { name: "Details for web" })).toBeTruthy();
+    await screen.findByTestId("secret-key-password");
+    expect(fetch.mock.calls.map(([u]) => u)).toContain("/api/clusters/c1/resources/helm-releases/sh.helm.release.v1.web.v3/describe?namespace=demo");
+    fireEvent.click(screen.getByRole("tab", { name: "YAML" }));
+    await waitFor(() =>
+      expect(fetch.mock.calls.map(([u]) => u)).toContain("/api/clusters/c1/resources/helm-releases/sh.helm.release.v1.web.v3/yaml?namespace=demo"),
+    );
+  });
+
   it("copy yaml copies masked secret", async () => {
     const fetch = answer();
     vi.stubGlobal("fetch", fetch);
