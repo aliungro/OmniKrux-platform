@@ -1,4 +1,5 @@
 import type { KindInfo, Provider, ResourceRow } from "../../api/types";
+import type { MetricsLookup } from "../../api/useMetrics";
 import { Cell } from "./cells";
 import { rowKey } from "./model";
 import { knownProvider } from "./ProviderBadge";
@@ -17,6 +18,7 @@ export function ResourceRowView({
   expanded,
   focusable = false,
   podCounts,
+  metrics = null,
   onActivate,
 }: {
   row: ResourceRow;
@@ -33,11 +35,14 @@ export function ResourceRowView({
   focusable?: boolean;
   /** Live pods per node per cluster, for a node row's Pods column. */
   podCounts?: Map<string, Map<string, number>> | null;
+  /** Live CPU and memory for this kind's rows (pods and nodes); null where none are polled. */
+  metrics?: MetricsLookup | null;
   onActivate?: (row: ResourceRow) => void;
 }) {
   const at = now ?? new Date();
   const nodePods = podCounts?.get(row.cluster_id);
   const podsOnNode = nodePods ? (nodePods.get(row.name) ?? 0) : null;
+  const metricsKey = row.namespace ? `${row.namespace}/${row.name}` : row.name;
   return (
     <div
       role="row"
@@ -50,7 +55,15 @@ export function ResourceRowView({
       className={`${s.row} ${pc[knownProvider(provider)]}${last ? ` ${s.last}` : ""}${selected ? ` ${s.sel}` : ""}${onActivate ? ` ${s.active}` : ""}`}
     >
       {kind.columns.map((c) => (
-        <Cell key={c.key} col={c} row={row} now={at} podsOnNode={c.type === "pods" ? podsOnNode : null} />
+        <Cell
+          key={c.key}
+          col={c}
+          row={row}
+          now={at}
+          podsOnNode={c.type === "pods" ? podsOnNode : null}
+          live={metrics && (c.type === "cpu" || c.type === "memory") ? metrics.usage(row.cluster_id, metricsKey) : null}
+          nowMs={metrics?.now}
+        />
       ))}
     </div>
   );

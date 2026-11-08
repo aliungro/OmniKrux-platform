@@ -10,6 +10,7 @@ import {
   type SetStateAction,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import type { MetricsLookup } from "../../api/useMetrics";
 import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/types";
 import { rowShortcut } from "../chrome/shortcuts";
 import { Inspector } from "../inspector/Inspector";
@@ -37,6 +38,8 @@ export interface TerritoryTableProps {
   onRetry: (clusterId: string, state: ClusterState) => void;
   /** Live pods per node per cluster, for the Nodes view's Pods column. */
   podCounts?: Map<string, Map<string, number>> | null;
+  /** Live CPU and memory per row (pods and nodes); null for kinds without them. */
+  metrics?: MetricsLookup | null;
   /** `previous`: the run before the last restart (the `p` key). */
   onOpenLogs?: (row: ResourceRow, previous?: boolean) => void;
   onOpenShell?: (row: ResourceRow) => void;
@@ -62,6 +65,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   onSelection,
   onRetry,
   podCounts = null,
+  metrics = null,
   onOpenLogs,
   onOpenShell,
   onNodeShell,
@@ -265,7 +269,13 @@ export const TerritoryTable = memo(function TerritoryTable({
             return (
               <div key={v.key} role="presentation" className={s.item} style={{ height: v.size, transform: `translateY(${v.start - margin}px)` }}>
                 {it.type === "band" ? (
-                  <ClusterBand t={it.t} kind={kind} onRetry={onRetry} rowIndex={rowIndex} />
+                  <ClusterBand
+                    t={it.t}
+                    kind={kind}
+                    onRetry={onRetry}
+                    rowIndex={rowIndex}
+                    metricsNote={metrics ? metrics.why(it.t.cluster.id) : null}
+                  />
                 ) : (
                   <ResourceRowView
                     row={it.row}
@@ -278,6 +288,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                     expanded={inspectable ? open && key === selectedKey : undefined}
                     focusable={key === tabKey}
                     podCounts={podCounts}
+                    metrics={metrics}
                     onActivate={inspectable ? toggle : select}
                   />
                 )}

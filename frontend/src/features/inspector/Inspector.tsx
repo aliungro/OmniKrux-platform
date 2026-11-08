@@ -5,6 +5,7 @@ import type { OwnerRef, Provider, ResourceRow } from "../../api/types";
 import { textColumn } from "../territories/model";
 import { DescribeView } from "./DescribeView";
 import { EventsTable } from "./EventsTable";
+import { MetricsView } from "./MetricsView";
 import { useDescribe, usePodYaml } from "./useDescribe";
 import { YamlView } from "./YamlView";
 import { knownProvider } from "../territories/ProviderBadge";
@@ -12,7 +13,7 @@ import k from "../chrome/key.module.css";
 import pc from "../territories/provider.module.css";
 import s from "./Inspector.module.css";
 
-const TABS = ["Describe", "YAML", "Events"] as const;
+const TABS = ["Describe", "YAML", "Events", "Metrics"] as const;
 type Tab = (typeof TABS)[number];
 
 function Loaded<T>({ q, children }: { q: UseQueryResult<T>; children: (data: T) => ReactNode }) {
@@ -116,6 +117,7 @@ export function Inspector({
               />
             )}</Loaded>}
         {tab === "YAML" && <Loaded q={yaml}>{(y) => <YamlView yaml={y} />}</Loaded>}
+        {tab === "Metrics" && <MetricsView clusterId={row.cluster_id} ns={ns} name={row.name} />}
         {tab === "Events" && (
           <Loaded q={describe}>
             {(d) => (

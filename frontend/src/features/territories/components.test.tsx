@@ -6,6 +6,9 @@ import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
 import { Status } from "./Status";
 import { CERTIFICATES, DEPLOYMENTS, EVENTS, HELM, NODES, PODS, SERVICES } from "../../test/kinds";
+import { Cell } from "./cells";
+import type { MetricsLookup } from "../../api/useMetrics";
+import type { Usage } from "../../api/types";
 import { Table } from "../../test/table";
 
 afterEach(() => {
@@ -211,5 +214,93 @@ describe("band for a failed API group", () => {
     expect(screen.queryByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledWith("c1", "absent");
+  });
+});
+
+describe("cpu and memory cells", () => {
+  const MIB = 1024 ** 2;
+  const usage = (over: Partial<Usage> = {}): Usage => ({ cpu_m: 110, memory_b: 301 * MIB, at: "2026-11-07T14:00:00Z", window_s: 15, stale: false, ...over });
+  const limits = { cpu_limit_m: 500, cpu_request_m: 100, memory_limit_b: 256 * MIB, memory_request_b: 128 * MIB };
+  const cols = { cpu: PODS.columns.find((c) => c.key === "cpu")!, memory: PODS.columns.find((c) => c.key === "memory")! };
+  const renderCell = (key: "cpu" | "memory", live: { usage: Usage | null; why: string | null } | null, columns: Record<string, unknown> = limits) =>
+    render(<Cell col={cols[key]} row={pod({ columns })} now={new Date("2026-11-07T14:10:00Z")} live={live} nowMs={Date.parse("2026-11-07T14:10:00Z")} />);
+
+  it("cpu and memory cells show usage against limit", () => {
+    const { container } = renderCell("cpu", { usage: usage(), why: null });
+    expect(screen.getByText("110m")).toBeTruthy();
+    expect(container.querySelector("i")?.getAttribute("style")).toContain("--v: 22%");
+    cleanup();
+    renderCell("memory", { usage: usage(), why: null });
+    expect(screen.getByText("301 / 256 Mi")).toBeTruthy();
+  });
+
+  it("a pod without a limit measures against its request, and without either has no bar", () => {
+    const { container } = renderCell("cpu", { usage: usage(), why: null }, { cpu_limit_m: null, cpu_request_m: 220 });
+    expect(container.querySelector("i")?.getAttribute("style")).toContain("--v: 50%");
+    expect(screen.queryByLabelText("near its limit")).toBeNull();
+    cleanup();
+    const bare = renderCell("memory", { usage: usage(), why: null }, { memory_limit_b: null, memory_request_b: 0 });
+    expect(screen.getByText("301 Mi")).toBeTruthy();
+    expect(bare.container.querySelector("i")).toBeNull();
+  });
+
+  it("over 90 percent of limit is hot", () => {
+    renderCell("memory", { usage: usage(), why: null });
+    expect(screen.getByLabelText("near its limit")).toBeTruthy();
+    cleanup();
+    renderCell("memory", { usage: usage({ memory_b: 200 * MIB }), why: null });
+    expect(screen.queryByLabelText("near its limit")).toBeNull();
+  });
+
+  it("a node is measured against what it can allocate", () => {
+    render(
+      <Cell
+        col={NODES.columns.find((c) => c.key === "cpu")!}
+        row={pod({ columns: { allocatable_cpu_m: 1000 } })}
+        now={new Date()}
+        live={{ usage: usage({ cpu_m: 950 }), why: null }}
+      />,
+    );
+    expect(screen.getByLabelText("near its limit")).toBeTruthy();
+  });
+
+  it("a cell without live numbers is a dash that carries the reason", () => {
+    renderCell("cpu", { usage: null, why: "Metrics are out of date, so they're hidden: x" });
+    expect(screen.getByText("—").getAttribute("title")).toBe("Metrics are out of date, so they're hidden: x");
+  });
+
+  it("stale item dimmed with measured-ago title", () => {
+    renderCell("cpu", { usage: usage({ stale: true, at: "2026-11-07T14:07:00Z" }), why: null });
+    const meter = screen.getByText("110m").parentElement!;
+    expect(meter.getAttribute("title")).toBe("Measured 3m ago; metrics-server has nothing newer.");
+    expect(meter.className).toMatch(/stale/);
+    cleanup();
+    renderCell("cpu", { usage: usage(), why: null });
+    expect(screen.getByText("110m").parentElement!.className).not.toMatch(/stale/);
+  });
+
+  it("unavailable cluster shows band message not empty cells", () => {
+    const message = "Metrics not available on this cluster: metrics-server isn't installed.";
+    // jsdom has no layout: give the scroll container a size or the virtualizer renders nothing.
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
+    const metrics: MetricsLookup = {
+      usage: () => ({ usage: null, why: message }),
+      why: () => message,
+      now: Date.now(),
+    };
+    render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} metrics={metrics} />);
+    expect(screen.getByTestId("band-metrics").textContent).toBe(message);
+    // The cells' dashes are explained, not silently empty.
+    expect(screen.getAllByText("—").some((n) => n.getAttribute("title") === message)).toBe(true);
+  });
+
+  it("the band says nothing when metrics are fine", () => {
+    render(<ClusterBand t={terr()} kind={PODS} onRetry={() => {}} metricsNote={null} />);
+    expect(screen.queryByTestId("band-metrics")).toBeNull();
   });
 });

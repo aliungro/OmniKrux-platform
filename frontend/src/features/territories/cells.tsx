@@ -1,20 +1,27 @@
 import type { ColumnSpec, Link, ResourceRow } from "../../api/types";
+import type { Live } from "../../api/useMetrics";
+import { formatCpu, formatMemory, formatWindow, fraction, HOT_AT } from "../metrics/format";
+import { Meter } from "../metrics/Meter";
 import { formatAge, formatAgo, statusClass, textColumn } from "./model";
 import { Status } from "./Status";
 import s from "./ResourceRowView.module.css";
 
 export const UNKNOWN = "—";
 
+const isMeter = (c: ColumnSpec) => c.type === "cpu" || c.type === "memory";
+/** A 60 px bar, its gap and a text like "301 / 256 Mi". */
+const METER_WIDTH = "minmax(150px, 1fr)";
+
 /** One grid template for the header and every row, from the columns' widths. */
 export function gridTemplate(columns: readonly ColumnSpec[]): string {
   return columns
-    .map((c) => (c.key === "name" ? "minmax(200px, 2fr)" : c.width === "s" ? "70px" : c.width === "l" ? "2fr" : "1fr"))
+    .map((c) => (c.key === "name" ? "minmax(200px, 2fr)" : isMeter(c) ? METER_WIDTH : c.width === "s" ? "70px" : c.width === "l" ? "2fr" : "1fr"))
     .join(" ");
 }
 
 /** Wide enough that every column keeps a readable share; the table scrolls sideways below it. */
 export function minTableWidth(columns: readonly ColumnSpec[]): number {
-  const cols = columns.reduce((w, c) => w + (c.key === "name" ? 200 : c.width === "s" ? 70 : c.width === "l" ? 180 : 100), 0);
+  const cols = columns.reduce((w, c) => w + (c.key === "name" ? 200 : isMeter(c) ? 150 : c.width === "s" ? 70 : c.width === "l" ? 180 : 100), 0);
   // Column gaps, the row's own padding and the table's.
   return cols + 12 * (columns.length - 1) + 32 + 32;
 }
@@ -46,11 +53,17 @@ export function Cell({
   row,
   now,
   podsOnNode = null,
+  live = null,
+  nowMs,
 }: {
   col: ColumnSpec;
   row: ResourceRow;
   now: Date;
   podsOnNode?: number | null;
+  /** The row's live usage, or why there is none; null where metrics aren't polled. */
+  live?: Live | null;
+  /** The moment `live` was judged at, for "measured X ago". */
+  nowMs?: number;
 }) {
   const v = row.columns[col.key];
   // A `{key}_title` column carries the details for this one's tooltip (Ruling R23: node taints).
@@ -81,8 +94,11 @@ export function Cell({
     }
     case "cpu":
     case "memory":
-      // Metrics arrive with Task 11; until then nothing is measured, so nothing is shown.
-      return <span role="gridcell" className={`${s.cell} ${s.num} ${s.zero}`}>{UNKNOWN}</span>;
+      return (
+        <span role="gridcell" className={`${s.cell} ${s.num}${live?.usage ? "" : ` ${s.zero}`}`}>
+          <UsageMeter col={col} row={row} live={live} nowMs={nowMs ?? Date.now()} />
+        </span>
+      );
     case "pods":
       return (
         <span role="gridcell" className={`${s.cell} ${s.num}${podsOnNode === null ? ` ${s.zero}` : ""}`}>
@@ -108,4 +124,26 @@ export function Cell({
       );
     }
   }
+}
+
+/** CPU or memory of a pod or node row; a dash (with the reason as its title) whenever it is not live. */
+function UsageMeter({ col, row, live, nowMs }: { col: ColumnSpec; row: ResourceRow; live: Live | null; nowMs: number }) {
+  const u = live?.usage;
+  if (!u) return <span title={live?.why ?? undefined}>{UNKNOWN}</span>;
+  const num = (k: string) => {
+    const x = row.columns[k];
+    return typeof x === "number" && x > 0 ? x : null;
+  };
+  const cpu = col.type === "cpu";
+  // Pods: against the limit, else the request. Nodes: against what they can allocate.
+  const limit = cpu ? (num("cpu_limit_m") ?? num("allocatable_cpu_m")) : (num("memory_limit_b") ?? num("allocatable_memory_b"));
+  const request = cpu ? num("cpu_request_m") : num("memory_request_b");
+  const used = cpu ? u.cpu_m : u.memory_b;
+  const basis = limit ?? request;
+  const frac = fraction(used, basis);
+  const text = cpu ? formatCpu(used) : formatMemory(used, limit);
+  const title = u.stale
+    ? `Measured ${formatAge(u.at, new Date(nowMs))} ago; metrics-server has nothing newer.`
+    : `Measured over ${formatWindow(u.window_s)}`;
+  return <Meter text={text} frac={frac} hot={limit !== null && frac !== null && frac >= HOT_AT} stale={u.stale} title={title} />;
 }

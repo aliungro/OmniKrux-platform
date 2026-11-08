@@ -232,3 +232,56 @@ describe("inspector", () => {
     expect(onOpenShell).toHaveBeenCalledWith(row());
   });
 });
+
+describe("metrics tab", () => {
+  const MIB = 1024 ** 2;
+  const metricsBody = (over: Record<string, unknown> = {}) => ({
+    state: "ok", message: null, at: new Date(Date.now() - 20_000).toISOString(), window_s: 15, stale: false,
+    containers: [
+      { name: "payments-api", cpu_m: 110, memory_b: 301 * MIB, cpu_request_m: 100, cpu_limit_m: 500, memory_request_b: 128 * MIB, memory_limit_b: 256 * MIB },
+      { name: "sidecar", cpu_m: 5, memory_b: 20 * MIB, cpu_request_m: null, cpu_limit_m: null, memory_request_b: null, memory_limit_b: null },
+    ],
+    ...over,
+  });
+  const answer = (metrics: () => Promise<Response>) =>
+    vi.fn((url: string) => (url.endsWith("/metrics") ? metrics() : json(describeBody())));
+
+  it("metrics tab lists containers", async () => {
+    const fetch = answer(() => json(metricsBody()));
+    vi.stubGlobal("fetch", fetch);
+    wrap(<Inspector row={row()} provider="aks" />);
+    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    await screen.findByText("sidecar");
+    expect(screen.getByText("payments-api")).toBeTruthy();
+    expect(screen.getByText("301 / 256 Mi")).toBeTruthy();
+    expect(screen.getByLabelText("near its limit")).toBeTruthy();
+    expect(screen.getByText("request 100m · limit 500m")).toBeTruthy();
+    expect(screen.getAllByText("no request or limit").length).toBe(2);
+    expect(screen.getByText(/Measured (19|20|21)s ago over 15 s/)).toBeTruthy();
+    expect(fetch.mock.calls.some(([u]) => u === "/api/clusters/c1/pods/payments/payments-api-1/metrics")).toBe(true);
+  });
+
+  it("shows the server's words when there are no metrics", async () => {
+    const message = "No metrics yet: metrics-server hasn't measured payments-api-1. Check again in a minute.";
+    vi.stubGlobal("fetch", answer(() => json(metricsBody({ state: "unavailable", message, containers: [] }))));
+    wrap(<Inspector row={row()} provider="aks" />);
+    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    expect(await screen.findByText(message)).toBeTruthy();
+  });
+
+  it("a failed request hides the numbers with the out-of-date copy", async () => {
+    vi.stubGlobal("fetch", answer(() => json({ detail: "Bad gateway" }, 502)));
+    wrap(<Inspector row={row()} provider="aks" />);
+    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    expect(await screen.findByText(/Metrics are out of date, so they're hidden: Bad gateway/)).toBeTruthy();
+    expect(screen.queryByText("sidecar")).toBeNull();
+  });
+
+  it("a stale measurement says so", async () => {
+    vi.stubGlobal("fetch", answer(() => json(metricsBody({ stale: true }))));
+    wrap(<Inspector row={row()} provider="aks" />);
+    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    await screen.findByText("sidecar");
+    expect(document.querySelector('[title^="Measured "][title$="; metrics-server has nothing newer."]')).toBeTruthy();
+  });
+});

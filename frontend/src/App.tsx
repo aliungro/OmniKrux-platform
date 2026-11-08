@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "./api/useClusters";
 import { refreshKinds, useKinds } from "./api/useKinds";
+import { useLiveMetrics } from "./api/useMetrics";
 import { useWatch } from "./api/useWatch";
 import { failure } from "./api/http";
 import type { ClusterState, KindInfo, KindsResponse, OwnerRef, ResourceRow } from "./api/types";
@@ -74,6 +75,8 @@ export function Console() {
   // The Nodes view's Pods column counts live pods per node.
   const podWatch = useWatch(kindKey === "nodes" ? "pods" : null);
   const podCounts = useMemo(() => (kindKey === "nodes" ? podsPerNode(podWatch) : null), [kindKey, podWatch]);
+  // Pods and nodes have CPU and memory columns; polled only while one of those views is open.
+  const metrics = useLiveMetrics(kindKey === "nodes" ? "nodes" : "pods", kindKey === "pods" || kindKey === "nodes");
   const now = useNow(60_000);
 
   const [filters, setFilters] = useState<Filters>(NO_FILTER);
@@ -171,6 +174,7 @@ export function Console() {
             onSelection={setSelection}
             onRetry={onRetry}
             podCounts={podCounts}
+            metrics={metrics}
             onOpenLogs={onOpenLogs}
             onOpenShell={onOpenShell}
             onNodeShell={onNodeShell}

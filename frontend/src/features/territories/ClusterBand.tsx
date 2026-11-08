@@ -54,12 +54,15 @@ export function ClusterBand({
   kind,
   onRetry,
   rowIndex,
+  metricsNote = null,
 }: {
   t: Territory;
   kind: KindInfo;
   /** With the band's state: an absent kind is retried by asking the cluster for its kinds again. */
   onRetry: (clusterId: string, state: ClusterState) => void;
   rowIndex?: number;
+  /** Why this cluster's CPU and memory columns have no numbers (metrics-server missing, not answering). */
+  metricsNote?: string | null;
 }) {
   const { cluster } = t;
   const provider = knownProvider(cluster.provider);
@@ -85,6 +88,9 @@ export function ClusterBand({
         {cluster.environment === "production" && <span className={`${s.env} ${s.prod}`}>Production</span>}
         {cluster.environment === "development" && <span className={`${s.env} ${s.dev}`}>Development</span>}
         <Summary t={t} kind={kind} />
+        {metricsNote && t.state === "ready" && (
+          <span className={s.metricsNote} data-testid="band-metrics" title={metricsNote}>{metricsNote}</span>
+        )}
         {(t.state === "error" || t.state === "absent" || (t.state === "syncing" && t.message)) && (
           <button type="button" className={s.retry} onClick={() => onRetry(cluster.id, t.state)}>
             Retry

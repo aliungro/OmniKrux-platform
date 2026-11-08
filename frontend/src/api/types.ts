@@ -263,3 +263,63 @@ export interface ShellSession {
   /** True for node shells: the server deletes the pod when the session ends. */
   cleanupPod: boolean;
 }
+
+/* Metrics — mirrors backend/omnikrux/metrics/models.py. */
+
+export type MetricsState = "ok" | "unavailable" | "error";
+
+export interface Usage {
+  cpu_m: number;
+  memory_b: number;
+  /** metrics-server's own timestamp for the measurement. */
+  at: string;
+  window_s: number;
+  /** metrics-server has nothing newer than a minute or so before we asked. */
+  stale: boolean;
+}
+
+export interface ClusterMetrics {
+  state: MetricsState;
+  message: string | null;
+  fetched_at: string | null;
+  /** "ns/name" for pods, "name" for nodes; empty unless `state` is ok. */
+  items: Record<string, Usage>;
+}
+
+export interface MetricsOut {
+  kind: "pods" | "nodes";
+  clusters: Record<string, ClusterMetrics>;
+}
+
+export interface ContainerUsage {
+  name: string;
+  cpu_m: number;
+  memory_b: number;
+  cpu_request_m: number | null;
+  cpu_limit_m: number | null;
+  memory_request_b: number | null;
+  memory_limit_b: number | null;
+}
+
+export interface PodMetrics {
+  state: MetricsState;
+  message: string | null;
+  at: string | null;
+  window_s: number | null;
+  stale: boolean;
+  containers: ContainerUsage[];
+}
+
+export interface NodeMetrics {
+  state: MetricsState;
+  message: string | null;
+  at: string | null;
+  window_s: number | null;
+  stale: boolean;
+  cpu_m: number | null;
+  memory_b: number | null;
+  allocatable_cpu_m: number | null;
+  allocatable_memory_b: number | null;
+  capacity_cpu_m: number | null;
+  capacity_memory_b: number | null;
+}

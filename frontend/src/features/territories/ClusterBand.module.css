@@ -144,3 +144,13 @@
   opacity: 0.16;
   pointer-events: none;
 }
+
+/* Why the CPU and memory columns are "—" on this cluster; quiet, like the absent note. */
+.metricsNote {
+  min-width: 0;
+  margin-left: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-3);
+  white-space: nowrap;
+}

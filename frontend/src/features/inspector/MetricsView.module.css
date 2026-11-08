@@ -1,0 +1,44 @@
+.mv {
+  display: grid;
+  gap: 10px;
+}
+
+.t {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.t th {
+  padding: 4px 16px 6px 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.t td {
+  padding: 7px 16px 7px 0;
+  vertical-align: middle;
+  border-top: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
+}
+
+.name {
+  font-weight: 600;
+}
+
+/* Request and limit sit under the meter, quieter than the usage itself. */
+.ctx {
+  margin-top: 3px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.foot {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.stale {
+  color: var(--ink-2);
+}
