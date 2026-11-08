@@ -26,7 +26,7 @@ docker run --rm -p 127.0.0.1:8080:8080 --add-host=host.docker.internal:host-gate
 
 Open http://localhost:8080.
 
-To use port-forwards (see below), add `-p 127.0.0.1:30000-30019:30000-30019` to the command, next to the first `-p`.
+To use port-forwards (see below), add `-p 127.0.0.1:30000-30019:30000-30019 -e OMNIKRUX_PORT_FORWARD_BIND=0.0.0.0` to the command, next to the first `-p`. Docker can only pass published ports to forwards that listen on every interface inside the container; your machine still publishes them on `127.0.0.1` only.
 
 Host port 8080 already in use? Pick another host port, for example `-p 127.0.0.1:8090:8080`, and open http://localhost:8090.
 
@@ -64,7 +64,7 @@ The container runs as uid 10001, but `~/.kube/config` is normally mode 0600 and 
   docker run --rm -p 127.0.0.1:8080:8080 --add-host=host.docker.internal:host-gateway --user "$(id -u):$(id -g)" -v ~/.kube:/kube:ro -v ~/.omnikrux-data:/data omnikrux:dev
   ```
 
-### Upgrading from Plan 1
+### Upgrading from an earlier version
 
 Clusters imported through the API are treated as coming from your kubeconfig file; if their context isn't in the mounted file they are removed on first start — upload them again.
 
@@ -114,7 +114,7 @@ Keys on a selected row, by kind (`Enter` or `d` opens the details and `y` the YA
 Every change follows the same steps: Omnikrux shows what it will do, you confirm, the change is written to the audit log, and only then is it applied.
 
 - The review shows the cluster, the object and a diff. What you apply is exactly what you reviewed: it is kept on the server for 300 seconds and used once. If the object changed in the meantime you read "{Kind} {name} changed since you reviewed this change. Review it again."
-- On a production cluster the review says so. Deleting or draining on a production cluster asks you to type the object's name. So does deleting or draining a namespace, node, PersistentVolume, PersistentVolumeClaim or custom resource definition, on any cluster.
+- On a production cluster the review says so. Deleting or draining on a production cluster asks you to type the object's name. So does deleting a namespace, PersistentVolume, PersistentVolumeClaim or custom resource definition, or deleting or draining a node, on any cluster.
 - No audit, no change: if the audit log can't be written, nothing is applied.
 - Edit, scale, restart, roll back (deployments), delete, cordon, uncordon and drain all work this way. Drain runs as a job you can watch and cancel; the node stays cordoned if it stops.
 - The audit log is the Audit log view (button in the top bar). It records what was done, on which cluster, when and how it ended (Omnikrux has no login yet, so it doesn't record who), and is kept in the data volume next to your clusters. Exec, debug containers, node shells, port-forwards and secret reveals write a row too.
@@ -131,20 +131,20 @@ CPU and memory for pods and nodes need metrics-server on the cluster. Without it
 
 Press `f` on a pod or service (or use Port-forward in its details) to forward one of its ports to this machine. A forward listens on `127.0.0.1:{port}`, with the port taken from `30000-30019` by default; change the range with `-e OMNIKRUX_PORT_FORWARD_PORTS=31000-31009`. When all ports are in use, stop one first. A service forward needs a ready pod behind it.
 
-A forward is reachable only from this machine. Publish the range on `127.0.0.1` only (`-p 127.0.0.1:30000-30019:30000-30019`, as in the run command above); publishing it without `127.0.0.1` would expose the forwarded service to your network. Forwards stop when Omnikrux stops. With the Linux `--network host` command above, no `-p` is needed: the forwards listen on the host's `127.0.0.1` directly.
+A forward is reachable only from this machine. With the usual run commands, publish the range on `127.0.0.1` only and add `-e OMNIKRUX_PORT_FORWARD_BIND=0.0.0.0`, as in the commands below: Docker can only pass published ports to forwards that listen on every interface inside the container, and your machine still publishes them on `127.0.0.1` only. Publishing the range without `127.0.0.1` would expose the forwarded service to your network. With the Linux `--network host` command above, add neither: the forwards listen on the host's `127.0.0.1`, the default. `OMNIKRUX_PORT_FORWARD_BIND` must be an IP address, or Omnikrux refuses to start. Forwards stop when Omnikrux stops.
 
 Full commands with the port range (set `OMNIKRUX_PORT_FORWARD_PORTS` to something else and publish that range instead if you changed it):
 
 Linux / macOS:
 
 ```bash
-docker run --rm -p 127.0.0.1:8080:8080 -p 127.0.0.1:30000-30019:30000-30019 --add-host=host.docker.internal:host-gateway -v ~/.kube:/kube:ro -v omnikrux-data:/data omnikrux:dev
+docker run --rm -p 127.0.0.1:8080:8080 -p 127.0.0.1:30000-30019:30000-30019 -e OMNIKRUX_PORT_FORWARD_BIND=0.0.0.0 --add-host=host.docker.internal:host-gateway -v ~/.kube:/kube:ro -v omnikrux-data:/data omnikrux:dev
 ```
 
 Windows PowerShell:
 
 ```powershell
-docker run --rm -p 127.0.0.1:8080:8080 -p 127.0.0.1:30000-30019:30000-30019 --add-host=host.docker.internal:host-gateway -v "${env:USERPROFILE}\.kube:/kube:ro" -v omnikrux-data:/data omnikrux:dev
+docker run --rm -p 127.0.0.1:8080:8080 -p 127.0.0.1:30000-30019:30000-30019 -e OMNIKRUX_PORT_FORWARD_BIND=0.0.0.0 --add-host=host.docker.internal:host-gateway -v "${env:USERPROFILE}\.kube:/kube:ro" -v omnikrux-data:/data omnikrux:dev
 ```
 
 ### Other things worth knowing
