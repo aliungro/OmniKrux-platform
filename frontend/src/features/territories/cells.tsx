@@ -1,7 +1,8 @@
-import type { ColumnSpec, Link, ResourceRow } from "../../api/types";
+import type { ColumnSpec, ObjectColumn, ResourceRow } from "../../api/types";
 import type { Live } from "../../api/useMetrics";
 import { formatCpu, formatMemory, formatWindow, fraction, HOT_AT } from "../metrics/format";
 import { Meter } from "../metrics/Meter";
+import { LinkButton, useGoTo } from "../navigation/navigation";
 import { formatAge, formatAgo, statusClass, textColumn } from "./model";
 import { Status } from "./Status";
 import s from "./ResourceRowView.module.css";
@@ -26,8 +27,8 @@ export function minTableWidth(columns: readonly ColumnSpec[]): number {
   return cols + 12 * (columns.length - 1) + 32 + 32;
 }
 
-function isLink(v: unknown): v is Link {
-  return typeof v === "object" && v !== null && typeof (v as Link).label === "string";
+function isObjectColumn(v: unknown): v is ObjectColumn {
+  return typeof v === "object" && v !== null && typeof (v as ObjectColumn).label === "string";
 }
 
 /** Plain words for a value the backend sent; "—" for nothing (never a made-up 0 or "None"). */
@@ -40,7 +41,7 @@ function plain(v: unknown): string {
     const parts = v.filter((x) => typeof x === "string" || typeof x === "number").map(String);
     return parts.length > 0 ? parts.join(", ") : UNKNOWN;
   }
-  if (isLink(v)) return v.label;
+  if (isObjectColumn(v)) return v.label;
   return UNKNOWN;
 }
 
@@ -113,7 +114,11 @@ export function Cell({
       );
     case "object": {
       const text = plain(v);
-      return <span role="gridcell" className={s.cell} title={text === UNKNOWN ? undefined : text}>{text}</span>;
+      return (
+        <span role="gridcell" className={s.cell} title={text === UNKNOWN ? undefined : text}>
+          {isObjectColumn(v) && v.kind_key !== null ? <ObjectLink row={row} target={v} kindKey={v.kind_key} /> : text}
+        </span>
+      );
     }
     default: {
       const text = plain(v);
@@ -124,6 +129,25 @@ export function Cell({
       );
     }
   }
+}
+
+/**
+ * What an `object` cell points at, as a link on the row's cluster. It takes no tab stop (the table
+ * has one), and keyboard users follow the same link from the row's details.
+ */
+function ObjectLink({ row, target, kindKey }: { row: ResourceRow; target: ObjectColumn; kindKey: string }) {
+  const goTo = useGoTo();
+  const { namespace, name, label } = target;
+  return (
+    <LinkButton
+      link={{ kind_key: kindKey, namespace, name }}
+      onLink={(link) => goTo({ ...link, clusterId: row.cluster_id })}
+      tabIndex={-1}
+      className={s.objLink}
+    >
+      {label}
+    </LinkButton>
+  );
 }
 
 /** CPU or memory of a pod or node row; a dash (with the reason as its title) whenever it is not live. */

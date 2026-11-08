@@ -13,7 +13,7 @@ const describeBody = {
     name: "pod-0", namespace: "n", status: "Running", status_class: "ok", node: "node-a", pod_ip: null, host_ip: null,
     qos: null, service_account: null, owner: null, started_at: null, resource_version: "1",
   },
-  containers: [], init_containers: [], ephemeral_containers: [], conditions: [], labels: {}, annotations: {},
+  containers: [], init_containers: [], ephemeral_containers: [], volumes: [], conditions: [], labels: {}, annotations: {},
   events: [], events_error: null,
 };
 
@@ -208,7 +208,7 @@ describe("selection", () => {
     expect(inspector()).toBeNull();
   });
 
-  it("other kinds select rows, but only pods open details, logs and shells", () => {
+  it("every kind opens details; logs and shells stay with pods", () => {
     const onOpenLogs = vi.fn();
     const onOpenShell = vi.fn();
     const deps = rows(3).map((r) => ({ ...r, kind: "Deployment", name: r.name.replace("pod", "web") }));
@@ -218,14 +218,15 @@ describe("selection", () => {
       </QueryClientProvider>,
     );
     const r = podRow("web-1");
-    fireEvent.keyDown(r, { key: "Enter" });
-    fireEvent.click(screen.getByText("web-1"));
     for (const key of ["l", "p", "s"]) fireEvent.keyDown(r, { key });
-    expect(inspector()).toBeNull();
-    expect(r.getAttribute("aria-selected")).toBe("true");
-    expect(r.hasAttribute("aria-expanded")).toBe(false);
     expect(onOpenLogs).not.toHaveBeenCalled();
     expect(onOpenShell).not.toHaveBeenCalled();
+    fireEvent.keyDown(r, { key: "Enter" });
+    expect(inspector()).toBeTruthy();
+    expect(r.getAttribute("aria-selected")).toBe("true");
+    expect(r.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(r, { key: "Escape" });
+    expect(inspector()).toBeNull();
     fireEvent.keyDown(r, { key: "ArrowDown" });
     expect(podRow("web-2").getAttribute("aria-selected")).toBe("true");
   });

@@ -12,6 +12,7 @@ export type ShortcutId =
   | "logs"
   | "previousLogs"
   | "shell"
+  | "reveal"
   | "searchLogs"
   | "nextMatch"
   | "previousMatch"
@@ -23,7 +24,7 @@ export type ShortcutId =
 export interface Shortcut {
   id: ShortcutId;
   /** Where it works, the "?" sheet's group. */
-  group: "Table" | "Logs" | "Dock";
+  group: "Table" | "Details" | "Logs" | "Dock";
   /** As drawn on the keycaps. */
   keys: string[];
   /** `KeyboardEvent.key` values that trigger it, where something reads them from here. */
@@ -38,12 +39,13 @@ export interface Shortcut {
 
 export const SHORTCUTS: readonly Shortcut[] = [
   { id: "move", group: "Table", keys: ["↑", "↓"], match: ["ArrowUp", "ArrowDown"], label: "Move between rows", bar: "move" },
-  { id: "details", group: "Table", keys: ["Enter"], match: ["Enter", "d"], label: "Open or close the pod's details", bar: "details", podsOnly: true },
+  { id: "details", group: "Table", keys: ["Enter"], match: ["Enter", "d"], label: "Open or close the details", bar: "details" },
   { id: "close", group: "Table", keys: ["Esc"], match: ["Escape"], label: "Close the details" },
   { id: "filter", group: "Table", keys: ["/"], match: ["/"], label: "Filter rows", bar: "filter" },
   { id: "logs", group: "Table", keys: ["l"], match: ["l"], label: "Logs for the selected pod", bar: "logs", podsOnly: true },
   { id: "previousLogs", group: "Table", keys: ["p"], match: ["p"], label: "Previous logs (the run before the last restart)", bar: "previous logs", podsOnly: true },
   { id: "shell", group: "Table", keys: ["s"], match: ["s"], label: "Shell in the selected pod", bar: "shell", podsOnly: true },
+  { id: "reveal", group: "Details", keys: ["x"], match: ["x"], label: "Reveal the focused secret key" },
   { id: "searchLogs", group: "Logs", keys: ["Ctrl F"], label: "Search logs", bar: "search logs" },
   { id: "nextMatch", group: "Logs", keys: ["Enter"], label: "Next match" },
   { id: "previousMatch", group: "Logs", keys: ["Shift", "Enter"], label: "Previous match" },
@@ -58,7 +60,7 @@ const BAR_ORDER: ShortcutId[] = ["move", "details", "logs", "previousLogs", "she
 
 export const BAR: readonly Shortcut[] = BAR_ORDER.map((id) => SHORTCUTS.find((s) => s.id === id)!);
 
-export const GROUPS: readonly [group: Shortcut["group"], rows: Shortcut[]][] = (["Table", "Logs", "Dock"] as const).map(
+export const GROUPS: readonly [group: Shortcut["group"], rows: Shortcut[]][] = (["Table", "Details", "Logs", "Dock"] as const).map(
   (g) => [g, SHORTCUTS.filter((s) => s.group === g)],
 );
 

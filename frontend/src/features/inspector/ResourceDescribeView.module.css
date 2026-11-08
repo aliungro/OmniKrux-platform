@@ -1,0 +1,91 @@
+/* Facts are wider than a pod's (values such as "2 desired, 2 updated, 2 ready" read on one line). */
+.grid.three {
+  grid-template-columns: 320px minmax(0, 1fr) 290px;
+}
+
+/* Without sections the facts take the room the middle column would have had. */
+.grid.two {
+  grid-template-columns: minmax(0, 1fr) 290px;
+}
+
+/* Fields wrap in pairs so a dt and its dd stay in the key/value grid. */
+.pair {
+  display: contents;
+}
+
+.kv {
+  grid-template-columns: 112px minmax(0, 1fr);
+}
+
+.section + .section {
+  margin-top: 16px;
+}
+
+.title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.count {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Compact tables: a quiet header, hairlines between rows, the first column a little stronger. */
+.wrap {
+  overflow-x: auto;
+}
+
+.t {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.t th {
+  padding: 0 14px 5px 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.t td {
+  max-width: 280px;
+  padding: 6px 14px 6px 0;
+  border-top: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.t th:last-child,
+.t td:last-child {
+  padding-right: 0;
+}
+
+.first {
+  font-weight: 600;
+}
+
+.dim {
+  color: var(--ink-3);
+}
+
+.note {
+  margin: 0;
+  color: var(--ink-3);
+}
+
+.t + .note,
+.wrap + .note {
+  margin-top: 6px;
+}

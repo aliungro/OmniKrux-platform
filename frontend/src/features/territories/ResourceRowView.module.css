@@ -77,3 +77,13 @@
 .zero {
   color: var(--ink-3);
 }
+
+/* An object cell's link: one line, cut with an ellipsis like the cell's text. */
+.cell .objLink {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}

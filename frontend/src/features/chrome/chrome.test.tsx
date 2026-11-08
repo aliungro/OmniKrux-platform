@@ -208,14 +208,15 @@ describe("FilterBar counts", () => {
 
 describe("ShortcutBar per kind", () => {
   const strip = () => Array.from(within(screen.getByRole("navigation", { name: "Keyboard shortcuts" })).getAllByRole("listitem")).map((li) => li.textContent);
-  it("pod-only keys appear only on pods", () => {
+  it("pod-only keys appear only on pods; every kind opens details", () => {
     const { rerender } = render(<ShortcutBar kind="pods" />);
     expect(strip()).toContain("l logs");
     rerender(<ShortcutBar kind="deployments.apps" />);
-    expect(strip()).toEqual(["↑↓ move", "Ctrl F search logs", "Ctrl \\ layout", "/ filter", "? all shortcuts"]);
+    expect(strip()).toEqual(["↑↓ move", "Enter details", "Ctrl F search logs", "Ctrl \\ layout", "/ filter", "? all shortcuts"]);
     fireEvent.click(screen.getByRole("button", { name: /all shortcuts/ }));
     const sheet = screen.getByRole("dialog", { name: "All shortcuts" });
     expect(sheet.textContent).not.toContain("Logs for the selected pod");
     expect(sheet.textContent).toContain("Move between rows");
+    expect(within(sheet).getByRole("region", { name: "Details" }).textContent).toContain("Reveal the focused secret key");
   });
 });

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { getJson } from "../../api/http";
-import type { ContainerUsage, PodMetrics } from "../../api/types";
+import type { ContainerUsage, NodeMetrics, PodMetrics } from "../../api/types";
 import { hiddenWhy, METRICS_POLL_MS, useJudged } from "../../api/useMetrics";
 import { formatCpu, formatMemory, formatWindow, fraction, HOT_AT } from "../metrics/format";
 import { Meter } from "../metrics/Meter";
@@ -77,6 +77,74 @@ export function MetricsView({ clusterId, ns, name }: { clusterId: string; ns: st
         </thead>
         <tbody>
           {m.containers.map((c) => <ContainerRow key={c.name} c={c} stale={m.stale} staleTitle={staleTitle} />)}
+        </tbody>
+      </table>
+      <div className={`${k.foot}${m.stale ? ` ${k.stale}` : ""}`} title={m.stale ? staleTitle : undefined}>
+        Measured {formatAge(m.at, new Date(now))} ago over {formatWindow(m.window_s)}
+        {m.stale && ". metrics-server has nothing newer."}
+      </div>
+    </div>
+  );
+}
+
+function useNodeMetrics(clusterId: string, name: string) {
+  return useQuery({
+    queryKey: ["node-metrics", clusterId, name],
+    queryFn: () => getJson<NodeMetrics>(`/api/clusters/${encodeURIComponent(clusterId)}/nodes/${encodeURIComponent(name)}/metrics`),
+    refetchInterval: METRICS_POLL_MS,
+    retry: false,
+  });
+}
+
+function capacityLine(allocatable: number | null, capacity: number | null, fmt: (n: number) => string): string {
+  const parts = [allocatable ? `allocatable ${fmt(allocatable)}` : null, capacity ? `capacity ${fmt(capacity)}` : null].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "the node reports no allocatable amount";
+}
+
+/**
+ * A node's usage against what it can allocate, polled while the tab is open; hidden, like the
+ * pod's, the moment a poll fails or the last answer is 45 s old.
+ */
+export function NodeMetricsView({ clusterId, name }: { clusterId: string; name: string }) {
+  const q = useNodeMetrics(clusterId, name);
+  const { snap, now } = useJudged(q, `${clusterId}/node/${name}`);
+  const hidden = hiddenWhy(snap, now);
+  if (hidden) return <div className={s.state} role="alert"><span className={s.err}>{hidden}</span></div>;
+  const m = q.data;
+  if (m === undefined || snap.awaiting) return <div className={s.state} role="status">Loading metrics…</div>;
+  if (m.state !== "ok" || m.cpu_m === null || m.memory_b === null) {
+    return <div className={s.state} role="status"><span>{m.message ?? "Metrics aren't available for this node."}</span></div>;
+  }
+  const staleTitle = `Measured ${formatAge(m.at, new Date(now))} ago; metrics-server has nothing newer.`;
+  const cpuFrac = fraction(m.cpu_m, m.allocatable_cpu_m);
+  const memFrac = fraction(m.memory_b, m.allocatable_memory_b);
+  return (
+    <div className={k.mv}>
+      <table className={k.t}>
+        <thead>
+          <tr><th scope="col">Resource</th><th scope="col">Used</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td className={k.name}>CPU</td>
+            <td>
+              <Meter text={formatCpu(m.cpu_m)} frac={cpuFrac} hot={cpuFrac !== null && cpuFrac >= HOT_AT} stale={m.stale} title={m.stale ? staleTitle : undefined} />
+              <div className={k.ctx}>{capacityLine(m.allocatable_cpu_m, m.capacity_cpu_m, formatCpu)}</div>
+            </td>
+          </tr>
+          <tr>
+            <td className={k.name}>Memory</td>
+            <td>
+              <Meter
+                text={formatMemory(m.memory_b, m.allocatable_memory_b)}
+                frac={memFrac}
+                hot={memFrac !== null && memFrac >= HOT_AT}
+                stale={m.stale}
+                title={m.stale ? staleTitle : undefined}
+              />
+              <div className={k.ctx}>{capacityLine(m.allocatable_memory_b, m.capacity_memory_b, (n) => formatMemory(n))}</div>
+            </td>
+          </tr>
         </tbody>
       </table>
       <div className={`${k.foot}${m.stale ? ` ${k.stale}` : ""}`} title={m.stale ? staleTitle : undefined}>

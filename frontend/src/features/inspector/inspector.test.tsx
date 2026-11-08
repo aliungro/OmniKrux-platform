@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import type { ContainerInfo, PodDescribe, ResourceRow } from "../../api/types";
+import type { Link, ResourceRow } from "../../api/types";
+import { container, describeBody, resourceDescribe, secretDescribe } from "../../test/describe";
 import { DescribeView } from "./DescribeView";
 import { EventsTable } from "./EventsTable";
 import { Inspector } from "./Inspector";
+import { ResourceDescribeView } from "./ResourceDescribeView";
 
 afterEach(() => {
   cleanup();
@@ -15,54 +17,6 @@ afterEach(() => {
 
 const json = (body: unknown, status = 200) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
-
-const container = (over: Partial<ContainerInfo> = {}): ContainerInfo => ({
-  name: "payments-api",
-  image: "acmeprod.azurecr.io/payments-api:2.4.1",
-  state: "Waiting: CrashLoopBackOff",
-  state_class: "bad",
-  ready: false,
-  restarts: 14,
-  last_state: "Terminated: OOMKilled (exit 137)",
-  last_finished_at: "2026-11-07T14:04:14Z",
-  requests: { cpu: "100m", memory: "128Mi" },
-  limits: { cpu: "500m", memory: "256Mi" },
-  limit_hit: ["memory"],
-  ports: ["8080/TCP"],
-  probes: { liveness: "GET :8080/healthz every 10s" },
-  env: [],
-  mounts: [],
-  ...over,
-});
-
-export const describeBody = (over: Partial<PodDescribe> = {}): PodDescribe => ({
-  pod: {
-    name: "payments-api-1",
-    namespace: "payments",
-    status: "CrashLoopBackOff",
-    status_class: "bad",
-    node: "aks-np1-03",
-    pod_ip: "10.244.3.17",
-    host_ip: "10.0.0.4",
-    qos: "Burstable",
-    service_account: "payments-api",
-    owner: { kind: "ReplicaSet", name: "payments-api-7f9c4", selector: "app=payments-api,pod-template-hash=7f9c4" },
-    started_at: "2026-11-07T14:02:00Z",
-    resource_version: "1",
-  },
-  containers: [container()],
-  init_containers: [],
-  ephemeral_containers: [],
-  conditions: [
-    { type: "PodScheduled", status: "True", reason: null, message: null },
-    { type: "Ready", status: "False", reason: "ContainersNotReady", message: "containers with unready status: [payments-api]" },
-  ],
-  labels: { app: "payments-api" },
-  annotations: {},
-  events: [],
-  events_error: null,
-  ...over,
-});
 
 const row = (rv = "1"): ResourceRow => ({
   uid: "u1",
@@ -80,6 +34,7 @@ function wrap(ui: ReactNode) {
   const out = render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
   return {
     ...out,
+    client,
     rerender: (next: ReactNode) => out.rerender(<QueryClientProvider client={client}>{next}</QueryClientProvider>),
   };
 }
@@ -106,8 +61,8 @@ describe("describe view", () => {
 
   it("secret env shows source but no value", () => {
     const env = [
-      { name: "DB_PASSWORD", value: null, source: "Secret payments-db key password" },
-      { name: "LOG_LEVEL", value: "info", source: null },
+      { name: "DB_PASSWORD", value: null, source: "Secret payments-db key password", link: null },
+      { name: "LOG_LEVEL", value: "info", source: null, link: null },
     ];
     render(<DescribeView data={describeBody({ containers: [container({ env })] })} />);
     const secret = screen.getByTestId("env-DB_PASSWORD");
@@ -342,5 +297,260 @@ describe("metrics tab expiry", () => {
     expect(screen.getByText("Loading metrics…")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText("payments-api")).toBeNull();
+  });
+});
+
+describe("pod describe links", () => {
+  it("owner, node, service account, env sources and volumes are links", () => {
+    const onLink = vi.fn<(l: Link) => void>();
+    const secret: Link = { kind_key: "secrets", namespace: "payments", name: "payments-db" };
+    const env = [{ name: "DB_PASSWORD", value: null, source: "Secret payments-db key password", link: secret }];
+    const volumes = [
+      { name: "config", type: "configMap", link: { kind_key: "configmaps", namespace: "payments", name: "payments-config" } },
+      { name: "scratch", type: "emptyDir", link: null },
+    ];
+    render(<DescribeView data={describeBody({ containers: [container({ env })], volumes })} onLink={onLink} />);
+    fireEvent.click(screen.getByRole("button", { name: "ReplicaSet payments-api-7f9c4" }));
+    fireEvent.click(screen.getByRole("button", { name: "aks-np1-03" }));
+    fireEvent.click(screen.getByRole("button", { name: "payments-api" }));
+    fireEvent.click(screen.getByRole("button", { name: "Secret payments-db key password" }));
+    fireEvent.click(screen.getByRole("button", { name: "payments-config" }));
+    expect(onLink.mock.calls.map(([l]) => `${l.kind_key} ${l.namespace ?? "-"} ${l.name}`)).toEqual([
+      "replicasets.apps payments payments-api-7f9c4",
+      "nodes - aks-np1-03",
+      "serviceaccounts payments payments-api",
+      "secrets payments payments-db",
+      "configmaps payments payments-config",
+    ]);
+    // A volume without anything to point at is listed by its type, as plain text.
+    const scratch = screen.getByTestId("volume-scratch");
+    expect(scratch.textContent).toContain("emptyDir");
+    expect(within(scratch).queryByRole("button")).toBeNull();
+  });
+});
+
+const deployRow: ResourceRow = {
+  uid: "d-1", cluster_id: "c1", kind: "Deployment", namespace: "demo", name: "web", created_at: null, labels: {},
+  columns: { status: "Progressing", status_class: "warn", ready: "1/2" },
+};
+const secretRow: ResourceRow = {
+  uid: "s-1", cluster_id: "c1", kind: "Secret", namespace: "payments", name: "payments-db", created_at: null, labels: {},
+  columns: { type: "Opaque", keys: 2 },
+};
+const nodeRow: ResourceRow = {
+  uid: "n-1", cluster_id: "c1", kind: "Node", namespace: null, name: "aks-np1-03", created_at: null, labels: {},
+  columns: { status: "Ready", status_class: "ok" },
+};
+
+const deployment = resourceDescribe({
+  fields: [
+    { label: "Controlled by", value: null, link: null },
+    { label: "Replicas", value: "2 desired, 2 updated, 1 ready, 1 available", link: null },
+    { label: "Strategy", value: "RollingUpdate (max surge 25%, max unavailable 25%)", link: null },
+  ],
+  sections: [
+    {
+      title: "Replica sets",
+      columns: ["Name", "Revision", "Ready", "Created"],
+      rows: [[
+        { text: "web-5d8f", link: { kind_key: "replicasets.apps", namespace: "demo", name: "web-5d8f" }, cls: null },
+        { text: "3", link: null, cls: null },
+        { text: "1/2", link: null, cls: null },
+        { text: null, link: null, cls: null },
+      ]],
+      note: null,
+    },
+    {
+      title: "Pods",
+      columns: ["Name", "Status", "Ready", "Restarts", "Node"],
+      rows: [[
+        { text: "web-5d8f-a", link: { kind_key: "pods", namespace: "demo", name: "web-5d8f-a" }, cls: null },
+        { text: "CrashLoopBackOff", link: null, cls: "bad" },
+        { text: "0/1", link: null, cls: null },
+        { text: "4", link: null, cls: null },
+        { text: "worker", link: { kind_key: "nodes", namespace: null, name: "worker" }, cls: null },
+      ]],
+      note: null,
+    },
+    { title: "Spec and status", columns: [], rows: [], note: "The YAML tab shows the full object." },
+  ],
+  conditions: [{ type: "Available", status: "False", reason: "MinimumReplicasUnavailable", message: null }],
+  labels: { app: "web" },
+  events: [{ type: "Normal", reason: "ScalingReplicaSet", message: "Scaled up replica set web-5d8f to 2", count: 1, last_seen: null }],
+});
+
+describe("resource inspector", () => {
+  it("deployment describe renders sections", async () => {
+    const fetch = vi.fn((_url: string) => json(deployment));
+    vi.stubGlobal("fetch", fetch);
+    wrap(<Inspector row={deployRow} provider="kind" kindKey="deployments.apps" />);
+    expect(await screen.findByText("2 desired, 2 updated, 1 ready, 1 available")).toBeTruthy();
+    expect(fetch.mock.calls[0][0]).toBe("/api/clusters/c1/resources/deployments.apps/web/describe?namespace=demo");
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Describe", "YAML", "Events"]);
+    // A field with nothing to say reads as a dash, never "null".
+    expect(screen.queryByText("null")).toBeNull();
+    const sets = screen.getByRole("table", { name: "Replica sets" });
+    expect(within(sets).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Name", "Revision", "Ready", "Created"]);
+    expect(within(sets).getByRole("button", { name: "web-5d8f" })).toBeTruthy();
+    const pods = screen.getByRole("table", { name: "Pods" });
+    expect(within(pods).getByText("CrashLoopBackOff")).toBeTruthy();
+    expect(pods.querySelector('[data-shape="diamond"]')).toBeTruthy();
+    expect(within(pods).getByRole("button", { name: "worker" })).toBeTruthy();
+    expect(screen.getByText("The YAML tab shows the full object.")).toBeTruthy();
+    expect(within(screen.getByRole("list", { name: "Conditions" })).getByText("Available").getAttribute("data-status")).toBe("False");
+    expect(screen.getByText("app=web")).toBeTruthy();
+    expect(screen.getByText("Scaled up replica set web-5d8f to 2")).toBeTruthy();
+    // No logs or shell for a deployment (those tools arrive with Tasks 13 and 15).
+    expect(screen.queryByRole("button", { name: /Logs/ })).toBeNull();
+  });
+
+  it("section links call the navigation", () => {
+    const onLink = vi.fn<(l: Link) => void>();
+    render(<ResourceDescribeView data={deployment} clusterId="c1" onLink={onLink} />);
+    fireEvent.click(screen.getByRole("button", { name: "web-5d8f-a" }));
+    expect(onLink).toHaveBeenCalledWith({ kind_key: "pods", namespace: "demo", name: "web-5d8f-a" });
+  });
+
+  it("the yaml tab reads the kind's yaml and copies it", async () => {
+    const yaml = "apiVersion: apps/v1\nkind: Deployment\n";
+    const fetch = vi.fn((url: string) => (url.includes("/yaml") ? json({ yaml }) : json(deployment)));
+    vi.stubGlobal("fetch", fetch);
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    wrap(<Inspector row={deployRow} provider="kind" kindKey="deployments.apps" />);
+    fireEvent.click(screen.getByRole("tab", { name: "YAML" }));
+    expect((await screen.findByTestId("yaml")).textContent).toContain("kind: Deployment");
+    expect(fetch.mock.calls.some(([u]) => u === "/api/clusters/c1/resources/deployments.apps/web/yaml?namespace=demo")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(writeText).toHaveBeenCalledWith(yaml);
+    expect(await screen.findByText("Copied")).toBeTruthy();
+  });
+
+  it("a cluster-scoped kind is asked for without a namespace, and a node has a metrics tab", async () => {
+    const MIB = 1024 ** 2;
+    const metrics = {
+      state: "ok", message: null, at: new Date(Date.now() - 10_000).toISOString(), window_s: 20, stale: false,
+      cpu_m: 950, memory_b: 3000 * MIB, allocatable_cpu_m: 1900, allocatable_memory_b: 6000 * MIB,
+      capacity_cpu_m: 2000, capacity_memory_b: 8000 * MIB,
+    };
+    const fetch = vi.fn((url: string) =>
+      url.endsWith("/metrics") ? json(metrics) : json(resourceDescribe({ kind_key: "nodes", kind: "Node", name: "aks-np1-03", namespace: null })));
+    vi.stubGlobal("fetch", fetch);
+    wrap(<Inspector row={nodeRow} provider="aks" kindKey="nodes" />);
+    await waitFor(() => expect(fetch.mock.calls[0]?.[0]).toBe("/api/clusters/c1/resources/nodes/aks-np1-03/describe"));
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Describe", "YAML", "Events", "Metrics"]);
+    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    expect(await screen.findByText("950m")).toBeTruthy();
+    expect(screen.getByText("allocatable 1900m · capacity 2000m")).toBeTruthy();
+    expect(fetch.mock.calls.some(([u]) => u === "/api/clusters/c1/nodes/aks-np1-03/metrics")).toBe(true);
+  });
+});
+
+describe("secret values", () => {
+  const VALUE = "hunter2-correct-horse";
+  /** Answers the describe, the YAML, and the reveal of `password` (any other key: the server's 404 words). */
+  const answer = () =>
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/reveal")) {
+        const { key } = JSON.parse(String(init?.body)) as { key: string };
+        return key === "password"
+          ? json({ key, value: VALUE, encoding: "utf-8" })
+          : json({ detail: `Secret payments-db has no key ${key}.` }, 404);
+      }
+      if (url.includes("/yaml")) return json({ yaml: "data:\n  password: •••••• (12 bytes)\n" });
+      return json(secretDescribe());
+    });
+
+  it("reveal shows one key and hides on close", async () => {
+    const fetch = answer();
+    vi.stubGlobal("fetch", fetch);
+    const { unmount } = wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    const password = await screen.findByTestId("secret-key-password");
+    const username = screen.getByTestId("secret-key-username");
+    expect(password.textContent).toContain("•••••• (12 bytes)");
+    expect(username.textContent).toContain("•••••• (5 bytes)");
+    fireEvent.click(within(password).getByRole("button", { name: "Reveal" }));
+    const value = await within(password).findByText(VALUE);
+    expect(value.classList.contains("mono")).toBe(true);
+    const [url, init] = fetch.mock.calls.find(([u]) => u.endsWith("/reveal"))!;
+    expect(url).toBe("/api/clusters/c1/secrets/payments/payments-db/reveal");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ key: "password" });
+    // Only the key asked for.
+    expect(username.textContent).toContain("•••••• (5 bytes)");
+    expect(screen.getAllByText(VALUE)).toHaveLength(1);
+
+    fireEvent.click(within(password).getByRole("button", { name: "Hide" }));
+    expect(screen.queryByText(VALUE)).toBeNull();
+    expect(password.textContent).toContain("•••••• (12 bytes)");
+
+    // x on the focused key reveals it; another tab drops it.
+    password.focus();
+    fireEvent.keyDown(password, { key: "x" });
+    await within(password).findByText(VALUE);
+    fireEvent.click(screen.getByRole("tab", { name: "YAML" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Describe" }));
+    expect(await screen.findByTestId("secret-key-password")).toBeTruthy();
+    expect(screen.queryByText(VALUE)).toBeNull();
+
+    // Closing the details drops it too.
+    fireEvent.click(within(screen.getByTestId("secret-key-password")).getByRole("button", { name: "Reveal" }));
+    await screen.findByText(VALUE);
+    unmount();
+    expect(document.body.textContent).not.toContain(VALUE);
+  });
+
+  it("a hidden browser tab drops the value, and a failed reveal says why", async () => {
+    vi.stubGlobal("fetch", answer());
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    const password = await screen.findByTestId("secret-key-password");
+    fireEvent.click(within(password).getByRole("button", { name: "Reveal" }));
+    await within(password).findByText(VALUE);
+    const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(screen.queryByText(VALUE)).toBeNull();
+    hidden.mockRestore();
+
+    fireEvent.click(within(screen.getByTestId("secret-key-username")).getByRole("button", { name: "Reveal" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Couldn't reveal username: Secret payments-db has no key username.");
+  });
+
+  it("revealed values are not kept in the query cache", async () => {
+    vi.stubGlobal("fetch", answer());
+    const { client, unmount } = wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    const password = await screen.findByTestId("secret-key-password");
+    fireEvent.click(within(password).getByRole("button", { name: "Reveal" }));
+    await within(password).findByText(VALUE);
+    const cached = client.getQueryCache().getAll().map((q) => JSON.stringify([q.queryKey, q.state]));
+    expect(cached.length).toBeGreaterThan(0); // the describe is cached, the value is not
+    for (const entry of cached) expect(entry).not.toContain(VALUE);
+    expect(client.getMutationCache().getAll()).toHaveLength(0);
+    expect(window.location.href).not.toContain(VALUE);
+    for (const store of [window.localStorage, window.sessionStorage]) {
+      for (let i = 0; i < store.length; i++) expect(store.getItem(store.key(i)!) ?? "").not.toContain(VALUE);
+    }
+    unmount();
+  });
+
+  it("helm releases list their keys but offer no reveal", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(secretDescribe({ kind_key: "helm-releases", kind: "HelmRelease" }))));
+    wrap(<Inspector row={{ ...secretRow, kind: "HelmRelease" }} provider="kind" kindKey="helm-releases" />);
+    const password = await screen.findByTestId("secret-key-password");
+    expect(password.textContent).toContain("•••••• (12 bytes)");
+    expect(within(password).queryByRole("button", { name: "Reveal" })).toBeNull();
+  });
+
+  it("copy yaml copies masked secret", async () => {
+    const fetch = answer();
+    vi.stubGlobal("fetch", fetch);
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    fireEvent.click(screen.getByRole("tab", { name: "YAML" }));
+    expect((await screen.findByTestId("yaml")).textContent).toContain("password: •••••• (12 bytes)");
+    expect(fetch.mock.calls.some(([u]) => u === "/api/clusters/c1/resources/secrets/payments-db/yaml?namespace=payments")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(writeText).toHaveBeenCalledWith("data:\n  password: •••••• (12 bytes)\n");
+    expect(fetch.mock.calls.some(([u]) => u.endsWith("/reveal"))).toBe(false);
   });
 });

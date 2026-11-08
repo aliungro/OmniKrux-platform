@@ -1,0 +1,55 @@
+/* A link to another object: reads as text in the focus colour, underlined on hover. */
+.link {
+  display: inline;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--focus);
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--focus) 55%, transparent);
+  text-underline-offset: 3px;
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* The line above the table when a link found nothing; no height while it has nothing to say. */
+.notice {
+  flex: none;
+  padding: 0 16px;
+  font-size: 13px;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--rule));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 7%, var(--surf));
+  color: var(--ink);
+}
+
+/* Pending's hollow ring: the object may come back, nothing failed. */
+.ring {
+  flex: none;
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--warn);
+  border-radius: 50%;
+}

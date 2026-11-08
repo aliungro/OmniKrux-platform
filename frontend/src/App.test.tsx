@@ -180,7 +180,7 @@ describe("Console dock wiring", () => {
       { name: "app", state: "Waiting: CrashLoopBackOff", state_class: "bad" },
     ],
     init_containers: [{ name: "init", state: "Terminated: Completed (exit 0)", state_class: "done" }],
-    ephemeral_containers: [],
+    ephemeral_containers: [], volumes: [],
     conditions: [], labels: {}, annotations: {}, events: [], events_error: null,
   };
 

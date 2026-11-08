@@ -5,13 +5,14 @@ import { refreshKinds, useKinds } from "./api/useKinds";
 import { useLiveMetrics } from "./api/useMetrics";
 import { useWatch } from "./api/useWatch";
 import { failure } from "./api/http";
-import type { ClusterState, KindInfo, KindsResponse, OwnerRef, ResourceRow } from "./api/types";
+import type { Cluster, ClusterState, KindInfo, KindsResponse, OwnerRef, ResourceRow } from "./api/types";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
 import { ShortcutBar } from "./features/chrome/ShortcutBar";
 import { TopBar } from "./features/chrome/TopBar";
 import { Dock } from "./features/dock/Dock";
 import { useDock } from "./features/dock/useDock";
+import { NavigationNotice, NavigationProvider, useNavigator } from "./features/navigation/navigation";
 import {
   buildTerritories,
   chipsFor,
@@ -45,6 +46,8 @@ function discovery(data: unknown): KindsResponse["clusters"] | undefined {
     ? (clusters as KindsResponse["clusters"])
     : undefined;
 }
+
+const NO_CLUSTERS: Cluster[] = [];
 
 /** The whole console page; expects a QueryClientProvider above it. */
 export function Console() {
@@ -133,9 +136,29 @@ export function Console() {
       .catch((err: unknown) => console.error(`Retry for cluster ${id} failed:`, err));
   }, [queryClient]);
 
+  // Links: a jump switches to the link's kind, then selects and opens its row once the watch has it.
+  const onKind = useCallback((key: string) => setRoute({ view: "resources", kind: key }), [setRoute]);
+  const nav = useNavigator({
+    kindKey,
+    watch,
+    clusters: list ?? NO_CLUSTERS,
+    kinds: served,
+    onKind,
+    setFilters,
+    setSelection,
+  });
+  const { cancel: cancelJump } = nav;
+  // Picking a row or a kind yourself drops a jump still waiting for its row.
+  const onSelection = useCallback<typeof setSelection>((next) => {
+    cancelJump();
+    setSelection(next);
+  }, [cancelJump]);
   const onSelectKind = useCallback(
-    (key: string, opts?: { replace: boolean }) => setRoute({ view: "resources", kind: key }, opts),
-    [setRoute],
+    (key: string, opts?: { replace: boolean }) => {
+      cancelJump();
+      setRoute({ view: "resources", kind: key }, opts);
+    },
+    [setRoute, cancelJump],
   );
 
   let body;
@@ -166,12 +189,14 @@ export function Console() {
           onRetry={onRetryKinds}
         />
         <FilterBar value={filters} onChange={setFilters} chips={chips} counts={counts} namespaces={namespaces} />
+        <NavigationNotice text={nav.notice} />
         <main className={s.main}>
           <TerritoryTable
             territories={shown}
             kind={kind}
             selection={selection}
-            onSelection={setSelection}
+            onSelection={onSelection}
+            reveal={nav.reveal}
             onRetry={onRetry}
             podCounts={podCounts}
             metrics={metrics}
@@ -189,12 +214,14 @@ export function Console() {
   // The dock sits outside the switch above, so its sessions (and their shells) outlive a moment
   // with no clusters, e.g. the last one removed.
   return (
-    <div className={s.app}>
-      <TopBar clusters={all} />
-      {body}
-      {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
-      {hasTable && <ShortcutBar kind={kindKey} />}
-    </div>
+    <NavigationProvider goTo={nav.goTo}>
+      <div className={s.app}>
+        <TopBar clusters={all} />
+        {body}
+        {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
+        {hasTable && <ShortcutBar kind={kindKey} />}
+      </div>
+    </NavigationProvider>
   );
 }
 

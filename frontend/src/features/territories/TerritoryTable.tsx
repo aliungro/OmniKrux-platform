@@ -45,6 +45,11 @@ export interface TerritoryTableProps {
   onOpenShell?: (row: ResourceRow) => void;
   onNodeShell?: (row: ResourceRow, node: string) => void;
   onOwnerLogs?: (row: ResourceRow, owner: OwnerRef) => void;
+  /**
+   * Goes up by one when a link lands on the selected row: the table scrolls it (and its details)
+   * into view, and focuses it unless you've moved focus outside the table meanwhile.
+   */
+  reveal?: number;
 }
 
 function sameRef(a: RowRef | null, b: RowRef): boolean {
@@ -70,14 +75,10 @@ export const TerritoryTable = memo(function TerritoryTable({
   onOpenShell,
   onNodeShell,
   onOwnerLogs,
+  reveal = 0,
 }: TerritoryTableProps) {
   const { selected, open } = selection;
-  // Ruling R11: only pods have details for now; other kinds' rows select but don't open.
-  const inspectable = kind.key === "pods";
-  const items = useMemo(
-    () => flatten(territories, open && inspectable ? selected : null),
-    [territories, open, inspectable, selected],
-  );
+  const items = useMemo(() => flatten(territories, open ? selected : null), [territories, open, selected]);
   const indexByKey = useMemo(() => {
     const m = new Map<string, number>();
     items.forEach((it, i) => {
@@ -94,6 +95,9 @@ export const TerritoryTable = memo(function TerritoryTable({
    * rebuilt. Not before: an open inspector moves with the selection, which shifts every index after it.
    */
   const scrollPending = useRef(false);
+  /** How the pending scroll lines the row up: a link's target goes to the top, so its details show. */
+  const scrollAlign = useRef<"auto" | "start">("auto");
+  const revealed = useRef(reveal);
 
   const estimateSize = useCallback((i: number) => {
     const t = items[i].type;
@@ -148,8 +152,8 @@ export const TerritoryTable = memo(function TerritoryTable({
     if (at === undefined) return;
     const it = items[at];
     if (it.type !== "row") return;
-    // Ruling R14: details, logs and shells are pods' only, until per-kind meanings arrive.
-    if (shortcut.podsOnly && !inspectable) return;
+    // Ruling R14: logs and shells are pods' only, until per-kind meanings arrive.
+    if (shortcut.podsOnly && kind.key !== "pods") return;
     switch (shortcut.id) {
       case "move": {
         e.preventDefault();
@@ -161,6 +165,7 @@ export const TerritoryTable = memo(function TerritoryTable({
         select(next.row);
         focusPending.current = true;
         scrollPending.current = true;
+        scrollAlign.current = "auto";
         return;
       }
       case "details":
@@ -187,6 +192,14 @@ export const TerritoryTable = memo(function TerritoryTable({
 
   // Bring the selected row into view, then focus it once the virtualizer has rendered it.
   useLayoutEffect(() => {
+    if (revealed.current !== reveal) {
+      revealed.current = reveal;
+      scrollPending.current = true;
+      scrollAlign.current = "start";
+      // A link you followed hands focus to its row, unless you've since moved on (the dock, a field).
+      const active = document.activeElement;
+      focusPending.current = active === null || active === document.body || (scrollRef.current?.contains(active) ?? false);
+    }
     if (selectedKey === null) return;
     const at = indexByKey.get(selectedKey);
     if (at === undefined) {
@@ -202,7 +215,8 @@ export const TerritoryTable = memo(function TerritoryTable({
     }
     if (scrollPending.current) {
       scrollPending.current = false;
-      virtualizer.scrollToIndex(at, { align: "auto" });
+      virtualizer.scrollToIndex(at, { align: scrollAlign.current });
+      scrollAlign.current = "auto";
     }
     if (!focusPending.current) return;
     const el = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])
@@ -254,6 +268,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                   <div role="gridcell" aria-colspan={columns.length}>
                     <Inspector
                       row={it.row}
+                      kindKey={kind.key}
                       provider={it.provider}
                       onOpenLogs={onOpenLogs}
                       onOpenShell={onOpenShell}
@@ -285,11 +300,11 @@ export const TerritoryTable = memo(function TerritoryTable({
                     rowIndex={rowIndex}
                     now={now}
                     selected={key === selectedKey}
-                    expanded={inspectable ? open && key === selectedKey : undefined}
+                    expanded={open && key === selectedKey}
                     focusable={key === tabKey}
                     podCounts={podCounts}
                     metrics={metrics}
-                    onActivate={inspectable ? toggle : select}
+                    onActivate={toggle}
                   />
                 )}
               </div>

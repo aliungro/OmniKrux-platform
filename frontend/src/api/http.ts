@@ -29,9 +29,12 @@ export async function postEmpty(path: string): Promise<void> {
   if (!res.ok) return fail(res);
 }
 
-/** POSTs JSON (or nothing) and reads JSON back; the server's `detail` becomes the error's words. */
-export async function postJson<T>(path: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method: "POST" };
+/**
+ * POSTs JSON (or nothing) and reads JSON back; the server's `detail` becomes the error's words.
+ * `opts` passes a `signal` (to drop an answer nobody waits for) and a request `cache` mode.
+ */
+export async function postJson<T>(path: string, body?: unknown, opts: Pick<RequestInit, "signal" | "cache"> = {}): Promise<T> {
+  const init: RequestInit = { method: "POST", ...opts };
   if (body !== undefined) {
     init.headers = { "content-type": "application/json" };
     init.body = JSON.stringify(body);

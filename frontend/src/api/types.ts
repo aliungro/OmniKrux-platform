@@ -79,11 +79,18 @@ export interface KindsResponse {
 }
 
 /** An `object` column: what a row points at; `kind_key` is null for a kind the console can't name. */
-export interface Link {
+export interface ObjectColumn {
   kind_key: string | null;
   namespace: string | null;
   name: string;
   label: string;
+}
+
+/** Where a click goes — mirrors describe.py `Link`: an object of `kind_key`; a null namespace is a cluster-scoped kind. */
+export interface Link {
+  kind_key: string;
+  namespace: string | null;
+  name: string;
 }
 
 export type WatchMessage =
@@ -105,6 +112,8 @@ export interface OwnerRef {
   name: string;
   /** The owner's matchLabels as "k=v,k2=v2", for its pods' logs; null when it has none or couldn't be read. */
   selector: string | null;
+  /** Null for a kind the console can't name (a CRD owner). */
+  link: Link | null;
 }
 
 export interface PodInfo {
@@ -113,10 +122,12 @@ export interface PodInfo {
   status: string;
   status_class: StatusClass;
   node: string | null;
+  node_link: Link | null;
   pod_ip: string | null;
   host_ip: string | null;
   qos: string | null;
   service_account: string | null;
+  service_account_link: Link | null;
   owner: OwnerRef | null;
   started_at: string | null;
   resource_version: string;
@@ -127,6 +138,16 @@ export interface EnvVar {
   /** Always null for anything read from a Secret (or any other reference); `source` names it. */
   value: string | null;
   source: string | null;
+  /** The ConfigMap or Secret it is read from. */
+  link: Link | null;
+}
+
+export interface Volume {
+  name: string;
+  /** The volume source's field: "configMap", "secret", "emptyDir", … */
+  type: string;
+  /** For configMap, secret and persistentVolumeClaim volumes. */
+  link: Link | null;
 }
 
 export interface ContainerInfo {
@@ -167,6 +188,7 @@ export interface PodDescribe {
   containers: ContainerInfo[];
   init_containers: ContainerInfo[];
   ephemeral_containers: ContainerInfo[];
+  volumes: Volume[];
   conditions: Condition[];
   labels: Record<string, string>;
   annotations: Record<string, string>;
@@ -190,6 +212,76 @@ export interface NodeShellPod {
 
 export interface PodYaml {
   yaml: string;
+}
+
+/* Any kind's describe — mirrors backend/omnikrux/resources/describe_any.py field for field. */
+
+export interface Field {
+  label: string;
+  value: string | null;
+  link: Link | null;
+}
+
+export interface Cell {
+  text: string | null;
+  link: Link | null;
+  cls: StatusClass | null;
+}
+
+export interface Section {
+  title: string;
+  columns: string[];
+  rows: Cell[][];
+  /** Why there are no rows, or where to look instead. */
+  note: string | null;
+}
+
+export interface SecretKey {
+  key: string;
+  /** Bytes of the decoded value. */
+  size: number;
+}
+
+export interface ResourceDescribe {
+  kind_key: string;
+  kind: string;
+  name: string;
+  namespace: string | null;
+  uid: string;
+  resource_version: string;
+  created_at: string | null;
+  fields: Field[];
+  sections: Section[];
+  conditions: Condition[];
+  labels: Record<string, string>;
+  annotations: Record<string, string>;
+  owner: Link | null;
+  events: EventInfo[];
+  /** Why `events` is empty when listing them failed. */
+  events_error: string | null;
+  /** Secrets only: key names and sizes, never values. */
+  secret_keys: SecretKey[] | null;
+}
+
+/** `GET …/resources/{kind}/{name}/yaml`: a Secret's values are masked by the server. */
+export interface ResourceYaml {
+  yaml: string;
+}
+
+/** The body of `POST …/secrets/{ns}/{name}/reveal`: one key. */
+export interface RevealIn {
+  key: string;
+}
+
+/**
+ * The answer to a reveal (sent `no-store`). Held in component state only: never in the query
+ * cache, a URL, a log or browser storage.
+ */
+export interface RevealOut {
+  key: string;
+  value: string;
+  /** base64: the value isn't UTF-8 text. */
+  encoding: "utf-8" | "base64";
 }
 
 /* Logs — mirrors backend/omnikrux/logs (stream.py LogLine / Marker, api.py messages). */
