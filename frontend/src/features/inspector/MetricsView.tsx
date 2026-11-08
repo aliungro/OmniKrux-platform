@@ -1,8 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { failure, getJson } from "../../api/http";
+import { getJson } from "../../api/http";
 import type { ContainerUsage, PodMetrics } from "../../api/types";
-import { LIVE_FOR_MS, METRICS_POLL_MS } from "../../api/useMetrics";
-import { useNow } from "../../hooks/useNow";
+import { hiddenWhy, METRICS_POLL_MS, useJudged } from "../../api/useMetrics";
 import { formatCpu, formatMemory, formatWindow, fraction, HOT_AT } from "../metrics/format";
 import { Meter } from "../metrics/Meter";
 import { formatAge } from "../territories/model";
@@ -60,19 +59,16 @@ function ContainerRow({ c, stale, staleTitle }: { c: ContainerUsage; stale: bool
 /** A pod's usage per container, against each container's request and limit; polls while it is open. */
 export function MetricsView({ clusterId, ns, name }: { clusterId: string; ns: string; name: string }) {
   const q = usePodMetrics(clusterId, ns, name);
-  const now = useNow(5_000);
+  const { snap, now } = useJudged(q, `${clusterId}/${ns}/${name}`);
   // A failed poll or an old answer hides the numbers: the query keeps the last good data around.
+  const hidden = hiddenWhy(snap, now);
+  if (hidden) return <div className={s.state} role="alert"><span className={s.err}>{hidden}</span></div>;
   const m = q.data;
-  const tooOld = m !== undefined && now.getTime() - q.dataUpdatedAt > LIVE_FOR_MS;
-  if (q.isError || tooOld) {
-    const reason = q.isError ? failure(q.error, "wait for the next try") : "the last update is too old.";
-    return <div className={s.state} role="alert"><span className={s.err}>Metrics are out of date, so they're hidden: {reason}</span></div>;
-  }
-  if (m === undefined) return <div className={s.state} role="status">Loading metrics…</div>;
+  if (m === undefined || snap.awaiting) return <div className={s.state} role="status">Loading metrics…</div>;
   if (m.state !== "ok") {
     return <div className={s.state} role="status"><span>{m.message ?? "Metrics aren't available for this pod."}</span></div>;
   }
-  const staleTitle = `Measured ${formatAge(m.at, now)} ago; metrics-server has nothing newer.`;
+  const staleTitle = `Measured ${formatAge(m.at, new Date(now))} ago; metrics-server has nothing newer.`;
   return (
     <div className={k.mv}>
       <table className={k.t}>
@@ -84,7 +80,7 @@ export function MetricsView({ clusterId, ns, name }: { clusterId: string; ns: st
         </tbody>
       </table>
       <div className={`${k.foot}${m.stale ? ` ${k.stale}` : ""}`} title={m.stale ? staleTitle : undefined}>
-        Measured {formatAge(m.at, now)} ago over {formatWindow(m.window_s)}
+        Measured {formatAge(m.at, new Date(now))} ago over {formatWindow(m.window_s)}
         {m.stale && ". metrics-server has nothing newer."}
       </div>
     </div>

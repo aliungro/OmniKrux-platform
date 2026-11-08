@@ -1,6 +1,6 @@
 // frontend/src/features/inspector/inspector.test.tsx
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { ContainerInfo, PodDescribe, ResourceRow } from "../../api/types";
@@ -283,5 +283,64 @@ describe("metrics tab", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
     await screen.findByText("sidecar");
     expect(document.querySelector('[title^="Measured "][title$="; metrics-server has nothing newer."]')).toBeTruthy();
+  });
+});
+
+describe("metrics tab expiry", () => {
+  const ok = (b: unknown) => Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } }));
+  const metrics = () => ({
+    state: "ok", message: null, at: new Date().toISOString(), window_s: 15, stale: false,
+    containers: [{ name: "payments-api", cpu_m: 110, memory_b: 1024 ** 2, cpu_request_m: null, cpu_limit_m: null, memory_request_b: null, memory_limit_b: null }],
+  });
+  const answerWith = (fn: () => Promise<Response>) => vi.fn((url: string) => (url.endsWith("/metrics") ? fn() : ok(describeBody())));
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("numbers are hidden 45 s after the last answer, not at the next tick", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", answerWith(vi.fn().mockImplementationOnce(() => ok(metrics())).mockImplementation(() => new Promise(() => {}))));
+    wrap(<Inspector row={row()} provider="aks" />);
+    await advance(0);
+    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    await advance(0);
+    expect(screen.getByText("payments-api")).toBeTruthy();
+    await advance(44_000);
+    expect(screen.getByText("payments-api")).toBeTruthy();
+    await advance(1_200);
+    expect(screen.queryByText("payments-api")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toMatch(/^Metrics are out of date, so they're hidden: /);
+  });
+
+  it("a failed poll after a good one hides the numbers, a recovered one shows them", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", answerWith(vi.fn()
+      .mockImplementationOnce(() => ok(metrics()))
+      .mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify({ detail: "Bad gateway" }), { status: 502 })))
+      .mockImplementation(() => ok(metrics()))));
+    wrap(<Inspector row={row()} provider="aks" />);
+    await advance(0);
+    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    await advance(0);
+    expect(screen.getByText("payments-api")).toBeTruthy();
+    await advance(15_100);
+    expect(screen.queryByText("payments-api")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toBe("Metrics are out of date, so they're hidden: Bad gateway");
+    await advance(15_100);
+    expect(screen.getByText("payments-api")).toBeTruthy();
+  });
+
+  it("reopening the tab with old cached numbers shows loading, not an alert", async () => {
+    vi.useFakeTimers();
+    const client = new QueryClient();
+    client.setQueryData(["pod-metrics", "c1", "payments", "payments-api-1"], metrics(), { updatedAt: Date.now() - 120_000 });
+    vi.stubGlobal("fetch", answerWith(() => new Promise(() => {})));
+    render(<QueryClientProvider client={client}><Inspector row={row()} provider="aks" /></QueryClientProvider>);
+    await advance(0);
+    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    await advance(0);
+    expect(screen.getByText("Loading metrics…")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("payments-api")).toBeNull();
   });
 });

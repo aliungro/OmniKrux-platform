@@ -15,7 +15,7 @@ function amount(bytes: number, size: number): string {
 }
 
 export function formatCpu(m: number): string {
-  return m >= 10_000 ? `${(m / 1000).toFixed(0)} cores` : `${m}m`;
+  return m >= 10_000 ? `${(m / 1000).toFixed(1)} cores` : `${m}m`;
 }
 
 /** "154 Mi", or "301 / 256 Mi" against a limit (both in the limit's unit). */
