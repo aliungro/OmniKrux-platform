@@ -37,7 +37,7 @@ async def test_start_list_and_stop_over_http(env):
         "name": "web-1",
         "remote_port": 8080,
         "local_port": port,
-        "address": f"localhost:{port}",
+        "address": f"127.0.0.1:{port}",
         "pod": "web-1",
         "state": "listening",
         "message": None,
@@ -57,6 +57,22 @@ async def test_start_list_and_stop_over_http(env):
     r = await env.client.delete(f"/api/port-forwards/{out['id']}")
     assert r.status_code == 404
     assert r.json() == {"detail": "This port-forward isn't running any more."}
+
+
+async def test_pod_not_running_is_plain_422(env):
+    env.fake.pods[("demo", "web-1")] = pod("web-1") | {"status": {"phase": "Pending"}}
+
+    r = await env.client.post("/api/port-forwards", json=env.body())
+
+    assert (r.status_code, r.json()) == (
+        422,
+        {
+            "detail": "Pod web-1 isn't running (Pending), so nothing in it can be reached. "
+            "Wait for it to start, or pick a running pod."
+        },
+    )
+    assert env.forwards.list() == []
+    assert await env.records() == []
 
 
 async def test_service_without_ready_pods_plain_422(env):
@@ -218,6 +234,7 @@ async def test_removed_cluster_stops_its_forwards(env):
 
 async def test_forwards_stopped_on_shutdown(fake_api, tmp_path):
     ports = free_ports(2)
+    fake_api.pods[("demo", "web-1")] = pod("web-1", labels={})
     async with make_env(fake_api, tmp_path, ports) as env:
         out = (await env.client.post("/api/port-forwards", json=env.body())).json()
         reader, writer = await connect(out["local_port"])

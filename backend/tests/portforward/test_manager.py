@@ -3,19 +3,21 @@
 import asyncio
 
 from omnikrux.config import Settings
+from omnikrux.portforward import manager
 from omnikrux.portforward.manager import PortForwardManager
 from tests.portforward.conftest import (
     SECONDS,
     closed_by_peer,
     connect,
     echo,
+    forward_tasks,
     hang_up,
     pod,
     refused,
     service,
     until,
 )
-from tests.portforward.test_channel import KUBELET_REFUSED
+from tests.portforward.test_channel import KUBELET_REFUSED, REFUSED
 
 GONE = "Pod web-1 is gone; stop this forward and start a new one."
 
@@ -24,7 +26,7 @@ async def test_forward_pod_port_relays_bytes(env):
     out = await env.forwards.start(env.request(), "local")
 
     port = env.ports[0]  # the lowest free one
-    assert (out.local_port, out.address, out.remote_port) == (port, f"localhost:{port}", 8080)
+    assert (out.local_port, out.address, out.remote_port) == (port, f"127.0.0.1:{port}", 8080)
     assert (out.kind, out.name, out.namespace, out.pod) == ("pod", "web-1", "demo", "web-1")
     assert (out.state, out.message, out.connections) == ("listening", None, 0)
     assert (out.cluster_id, out.cluster_name, out.provider) == (env.cluster_id, "fake", "onprem")
@@ -152,10 +154,7 @@ async def test_error_frame_sets_error_state_until_a_connection_works(env):
     assert await closed_by_peer(reader)
     await hang_up(writer)
     [listed] = env.forwards.list()
-    assert (listed.state, listed.message) == (
-        "error",
-        "Nothing in pod web-1 is listening on port 8080 (connection refused).",
-    )
+    assert (listed.state, listed.message) == ("error", REFUSED)
 
     env.fake.forward_fail = None
     assert await echo(out.local_port) == b"ping"
@@ -184,7 +183,7 @@ async def test_bind_address_container_vs_host(env):
     try:
         everywhere = await manager.start(env.request(), "local")
         assert manager.bound_addresses(everywhere.id) == [("0.0.0.0", everywhere.local_port)]
-        assert everywhere.address == f"localhost:{everywhere.local_port}"
+        assert everywhere.address == f"127.0.0.1:{everywhere.local_port}"  # as published
     finally:
         await manager.close()
 
@@ -196,6 +195,7 @@ async def test_close_and_stop_cluster_end_every_forward(env):
     writer.write(b"x")
     await writer.drain()
     await asyncio.wait_for(reader.readexactly(1), SECONDS)
+    assert forward_tasks()  # the check below sees a live connection
 
     await env.forwards.stop_cluster("another-cluster")
     assert len(env.forwards.list()) == 2
@@ -210,4 +210,35 @@ async def test_close_and_stop_cluster_end_every_forward(env):
     assert [(r.outcome, r.message) for r in records] == [
         ("ended", "The cluster was removed from Omnikrux."),
     ] * 2
-    assert [t for t in asyncio.all_tasks() if "portforward" in repr(t.get_coro())] == []
+    assert forward_tasks() == []
+
+
+async def test_slow_answer_after_local_eof_arrives_complete(env, monkeypatch):
+    monkeypatch.setattr(manager, "IDLE_AFTER_EOF_SECONDS", 0.5)
+    chunks = [f"part {i};".encode() for i in range(8)]
+    env.fake.forward_answer, env.fake.forward_gap = chunks, 0.15  # 1.2 s in all
+    out = await env.forwards.start(env.request(), "local")
+
+    reader, writer = await connect(out.local_port)
+    writer.write(b"GET / HTTP/1.0\r\n\r\n")
+    writer.write_eof()  # half-close, as `nc -N` or shutdown(SHUT_WR) does
+    answer = await asyncio.wait_for(reader.read(), SECONDS)
+    await hang_up(writer)
+
+    assert answer == b"".join(chunks)
+    [listed] = env.forwards.list()
+    assert (listed.state, listed.message) == ("listening", None)
+
+
+async def test_half_closed_connection_closes_once_the_pod_goes_quiet(env, monkeypatch):
+    monkeypatch.setattr(manager, "IDLE_AFTER_EOF_SECONDS", 0.3)
+    env.fake.forward_answer = []  # the pod never answers, and never closes
+    out = await env.forwards.start(env.request(), "local")
+
+    reader, writer = await connect(out.local_port)
+    writer.write(b"hello")
+    writer.write_eof()
+    assert await asyncio.wait_for(reader.read(), SECONDS) == b""
+    await hang_up(writer)
+    await until(lambda: env.fake.forwards_open == 0)
+    await until(lambda: env.forwards.list()[0].connections == 0)

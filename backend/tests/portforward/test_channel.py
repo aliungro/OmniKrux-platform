@@ -10,6 +10,11 @@ from omnikrux.portforward.channel import ForwardError, PortForwardChannel
 from tests.fakekube import kubeconfig_for
 from tests.portforward.conftest import SECONDS, until
 
+REFUSED = (
+    "Nothing in pod web-1 is listening on port 8080 (connection refused). "
+    "Check the port number, or wait for the app in the pod to start, then connect again."
+)
+
 # What the kubelet's error channel says when nothing in the pod listens on the port.
 KUBELET_REFUSED = (
     "error forwarding port 8080 to pod 3f1c, uid : failed to execute portforward in network "
@@ -59,20 +64,26 @@ async def test_channel_error_frame_plain(fake_api):
             await asyncio.wait_for(channel.read(), SECONDS)
     finally:
         await channel.close()
-    assert refused.value.message == (
-        "Nothing in pod web-1 is listening on port 8080 (connection refused)."
-    )
+    assert refused.value.message == REFUSED
 
-    fake_api.forward_fail = "the runtime said no"
-    channel = await open_channel(fake_api)
-    try:
-        with pytest.raises(ForwardError) as failed:
-            await asyncio.wait_for(channel.read(), SECONDS)
-    finally:
-        await channel.close()
-    assert (
-        failed.value.message
-        == "The port-forward to pod web-1 port 8080 failed: the runtime said no"
+    async def message_for(text: str) -> str:
+        fake_api.forward_fail = text
+        channel = await open_channel(fake_api)
+        try:
+            with pytest.raises(ForwardError) as failed:
+                await asyncio.wait_for(channel.read(), SECONDS)
+        finally:
+            await channel.close()
+        return failed.value.message
+
+    assert await message_for("dial tcp4 127.0.0.1:8080: i/o timeout") == (
+        "Port 8080 in pod web-1 didn't answer in time. "
+        "Check that the app in the pod is healthy, then connect again."
+    )
+    # Anything else: cause and next step, never the kubelet's raw text.
+    assert await message_for('failed to execute portforward in network namespace "/x"') == (
+        "The cluster couldn't reach port 8080 in pod web-1. "
+        "Check that the pod is running and listens on that port, then connect again."
     )
 
 

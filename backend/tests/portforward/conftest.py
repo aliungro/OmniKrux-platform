@@ -3,6 +3,7 @@ are free on this machine right now, and helpers to talk TCP to them."""
 
 import asyncio
 import contextlib
+import os
 import random
 import socket
 from collections.abc import AsyncIterator, Callable
@@ -88,9 +89,16 @@ async def make_env(fake: FakeKubeApi, tmp_path, ports: range) -> AsyncIterator[E
 
 @pytest.fixture
 async def env(fake_api, tmp_path):
-    """Two port-forward ports."""
+    """Two port-forward ports; pod demo/web-1 is running."""
+    fake_api.pods[("demo", "web-1")] = pod("web-1", labels={})
     async with make_env(fake_api, tmp_path, free_ports(2)) as env:
         yield env
+
+
+def forward_tasks() -> list[asyncio.Task]:
+    """Tasks still running port-forward code (their repr names the file they run in)."""
+    marker = f"omnikrux{os.sep}portforward{os.sep}"
+    return [t for t in asyncio.all_tasks() if marker in repr(t)]
 
 
 def pod(

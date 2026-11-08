@@ -8,6 +8,7 @@ port once per stream, so every local connection gets a stream of its own."""
 
 import asyncio
 import contextlib
+import logging
 from contextlib import AsyncExitStack
 from typing import Self
 
@@ -17,11 +18,13 @@ from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.kube.connections import ClusterConnections
 
+log = logging.getLogger(__name__)
+
 DATA, ERROR = 0, 1
 PROTOCOL = "v4.channel.k8s.io"
 PORT_PREFIX = 2  # bytes of port number that open each channel
 CONNECT_SECONDS = 30  # for the WebSocket handshake
-MAX_DETAIL = 300
+MAX_LOGGED = 300  # characters of the kubelet's own text kept in the server log
 CLOSED = (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED)
 
 
@@ -34,11 +37,25 @@ class ForwardError(Exception):
 
 
 def error_message(text: str, pod: str, port: int) -> str:
-    """The kubelet's error text, in plain words."""
+    """The kubelet's error text as a cause and a next step; its raw words (network namespaces,
+    uids, dial errors) go to the server log only."""
     if "connection refused" in text:
-        return f"Nothing in pod {pod} is listening on port {port} (connection refused)."
-    detail = " ".join(text.split())[:MAX_DETAIL]
-    return f"The port-forward to pod {pod} port {port} failed: {detail}"
+        return (
+            f"Nothing in pod {pod} is listening on port {port} (connection refused). "
+            "Check the port number, or wait for the app in the pod to start, then connect again."
+        )
+    log.info(
+        "port-forward to pod %s port %d failed: %s", pod, port, " ".join(text.split())[:MAX_LOGGED]
+    )
+    if "timeout" in text or "timed out" in text:
+        return (
+            f"Port {port} in pod {pod} didn't answer in time. "
+            "Check that the app in the pod is healthy, then connect again."
+        )
+    return (
+        f"The cluster couldn't reach port {port} in pod {pod}. "
+        "Check that the pod is running and listens on that port, then connect again."
+    )
 
 
 class PortForwardChannel:
@@ -95,7 +112,9 @@ class PortForwardChannel:
             msg = await self._ws.receive()
             if msg.type == aiohttp.WSMsgType.ERROR:
                 raise ForwardError(
-                    f"The port-forward stream to pod {self._pod} broke ({type(msg.data).__name__})."
+                    f"The connection to pod {self._pod} broke ({type(msg.data).__name__}), "
+                    "most likely the network between the console and the cluster. "
+                    "Connect again."
                 )
             if msg.type in CLOSED:
                 return None

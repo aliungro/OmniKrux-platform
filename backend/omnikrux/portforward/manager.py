@@ -43,9 +43,20 @@ SERVICE_GONE = "Service {name} is gone; stop this forward and start a new one."
 CLUSTER_REMOVED = "The cluster was removed from Omnikrux."
 CONSOLE_STOPPED = "The console stopped."
 NOT_RUNNING = "This port-forward isn't running any more."
+POD_NOT_RUNNING = (
+    "Pod {name} isn't running ({phase}), so nothing in it can be reached. "
+    "Wait for it to start, or pick a running pod."
+)
+CLUSTER_GONE_NOW = "The cluster was removed from Omnikrux; stop this forward."
+UNEXPECTED = (
+    "The port-forward connection failed unexpectedly ({type}). "
+    "Connect again; if it keeps failing, stop this forward and start a new one."
+)
 
 CHUNK = 32 * 1024  # bytes read from a local connection at a time
-LINGER_SECONDS = 1.0  # after the local side stops sending, for the pod's last answer
+# After the local side stops sending (the stream can't tell the pod), the pod's answer is still
+# relayed until nothing has come back for this long.
+IDLE_AFTER_EOF_SECONDS = 5.0
 CLOSE_SECONDS = 5.0  # for a stopped forward's connections to close
 
 
@@ -69,7 +80,7 @@ class ForwardOut(BaseModel):
     name: str
     remote_port: int
     local_port: int
-    address: str  # "localhost:30001"
+    address: str  # "127.0.0.1:30001": the listener (or the published port) is IPv4 only
     pod: str | None  # the pod the latest connection went to
     state: Literal["listening", "error"]
     message: str | None
@@ -80,10 +91,12 @@ class ForwardOut(BaseModel):
 class ForwardRefused(Exception):
     """The forward can't start (or a connection can't be bridged); `message` says why."""
 
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, *, gone: bool = False, no_cluster: bool = False):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.gone = gone  # the pod or service isn't there
+        self.no_cluster = no_cluster  # the cluster isn't registered (any more)
 
 
 @dataclass(frozen=True)
@@ -125,7 +138,7 @@ class Forward:
             name=req.name,
             remote_port=req.port,
             local_port=self.local_port,
-            address=f"localhost:{self.local_port}",
+            address=f"127.0.0.1:{self.local_port}",
             pod=self.pod,
             state=self.state,
             message=self.message,
@@ -317,8 +330,15 @@ class PortForwardManager:
         tasks = list(forward.tasks)
         for task in tasks:
             task.cancel()
-        if tasks:
-            await asyncio.wait(tasks)
+        if tasks:  # capped: stop_cluster runs under the watch hub's lock
+            _, pending = await asyncio.wait(tasks, timeout=CLOSE_SECONDS)
+            if pending:
+                log.warning(
+                    "port-forward %s: %d connection(s) didn't stop in %.0f s",
+                    forward.id,
+                    len(pending),
+                    CLOSE_SECONDS,
+                )
         if forward.server is not None:
             try:
                 async with asyncio.timeout(CLOSE_SECONDS):
@@ -348,12 +368,18 @@ class PortForwardManager:
 
     async def _resolve(self, req: ForwardIn) -> Target:
         """The pod and port a connection goes to: the pod itself, or a ready pod of the service
-        with its `targetPort` mapped. ForwardRefused 404 when the object isn't there."""
+        with its `targetPort` mapped. ForwardRefused 404 (`gone`) when the object isn't there,
+        422 when a pod isn't running or a service has no ready pod."""
         what = f"{req.kind} {req.namespace}/{req.name}"
         try:
             async with self._connections.api(req.cluster_id) as api:
                 if req.kind == "pod":
-                    await read_pod(api, req.namespace, req.name, timeout=REQUEST_TIMEOUT)
+                    found = await read_pod(api, req.namespace, req.name, timeout=REQUEST_TIMEOUT)
+                    phase = (found.get("status") or {}).get("phase") or "phase unknown"
+                    if phase != "Running":
+                        raise ForwardRefused(
+                            422, POD_NOT_RUNNING.format(name=req.name, phase=phase)
+                        )
                     return Target(req.name, req.port)
                 core = CoreV1Api(api)
                 found = await read_json(
@@ -380,16 +406,17 @@ class PortForwardManager:
         except ForwardRefused:
             raise
         except KeyError as exc:
-            raise ForwardRefused(404, "Unknown cluster") from exc
+            raise ForwardRefused(404, "Unknown cluster", no_cluster=True) from exc
         except ApiException as exc:
             if exc.status == 404:
                 if req.kind == "pod":
-                    raise ForwardRefused(404, pod_missing_message(req.namespace, req.name)) from exc
+                    missing = pod_missing_message(req.namespace, req.name)
+                    raise ForwardRefused(404, missing, gone=True) from exc
                 missing = (
                     f"Service {req.namespace}/{req.name} not found. It may have been deleted; "
                     "pick it again from the list."
                 )
-                raise ForwardRefused(404, missing) from exc
+                raise ForwardRefused(404, missing, gone=True) from exc
             raise ForwardRefused(502, kube_error_message(exc, f"read {what}")) from exc
         except Exception as exc:  # unreachable, a missing exec plugin: said in words
             if not isinstance(exc, KUBE_ERRORS):
@@ -410,7 +437,7 @@ class PortForwardManager:
             await self._bridge(forward, reader, writer)
         except Exception as exc:  # noqa: BLE001 (becomes the forward's state; logged by type)
             log.warning("port-forward %s connection failed (%s)", forward.id, type(exc).__name__)
-            forward.fail(f"The port-forward connection failed ({type(exc).__name__}).")
+            forward.fail(UNEXPECTED.format(type=type(exc).__name__))
         finally:
             forward.tasks.discard(task)
             writer.close()
@@ -425,8 +452,10 @@ class PortForwardManager:
             try:
                 target = await self._resolve(req)
             except ForwardRefused as exc:
-                gone = exc.status == 404 and exc.message != "Unknown cluster"
-                forward.fail(SERVICE_GONE.format(name=req.name) if gone else exc.message)
+                if exc.gone:
+                    forward.fail(SERVICE_GONE.format(name=req.name))
+                else:
+                    forward.fail(CLUSTER_GONE_NOW if exc.no_cluster else exc.message)
                 return
         forward.pod = target.pod
         try:
@@ -434,7 +463,7 @@ class PortForwardManager:
                 self._connections, req.cluster_id, req.namespace, target.pod, target.port
             )
         except KeyError:
-            forward.fail("Unknown cluster")
+            forward.fail(CLUSTER_GONE_NOW)
             return
         except Exception as exc:  # noqa: BLE001 (refused, unreachable: said in words)
             if isinstance(exc, ApiException) and exc.status == 404:
@@ -462,9 +491,13 @@ class PortForwardManager:
             while data := await reader.read(CHUNK):
                 await channel.write(data)
 
+        loop = asyncio.get_running_loop()
+        heard = [loop.time()]  # when the pod last sent something
+
         async def to_local() -> None:
             answered = False
             while (data := await channel.read()) is not None:
+                heard[0] = loop.time()
                 if not answered:
                     answered = True
                     forward.works()
@@ -476,9 +509,14 @@ class PortForwardManager:
         try:
             await asyncio.wait((up, down), return_when=asyncio.FIRST_COMPLETED)
             if up.done() and not down.done() and up.exception() is None:
-                # The local side stopped sending (the stream can't say so to the pod):
-                # give the pod a moment to answer what it got.
-                await asyncio.wait((down,), timeout=LINGER_SECONDS)
+                # The local side stopped sending, and the stream can't tell the pod so: keep
+                # relaying its answer for as long as it keeps coming.
+                heard[0] = max(heard[0], loop.time())
+                while not down.done():
+                    quiet_left = heard[0] + IDLE_AFTER_EOF_SECONDS - loop.time()
+                    if quiet_left <= 0:
+                        break
+                    await asyncio.wait((down,), timeout=quiet_left)
         finally:
             for task in (up, down):
                 task.cancel()
@@ -490,7 +528,7 @@ class PortForwardManager:
                 forward.fail(exc.message)
             elif not isinstance(exc, ConnectionError):  # the local side reset: normal
                 log.warning("port-forward %s relay failed (%s)", forward.id, type(exc).__name__)
-                forward.fail(f"The port-forward connection failed ({type(exc).__name__}).")
+                forward.fail(UNEXPECTED.format(type=type(exc).__name__))
 
     # Last in the class: `list` would shadow the builtin in the annotations below it.
     def bound_addresses(self, forward_id: str) -> list[tuple[str, int]]:

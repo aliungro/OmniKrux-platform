@@ -297,6 +297,10 @@ class FakeKubeApi:
         # Text the port-forward's error channel carries at once, ending the stream (what the
         # kubelet sends when nothing listens on the port, say).
         self.forward_fail: str | None = None
+        # Instead of echoing, the pod answers the first data with these chunks, `forward_gap`
+        # seconds apart, then closes the stream ([]: it never answers, and never closes).
+        self.forward_answer: list[bytes] | None = None
+        self.forward_gap = 0.0
         self.start_states: list[dict] = [{"waiting": {"reason": "ContainerCreating"}}, STARTED]
         self.created: list[dict] = []
         self.patches: list[dict] = []
@@ -886,9 +890,10 @@ class FakeKubeApi:
     async def _portforward(self, request: web.Request, key: tuple[str, str]) -> web.StreamResponse:
         """Port-forward over WebSocket, framed as the kubelet does: port i gets a data channel
         (2i) and an error channel (2i+1), and each opens with the port number (2 bytes, little
-        endian). What arrives on a data channel comes back on it (an echo server in the pod).
-        With `forward_fail` set, the error channel carries that text and the stream ends. Each
-        stream is recorded in `forwards`; `forwards_open` counts the ones still open."""
+        endian). What arrives on a data channel comes back on it (an echo server in the pod), or
+        `forward_answer` is sent once (slowly, see `forward_gap`). With `forward_fail` set, the
+        error channel carries that text and the stream ends. Each stream is recorded in
+        `forwards`; `forwards_open` counts the ones still open."""
         if key not in self.pods:
             return not_found(f'pods "{key[1]}" not found')
         ports = [int(p) for value in request.query.getall("ports", []) for p in value.split(",")]
@@ -916,8 +921,15 @@ class FakeKubeApi:
                 if msg.type != web.WSMsgType.BINARY or not msg.data:
                     continue
                 channel, data = msg.data[0], msg.data[1:]
-                if channel % 2 == 0 and data:
+                if channel % 2 or not data:
+                    continue
+                if self.forward_answer is None:
                     await ws.send_bytes(bytes([channel]) + data)
+                elif self.forward_answer:
+                    for chunk in self.forward_answer:
+                        await asyncio.sleep(self.forward_gap)
+                        await ws.send_bytes(bytes([channel]) + chunk)
+                    await ws.close()
             return ws
         finally:
             self.forwards_open -= 1
