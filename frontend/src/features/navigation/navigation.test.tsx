@@ -135,6 +135,21 @@ describe("links in the console", () => {
     expect(screen.queryByRole("region", { name: /^Details for/ })).toBeNull();
   });
 
+  it("changing a filter drops a jump still waiting for its row", async () => {
+    watches.byKind.secrets = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "syncing", message: null });
+    const details = await openPod();
+    fireEvent.click(await within(details).findByRole("button", { name: "Secret payments-db key password" }));
+    await waitFor(() => expect(window.location.hash).toBe("#kind=secrets"));
+    const filter = screen.getByPlaceholderText("Filter by name, label or image");
+    fireEvent.change(filter, { target: { value: "x" } });
+    // The Secret arrives; the next render sees it, but the jump was dropped.
+    watches.byKind.secrets = ready([SECRET]);
+    fireEvent.change(filter, { target: { value: "" } });
+    expect(await screen.findByText("payments-db", { selector: '[role="gridcell"]' })).toBeTruthy();
+    expect(rowOf("payments-db").getAttribute("aria-selected")).toBe("false");
+    expect(screen.queryByRole("region", { name: "Details for payments-db" })).toBeNull();
+  });
+
   it("filters that would hide the target are cleared", async () => {
     renderConsole();
     const filter = await screen.findByPlaceholderText("Filter by name, label or image");
@@ -208,6 +223,46 @@ describe("useNavigator", () => {
     // Still on pods: a pod row by that name is not the Secret.
     hook.rerender({ watch: ready([row("x", "Pod", "payments", "payments-db")]) });
     expect(setSelection).not.toHaveBeenCalled();
+    expect(hook.result.current.notice).toBeNull();
+  });
+
+  it("a kind the cluster doesn't serve says so", () => {
+    const absent = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "absent", message: "This cluster doesn't serve secrets." });
+    const { hook } = harness(absent);
+    act(() => hook.result.current.goTo({ clusterId: "c1", kind_key: "secrets", namespace: "payments", name: "payments-db" }));
+    expect(hook.result.current.notice).toBe("This cluster doesn't serve secrets.");
+  });
+
+  it("a jump waits 6 s at most, saying what it waits for", () => {
+    vi.useFakeTimers();
+    const syncing = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "syncing", message: null });
+    const { hook, setSelection } = harness(syncing);
+    act(() => hook.result.current.goTo({ clusterId: "c1", kind_key: "secrets", namespace: "payments", name: "payments-db" }));
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(hook.result.current.notice).toBe("Waiting for kind-omnikrux-dev…");
+    expect(hook.result.current.waiting).toBe(true);
+    act(() => { vi.advanceTimersByTime(5_700); });
+    expect(hook.result.current.notice).toBe("Secret payments/payments-db wasn't opened: kind-omnikrux-dev isn't ready. Try the link again once it is.");
+    expect(hook.result.current.waiting).toBe(false);
+    hook.rerender({ watch: ready([SECRET]) });
+    expect(setSelection).not.toHaveBeenCalled();
+  });
+
+  it("a cluster that reports an error ends the wait", () => {
+    const syncing = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "syncing", message: null });
+    const { hook, setSelection } = harness(syncing);
+    act(() => hook.result.current.goTo({ clusterId: "c1", kind_key: "secrets", namespace: "payments", name: "payments-db" }));
+    hook.rerender({ watch: applyMessage(syncing, { type: "cluster_status", cluster_id: "c1", state: "error", message: "Can't reach this cluster: timeout" }) });
+    expect(hook.result.current.notice).toBe("Secret payments/payments-db wasn't opened: kind-omnikrux-dev isn't ready. Try the link again once it is.");
+    hook.rerender({ watch: ready([SECRET]) });
+    expect(setSelection).not.toHaveBeenCalled();
+  });
+
+  it("a row found quickly shows no waiting note", () => {
+    vi.useFakeTimers();
+    const { hook } = harness(ready([SECRET]));
+    act(() => hook.result.current.goTo({ clusterId: "c1", kind_key: "secrets", namespace: "payments", name: "payments-db" }));
+    act(() => { vi.advanceTimersByTime(7_000); });
     expect(hook.result.current.notice).toBeNull();
   });
 

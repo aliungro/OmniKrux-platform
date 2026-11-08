@@ -53,3 +53,28 @@
   border: 2px solid var(--warn);
   border-radius: 50%;
 }
+
+/* While a jump waits for its cluster: quieter, no warn edge; nothing has gone wrong yet. */
+.line.waiting {
+  border-color: var(--rule);
+  background: var(--surf);
+  color: var(--ink-2);
+}
+
+.waiting .ring {
+  border-color: var(--ink-3);
+  border-right-color: transparent;
+  animation: turn 0.9s linear infinite;
+}
+
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .waiting .ring {
+    animation: none;
+  }
+}

@@ -335,7 +335,7 @@ const deployRow: ResourceRow = {
 };
 const secretRow: ResourceRow = {
   uid: "s-1", cluster_id: "c1", kind: "Secret", namespace: "payments", name: "payments-db", created_at: null, labels: {},
-  columns: { type: "Opaque", keys: 2 },
+  columns: { type: "Opaque", keys: 2, resource_version: "7" },
 };
 const nodeRow: ResourceRow = {
   uid: "n-1", cluster_id: "c1", kind: "Node", namespace: null, name: "aks-np1-03", created_at: null, labels: {},
@@ -530,6 +530,47 @@ describe("secret values", () => {
       for (let i = 0; i < store.length; i++) expect(store.getItem(store.key(i)!) ?? "").not.toContain(VALUE);
     }
     unmount();
+  });
+
+  it("a new resource version drops the revealed value and reloads the describe", async () => {
+    let version = "7";
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/reveal")) {
+        const { key } = JSON.parse(String(init?.body)) as { key: string };
+        return json({ key, value: VALUE, encoding: "utf-8" });
+      }
+      // The value changed; the key names and sizes did not.
+      return json(secretDescribe({ resource_version: version }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    const describes = () => fetch.mock.calls.filter(([u]) => u.includes("/resources/secrets/payments-db/describe")).length;
+    const { rerender } = wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    const password = await screen.findByTestId("secret-key-password");
+    fireEvent.click(within(password).getByRole("button", { name: "Reveal" }));
+    await within(password).findByText(VALUE);
+    expect(describes()).toBe(1);
+
+    version = "8";
+    const changed = { ...secretRow, columns: { ...secretRow.columns, resource_version: "8" } };
+    rerender(<Inspector row={changed} provider="kind" kindKey="secrets" />);
+    // Gone at once, not when the new describe lands.
+    expect(screen.queryByText(VALUE)).toBeNull();
+    await waitFor(() => expect(describes()).toBe(2));
+    expect((await screen.findByTestId("secret-key-password")).textContent).toContain("•••••• (12 bytes)");
+    expect(screen.queryByText(VALUE)).toBeNull();
+  });
+
+  it("a row change drops the revealed value", async () => {
+    vi.stubGlobal("fetch", answer());
+    const { rerender } = wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    const password = await screen.findByTestId("secret-key-password");
+    fireEvent.click(within(password).getByRole("button", { name: "Reveal" }));
+    await within(password).findByText(VALUE);
+    const other = { ...secretRow, uid: "s-2", name: "payments-api-token" };
+    rerender(<Inspector row={other} provider="kind" kindKey="secrets" />);
+    expect(screen.queryByText(VALUE)).toBeNull();
+    // Nor is the other Secret's describe shown as this one's while it loads.
+    expect(screen.getByText("Loading details…")).toBeTruthy();
   });
 
   it("helm releases list their keys but offer no reveal", async () => {

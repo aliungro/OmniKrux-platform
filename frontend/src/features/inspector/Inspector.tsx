@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import type { Link, OwnerRef, Provider, ResourceRow } from "../../api/types";
@@ -101,24 +101,21 @@ function PodInspector({ row, provider, onOpenLogs, onOpenShell, onNodeShell, onO
   );
 }
 
-/**
- * What the watch knows changed about the row. Only pods carry their resource version; for other
- * kinds any change to the row's columns or labels reloads the describe.
- */
-function rowVersion(row: ResourceRow): string {
-  return textColumn(row, "resource_version") ?? JSON.stringify([row.columns, row.labels]);
-}
-
 function ResourceInspector({ row, provider, kindKey, onClose, onLink }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
   const [tab, setTab] = useState<Tab>("Describe");
-  const version = useMemo(() => rowVersion(row), [row]);
+  // Every row carries its resource version (backend `base_row`): a change reloads the details.
+  const version = textColumn(row, "resource_version") ?? "";
   const describe = useResourceDescribe(row.cluster_id, kindKey, row.namespace, row.name, version);
   const yaml = useResourceYaml(row.cluster_id, kindKey, row.namespace, row.name, version, tab === "YAML");
   const nodes = kindKey === "nodes";
   return (
     <Frame row={row} provider={provider} tabs={nodes ? WITH_METRICS : BASE_TABS} tab={tab} onTab={setTab} onClose={onClose}>
       {tab === "Describe" && (
-        <Loaded q={describe}>{(d) => <ResourceDescribeView data={d} clusterId={row.cluster_id} onLink={onLink} />}</Loaded>
+        <Loaded q={describe}>
+          {/* Keyed on the row's version: a revealed Secret value goes the moment the row changes,
+              not when the new describe lands. */}
+          {(d) => <ResourceDescribeView key={version} data={d} clusterId={row.cluster_id} onLink={onLink} />}
+        </Loaded>
       )}
       {tab === "YAML" && <Loaded q={yaml}>{(y) => <YamlView yaml={y} label={`${row.kind} YAML`} />}</Loaded>}
       {tab === "Metrics" && nodes && <NodeMetricsView clusterId={row.cluster_id} name={row.name} />}

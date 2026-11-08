@@ -35,7 +35,9 @@ def parse_ts(value: str) -> datetime:
 
 
 def base_row(obj: dict, cluster_id: str, kind: str) -> ResourceRow:
-    """The row every kind can have: identity, age and labels; its columns are for the caller."""
+    """The row every kind can have: identity, age, labels and the resource version (the inspector
+    reloads its details, and drops a revealed Secret value, when it changes); the caller adds its
+    other columns."""
     md = obj.get("metadata") or {}
     return ResourceRow(
         uid=md.get("uid", ""),
@@ -44,7 +46,7 @@ def base_row(obj: dict, cluster_id: str, kind: str) -> ResourceRow:
         namespace=md.get("namespace"),
         name=md.get("name", ""),
         created_at=parse_ts(md["creationTimestamp"]) if md.get("creationTimestamp") else None,
-        columns={},
+        columns={"resource_version": md.get("resourceVersion")},
         labels=md.get("labels") or {},
     )
 
@@ -119,7 +121,6 @@ def _resources(pod: dict) -> dict[str, Any]:
 
 
 def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
-    md = pod.get("metadata") or {}
     status = pod.get("status") or {}
     containers = status.get("containerStatuses") or []
     label, status_class = pod_status(pod)
@@ -130,14 +131,15 @@ def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
     ]
     last_restart = max(finished, key=parse_ts) if finished else None
     row = base_row(pod, cluster_id, "Pod")
-    row.columns = {
-        "status": label,
-        "status_class": status_class,
-        "ready": f"{sum(1 for cs in containers if cs.get('ready'))}/{len(containers)}",
-        "restarts": sum((cs.get("restartCount") or 0) for cs in containers),
-        "node": (pod.get("spec") or {}).get("nodeName"),
-        "last_restart_at": last_restart,
-        "resource_version": md.get("resourceVersion"),
-        **_resources(pod),
-    }
+    row.columns.update(
+        {
+            "status": label,
+            "status_class": status_class,
+            "ready": f"{sum(1 for cs in containers if cs.get('ready'))}/{len(containers)}",
+            "restarts": sum((cs.get("restartCount") or 0) for cs in containers),
+            "node": (pod.get("spec") or {}).get("nodeName"),
+            "last_restart_at": last_restart,
+            **_resources(pod),
+        }
+    )
     return row

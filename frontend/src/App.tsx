@@ -148,10 +148,14 @@ export function Console() {
     setSelection,
   });
   const { cancel: cancelJump } = nav;
-  // Picking a row or a kind yourself drops a jump still waiting for its row.
+  // Picking a row, a kind or a filter yourself drops a jump still waiting for its row.
   const onSelection = useCallback<typeof setSelection>((next) => {
     cancelJump();
     setSelection(next);
+  }, [cancelJump]);
+  const onFilters = useCallback((next: Filters) => {
+    cancelJump();
+    setFilters(next);
   }, [cancelJump]);
   const onSelectKind = useCallback(
     (key: string, opts?: { replace: boolean }) => {
@@ -188,8 +192,8 @@ export function Console() {
           error={kindsError}
           onRetry={onRetryKinds}
         />
-        <FilterBar value={filters} onChange={setFilters} chips={chips} counts={counts} namespaces={namespaces} />
-        <NavigationNotice text={nav.notice} />
+        <FilterBar value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} />
+        <NavigationNotice text={nav.notice} waiting={nav.waiting} />
         <main className={s.main}>
           <TerritoryTable
             territories={shown}

@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useQuery, type Query, type UseQueryResult } from "@tanstack/react-query";
 import { getJson } from "../../api/http";
 import type { ResourceDescribe, ResourceYaml } from "../../api/types";
 
@@ -9,8 +9,17 @@ export function resourcePath(clusterId: string, kindKey: string, ns: string | nu
 }
 
 /**
- * Any object's describe. `version` changes whenever the watch reports a change to the row, so the
- * describe reloads then; the previous answer stays on screen meanwhile. A Secret's answer holds its
+ * The previous answer while a new one loads, but only for the same object (a new version of it):
+ * another object's details are never shown as this one's.
+ */
+function sameObject<T>(key: readonly unknown[]) {
+  return (previous: T | undefined, query: Query<T, Error, T, readonly unknown[]> | undefined): T | undefined =>
+    previous !== undefined && query !== undefined && key.slice(0, 5).every((part, i) => query.queryKey[i] === part) ? previous : undefined;
+}
+
+/**
+ * Any object's describe. `version` is the row's resource version, so the describe reloads whenever
+ * the watch reports a change; the previous answer of the same object stays on screen meanwhile. A Secret's answer holds its
  * key names and sizes only: a revealed value never goes through here (see SecretValues).
  */
 export function useResourceDescribe(
@@ -20,10 +29,11 @@ export function useResourceDescribe(
   name: string,
   version: string,
 ): UseQueryResult<ResourceDescribe> {
+  const queryKey = ["resource-describe", clusterId, kindKey, ns, name, version] as const;
   return useQuery({
-    queryKey: ["resource-describe", clusterId, kindKey, ns, name, version],
+    queryKey,
     queryFn: () => getJson<ResourceDescribe>(resourcePath(clusterId, kindKey, ns, name, "describe")),
-    placeholderData: keepPreviousData,
+    placeholderData: sameObject<ResourceDescribe>(queryKey),
     retry: false,
   });
 }
@@ -37,10 +47,11 @@ export function useResourceYaml(
   version: string,
   enabled: boolean,
 ): UseQueryResult<string> {
+  const queryKey = ["resource-yaml", clusterId, kindKey, ns, name, version] as const;
   return useQuery({
-    queryKey: ["resource-yaml", clusterId, kindKey, ns, name, version],
+    queryKey,
     queryFn: async () => (await getJson<ResourceYaml>(resourcePath(clusterId, kindKey, ns, name, "yaml"))).yaml,
-    placeholderData: keepPreviousData,
+    placeholderData: sameObject<string>(queryKey),
     retry: false,
     enabled,
   });

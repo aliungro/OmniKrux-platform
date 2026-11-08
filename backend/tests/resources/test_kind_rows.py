@@ -366,3 +366,25 @@ def test_pv_row_survives_a_partial_claimref():
     only_name = obj(spec={"claimRef": {"name": "data"}})
     assert kr.pv_row(only_name, "c1").columns["claim"] == "data"
     assert kr.pv_row(obj(spec={"claimRef": {}}), "c1").columns["claim"] is None
+
+
+@pytest.mark.parametrize(
+    "build",
+    [kr.secret_row, kr.configmap_row, kr.deployment_row, kr.node_row, kr.helm_release_row],
+)
+def test_every_row_carries_its_resource_version(build):
+    """The inspector keys a row's describe (and drops a revealed Secret value) on it."""
+    with_version = {"metadata": {**MD, "resourceVersion": "4242"}}
+    assert build(with_version, "c1").columns["resource_version"] == "4242"
+    assert build(obj(), "c1").columns["resource_version"] is None
+
+
+def test_printer_rows_and_pod_rows_carry_their_resource_version():
+    from omnikrux.resources.printer import PrinterColumn, printer_row_builder
+    from omnikrux.resources.rows import pod_row
+
+    with_version = {"metadata": {**MD, "resourceVersion": "7"}}
+    column = PrinterColumn(name="Ready", type="string", json_path=".status.ready")
+    build = printer_row_builder([column], kind="Widget")
+    assert build(with_version, "c1").columns["resource_version"] == "7"
+    assert pod_row(with_version, "c1").columns["resource_version"] == "7"
