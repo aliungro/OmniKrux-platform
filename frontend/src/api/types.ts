@@ -1,6 +1,7 @@
 export type Provider = "aks" | "eks" | "gke" | "oke" | "kind" | "onprem";
 export type Environment = "production" | "development" | "unknown";
-export type ClusterState = "unknown" | "syncing" | "ready" | "error";
+/** `absent`: the cluster doesn't serve the watched kind (its message says so); says nothing about the cluster. */
+export type ClusterState = "unknown" | "syncing" | "ready" | "error" | "absent";
 export type StatusClass = "ok" | "warn" | "bad" | "done";
 
 export interface Cluster {
@@ -25,13 +26,71 @@ export interface ResourceRow {
   name: string;
   created_at: string | null;
   columns: Record<string, unknown>;
+  labels: Record<string, string>;
+}
+
+/* Kinds — mirrors backend/omnikrux/resources/catalog.py (GET /api/kinds). */
+
+export type ColumnType = "text" | "number" | "status" | "age" | "time" | "cpu" | "memory" | "object" | "pods";
+
+export interface ColumnSpec {
+  /** The row's `columns` key; `name`, `namespace` and `age` read the row's own fields. */
+  key: string;
+  label: string;
+  type: ColumnType;
+  /** s: 70px, m: 1fr, l: 2fr (Name is always at least 200px). */
+  width: "s" | "m" | "l";
+}
+
+export interface ServedKind {
+  /** kubectl's fully qualified resource name (`deployments.apps`), or `helm-releases`. */
+  key: string;
+  group: string;
+  version: string;
+  kind: string;
+  plural: string;
+  /** Singular, e.g. "Deployment" or "Helm release". */
+  label: string;
+  /** For copy such as "No deployments" (Ruling R18). */
+  plural_label: string;
+  namespaced: boolean;
+  short_names: string[];
+  columns: ColumnSpec[];
+  /** `recent`: newest `last seen` / `updated` first; `status`: failing first, then by name. */
+  sort: "status" | "recent";
+  builtin: boolean;
+  verbs: string[];
+  /** The clusters that serve it. */
+  clusters: string[];
+}
+
+export type KindInfo = ServedKind;
+
+export interface ClusterKindsStatus {
+  state: "ok" | "error";
+  message: string | null;
+  /** API groups that didn't answer, with why in plain words; their kinds are missing for now. */
+  failed_groups: Record<string, string>;
+}
+
+export interface KindsResponse {
+  kinds: KindInfo[];
+  clusters: Record<string, ClusterKindsStatus>;
+}
+
+/** An `object` column: what a row points at; `kind_key` is null for a kind the console can't name. */
+export interface Link {
+  kind_key: string | null;
+  namespace: string | null;
+  name: string;
+  label: string;
 }
 
 export type WatchMessage =
   | {
       type: "cluster_status";
       cluster_id: string;
-      state: "syncing" | "ready" | "error";
+      state: "syncing" | "ready" | "error" | "absent";
       message: string | null;
     }
   | { type: "snapshot"; cluster_id: string; rows: ResourceRow[]; part: number; last: boolean }

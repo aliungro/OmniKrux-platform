@@ -4,7 +4,9 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
-import { TerritoryTable } from "./TerritoryTable";
+import type { TerritoryTableProps } from "./TerritoryTable";
+import { DEPLOYMENTS, PODS } from "../../test/kinds";
+import { Table } from "../../test/table";
 
 const describeBody = {
   pod: {
@@ -35,22 +37,22 @@ afterEach(() => {
 
 const rows = (n: number): ResourceRow[] =>
   Array.from({ length: n }, (_, i) => ({
-    uid: String(i), cluster_id: "c1", kind: "Pod", namespace: "n", name: `pod-${i}`, created_at: null,
+    uid: String(i), cluster_id: "c1", kind: "Pod", namespace: "n", name: `pod-${i}`, created_at: null, labels: {},
     columns: { status: "Running", status_class: "ok", resource_version: "1" },
   }));
 
-const territory = (rs: ResourceRow[]): Territory => ({
+const territory = (rs: ResourceRow[], state: Territory["state"] = "ready"): Territory => ({
   cluster: { id: "c1", name: "big", context_name: "x", server: "https://x", original_server: null, provider: "gke",
     region: null, environment: "development", state: "ready", message: null },
-  state: "ready", message: null, rows: rs, total: rs.length, failing: 0, pending: 0,
+  state, message: null, rows: rs, total: rs.length, failing: 0, pending: 0,
 });
 
-function renderTable(n: number, props: Partial<Parameters<typeof TerritoryTable>[0]> = {}) {
+function renderTable(n: number, props: Partial<TerritoryTableProps> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <div style={{ height: 600 }}>
-        <TerritoryTable territories={[territory(rows(n))]} onRetry={() => {}} {...props} />
+        <Table territories={[territory(rows(n))]} kind={PODS} onRetry={() => {}} {...props} />
       </div>
     </QueryClientProvider>,
   );
@@ -146,7 +148,7 @@ describe("selection", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const ui = (n: number) => (
       <QueryClientProvider client={client}>
-        <TerritoryTable territories={[territory(rows(n))]} onRetry={() => {}} />
+        <Table territories={[territory(rows(n))]} kind={PODS} onRetry={() => {}} />
       </QueryClientProvider>
     );
     const { rerender } = render(ui(3));
@@ -178,5 +180,53 @@ describe("selection", () => {
     const rendered = screen.queryAllByText(/^pod-\d+$/).length;
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(200);
+  });
+
+  it("inspector survives a reconnect of its cluster", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (t: Territory) => (
+      <QueryClientProvider client={client}>
+        <Table territories={[t]} kind={PODS} onRetry={() => {}} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(territory(rows(3))));
+    fireEvent.keyDown(podRow("pod-1"), { key: "Enter" });
+    expect(inspector()!.getAttribute("aria-label")).toBe("Details for pod-1");
+    // The cluster reconnects: its rows are hidden until they're live again, the inspector with them.
+    rerender(ui(territory([], "syncing")));
+    expect(inspector()).toBeNull();
+    rerender(ui(territory([], "error")));
+    expect(inspector()).toBeNull();
+    // Back, with the pod still there: the inspector reopens under it.
+    rerender(ui(territory(rows(3))));
+    expect(inspector()!.getAttribute("aria-label")).toBe("Details for pod-1");
+    expect(podRow("pod-1").getAttribute("aria-selected")).toBe("true");
+    // Ready and gone: now it closes, and stays closed.
+    rerender(ui(territory(rows(1))));
+    expect(inspector()).toBeNull();
+    rerender(ui(territory(rows(3))));
+    expect(inspector()).toBeNull();
+  });
+
+  it("other kinds select rows, but only pods open details, logs and shells", () => {
+    const onOpenLogs = vi.fn();
+    const onOpenShell = vi.fn();
+    const deps = rows(3).map((r) => ({ ...r, kind: "Deployment", name: r.name.replace("pod", "web") }));
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Table territories={[territory(deps)]} kind={DEPLOYMENTS} onRetry={() => {}} onOpenLogs={onOpenLogs} onOpenShell={onOpenShell} />
+      </QueryClientProvider>,
+    );
+    const r = podRow("web-1");
+    fireEvent.keyDown(r, { key: "Enter" });
+    fireEvent.click(screen.getByText("web-1"));
+    for (const key of ["l", "p", "s"]) fireEvent.keyDown(r, { key });
+    expect(inspector()).toBeNull();
+    expect(r.getAttribute("aria-selected")).toBe("true");
+    expect(r.hasAttribute("aria-expanded")).toBe(false);
+    expect(onOpenLogs).not.toHaveBeenCalled();
+    expect(onOpenShell).not.toHaveBeenCalled();
+    fireEvent.keyDown(r, { key: "ArrowDown" });
+    expect(podRow("web-2").getAttribute("aria-selected")).toBe("true");
   });
 });

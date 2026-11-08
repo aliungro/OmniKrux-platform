@@ -71,6 +71,7 @@ const row = (rv = "1"): ResourceRow => ({
   namespace: "payments",
   name: "payments-api-1",
   created_at: null,
+  labels: {},
   columns: { status: "CrashLoopBackOff", status_class: "bad", resource_version: rv },
 });
 

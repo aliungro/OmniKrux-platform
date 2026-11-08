@@ -46,7 +46,8 @@ export function scheduleFrame(cb: () => void): () => void {
   return cancel;
 }
 
-export function useWatch(kind: string, opts: WatchOptions = {}): WatchState {
+/** Live rows of one kind from every cluster; `null` watches nothing (an empty state, no socket). */
+export function useWatch(kind: string | null, opts: WatchOptions = {}): WatchState {
   const [state, setState] = useState<WatchState>(emptyWatchState);
   const optsRef = useRef(opts);
   useEffect(() => {
@@ -94,7 +95,7 @@ export function useWatch(kind: string, opts: WatchOptions = {}): WatchState {
     };
 
     const connect = () => {
-      const ws = new WebSocket(watchUrl(kind));
+      const ws = new WebSocket(watchUrl(watched));
       socket = ws;
       ws.onmessage = (ev) => {
         if (disposed) return;
@@ -131,6 +132,8 @@ export function useWatch(kind: string, opts: WatchOptions = {}): WatchState {
     };
 
     setState(emptyWatchState());
+    if (kind === null) return;
+    const watched = kind;
     connect();
 
     return () => {

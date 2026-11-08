@@ -1,5 +1,5 @@
-import type { Territory } from "./model";
-import { COLUMN_COUNT } from "./PodRow";
+import type { ClusterState, KindInfo } from "../../api/types";
+import { countNoun, hasStatus, type Territory } from "./model";
 import { PROVIDER_CODE, ProviderBadge, knownProvider } from "./ProviderBadge";
 import s from "./ClusterBand.module.css";
 import pc from "./provider.module.css";
@@ -13,11 +13,7 @@ function serverHost(server: string | undefined): string | null {
   }
 }
 
-function pods(n: number): string {
-  return n === 1 ? "1 pod" : `${n} pods`;
-}
-
-function Summary({ t }: { t: Territory }) {
+function Summary({ t, kind }: { t: Territory; kind: KindInfo }) {
   if (t.state === "error") {
     const message = t.message ?? "This cluster reported an error without details";
     return <span className={s.error} title={message}>{message}</span>;
@@ -26,24 +22,39 @@ function Summary({ t }: { t: Territory }) {
     // Retrying after a failure: keep the reason on screen until the retry succeeds or fails.
     return <span className={s.error} title={t.message}>{t.message}</span>;
   }
+  if (t.state === "absent") {
+    // Not an error: this cluster just doesn't have the kind (a CRD that only some clusters install).
+    const message = t.message ?? `This cluster doesn't serve ${kind.key}.`;
+    return <span className={s.absent} data-testid="band-absent" title={message}>{message}</span>;
+  }
   if (t.state !== "ready") return <span className={s.sum}>Connecting…</span>;
-  if (t.total === 0) return <span className={s.sum} data-testid="band-summary">No pods</span>;
-  if (t.rows.length === 0) return <span className={s.sum} data-testid="band-summary">No pods match</span>;
+  if (t.total === 0) return <span className={s.sum} data-testid="band-summary">No {kind.plural_label}</span>;
+  if (t.rows.length === 0) return <span className={s.sum} data-testid="band-summary">No {kind.plural_label} match</span>;
+  // Health only for kinds that have a status worth judging; an event's type isn't one.
+  const health = hasStatus(kind) && kind.key !== "events";
   return (
     <span className={s.sum} data-testid="band-summary">
-      {pods(t.total)},{" "}
-      {t.failing > 0 ? <span className={s.failing}>{t.failing} failing</span> : "all healthy"}
+      {countNoun(kind, t.total)}
+      {health && (
+        <>
+          ,{" "}
+          {t.failing > 0 ? <span className={s.failing}>{t.failing} failing</span> : "all healthy"}
+        </>
+      )}
     </span>
   );
 }
 
 export function ClusterBand({
   t,
+  kind,
   onRetry,
   rowIndex,
 }: {
   t: Territory;
-  onRetry: (clusterId: string) => void;
+  kind: KindInfo;
+  /** With the band's state: an absent kind is retried by asking the cluster for its kinds again. */
+  onRetry: (clusterId: string, state: ClusterState) => void;
   rowIndex?: number;
 }) {
   const { cluster } = t;
@@ -54,7 +65,7 @@ export function ClusterBand({
   const loc = [cluster.region, original && host ? `via ${host}` : host].filter(Boolean).join(" · ");
   return (
     <div role="row" aria-rowindex={rowIndex} className={`${s.band} ${pc[provider]}${t.rows.length === 0 ? ` ${s.alone}` : ""}`} tabIndex={-1}>
-      <div role="rowheader" aria-colspan={COLUMN_COUNT} className={s.cell}>
+      <div role="rowheader" aria-colspan={kind.columns.length} className={s.cell}>
         <ProviderBadge provider={provider} large />
         <b className={s.name}>{cluster.name}</b>
         {loc && <span className={s.loc} title={loc}>{loc}</span>}
@@ -69,9 +80,9 @@ export function ClusterBand({
         )}
         {cluster.environment === "production" && <span className={`${s.env} ${s.prod}`}>Production</span>}
         {cluster.environment === "development" && <span className={`${s.env} ${s.dev}`}>Development</span>}
-        <Summary t={t} />
-        {(t.state === "error" || (t.state === "syncing" && t.message)) && (
-          <button type="button" className={s.retry} onClick={() => onRetry(cluster.id)}>
+        <Summary t={t} kind={kind} />
+        {(t.state === "error" || t.state === "absent" || (t.state === "syncing" && t.message)) && (
+          <button type="button" className={s.retry} onClick={() => onRetry(cluster.id, t.state)}>
             Retry
           </button>
         )}

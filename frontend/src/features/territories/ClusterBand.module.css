@@ -101,6 +101,15 @@
   font-weight: 600;
 }
 
+/* A kind this cluster doesn't have: a plain fact, quieter than an error. */
+.absent {
+  min-width: 0;
+  margin-left: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-3);
+}
+
 .retry {
   position: relative;
   z-index: 1;

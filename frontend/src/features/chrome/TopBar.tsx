@@ -8,6 +8,7 @@ export type ScopeCluster = Pick<Territory, "cluster" | "state" | "message" | "fa
 function tokenTitle(c: ScopeCluster): string | undefined {
   if (c.state === "error") return c.message ?? "This cluster reported an error without details";
   if (c.state === "syncing" && c.message) return c.message;
+  if (c.state === "absent") return c.message ?? undefined; // the cluster is fine; it lacks this kind
   if (c.state !== "ready") return "Connecting…";
   return undefined;
 }

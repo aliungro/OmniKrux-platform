@@ -1,23 +1,38 @@
 import { useCallback, useMemo, useState } from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "./api/useClusters";
+import { refreshKinds, useKinds } from "./api/useKinds";
 import { useWatch } from "./api/useWatch";
-import type { OwnerRef, ResourceRow } from "./api/types";
+import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "./api/types";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
 import { ShortcutBar } from "./features/chrome/ShortcutBar";
 import { TopBar } from "./features/chrome/TopBar";
 import { Dock } from "./features/dock/Dock";
 import { useDock } from "./features/dock/useDock";
-import { buildTerritories, countFilters, podCount, type Filters } from "./features/territories/model";
+import {
+  buildTerritories,
+  chipsFor,
+  countFilters,
+  fallbackKind,
+  isNoFilter,
+  kindCount,
+  namespacesIn,
+  NO_FILTER,
+  NO_SELECTION,
+  podsPerNode,
+  type Filters,
+  type Selection,
+} from "./features/territories/model";
 import { TerritoryTable } from "./features/territories/TerritoryTable";
 import { useNow } from "./hooks/useNow";
+import { useRoute } from "./route";
 import s from "./App.module.css";
 
-const NO_FILTER: Filters = { status: "all", text: "" };
-
-function isNoFilter(f: Filters): boolean {
-  return f.status === "all" && f.text.trim() === "";
+/** The page's kinds, or undefined while GET /api/kinds hasn't answered (or answered with something else). */
+function servedKinds(data: unknown): KindInfo[] | undefined {
+  const kinds = (data as { kinds?: unknown } | undefined)?.kinds;
+  return Array.isArray(kinds) ? (kinds as KindInfo[]) : undefined;
 }
 
 /** The whole console page; expects a QueryClientProvider above it. */
@@ -27,22 +42,49 @@ export function Console() {
   const list = clusters.data;
   const { refetch } = clusters;
   const knownClusterIds = useMemo(() => (list ? new Set(list.map((c) => c.id)) : undefined), [list]);
+
+  const [route, setRoute] = useRoute();
+  // The audit log (Task 14) has its own view; until then the pods view stands in.
+  const kindKey = route.view === "resources" ? route.kind : "pods";
+  const kinds = useKinds();
+  const served = servedKinds(kinds.data);
+  const kind = useMemo(() => served?.find((k) => k.key === kindKey) ?? fallbackKind(kindKey), [served, kindKey]);
+
   // The watch names clusters the moment the backend adds or drops them; reload the list then.
-  const watch = useWatch("pods", {
+  const watch = useWatch(kindKey, {
     knownClusterIds,
     onUnknownCluster: () => void refetch(),
     onClusterRemoved: () => void queryClient.invalidateQueries({ queryKey: CLUSTERS_QUERY_KEY }),
   });
+  // The Nodes view's Pods column counts live pods per node.
+  const podWatch = useWatch(kindKey === "nodes" ? "pods" : null);
+  const podCounts = useMemo(() => (kindKey === "nodes" ? podsPerNode(podWatch) : null), [kindKey, podWatch]);
   const now = useNow(60_000);
+
   const [filters, setFilters] = useState<Filters>(NO_FILTER);
+  const [selection, setSelection] = useState<Selection>(NO_SELECTION);
+  // Another kind starts with nothing selected, and without a status chip it may not offer.
+  const [shownKind, setShownKind] = useState(kindKey);
+  if (shownKind !== kindKey) {
+    setShownKind(kindKey);
+    setSelection(NO_SELECTION);
+    if (filters.status !== "all") setFilters({ ...filters, status: "all" });
+  }
+  // A kind without namespaces ignores the namespace you picked for another one (and keeps it for later).
+  const effective = useMemo(
+    () => (kind.namespaced || filters.namespace === null ? filters : { ...filters, namespace: null }),
+    [kind.namespaced, filters],
+  );
 
   // Unfiltered territories drive the scope tokens and every count, so counts never shrink as you filter.
-  const all = useMemo(() => buildTerritories(list ?? [], watch, NO_FILTER, now), [list, watch, now]);
+  const all = useMemo(() => buildTerritories(list ?? [], watch, NO_FILTER, now, kind), [list, watch, now, kind]);
   const shown = useMemo(
-    () => (isNoFilter(filters) ? all : buildTerritories(list ?? [], watch, filters, now)),
-    [all, list, watch, filters, now],
+    () => (isNoFilter(effective) ? all : buildTerritories(list ?? [], watch, effective, now, kind)),
+    [all, list, watch, effective, now, kind],
   );
-  const counts = useMemo(() => countFilters(all, now), [all, now]);
+  const chips = useMemo(() => chipsFor(kind), [kind]);
+  const counts = useMemo(() => countFilters(all, now, kind), [all, now, kind]);
+  const namespaces = useMemo(() => (kind.namespaced ? namespacesIn(all) : null), [kind.namespaced, all]);
 
   const dock = useDock(list ?? []);
   const { openPod, openOwnerLogs, askNodeShell } = dock;
@@ -54,10 +96,19 @@ export function Console() {
   const onNodeShell = useCallback((row: ResourceRow, node: string) => askNodeShell(row.cluster_id, node), [askNodeShell]);
   const onOwnerLogs = useCallback((row: ResourceRow, owner: OwnerRef) => openOwnerLogs(row, owner), [openOwnerLogs]);
 
-  const onRetry = useCallback((id: string) => {
-    // The watch reports the cluster's new state; a failed request leaves its band in error.
-    retryCluster(id).catch((err: unknown) => console.error(`Retry for cluster ${id} failed:`, err));
-  }, []);
+  const onRetry = useCallback((id: string, state: ClusterState) => {
+    // An absent kind may have been installed since: ask the clusters for their kinds again first
+    // (the server otherwise answers from a 5-minute cache). The watch reports the cluster's new
+    // state; a failed request leaves its band as it was.
+    const first = state === "absent" ? refreshKinds(queryClient).catch((err: unknown) => {
+      console.error("Refreshing the kinds failed:", err);
+    }) : Promise.resolve();
+    first
+      .then(() => retryCluster(id))
+      .catch((err: unknown) => console.error(`Retry for cluster ${id} failed:`, err));
+  }, [queryClient]);
+
+  const onSelectKind = useCallback((key: string) => setRoute({ view: "resources", kind: key }), [setRoute]);
 
   let body;
   if (list === undefined) {
@@ -78,12 +129,16 @@ export function Console() {
   } else {
     body = (
       <>
-        <KindTabs active="pods" counts={{ pods: podCount(all) }} />
-        <FilterBar value={filters} onChange={setFilters} counts={counts} />
+        <KindTabs kinds={served} active={kindKey} count={kindCount(all)} onSelect={onSelectKind} />
+        <FilterBar value={filters} onChange={setFilters} chips={chips} counts={counts} namespaces={namespaces} />
         <main className={s.main}>
           <TerritoryTable
             territories={shown}
+            kind={kind}
+            selection={selection}
+            onSelection={setSelection}
             onRetry={onRetry}
+            podCounts={podCounts}
             onOpenLogs={onOpenLogs}
             onOpenShell={onOpenShell}
             onNodeShell={onNodeShell}

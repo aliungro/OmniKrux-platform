@@ -243,7 +243,9 @@ export function useDock(clusters: Cluster[]): DockApi {
   // and it needs its session (a node-shell pod is only deleted when its session ends).
   const cancel = () => setAsk((a) => (a?.busy ? a : null));
 
-  // Everything but `state` and `ask` keeps its identity, so the table's rows don't re-render.
+  // Everything but `state` and `ask` keeps its identity, and the API object below changes only with
+  // them: the callbacks Console hands the (memoized) table stay the same, so opening, focusing or
+  // resizing a session re-renders the dock, not the table.
   const stable = useRef({ askNodeShell, askDebug, askRestart, confirm, cancel });
   stable.current = { askNodeShell, askDebug, askRestart, confirm, cancel };
   const fns = useMemo(
@@ -257,5 +259,8 @@ export function useDock(clusters: Cluster[]): DockApi {
     [],
   );
 
-  return { state, dispatch, openPod, openOwnerLogs, ask, ...fns };
+  return useMemo(
+    () => ({ state, dispatch, openPod, openOwnerLogs, ask, ...fns }),
+    [state, dispatch, openPod, openOwnerLogs, ask, fns],
+  );
 }

@@ -1,11 +1,23 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type CSSProperties,
+  type Dispatch,
+  type KeyboardEvent,
+  type SetStateAction,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { OwnerRef, ResourceRow } from "../../api/types";
+import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/types";
+import { rowShortcut } from "../chrome/shortcuts";
 import { Inspector } from "../inspector/Inspector";
-import { flatten, type RowRef, type Territory } from "./model";
+import { flatten, kindTitle, rowKey, type RowRef, type Selection, type Territory } from "./model";
+import { gridTemplate, minTableWidth } from "./cells";
 import { ClusterBand } from "./ClusterBand";
-import { COLUMN_COUNT, COLUMNS, PodRow, rowKey } from "./PodRow";
-import pr from "./PodRow.module.css";
+import { ResourceRowView } from "./ResourceRowView";
+import rv from "./ResourceRowView.module.css";
 import s from "./TerritoryTable.module.css";
 
 const BAND_HEIGHT = 52;
@@ -16,25 +28,52 @@ const INSPECTOR_ESTIMATE = 360;
 const HEADER_HEIGHT = 30;
 const OVERSCAN = 10;
 
-export function TerritoryTable({
-  territories,
-  onRetry,
-  onOpenLogs,
-  onOpenShell,
-  onNodeShell,
-  onOwnerLogs,
-}: {
+export interface TerritoryTableProps {
   territories: Territory[];
-  onRetry: (clusterId: string) => void;
+  kind: KindInfo;
+  /** The current row and whether its details are open; held by Console so other views can set it. */
+  selection: Selection;
+  onSelection: Dispatch<SetStateAction<Selection>>;
+  onRetry: (clusterId: string, state: ClusterState) => void;
+  /** Live pods per node per cluster, for the Nodes view's Pods column. */
+  podCounts?: Map<string, Map<string, number>> | null;
   /** `previous`: the run before the last restart (the `p` key). */
   onOpenLogs?: (row: ResourceRow, previous?: boolean) => void;
   onOpenShell?: (row: ResourceRow) => void;
   onNodeShell?: (row: ResourceRow, node: string) => void;
   onOwnerLogs?: (row: ResourceRow, owner: OwnerRef) => void;
-}) {
-  const [selected, setSelected] = useState<RowRef | null>(null);
-  const [open, setOpen] = useState(false);
-  const items = useMemo(() => flatten(territories, open ? selected : null), [territories, open, selected]);
+}
+
+function sameRef(a: RowRef | null, b: RowRef): boolean {
+  return a !== null && a.clusterId === b.clusterId && a.uid === b.uid;
+}
+
+/** A cluster in one of these states hides its rows until it's live again; they're not gone. */
+const NOT_LIVE: ReadonlySet<ClusterState> = new Set(["syncing", "error", "unknown"]);
+
+/**
+ * Memoized: Console passes stable props, so a change elsewhere on the page (the dock, a dialog)
+ * doesn't re-render the table.
+ */
+export const TerritoryTable = memo(function TerritoryTable({
+  territories,
+  kind,
+  selection,
+  onSelection,
+  onRetry,
+  podCounts = null,
+  onOpenLogs,
+  onOpenShell,
+  onNodeShell,
+  onOwnerLogs,
+}: TerritoryTableProps) {
+  const { selected, open } = selection;
+  // Ruling R11: only pods have details for now; other kinds' rows select but don't open.
+  const inspectable = kind.key === "pods";
+  const items = useMemo(
+    () => flatten(territories, open && inspectable ? selected : null),
+    [territories, open, inspectable, selected],
+  );
   const indexByKey = useMemo(() => {
     const m = new Map<string, number>();
     items.forEach((it, i) => {
@@ -74,22 +113,26 @@ export function TerritoryTable({
   });
   const now = new Date();
 
-  const select = useCallback((row: ResourceRow) => setSelected({ clusterId: row.cluster_id, uid: row.uid }), []);
+  const select = useCallback((row: ResourceRow) => {
+    const ref = { clusterId: row.cluster_id, uid: row.uid };
+    onSelection((prev) => (sameRef(prev.selected, ref) ? prev : { ...prev, selected: ref }));
+  }, [onSelection]);
 
   const toggle = useCallback((row: ResourceRow) => {
-    const same = selected?.clusterId === row.cluster_id && selected.uid === row.uid;
-    select(row);
-    setOpen(!(open && same));
-  }, [open, select, selected]);
+    const ref = { clusterId: row.cluster_id, uid: row.uid };
+    onSelection((prev) => ({ selected: ref, open: !(prev.open && sameRef(prev.selected, ref)) }));
+  }, [onSelection]);
 
   const close = useCallback(() => {
-    setOpen(false);
+    onSelection((prev) => (prev.open ? { ...prev, open: false } : prev));
     focusPending.current = true;
-  }, []);
+  }, [onSelection]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.key === "Escape") {
+    const shortcut = rowShortcut(e.key);
+    if (!shortcut) return;
+    if (shortcut.id === "close") {
       if (!open) return;
       e.preventDefault();
       close();
@@ -101,9 +144,10 @@ export function TerritoryTable({
     if (at === undefined) return;
     const it = items[at];
     if (it.type !== "row") return;
-    switch (e.key) {
-      case "ArrowDown":
-      case "ArrowUp": {
+    // Ruling R14: details, logs and shells are pods' only, until per-kind meanings arrive.
+    if (shortcut.podsOnly && !inspectable) return;
+    switch (shortcut.id) {
+      case "move": {
         e.preventDefault();
         const step = e.key === "ArrowDown" ? 1 : -1;
         let i = at + step;
@@ -115,20 +159,19 @@ export function TerritoryTable({
         scrollPending.current = true;
         return;
       }
-      case "Enter":
-      case "d":
+      case "details":
         e.preventDefault();
         toggle(it.row);
         return;
-      case "l":
-      case "p":
+      case "logs":
+      case "previousLogs":
         if (onOpenLogs) {
           e.preventDefault();
           select(it.row);
-          onOpenLogs(it.row, e.key === "p");
+          onOpenLogs(it.row, shortcut.id === "previousLogs");
         }
         return;
-      case "s":
+      case "shell":
         if (onOpenShell) {
           e.preventDefault();
           select(it.row);
@@ -143,10 +186,14 @@ export function TerritoryTable({
     if (selectedKey === null) return;
     const at = indexByKey.get(selectedKey);
     if (at === undefined) {
-      // The pod was deleted or filtered out: nothing left to inspect, scroll to or focus.
       focusPending.current = false;
       scrollPending.current = false;
-      if (open) setOpen(false);
+      // Its cluster is reconnecting: the row is hidden, not gone. Keep it selected, details open,
+      // so both come back with it.
+      const home = territories.find((t) => t.cluster.id === selected?.clusterId);
+      if (home && NOT_LIVE.has(home.state)) return;
+      // Deleted or filtered out on a live cluster: nothing left to inspect.
+      if (open) onSelection((prev) => (prev.open ? { ...prev, open: false } : prev));
       return;
     }
     if (scrollPending.current) {
@@ -164,13 +211,24 @@ export function TerritoryTable({
   // One row takes Tab focus: the selected one while it's shown, else the first row.
   const tabKey = selectedKey !== null && indexByKey.has(selectedKey) ? selectedKey : indexByKey.keys().next().value;
   const margin = virtualizer.options.scrollMargin;
+  const columns = kind.columns;
+  const tableStyle = useMemo(
+    () => ({ "--cols": gridTemplate(columns), minWidth: minTableWidth(columns) }) as CSSProperties,
+    [columns],
+  );
 
   return (
     <div ref={scrollRef} className={s.scroll} onKeyDown={onKeyDown}>
-      <div role="grid" aria-label="Pods by cluster" aria-rowcount={items.length + 1} className={s.table}>
+      <div
+        role="grid"
+        aria-label={`${kindTitle(kind)} by cluster`}
+        aria-rowcount={items.length + 1}
+        className={s.table}
+        style={tableStyle}
+      >
         <div role="rowgroup" className={s.head}>
-          <div role="row" aria-rowindex={1} className={`${pr.grid} ${s.cols}`}>
-            {COLUMNS.map((c) => <span key={c} role="columnheader">{c}</span>)}
+          <div role="row" aria-rowindex={1} className={`${rv.grid} ${s.cols}`}>
+            {columns.map((c) => <span key={c.key} role="columnheader">{c.label}</span>)}
           </div>
         </div>
         <div role="rowgroup" className={s.body} style={{ height: virtualizer.getTotalSize() }}>
@@ -189,7 +247,7 @@ export function TerritoryTable({
                   className={`${s.item} ${s.inspRow}${last ? ` ${s.last}` : ""}`}
                   style={{ transform: `translateY(${v.start - margin}px)` }}
                 >
-                  <div role="gridcell" aria-colspan={COLUMN_COUNT}>
+                  <div role="gridcell" aria-colspan={columns.length}>
                     <Inspector
                       row={it.row}
                       provider={it.provider}
@@ -203,21 +261,24 @@ export function TerritoryTable({
                 </div>
               );
             }
+            const key = it.type === "row" ? rowKey(it.row.cluster_id, it.row.uid) : null;
             return (
               <div key={v.key} role="presentation" className={s.item} style={{ height: v.size, transform: `translateY(${v.start - margin}px)` }}>
                 {it.type === "band" ? (
-                  <ClusterBand t={it.t} onRetry={onRetry} rowIndex={rowIndex} />
+                  <ClusterBand t={it.t} kind={kind} onRetry={onRetry} rowIndex={rowIndex} />
                 ) : (
-                  <PodRow
+                  <ResourceRowView
                     row={it.row}
+                    kind={kind}
                     provider={it.provider}
                     last={last}
                     rowIndex={rowIndex}
                     now={now}
-                    selected={rowKey(it.row.cluster_id, it.row.uid) === selectedKey}
-                    expanded={open && rowKey(it.row.cluster_id, it.row.uid) === selectedKey}
-                    focusable={rowKey(it.row.cluster_id, it.row.uid) === tabKey}
-                    onActivate={toggle}
+                    selected={key === selectedKey}
+                    expanded={inspectable ? open && key === selectedKey : undefined}
+                    focusable={key === tabKey}
+                    podCounts={podCounts}
+                    onActivate={inspectable ? toggle : select}
                   />
                 )}
               </div>
@@ -227,4 +288,4 @@ export function TerritoryTable({
       </div>
     </div>
   );
-}
+});
