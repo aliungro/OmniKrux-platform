@@ -18,6 +18,10 @@ from omnikrux.logs.stream import (
 from tests.fakekube import CUT, kubeconfig_for
 
 CLUSTER = "c1"
+NO_PREVIOUS_RUN = (
+    "No previous run to show yet: the kubelet can take about a minute to serve the previous run "
+    "after a restart. Try again in a minute, or read the current logs."
+)
 REAL_PREVIOUS_DELAYS = (
     stream_module.PREVIOUS_RETRY_DELAYS if hasattr(stream_module, "PREVIOUS_RETRY_DELAYS") else None
 )
@@ -105,7 +109,7 @@ async def test_missing_previous_run_is_said_plainly(fake_api, connections):
     fake_api.pods[("demo", "crasher")] = pod()
     with pytest.raises(LogStreamError) as e:
         await collect(make(connections, previous=True))
-    assert e.value.message.startswith('No previous run of container "app" in pod demo/crasher')
+    assert e.value.message == NO_PREVIOUS_RUN
     assert "{" not in e.value.message
 
 
@@ -118,11 +122,7 @@ async def test_previous_logs_retry_400_then_soft_message(fake_api, connections, 
         await collect(make(connections, previous=True))
 
     assert fake_api.previous_requests == 3  # the first try and two retries
-    assert e.value.message == (
-        'No previous run of container "app" in pod demo/crasher is available right now: it may '
-        "not have restarted yet, or it is restarting at this moment. Try again in a few seconds, "
-        "or read the current logs."
-    )
+    assert e.value.message == NO_PREVIOUS_RUN
 
 
 async def test_previous_logs_retry_succeeds_when_the_kubelet_catches_up(

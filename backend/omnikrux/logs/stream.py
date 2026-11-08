@@ -402,8 +402,7 @@ def log_error_message(
             return pod_missing_message(namespace, pod)
         if exc.status == 400 and previous:
             return (
-                f'No previous run of container "{container}" in pod {namespace}/{pod} is '
-                "available right now: it may not have restarted yet, or it is restarting at this "
-                "moment. Try again in a few seconds, or read the current logs."
+                "No previous run to show yet: the kubelet can take about a minute to serve the "
+                "previous run after a restart. Try again in a minute, or read the current logs."
             )
     return kube_error_message(exc, f"read logs for pod {namespace}/{pod}")

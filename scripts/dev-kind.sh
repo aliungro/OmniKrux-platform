@@ -25,7 +25,11 @@ fi
 
 if exists; then
   echo "kind cluster $CLUSTER already exists"
-  nodes="$(kubectl --context "$CONTEXT" get nodes --no-headers | tr -d '\r' | grep -vc control-plane || true)"
+  if ! listed="$(kubectl --context "$CONTEXT" get nodes --no-headers)"; then
+    echo "$CLUSTER exists but its API server isn't reachable; check that Docker is running and retry (nothing was changed)" >&2
+    exit 1
+  fi
+  nodes="$(printf '%s\n' "$listed" | tr -d '\r' | grep -vc control-plane || true)"
   if [ "$nodes" -lt 1 ]; then
     echo "$CLUSTER has no worker node; run scripts/dev-kind.sh --recreate (this deletes the cluster)" >&2
     exit 1

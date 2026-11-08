@@ -243,11 +243,40 @@ def test_scale_conflict_when_replicas_changed_on_a_real_api_server(client, clust
     wait_ready("web", 2)
 
 
+REMOVE_RESTARTED_AT = json.dumps(
+    [
+        {
+            "op": "remove",
+            "path": "/spec/template/metadata/annotations/kubectl.kubernetes.io~1restartedAt",
+        }
+    ]
+)
+
+
+def clear_restart_annotation() -> None:
+    """Whatever the test left: no restartedAt on the template, so a later run starts clean."""
+    subprocess.run(
+        ["kubectl", "--context", CONTEXT, "-n", "demo", "patch", "deployment", "web",
+         "--type=json", "-p", REMOVE_RESTARTED_AT],
+        check=False,
+        capture_output=True,
+        timeout=60,
+    )  # fmt: skip
+
+
 def test_restart_then_rollback_web(client, cluster):
     wait_ready("web", 2)
     assert "restartedAt" not in kubectl(
         "-n", "demo", "get", "deployment", "web", "-o", TEMPLATE_ANNOTATIONS
     )
+    try:
+        restart_then_rollback(client, cluster)
+    finally:
+        clear_restart_annotation()
+        wait_ready("web", 2)
+
+
+def restart_then_rollback(client, cluster) -> None:
     planned = plan(client, cluster, "restart", "deployments.apps", "web", "demo")
     response = apply_plan(client, planned)
     assert response.status_code == 200, response.text
@@ -488,12 +517,14 @@ def test_drain_worker_evicts_and_reports_pdb_blocked_pod(client, cluster):
 
         uncordon = plan(client, cluster, "uncordon", "nodes", node)
         assert apply_plan(client, uncordon).status_code == 200
+        # The pipeline did it (the finally's kubectl uncordon must not be the one that did).
+        assert kubectl("get", "node", node, "-o", "jsonpath={.spec.unschedulable}") == ""
     finally:
-        kubectl("uncordon", node)
-        subprocess.run(
-            ["kubectl", "--context", CONTEXT, "apply", "-f", str(WORKLOADS)],
-            check=False,
-            capture_output=True,
-            timeout=120,
-        )
+        for command in (["uncordon", node], ["apply", "-f", str(WORKLOADS)]):
+            subprocess.run(
+                ["kubectl", "--context", CONTEXT, *command],
+                check=False,
+                capture_output=True,
+                timeout=120,
+            )
         wait_ready("web", 2, timeout=150)

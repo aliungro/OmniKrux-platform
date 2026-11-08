@@ -649,3 +649,41 @@ async def test_json_patch_bare_422_is_a_conflict_only_when_a_test_no_longer_hold
 
     assert caught.value.status == expected
     assert pipeline.is_conflict(caught.value) is (expected == 409)
+
+
+async def test_json_patch_failed_reread_reraises_the_original_422(monkeypatch):
+    from omnikrux.actions import pipeline
+
+    original = _bare_422()
+
+    async def call(api, method, path, **kwargs):
+        if method == "PATCH":
+            raise original
+        raise ApiException(status=500, reason="boom")
+
+    monkeypatch.setattr(pipeline, "call_json", call)
+    ops = [{"op": "test", "path": "/spec/replicas", "value": 3}]
+
+    with pytest.raises(ApiException) as caught:
+        await pipeline.json_patch(object(), "/apis/apps/v1/namespaces/demo/deployments/web", ops)
+
+    assert caught.value is original
+
+
+@pytest.mark.parametrize("status", [403, 404, 409, 500])
+async def test_json_patch_other_errors_pass_through_without_a_reread(monkeypatch, status):
+    from omnikrux.actions import pipeline
+
+    methods = []
+    error = ApiException(status=status, reason="refused")
+
+    async def call(api, method, path, **kwargs):
+        methods.append(method)
+        raise error
+
+    monkeypatch.setattr(pipeline, "call_json", call)
+
+    with pytest.raises(ApiException) as caught:
+        await pipeline.json_patch(object(), "/api/v1/nodes/n1", [])
+
+    assert caught.value is error and methods == ["PATCH"]

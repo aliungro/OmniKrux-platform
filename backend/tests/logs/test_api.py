@@ -17,7 +17,7 @@ from omnikrux.config import Settings
 from omnikrux.logs.api import MAX_SELECTOR_PODS, QUEUE_LIMIT, LineBuffer, logs, send_batches
 from omnikrux.main import create_app
 from tests.fakekube import kubeconfig_for
-from tests.logs.test_stream import pod
+from tests.logs.test_stream import NO_PREVIOUS_RUN, pod
 
 
 @pytest.fixture
@@ -169,7 +169,7 @@ async def test_selector_pod_failure_is_a_marker_not_the_end(app, fake_api):
     assert {"pod": "web-a", "container": "app", "ts": "2026-01-01T00:00:00.000000000Z",
             "text": "previous of a"} in items  # fmt: skip
     [marker] = [i for i in items if "marker" in i]
-    assert marker["marker"].startswith('web-b: No previous run of container "app"')
+    assert marker["marker"] == f"web-b: {NO_PREVIOUS_RUN}"
     assert statuses(ws)[-1] == ("ended", None)
 
 
@@ -354,7 +354,7 @@ async def test_download_errors_are_plain(http, fake_api):
         f"/api/clusters/{cluster_id}/pods/demo/crasher/logs/download", params={"previous": "true"}
     )
     assert r.status_code == 400  # Kubernetes said no: the request can't be served as asked
-    assert r.json()["detail"].startswith('No previous run of container "app"')
+    assert r.json()["detail"] == NO_PREVIOUS_RUN
     r = await client.get("/api/clusters/nope/pods/demo/crasher/logs/download")
     assert r.status_code == 404 and r.json()["detail"] == "Unknown cluster"
 
