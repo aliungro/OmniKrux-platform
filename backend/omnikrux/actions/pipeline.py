@@ -40,7 +40,8 @@ from omnikrux.audit.store import (
 from omnikrux.clusters.models import Environment
 from omnikrux.exec.debug import finish_even_if_cancelled
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
-from omnikrux.kube.http import KUBE_ERRORS
+from omnikrux.kube.http import KUBE_ERRORS, call_json
+from omnikrux.kube.pods import REQUEST_TIMEOUT
 from omnikrux.resources.catalog import KindNotServed
 from omnikrux.resources.kinds import (
     HELM_RELEASES,
@@ -322,6 +323,51 @@ def is_conflict(exc: BaseException) -> bool:
     if exc.status == CONFLICT_STATUS:
         return True
     return exc.status == 422 and any(_TEST_FAILED.search(t) for t in _kube_texts(exc))
+
+
+JSON_PATCH = "application/json-patch+json"
+_MISSING = object()
+
+
+def _value_at(doc: object, pointer: str) -> object:
+    """The value a JSON pointer (RFC 6901) names; _MISSING when nothing is there."""
+    for raw in pointer.split("/")[1:]:
+        token = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(doc, dict) and token in doc:
+            doc = doc[token]
+        elif isinstance(doc, list) and token.isdigit() and int(token) < len(doc):
+            doc = doc[int(token)]
+        else:
+            return _MISSING
+    return doc
+
+
+async def json_patch(api: ApiClient, path: str, ops: list[dict]) -> dict:
+    """PATCH one object with JSON-patch `ops`, whose `test` ops are the apply's precondition.
+
+    A real API server answers a patch whose `test` op fails with a bare 422 (the Status has no
+    message or causes naming the test), the same as for any other refused patch. So on a 422 the
+    object is read again and the `test` ops are checked against it: one that no longer holds is
+    the object having changed since the review, raised as the 409 conflict."""
+    try:
+        return await call_json(
+            api, "PATCH", path, timeout=REQUEST_TIMEOUT, body=ops, content_type=JSON_PATCH
+        )
+    except ApiException as exc:
+        if exc.status != 422:
+            raise
+        try:
+            live = await call_json(api, "GET", path, timeout=REQUEST_TIMEOUT)
+        except KUBE_ERRORS:
+            raise exc from None  # what the user reads is the patch's refusal
+        if any(
+            op.get("op") == "test" and _value_at(live, op.get("path", "")) != op.get("value")
+            for op in ops
+        ):
+            raise ApiException(
+                status=CONFLICT_STATUS, reason="a test of the patch no longer holds"
+            ) from exc
+        raise
 
 
 def _where(target: Target) -> str:

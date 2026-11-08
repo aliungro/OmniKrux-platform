@@ -16,7 +16,7 @@ ADDED, then the watch stays open until `release`). Objects live in `objects[kind
 Any served object can be replaced (PUT, honouring `metadata.resourceVersion` with a 409 like the
 API server, and `dryRun=All`) and patched (`application/merge-patch+json`, or
 `application/json-patch+json` with `test` / `add` / `replace` / `remove`; a failed `test` answers
-the API server's 422). Each write bumps `resourceVersion` (and `generation` when `spec` changed)
+the API server's bare 422). Each write bumps `resourceVersion` (and `generation` when `spec` changed)
 and is recorded in `writes`. Any served object can be deleted (recorded in `deletes`), honouring
 DeleteOptions `preconditions.uid` (and `resourceVersion`) with the API server's 409.
 
@@ -1132,9 +1132,10 @@ def _value_at(doc: object, path: str) -> object:
 
 
 def _patch_failed(message: str) -> web.Response:
-    """How the API server answers a JSON patch it can't apply: 422, the reason in `causes`."""
+    """How a real API server (checked on kind, Kubernetes 1.37) answers a JSON patch it can't
+    apply, a failed `test` included: a bare 422, the reason (`message`) nowhere in the body."""
     body = status_body(422, "Invalid", REJECTED)
-    body["details"] = {"causes": [{"type": "UnexpectedServerResponse", "message": message}]}
+    body["details"] = {}
     return web.json_response(body, status=422)
 
 

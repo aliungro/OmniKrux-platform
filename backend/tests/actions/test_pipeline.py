@@ -601,3 +601,51 @@ def test_diff_text_is_unified_and_capped():
     assert len(huge.encode()) <= 64 * 1024 + 100
     assert huge.endswith("… (diff cut at 64 KB)")
     assert DIFF_LIMIT == 64 * 1024
+
+
+# --- json_patch: a real API server's bare 422 ------------------------------------------------
+
+
+def _bare_422() -> ApiException:
+    """What a real API server (kind, Kubernetes 1.37) answers any refused JSON patch with."""
+    exc = ApiException(status=422, reason="Invalid")
+    exc.body = json.dumps(
+        {
+            "kind": "Status",
+            "status": "Failure",
+            "reason": "Invalid",
+            "code": 422,
+            "message": "the server rejected our request due to an error in our request",
+            "details": {},
+        }
+    )
+    return exc
+
+
+@pytest.mark.parametrize(
+    ("live_replicas", "expected"),
+    [(4, 409), (3, 422)],
+    ids=["a tested value moved since the review", "the tests hold, the patch is bad"],
+)
+async def test_json_patch_bare_422_is_a_conflict_only_when_a_test_no_longer_holds(
+    monkeypatch, live_replicas, expected
+):
+    from omnikrux.actions import pipeline
+
+    async def call(api, method, path, **kwargs):
+        if method == "PATCH":
+            raise _bare_422()
+        return {"metadata": {"uid": "u1"}, "spec": {"replicas": live_replicas}}
+
+    monkeypatch.setattr(pipeline, "call_json", call)
+    ops = [
+        {"op": "test", "path": "/metadata/uid", "value": "u1"},
+        {"op": "test", "path": "/spec/replicas", "value": 3},
+        {"op": "replace", "path": "/spec/replicas", "value": 5},
+    ]
+
+    with pytest.raises(ApiException) as caught:
+        await pipeline.json_patch(object(), "/apis/apps/v1/namespaces/demo/deployments/web", ops)
+
+    assert caught.value.status == expected
+    assert pipeline.is_conflict(caught.value) is (expected == 409)

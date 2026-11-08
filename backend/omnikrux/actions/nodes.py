@@ -36,13 +36,13 @@ from omnikrux.actions.pipeline import (
     ClusterRef,
     Planned,
     Target,
+    json_patch,
 )
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.kube.http import KUBE_ERRORS, call_json, status_message
 from omnikrux.kube.pods import REQUEST_TIMEOUT
 from omnikrux.resources.kinds import KindSpec
 
-JSON_PATCH = "application/json-patch+json"
 MIRROR = "kubernetes.io/config.mirror"
 MAX_EVICTIONS = 5  # in flight at once
 RETRY_SECONDS = 5.0  # between evictions a PodDisruptionBudget refused
@@ -131,14 +131,7 @@ def _switch_ops(uid: str | None, unschedulable: bool) -> list[dict]:
 async def _switch(
     api: ApiClient, spec: KindSpec, target: Target, uid: str | None, unschedulable: bool
 ) -> None:
-    await call_json(
-        api,
-        "PATCH",
-        spec.object_path(None, target.name),
-        timeout=REQUEST_TIMEOUT,
-        body=_switch_ops(uid, unschedulable),
-        content_type=JSON_PATCH,
-    )
+    await json_patch(api, spec.object_path(None, target.name), _switch_ops(uid, unschedulable))
 
 
 def _cordoned(node: dict) -> bool:

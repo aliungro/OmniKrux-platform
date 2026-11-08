@@ -6,7 +6,7 @@ scale replaces or the `metadata.generation`, which the API server bumps on every
 Pod templates are never compared themselves: the API server's JSON escapes text differently from
 Python's (`&` as \u0026, non-ASCII as itself) and json-patch compares strings byte for byte, so a
 template `test` could fail on every try. If a test fails, the API server refuses the whole patch
-(a 422 naming it) and the user reads the conflict copy."""
+(a 422, which `json_patch` checks against the live object) and the user reads the conflict copy."""
 
 import copy
 from datetime import UTC, datetime
@@ -22,6 +22,7 @@ from omnikrux.actions.pipeline import (
     ClusterRef,
     Planned,
     Target,
+    json_patch,
 )
 from omnikrux.kube.connections import kube_error_message
 from omnikrux.kube.http import call_json
@@ -29,7 +30,6 @@ from omnikrux.kube.pods import REQUEST_TIMEOUT
 from omnikrux.resources.describe_any import match_labels
 from omnikrux.resources.kinds import KindSpec
 
-JSON_PATCH = "application/json-patch+json"
 MAX_REPLICAS = 10_000
 REVISION = "deployment.kubernetes.io/revision"
 POD_TEMPLATE_HASH = "pod-template-hash"
@@ -77,10 +77,7 @@ async def _read(api: ApiClient, spec: KindSpec, target: Target) -> dict:
 
 
 async def _patch(api: ApiClient, spec: KindSpec, target: Target, ops: list[dict]) -> dict:
-    path = spec.object_path(target.namespace, target.name)
-    return await call_json(
-        api, "PATCH", path, timeout=REQUEST_TIMEOUT, body=ops, content_type=JSON_PATCH
-    )
+    return await json_patch(api, spec.object_path(target.namespace, target.name), ops)
 
 
 def _test(path: str, value: object) -> dict:

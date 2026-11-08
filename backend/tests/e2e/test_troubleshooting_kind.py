@@ -1,117 +1,15 @@
 """The troubleshooting flows against the real kind cluster `omnikrux-dev` (scripts/dev-kind.sh):
 describe, logs, shells, debug containers and node shells, through the real app in-process."""
 
-import queue
-import shutil
-import subprocess
-import threading
-import time
 from urllib.parse import urlencode
 
 import pytest
-from fastapi.testclient import TestClient
 
-from omnikrux.config import Settings
-from omnikrux.main import create_app
-from tests.kube.test_source_kind import CONTEXT, find_kind
+from tests.e2e.support import Reader, kubectl, wait_for
 
 pytestmark = pytest.mark.kind
 
 NODE_SHELL_LABEL = "omnikrux.dev/node-shell=true"
-
-
-@pytest.fixture
-def kind_kubeconfig(tmp_path):
-    if (kind := find_kind()) is None:
-        pytest.skip("kind is not installed")
-    result = subprocess.run(
-        [kind, "get", "kubeconfig", "--name", "omnikrux-dev"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        pytest.skip("kind cluster omnikrux-dev not running (scripts/dev-kind.sh)")
-    path = tmp_path / "config"
-    path.write_text(result.stdout, encoding="utf-8")
-    return path
-
-
-@pytest.fixture
-def client(tmp_path, kind_kubeconfig):
-    app = create_app(
-        Settings(data_dir=tmp_path, kubeconfig=str(kind_kubeconfig), in_container=False)
-    )
-    with TestClient(app) as test_client:
-        yield test_client
-
-
-@pytest.fixture
-def cluster(client):
-    clusters = client.get("/api/clusters").json()
-    assert len(clusters) == 1, clusters
-    return clusters[0]["id"]
-
-
-@pytest.fixture(autouse=True)
-def need_kubectl():
-    if shutil.which("kubectl") is None:
-        pytest.skip("kubectl is not installed")
-
-
-def kubectl(*args: str) -> str:
-    """kubectl's stdout; a failure (wrong context, no access, timeout) fails the test."""
-    done = subprocess.run(
-        ["kubectl", "--context", CONTEXT, *args],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert done.returncode == 0, f"kubectl {' '.join(args)} failed: {done.stderr.strip()}"
-    return done.stdout
-
-
-def wait_for(check, what: str, timeout: float = 60.0, interval: float = 1.0):
-    """Poll `check` until it returns something truthy; fail with `what` after `timeout`."""
-    deadline = time.monotonic() + timeout
-    while True:
-        if value := check():
-            return value
-        if time.monotonic() > deadline:
-            pytest.fail(f"Timed out after {timeout:.0f}s waiting for {what}")
-        time.sleep(interval)
-
-
-class Reader:
-    """Reads a websocket's JSON messages on a thread, so every wait has a deadline."""
-
-    def __init__(self, ws):
-        self.ws = ws
-        self.messages: queue.Queue = queue.Queue()
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self) -> None:
-        try:
-            while True:
-                self.messages.put(self.ws.receive_json())
-        except Exception as exc:  # noqa: BLE001 (the socket closed; say so to the waiter)
-            self.messages.put({"type": "closed", "error": repr(exc)})
-
-    def until(self, done, what: str, timeout: float = 60.0) -> list[dict]:
-        """Messages up to and including the first for which `done(message)` holds."""
-        seen, deadline = [], time.monotonic() + timeout
-        while True:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                pytest.fail(f"Timed out waiting for {what}; got {seen[-5:]}")
-            try:
-                message = self.messages.get(timeout=left)
-            except queue.Empty:
-                continue
-            seen.append(message)
-            if done(message):
-                return seen
 
 
 def logs_url(cluster: str, **params) -> str:
@@ -152,15 +50,16 @@ def test_previous_logs_of_crasher_contain_boom(client, cluster):
     url = logs_url(cluster, pod="crasher", container="crasher", previous="true", follow="false")
 
     def previous_text() -> list[str] | None:
-        # The kubelet briefly can't serve the previous run while the container is replaced
-        # ("unable to retrieve container logs"); that passes, so ask again.
+        # For about 70 s after each restart (the kubelet's 1-minute container GC) the pod's last
+        # state names a container that is already removed, and the kubelet answers "unable to
+        # retrieve container logs" (kubectl logs --previous too); that passes, so ask again.
         with client.websocket_connect(url) as ws:
             messages = Reader(ws).until(ended, "the previous logs to end")
         if any(m.get("state") == "error" for m in messages):
             return None
         return [line.get("text") for line in log_lines(messages)]
 
-    texts = wait_for(previous_text, "the previous logs of crasher", timeout=30, interval=0.5)
+    texts = wait_for(previous_text, "the previous logs of crasher", timeout=120, interval=1)
     assert "boom" in texts
 
 
