@@ -10,6 +10,7 @@ import { MetricsView, NodeMetricsView } from "./MetricsView";
 import { ResourceDescribeView } from "./ResourceDescribeView";
 import { useDescribe, usePodYaml } from "./useDescribe";
 import { useResourceDescribe, useResourceYaml } from "./useResourceDescribe";
+import { useTools, type ToolIntent } from "./Tools";
 import { YamlView } from "./YamlView";
 import { knownProvider } from "../territories/ProviderBadge";
 import k from "../chrome/key.module.css";
@@ -40,6 +41,11 @@ interface Props {
   provider: Provider;
   /** The row's kind key (`pods`, `deployments.apps`, …). */
   kindKey?: string;
+  /** The kind's API verbs: which changes it allows (`update` to edit, `delete` to delete). */
+  verbs?: readonly string[];
+  /** A change tool's key pressed on the row; run once, then `onIntentDone`. */
+  intent?: ToolIntent | null;
+  onIntentDone?: () => void;
   onOpenLogs?: (row: ResourceRow) => void;
   onOpenShell?: (row: ResourceRow) => void;
   /** A shell on the pod's node (the dock asks first, then starts a node-shell pod). */
@@ -49,9 +55,12 @@ interface Props {
   onClose?: () => void;
 }
 
+const NO_VERBS: readonly string[] = [];
+
 /**
  * The details under a row, for every kind: Describe, YAML and Events, plus Metrics for pods and
- * nodes. Every object the details name is a link to it, on the row's cluster.
+ * nodes. Every object the details name is a link to it, on the row's cluster. The tools on the
+ * right change the object (edit, scale, restart, …), each reviewed in a dialog first.
  */
 export function Inspector({ kindKey = "pods", ...props }: Props) {
   const goTo = useGoTo();
@@ -60,12 +69,14 @@ export function Inspector({ kindKey = "pods", ...props }: Props) {
   return kindKey === "pods" ? <PodInspector {...props} onLink={onLink} /> : <ResourceInspector {...props} kindKey={kindKey} onLink={onLink} />;
 }
 
-function PodInspector({ row, provider, onOpenLogs, onOpenShell, onNodeShell, onOwnerLogs, onClose, onLink }: Omit<Props, "kindKey"> & { onLink: (l: Link) => void }) {
+function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, onOpenLogs, onOpenShell, onNodeShell, onOwnerLogs, onClose, onLink }: Omit<Props, "kindKey"> & { onLink: (l: Link) => void }) {
   const [tab, setTab] = useState<Tab>("Describe");
   const ns = row.namespace ?? "";
   const rv = textColumn(row, "resource_version") ?? "";
   const describe = useDescribe(row.cluster_id, ns, row.name, rv);
   const yaml = usePodYaml(row.cluster_id, ns, row.name, rv, tab === "YAML");
+  const change = useTools({ row, kindKey: "pods", verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone });
+  const editor = change.editor(yaml.data);
   const tools = (
     <>
       <button type="button" className={s.btn} disabled={!onOpenLogs} onClick={() => onOpenLogs?.(row)}>
@@ -74,10 +85,11 @@ function PodInspector({ row, provider, onOpenLogs, onOpenShell, onNodeShell, onO
       <button type="button" className={s.btn} disabled={!onOpenShell} onClick={() => onOpenShell?.(row)}>
         Shell<span className={`${k.k} ${s.k}`} aria-hidden="true">s</span>
       </button>
+      {change.buttons}
     </>
   );
   return (
-    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} onClose={onClose}>
+    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} onClose={onClose}>
       {tab === "Describe" && <Loaded q={describe}>{(d) => (
         <DescribeView
           data={d}
@@ -86,7 +98,7 @@ function PodInspector({ row, provider, onOpenLogs, onOpenShell, onNodeShell, onO
           onOwnerLogs={onOwnerLogs && ((owner) => onOwnerLogs(row, owner))}
         />
       )}</Loaded>}
-      {tab === "YAML" && <Loaded q={yaml}>{(y) => <YamlView yaml={y} />}</Loaded>}
+      {tab === "YAML" && (editor ?? <Loaded q={yaml}>{(y) => <YamlView yaml={y} onEdit={change.canEdit ? change.edit : undefined} />}</Loaded>)}
       {tab === "Metrics" && <MetricsView clusterId={row.cluster_id} ns={ns} name={row.name} />}
       {tab === "Events" && (
         <Loaded q={describe}>
@@ -101,15 +113,27 @@ function PodInspector({ row, provider, onOpenLogs, onOpenShell, onNodeShell, onO
   );
 }
 
-function ResourceInspector({ row, provider, kindKey, onClose, onLink }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
+function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, onIntentDone, onNodeShell, onClose, onLink }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
   const [tab, setTab] = useState<Tab>("Describe");
   // Every row carries its resource version (backend `base_row`): a change reloads the details.
   const version = textColumn(row, "resource_version") ?? "";
   const describe = useResourceDescribe(row.cluster_id, kindKey, row.namespace, row.name, version);
   const yaml = useResourceYaml(row.cluster_id, kindKey, row.namespace, row.name, version, tab === "YAML");
   const nodes = kindKey === "nodes";
+  const change = useTools({ row, kindKey, verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone });
+  const editor = change.editor(yaml.data);
   return (
-    <Frame row={row} provider={provider} tabs={nodes ? WITH_METRICS : BASE_TABS} tab={tab} onTab={setTab} onClose={onClose}>
+    <Frame
+      row={row}
+      provider={provider}
+      tabs={nodes ? WITH_METRICS : BASE_TABS}
+      tab={tab}
+      onTab={setTab}
+      tools={change.buttons}
+      strip={change.strip}
+      onKey={change.onKey}
+      onClose={onClose}
+    >
       {tab === "Describe" && (
         <Loaded q={describe}>
           {/* Keyed on the row's version: a revealed Secret value goes the moment the row changes,
@@ -117,7 +141,12 @@ function ResourceInspector({ row, provider, kindKey, onClose, onLink }: Omit<Pro
           {(d) => <ResourceDescribeView key={version} data={d} clusterId={row.cluster_id} onLink={onLink} />}
         </Loaded>
       )}
-      {tab === "YAML" && <Loaded q={yaml}>{(y) => <YamlView yaml={y} label={`${row.kind} YAML`} />}</Loaded>}
+      {tab === "YAML" &&
+        (editor ?? (
+          <Loaded q={yaml}>
+            {(y) => <YamlView yaml={y} label={`${row.kind} YAML`} onEdit={change.canEdit ? change.edit : undefined} />}
+          </Loaded>
+        ))}
       {tab === "Metrics" && nodes && <NodeMetricsView clusterId={row.cluster_id} name={row.name} />}
       {tab === "Events" && (
         <Loaded q={describe}>
@@ -132,7 +161,10 @@ function ResourceInspector({ row, provider, kindKey, onClose, onLink }: Omit<Pro
   );
 }
 
-/** The inspector's frame: the provider stripe, the tabs, the tools on the right, and the panel. */
+/**
+ * The inspector's frame: the provider stripe, the tabs, the tools on the right, a form the tools
+ * open (`strip`), and the panel.
+ */
 function Frame({
   row,
   provider,
@@ -140,6 +172,8 @@ function Frame({
   tab,
   onTab,
   tools,
+  strip,
+  onKey,
   onClose,
   children,
 }: {
@@ -149,6 +183,8 @@ function Frame({
   tab: Tab;
   onTab: (t: Tab) => void;
   tools?: ReactNode;
+  strip?: ReactNode;
+  onKey?: (e: KeyboardEvent<HTMLElement>) => void;
   onClose?: () => void;
   children: ReactNode;
 }) {
@@ -166,7 +202,7 @@ function Frame({
   };
 
   return (
-    <section className={`${s.insp} ${pc[knownProvider(provider)]}`} aria-label={`Details for ${row.name}`}>
+    <section className={`${s.insp} ${pc[knownProvider(provider)]}`} aria-label={`Details for ${row.name}`} onKeyDown={onKey}>
       <div className={s.bar}>
         <div role="tablist" aria-label="Details" className={s.tabs} onKeyDown={onTabKey}>
           {tabs.map((t, i) => (
@@ -186,7 +222,7 @@ function Frame({
             </button>
           ))}
         </div>
-        <div className={s.tools}>
+        <div className={s.tools} role="toolbar" aria-label="Tools">
           {tools}
           {onClose && (
             <button type="button" className={`${s.btn} ${s.quiet}`} onClick={onClose}>
@@ -195,6 +231,7 @@ function Frame({
           )}
         </div>
       </div>
+      {strip}
       <div
         role="tabpanel"
         id={`${id}-panel`}

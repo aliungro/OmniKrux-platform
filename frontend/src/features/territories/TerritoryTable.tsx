@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
@@ -12,7 +13,9 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/types";
-import { rowShortcut } from "../chrome/shortcuts";
+import { keyedTools, toolsFor, type ToolId } from "../actions/tools";
+import { useStartAction } from "../actions/useActions";
+import { rowShortcut, toolShortcut } from "../chrome/shortcuts";
 import { Inspector } from "../inspector/Inspector";
 import { flatten, kindTitle, rowKey, type RowRef, type Selection, type Territory } from "./model";
 import { gridTemplate, minTableWidth } from "./cells";
@@ -98,6 +101,11 @@ export const TerritoryTable = memo(function TerritoryTable({
   /** How the pending scroll lines the row up: a link's target goes to the top, so its details show. */
   const scrollAlign = useRef<"auto" | "start">("auto");
   const revealed = useRef(reveal);
+  /** A change tool's key pressed on a row: its details open and run it (see `useTools`). */
+  const [intent, setIntent] = useState<{ key: string; tool: ToolId; seq: number } | null>(null);
+  const intentDone = useCallback(() => setIntent(null), []);
+  const canChange = useStartAction() !== null;
+  const rowTools = useMemo(() => (canChange ? keyedTools(toolsFor(kind.key, kind.verbs)) : []), [canChange, kind.key, kind.verbs]);
 
   const estimateSize = useCallback((i: number) => {
     const t = items[i].type;
@@ -137,6 +145,21 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [onSelection]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // A change tool's key on a row (`e`, `s`, `r`, Ctrl D, … as its kind has them): open its
+    // details and run the tool there, where its form or error shows.
+    const tool = toolShortcut(e, rowTools);
+    const rowKeyOf = (e.target as HTMLElement).dataset?.rowKey;
+    if (tool !== undefined && rowKeyOf !== undefined) {
+      const at = indexByKey.get(rowKeyOf);
+      const it = at === undefined ? undefined : items[at];
+      if (it?.type === "row") {
+        e.preventDefault();
+        const ref = { clusterId: it.row.cluster_id, uid: it.row.uid };
+        onSelection({ selected: ref, open: true });
+        setIntent((prev) => ({ key: rowKeyOf, tool: tool as ToolId, seq: (prev?.seq ?? 0) + 1 }));
+        return;
+      }
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const shortcut = rowShortcut(e.key);
     if (!shortcut) return;
@@ -269,6 +292,9 @@ export const TerritoryTable = memo(function TerritoryTable({
                     <Inspector
                       row={it.row}
                       kindKey={kind.key}
+                      verbs={kind.verbs}
+                      intent={intent?.key === rowKey(it.row.cluster_id, it.row.uid) ? intent : null}
+                      onIntentDone={intentDone}
                       provider={it.provider}
                       onOpenLogs={onOpenLogs}
                       onOpenShell={onOpenShell}

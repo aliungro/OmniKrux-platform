@@ -1,0 +1,218 @@
+/* The review dialog: the confirm dialog's shell (cluster colour along the top), a little wider,
+   and wider again when it carries a diff. The one bold thing is the diff itself; everything around
+   it stays quiet. */
+.dialog {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+
+.wide {
+  width: min(980px, 100%);
+}
+
+.path {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.sep {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.kind {
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+.name {
+  color: var(--ink);
+}
+
+.env {
+  flex: none;
+  height: 22px;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.prod {
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 35%, transparent);
+}
+
+.dev {
+  background: color-mix(in srgb, var(--ink-2) 12%, transparent);
+  color: var(--ink-2);
+}
+
+.production {
+  margin: 10px 0 0;
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.summary {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+  list-style: none;
+  line-height: 1.5;
+}
+
+.lead {
+  color: var(--ink-2);
+}
+
+/* Further summary lines (a drain's pods): one per line, set in from the lead. */
+.item {
+  padding-left: 14px;
+  color: var(--ink-3);
+}
+
+.notes {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Warnings and blocks: the status shapes of the table (hollow ring pending, diamond failing), so
+   they read without colour too. */
+.note {
+  display: grid;
+  grid-template-columns: 8px 1fr;
+  align-items: baseline;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  line-height: 1.45;
+}
+
+.note[data-tone="warn"] {
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  color: color-mix(in srgb, var(--warn) 55%, var(--ink));
+}
+
+.note[data-tone="bad"] {
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+}
+
+.shape {
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+}
+
+.note[data-tone="warn"] .shape {
+  border: 2px solid var(--warn);
+}
+
+.note[data-tone="bad"] .shape {
+  border-radius: 2px;
+  background: var(--bad);
+  transform: translateY(-1px) rotate(45deg);
+}
+
+.typed {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.btn {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+
+.btn:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.again {
+  margin-right: auto;
+}
+
+.go {
+  border-color: var(--focus);
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.danger {
+  border-color: var(--bad);
+  background: var(--bad);
+  color: var(--bg);
+}
+
+.go:disabled,
+.danger:disabled {
+  opacity: 0.45;
+  color: var(--bg);
+}
+
+.go:hover:not(:disabled),
+.danger:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .env {
+    display: none;
+  }
+}

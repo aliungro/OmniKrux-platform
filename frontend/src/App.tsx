@@ -6,6 +6,7 @@ import { useLiveMetrics } from "./api/useMetrics";
 import { useWatch } from "./api/useWatch";
 import { failure } from "./api/http";
 import type { Cluster, ClusterState, KindInfo, KindsResponse, OwnerRef, ResourceRow } from "./api/types";
+import { ActionsProvider } from "./features/actions/ActionDialog";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
 import { ShortcutBar } from "./features/chrome/ShortcutBar";
@@ -216,15 +217,18 @@ export function Console() {
   const hasTable = list !== undefined && list.length > 0;
 
   // The dock sits outside the switch above, so its sessions (and their shells) outlive a moment
-  // with no clusters, e.g. the last one removed.
+  // with no clusters, e.g. the last one removed. A change's review dialog is drawn by
+  // ActionsProvider over all of it, naming the plan's cluster whatever is selected meanwhile.
   return (
     <NavigationProvider goTo={nav.goTo}>
-      <div className={s.app}>
-        <TopBar clusters={all} />
-        {body}
-        {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
-        {hasTable && <ShortcutBar kind={kindKey} />}
-      </div>
+      <ActionsProvider>
+        <div className={s.app}>
+          <TopBar clusters={all} />
+          {body}
+          {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
+          {hasTable && <ShortcutBar kind={kindKey} />}
+        </div>
+      </ActionsProvider>
     </NavigationProvider>
   );
 }

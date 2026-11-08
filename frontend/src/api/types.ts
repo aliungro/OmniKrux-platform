@@ -415,3 +415,84 @@ export interface NodeMetrics {
   capacity_cpu_m: number | null;
   capacity_memory_b: number | null;
 }
+
+/* Actions — mirrors backend/omnikrux/actions (pipeline.py PlanIn / PlanOut / ApplyOut, jobs.py JobOut, workloads.py Revision). */
+
+export type ActionName = "edit" | "scale" | "restart" | "rollback" | "delete" | "cordon" | "uncordon" | "drain";
+
+/** What a change acts on; a null namespace is a cluster-scoped kind. */
+export interface ActionTarget {
+  cluster_id: string;
+  kind_key: string;
+  namespace: string | null;
+  name: string;
+}
+
+/** The body of `POST /api/actions/plan`. */
+export interface PlanRequest {
+  action: ActionName;
+  target: ActionTarget;
+  params?: Record<string, unknown>;
+}
+
+/** The plan's cluster: what the dialog names, whatever is selected. */
+export interface PlanCluster {
+  id: string;
+  name: string;
+  provider: string;
+  environment: string;
+}
+
+/** A change as the server worked it out; it is kept there 300 s and applied once, by id. */
+export interface Plan {
+  plan_id: string;
+  action: ActionName;
+  target: ActionTarget;
+  cluster: PlanCluster;
+  title: string;
+  summary: string[];
+  warnings: string[];
+  /** Non-empty: the plan can't be applied. */
+  blocked: string[];
+  /** Both sides rendered (and a Secret's values masked) by the server. */
+  diff: { before: string; after: string } | null;
+  /** The text to type before applying; null: no typing. */
+  confirm_text: string | null;
+  apply_label: string;
+  expires_at: string;
+}
+
+/** The answer to `POST /api/actions/{plan_id}/apply`; `started`: a job carries on (`job_id`). */
+export interface ApplyResult {
+  outcome: "succeeded" | "started";
+  message: string;
+  job_id: string | null;
+  audit_id: number;
+}
+
+/** A pod a job is held up by, e.g. one a PodDisruptionBudget protects for now. */
+export interface JobBlocked {
+  namespace: string;
+  name: string;
+  message: string;
+}
+
+export interface Job {
+  id: string;
+  action: string;
+  state: "running" | "succeeded" | "failed" | "cancelled";
+  message: string;
+  total: number;
+  done: number;
+  blocked: JobBlocked[];
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** One of a deployment's revisions (its ReplicaSets), newest first. */
+export interface Revision {
+  revision: number;
+  created_at: string | null;
+  images: string[];
+  current: boolean;
+}

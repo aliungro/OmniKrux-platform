@@ -7,6 +7,17 @@ export function failure(err: unknown, tryAgain = "try again"): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** A request the server answered with an error: `status` tells a conflict (409) from an expired plan (404). */
+export class HttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
 async function fail(res: Response): Promise<never> {
   let detail: string | undefined;
   try {
@@ -15,7 +26,7 @@ async function fail(res: Response): Promise<never> {
   } catch {
     // body was not JSON
   }
-  throw new Error(detail ?? `${res.status} ${res.statusText}`.trim());
+  throw new HttpError(res.status, detail ?? `${res.status} ${res.statusText}`.trim());
 }
 
 export async function getJson<T>(path: string): Promise<T> {
