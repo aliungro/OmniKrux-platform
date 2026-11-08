@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import type { WatchMessage } from "./types";
 import { applyMessage, applyMessages, emptyWatchState, resetForReconnect, type WatchState } from "./watchState";
-const row = (uid: string) => ({ uid, cluster_id: "c", kind: "Pod", namespace: "n", name: uid, created_at: "", columns: {} });
+const row = (uid: string) => ({ uid, cluster_id: "c", kind: "Pod", namespace: "n", name: uid, created_at: "", labels: {}, columns: {} });
 const snap = (uids: string[], part = 0, last = true) => ({ type: "snapshot", cluster_id: "c", rows: uids.map(row), part, last } as const);
 
 describe("applyMessage", () => {

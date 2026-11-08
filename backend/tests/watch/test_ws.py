@@ -1,17 +1,21 @@
 import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.main import create_app
 from omnikrux.watch.api import watch
 from omnikrux.watch.hub import WatchHub
 from tests.clusters.test_kubeconfig import kc
+from tests.fakekube import kubeconfig_for
 from tests.watch.fakes import FakeSource
 from tests.watch.test_cache import p
 
@@ -30,10 +34,11 @@ def test_ws_streams_snapshot(
     assert "snapshot" in types
 
 
-def test_ws_unknown_kind_closes_4404(app_with_fake_sources):
+@pytest.mark.parametrize("kind", ["Deployments", "pods/log", "a..b"])
+def test_unknown_kind_key_4404(app_with_fake_sources, kind):
     with (
         pytest.raises(WebSocketDisconnect) as e,
-        app_with_fake_sources.websocket_connect("/api/watch?kind=nope") as ws,
+        app_with_fake_sources.websocket_connect(f"/api/watch?kind={kind}") as ws,
     ):
         ws.receive_json()
     assert e.value.code == 4404 and e.value.reason == "Unknown kind"
@@ -175,3 +180,72 @@ def test_delete_mid_session_sends_cluster_removed(app_with_real_registry):
         assert client.delete(f"/api/clusters/{cluster_id}").status_code == 204
         assert hub._caches == {}  # forgotten before responding
         assert ws.receive_json() == {"type": "cluster_removed", "cluster_id": cluster_id}
+
+
+class RecordingWebSocket(FakeWebSocket):
+    """A FakeWebSocket on a real app that keeps what the handler sends."""
+
+    def __init__(self, app):
+        super().__init__(app.state.hub)
+        self.app = app
+        self.sent: asyncio.Queue[dict] = asyncio.Queue()
+
+    async def send_text(self, text):
+        self.sent.put_nowait(json.loads(text))
+
+
+async def test_watch_crd_rows_through_fake_api(fake_api, tmp_path):
+    fake_api.objects["widgets.example.omnikrux.dev"][("demo", "w1")] = {
+        "apiVersion": "example.omnikrux.dev/v1",
+        "kind": "Widget",
+        "metadata": {
+            "name": "w1",
+            "namespace": "demo",
+            "uid": "u-w1",
+            "creationTimestamp": "2026-11-07T09:00:00Z",
+            "labels": {"app": "web"},
+        },
+        "spec": {"size": 3},
+    }
+    app = create_app(
+        Settings(data_dir=tmp_path, kubeconfig="", in_container=False, rewrite_loopback=False)
+    )
+    async with app.router.lifespan_context(app):
+        [info] = await app.state.registry.upsert_from_kubeconfig(
+            yaml.safe_dump(kubeconfig_for(fake_api)), rewrite_loopback=False, source=SOURCE_UPLOAD
+        )
+        ws = RecordingWebSocket(app)
+        handler = asyncio.create_task(watch(ws, "widgets.example.omnikrux.dev"))
+        try:
+            msgs = []
+            while not msgs or msgs[-1]["type"] != "snapshot":
+                msgs.append(await asyncio.wait_for(ws.sent.get(), 5))
+        finally:
+            ws.gone.set()
+            await asyncio.wait_for(handler, 5)
+    assert [m.get("state") for m in msgs[:-1]] == ["syncing", "ready"]
+    [row] = msgs[-1]["rows"]
+    assert row["cluster_id"] == info.id and row["kind"] == "Widget"
+    assert (row["namespace"], row["name"], row["uid"]) == ("demo", "w1", "u-w1")
+    assert row["labels"] == {"app": "web"} and row["created_at"] == "2026-11-07T09:00:00Z"
+    paths = [p for _, p, _ in fake_api.requests]
+    assert "/apis/example.omnikrux.dev/v1/widgets" in paths
+
+
+async def test_watch_a_kind_the_cluster_does_not_serve_says_absent(fake_api, tmp_path):
+    app = create_app(
+        Settings(data_dir=tmp_path, kubeconfig="", in_container=False, rewrite_loopback=False)
+    )
+    async with app.router.lifespan_context(app):
+        await app.state.registry.upsert_from_kubeconfig(
+            yaml.safe_dump(kubeconfig_for(fake_api)), rewrite_loopback=False, source=SOURCE_UPLOAD
+        )
+        ws = RecordingWebSocket(app)
+        handler = asyncio.create_task(watch(ws, "certificates.cert-manager.io"))
+        try:
+            msgs = [await asyncio.wait_for(ws.sent.get(), 5) for _ in range(2)]
+        finally:
+            ws.gone.set()
+            await asyncio.wait_for(handler, 5)
+    assert msgs[1]["state"] == "absent"
+    assert msgs[1]["message"] == "This cluster doesn't serve certificates.cert-manager.io."

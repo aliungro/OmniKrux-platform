@@ -1,51 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { allGroups, barFor, capsOf, pageKey, pressed, type ShortcutGroup } from "./shortcuts";
 import k from "./key.module.css";
 import s from "./ShortcutBar.module.css";
-
-/** The k9s-style strip along the bottom: the keys you'll use most. */
-const BAR: [keys: string[], label: string][] = [
-  [["↑", "↓"], "move"],
-  [["Enter"], "details"],
-  [["l"], "logs"],
-  [["p"], "previous logs"],
-  [["s"], "shell"],
-  [["Ctrl F"], "search logs"],
-  [["Ctrl \\"], "layout"],
-  [["/"], "filter"],
-];
-
-/** Every shortcut, by where it works. */
-const ALL: [group: string, rows: [keys: string[], label: string][]][] = [
-  [
-    "Pods",
-    [
-      [["↑", "↓"], "Move between pods"],
-      [["Enter"], "Open or close the pod's details"],
-      [["Esc"], "Close the details"],
-      [["/"], "Filter pods"],
-      [["l"], "Logs for the selected pod"],
-      [["p"], "Previous logs (the run before the last restart)"],
-      [["s"], "Shell in the selected pod"],
-    ],
-  ],
-  [
-    "Logs",
-    [
-      [["Ctrl F"], "Search logs"],
-      [["Enter"], "Next match"],
-      [["Shift", "Enter"], "Previous match"],
-      [["G"], "Jump to live"],
-    ],
-  ],
-  [
-    "Dock",
-    [
-      [["Ctrl \\"], "Switch between one pane and side by side"],
-      [["←", "→"], "Move between session tabs"],
-      [["?"], "Show all shortcuts"],
-    ],
-  ],
-];
 
 function Keys({ keys }: { keys: string[] }) {
   return (
@@ -57,13 +13,7 @@ function Keys({ keys }: { keys: string[] }) {
   );
 }
 
-/** Keys typed into a field (or a terminal) belong to it. */
-function isEditable(el: EventTarget | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  return el.isContentEditable || el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
-}
-
-function AllShortcuts({ onClose }: { onClose: () => void }) {
+function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGroup[]; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const back = document.activeElement;
@@ -73,7 +23,7 @@ function AllShortcuts({ onClose }: { onClose: () => void }) {
     };
   }, []);
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape" || e.key === "?") {
+    if (e.key === "Escape" || pressed("help", e)) {
       e.preventDefault();
       onClose();
     }
@@ -89,14 +39,14 @@ function AllShortcuts({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div className={s.groups}>
-          {ALL.map(([group, rows]) => (
+          {groups.map(([group, rows]) => (
             <section key={group} className={s.group} aria-label={group}>
               <h3 className={s.groupTitle}>{group}</h3>
               <dl className={s.list}>
-                {rows.map(([keys, label]) => (
-                  <Fragment key={label}>
-                    <dt><Keys keys={keys} /></dt>
-                    <dd>{label}</dd>
+                {rows.map((x) => (
+                  <Fragment key={x.id}>
+                    <dt><Keys keys={x.keys} /></dt>
+                    <dd>{x.label}</dd>
                   </Fragment>
                 ))}
               </dl>
@@ -108,15 +58,18 @@ function AllShortcuts({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function ShortcutBar() {
+/**
+ * The key strip along the bottom and the "?" sheet, both for the kind on screen: `s` reads "shell"
+ * on pods and "scale" on deployments, as the registry says.
+ */
+export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "?" || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
-      if (isEditable(e.target) || isEditable(document.activeElement)) return;
+      if (!pressed("help", e) || !pageKey(e)) return;
       e.preventDefault();
-      setOpen((o) => !o);
+      setOpen(true);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -126,19 +79,19 @@ export function ShortcutBar() {
     <>
       <nav className={s.keys} aria-label="Keyboard shortcuts">
         <ul className={s.strip}>
-          {BAR.map(([keys, label]) => (
-            <li key={label} className={s.item}>
-              <Keys keys={keys} /> {label}
+          {barFor(kind).map((x) => (
+            <li key={x.id} className={s.item}>
+              <Keys keys={x.keys} /> {x.bar}
             </li>
           ))}
           <li className={s.item}>
             <button type="button" className={s.more} aria-haspopup="dialog" onClick={() => setOpen(true)}>
-              <span className={k.k}>?</span> all shortcuts
+              <span className={k.k}>{capsOf("help")[0]}</span> all shortcuts
             </button>
           </li>
         </ul>
       </nav>
-      {open && <AllShortcuts onClose={() => setOpen(false)} />}
+      {open && <AllShortcuts groups={allGroups(kind)} onClose={() => setOpen(false)} />}
     </>
   );
 }

@@ -49,7 +49,7 @@ async def test_caches_are_shared_and_evicted_when_idle(fake_registry_two_cluster
 async def test_unknown_kind(fake_registry_two_clusters):
     hub = WatchHub(fake_registry_two_clusters, None)
     with pytest.raises(KeyError):
-        await hub.subscribe("nope")
+        await hub.subscribe("Deployments")  # not a kind key: kubectl names are lower case
 
 
 def _counting_source_for(calls):
@@ -285,4 +285,64 @@ async def test_clusters_changed_skips_a_subscription_that_is_closing(fake_regist
     gate.set()
     await changed
     assert ("new", "pods") not in hub._caches and ("new", "pods") not in hub._refs
+    await hub.close()
+
+
+async def test_absent_not_counted_in_cluster_status(fake_registry_two_clusters):
+    from omnikrux.resources.catalog import KindNotServed
+
+    widgets = "widgets.example.omnikrux.dev"
+
+    async def source_for(cid, key):
+        if key == widgets:
+            raise KindNotServed(key)
+        return await FakeSource(lists=[([p("a")], "1")], watches=[[]]).factory()
+
+    hub = WatchHub(fake_registry_two_clusters, source_for, idle_seconds=60)
+    only_widgets = await hub.subscribe(widgets, ["bad"])
+    msgs = await asyncio.wait_for(collect(only_widgets, 2), 2)
+    assert msgs[1]["state"] == "absent"
+    assert hub.status("bad") == ("unknown", None)  # absent says nothing about the cluster
+    pods, widgets_sub = (
+        await hub.subscribe("pods", ["good"]),
+        await hub.subscribe(widgets, ["good"]),
+    )
+    await asyncio.wait_for(collect(pods, 3), 2)
+    await asyncio.wait_for(collect(widgets_sub, 2), 2)
+    assert hub._caches[("good", widgets)].state == "absent"
+    assert hub.status("good") == ("ready", None)
+    await hub.close()
+
+
+async def test_hub_passes_the_kind_key_to_source_for(fake_registry_two_clusters):
+    seen = []
+
+    async def source_for(cid, key):
+        seen.append((cid, key))
+        return await FakeSource(lists=[([], "1")], watches=[[]]).factory()
+
+    hub = WatchHub(fake_registry_two_clusters, source_for)
+    sub = await hub.subscribe("deployments.apps", ["good"])
+    await asyncio.wait_for(collect(sub, 3), 2)
+    assert seen == [("good", "deployments.apps")]
+    await hub.close()
+
+
+async def test_forget_calls_on_forget_for_each_forgotten_cluster(fake_registry_two_clusters):
+    forgotten = []
+
+    async def on_forget(cluster_id):
+        forgotten.append(cluster_id)
+
+    hub = WatchHub(
+        fake_registry_two_clusters, _counting_source_for({}), idle_seconds=60, on_forget=on_forget
+    )
+    await hub.forget("good")  # nothing watched yet: still forgotten (the catalog may know it)
+    sub = await hub.subscribe("pods")
+    await asyncio.wait_for(collect(sub, 6), 2)
+    fake_registry_two_clusters._infos[:] = [
+        c for c in fake_registry_two_clusters._infos if c.id != "bad"
+    ]
+    await hub.clusters_changed()
+    assert forgotten == ["good", "bad"]
     await hub.close()

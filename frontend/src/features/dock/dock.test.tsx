@@ -239,7 +239,7 @@ describe("Dock", () => {
 
   it("an open that resolves late never takes focus from a newer one", async () => {
     const rowOf = (cluster_id: string, name: string): ResourceRow => ({
-      uid: name, cluster_id, kind: "Pod", namespace: "payments", name, created_at: null,
+      uid: name, cluster_id, kind: "Pod", namespace: "payments", name, created_at: null, labels: {},
       columns: { status: "Running", status_class: "ok", resource_version: "1" },
     });
     const describe = (name: string) => ({
@@ -277,7 +277,7 @@ describe("Dock", () => {
 
   describe("a late open never moves focus past a newer choice of yours", () => {
     const rowOf = (cluster_id: string, name: string): ResourceRow => ({
-      uid: name, cluster_id, kind: "Pod", namespace: "payments", name, created_at: null,
+      uid: name, cluster_id, kind: "Pod", namespace: "payments", name, created_at: null, labels: {},
       columns: { status: "Running", status_class: "ok", resource_version: "1" },
     });
     const describeBody = (name: string) => ({

@@ -5,8 +5,8 @@
   color: var(--ink);
 }
 
+/* min-width and the column template (--cols) come from the kind's columns, inline. */
 .table {
-  min-width: 980px;
   padding: 0 16px;
 }
 
@@ -17,7 +17,7 @@
   background: var(--bg);
 }
 
-/* Lines up with the rows through PodRow's `.grid` (applied in TerritoryTable.tsx).
+/* Lines up with the rows through ResourceRowView's `.grid` (applied in TerritoryTable.tsx).
    Fixed height: the virtualizer offsets the body by it (HEADER_HEIGHT in TerritoryTable.tsx). */
 .cols {
   box-sizing: border-box;

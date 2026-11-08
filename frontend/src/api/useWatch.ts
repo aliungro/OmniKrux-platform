@@ -46,8 +46,14 @@ export function scheduleFrame(cb: () => void): () => void {
   return cancel;
 }
 
-export function useWatch(kind: string, opts: WatchOptions = {}): WatchState {
-  const [state, setState] = useState<WatchState>(emptyWatchState);
+/** Live rows of one kind from every cluster; `null` watches nothing (an empty state, no socket). */
+/** Shared by every empty watch: `applyMessages` never mutates its input, and one identity keeps memos stable. */
+const EMPTY: WatchState = emptyWatchState();
+
+export function useWatch(kind: string | null, opts: WatchOptions = {}): WatchState {
+  // The state is kept with the kind it belongs to. On a kind change, the render before the effect
+  // below runs (and could be painted) must not show the previous kind's rows as this kind's.
+  const [held, setHeld] = useState<{ kind: string | null; state: WatchState }>(() => ({ kind, state: EMPTY }));
   const optsRef = useRef(opts);
   useEffect(() => {
     optsRef.current = opts;
@@ -70,6 +76,10 @@ export function useWatch(kind: string, opts: WatchOptions = {}): WatchState {
       queue = [];
       return batch;
     };
+
+    /** Updates this kind's state; whatever another kind left behind counts as empty. */
+    const setState = (f: (s: WatchState) => WatchState) =>
+      setHeld((h) => ({ kind, state: f(h.kind === kind ? h.state : EMPTY) }));
 
     const flush = () => {
       const batch = takeQueue();
@@ -94,7 +104,7 @@ export function useWatch(kind: string, opts: WatchOptions = {}): WatchState {
     };
 
     const connect = () => {
-      const ws = new WebSocket(watchUrl(kind));
+      const ws = new WebSocket(watchUrl(watched));
       socket = ws;
       ws.onmessage = (ev) => {
         if (disposed) return;
@@ -130,7 +140,9 @@ export function useWatch(kind: string, opts: WatchOptions = {}): WatchState {
       };
     };
 
-    setState(emptyWatchState());
+    setHeld((h) => (h.kind === kind && h.state === EMPTY ? h : { kind, state: EMPTY }));
+    if (kind === null) return;
+    const watched = kind;
     connect();
 
     return () => {
@@ -145,5 +157,5 @@ export function useWatch(kind: string, opts: WatchOptions = {}): WatchState {
     };
   }, [kind]);
 
-  return state;
+  return held.kind === kind ? held.state : EMPTY;
 }

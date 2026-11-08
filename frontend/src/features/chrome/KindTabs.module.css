@@ -8,13 +8,17 @@
 }
 
 .list {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 2px;
+  /* Narrow windows scroll the tabs sideways; the list overlaps the rule so the underline sits on it. */
+  margin-bottom: -1px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .tab {
-  margin-bottom: -1px;
   padding: 10px 12px 9px;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -37,4 +41,74 @@
   font-weight: 400;
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
+}
+
+.tab:hover:not(.on) {
+  color: var(--ink);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  border-radius: 6px 6px 0 0;
+}
+
+/* The kinds couldn't be loaded: said in words beside the tab you're on, with a way to try again. */
+.err {
+  min-width: 0;
+  margin-left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  white-space: nowrap;
+}
+
+.err > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.retry {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--rule);
+  background: var(--surf-2);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.retry:hover {
+  border-color: var(--ink-3);
+}
+
+/* Every kind, through the palette's kind mode: pushed to the right end, as in the mockup. */
+.more {
+  flex: none;
+  margin-left: auto;
+  padding: 6px 4px 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.more:hover {
+  color: var(--ink);
+}
+
+.more:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 6px;
 }

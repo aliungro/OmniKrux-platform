@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
-import type { Condition, ContainerInfo, EnvVar, OwnerRef, PodDescribe } from "../../api/types";
+import type { Condition, ContainerInfo, EnvVar, Link, OwnerRef, PodDescribe, Volume } from "../../api/types";
+import { LinkButton } from "../navigation/navigation";
 import { formatAge } from "../territories/model";
 import { Status } from "../territories/Status";
 import { EventsTable } from "./EventsTable";
@@ -47,9 +48,33 @@ function ConditionChip({ c }: { c: Condition }) {
 interface Actions {
   onNodeShell?: (node: string) => void;
   onOwnerLogs?: (owner: OwnerRef) => void;
+  /** Jump to an object the pod points at; without it, names are plain text. */
+  onLink?: (link: Link) => void;
 }
 
-function PodSection({ data, now, onNodeShell, onOwnerLogs }: { data: PodDescribe; now: Date } & Actions) {
+/** `text` as a link to `link` when there is somewhere to go, else as plain text. */
+function Linked({ text, link, onLink }: { text: string; link: Link | null | undefined; onLink?: (link: Link) => void }) {
+  return link && onLink ? <LinkButton link={link} onLink={onLink}>{text}</LinkButton> : <span>{text}</span>;
+}
+
+function Volumes({ volumes, onLink }: { volumes: Volume[]; onLink?: (link: Link) => void }) {
+  return (
+    <div className={s.vols}>
+      <h6 className={s.sub}>Volumes</h6>
+      <ul className={s.volList} aria-label="Volumes">
+        {volumes.map((v) => (
+          <li key={v.name} className={s.vol} data-testid={`volume-${v.name}`}>
+            <span className={s.volName}>{v.name}</span>
+            <span className={s.volType}>{v.type}</span>
+            {v.link && <Linked text={v.link.name} link={v.link} onLink={onLink} />}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PodSection({ data, now, onNodeShell, onOwnerLogs, onLink }: { data: PodDescribe; now: Date } & Actions) {
   const { pod } = data;
   const owner = pod.owner;
   const labels = Object.entries(data.labels);
@@ -62,7 +87,7 @@ function PodSection({ data, now, onNodeShell, onOwnerLogs }: { data: PodDescribe
         <dd><Status label={pod.status} cls={pod.status_class} /></dd>
         <dt>Node</dt>
         <dd title={pod.node ?? undefined}>
-          <span>{pod.node ?? UNKNOWN}</span>
+          {pod.node ? <Linked text={pod.node} link={pod.node_link} onLink={onLink} /> : <span>{UNKNOWN}</span>}
           {pod.node && onNodeShell && (
             <button type="button" className={s.link} onClick={() => onNodeShell(pod.node!)}>Node shell</button>
           )}
@@ -75,7 +100,7 @@ function PodSection({ data, now, onNodeShell, onOwnerLogs }: { data: PodDescribe
         <dd>{pod.qos ?? UNKNOWN}</dd>
         <dt>Controlled by</dt>
         <dd title={owner ? `${owner.kind} ${owner.name}` : undefined}>
-          <span>{owner ? `${owner.kind} ${owner.name}` : "Nothing (a bare pod)"}</span>
+          {owner ? <Linked text={`${owner.kind} ${owner.name}`} link={owner.link} onLink={onLink} /> : <span>Nothing (a bare pod)</span>}
           {owner?.selector && onOwnerLogs && (
             <button type="button" className={s.link} title={`Logs of every pod matching ${owner.selector}`} onClick={() => onOwnerLogs(owner)}>
               All pods' logs
@@ -83,7 +108,7 @@ function PodSection({ data, now, onNodeShell, onOwnerLogs }: { data: PodDescribe
           )}
         </dd>
         <dt>Service account</dt>
-        <dd>{pod.service_account ?? UNKNOWN}</dd>
+        <dd>{pod.service_account ? <Linked text={pod.service_account} link={pod.service_account_link} onLink={onLink} /> : UNKNOWN}</dd>
         <dt>Started</dt>
         <dd title={pod.started_at ?? undefined}>{pod.started_at ? formatWhen(pod.started_at, now) : "Not started"}</dd>
       </dl>
@@ -92,6 +117,7 @@ function PodSection({ data, now, onNodeShell, onOwnerLogs }: { data: PodDescribe
           {data.conditions.map((c) => <ConditionChip key={c.type} c={c} />)}
         </ul>
       )}
+      {data.volumes.length > 0 && <Volumes volumes={data.volumes} onLink={onLink} />}
       {labels.length > 0 && (
         <ul className={s.tags} aria-label="Labels">
           {labels.map(([k, v]) => <li key={k} className={s.tag} title={`${k}=${v}`}>{`${k}=${v}`}</li>)}
@@ -134,7 +160,7 @@ function Resource({ c, k }: { c: ContainerInfo; k: string }) {
   );
 }
 
-function Env({ e }: { e: EnvVar }) {
+function Env({ e, onLink }: { e: EnvVar; onLink?: (link: Link) => void }) {
   return (
     <li className={s.env} data-testid={`env-${e.name}`}>
       <span className={s.envName}>{e.name}</span>
@@ -142,7 +168,9 @@ function Env({ e }: { e: EnvVar }) {
         <span className={s.envValue} data-testid="env-value" title={e.value}>{e.value === "" ? '""' : e.value}</span>
       ) : (
         // A reference: name where it comes from, never a value (Secrets never reach the browser).
-        <span className={s.envSource}>from {e.source ?? "a reference the console can't name"}</span>
+        <span className={s.envSource}>
+          from {e.source ? <Linked text={e.source} link={e.link} onLink={onLink} /> : "a reference the console can't name"}
+        </span>
       )}
     </li>
   );
@@ -151,7 +179,7 @@ function Env({ e }: { e: EnvVar }) {
 type ContainerKind = "init" | "ephemeral" | null;
 const KIND_TAG: Record<Exclude<ContainerKind, null>, string> = { init: "Init", ephemeral: "Ephemeral" };
 
-function ContainerCard({ c, kind, now }: { c: ContainerInfo; kind: ContainerKind; now: Date }) {
+function ContainerCard({ c, kind, now, onLink }: { c: ContainerInfo; kind: ContainerKind; now: Date; onLink?: (link: Link) => void }) {
   // Healthy containers start folded to their header, as in the mockup; anything worth a look starts open.
   const troubled = c.state_class === "bad" || c.state_class === "warn" || c.restarts > 0 || c.limit_hit.length > 0;
   const [open, setOpen] = useState(troubled);
@@ -199,7 +227,7 @@ function ContainerCard({ c, kind, now }: { c: ContainerInfo; kind: ContainerKind
           {c.env.length > 0 && (
             <div className={s.wide}>
               <h6 className={s.sub}>Environment</h6>
-              <ul className={s.envs}>{c.env.map((e, i) => <Env key={`${e.name}\u0000${i}`} e={e} />)}</ul>
+              <ul className={s.envs}>{c.env.map((e, i) => <Env key={`${e.name}\u0000${i}`} e={e} onLink={onLink} />)}</ul>
             </div>
           )}
           {c.mounts.length > 0 && (
@@ -216,9 +244,10 @@ function ContainerCard({ c, kind, now }: { c: ContainerInfo; kind: ContainerKind
 
 /**
  * The Describe tab: pod, containers and events side by side, as in the Territories mockup.
- * `onNodeShell` / `onOwnerLogs` add "Node shell" by the node and "All pods' logs" by the owner.
+ * `onNodeShell` / `onOwnerLogs` add "Node shell" by the node and "All pods' logs" by the owner;
+ * `onLink` makes the owner, node, service account, env sources and volumes links.
  */
-export function DescribeView({ data, onNodeShell, onOwnerLogs }: { data: PodDescribe } & Actions) {
+export function DescribeView({ data, onNodeShell, onOwnerLogs, onLink }: { data: PodDescribe } & Actions) {
   const now = new Date();
   const containers: [ContainerInfo, ContainerKind][] = [
     ...data.init_containers.map((c): [ContainerInfo, ContainerKind] => [c, "init"]),
@@ -227,13 +256,13 @@ export function DescribeView({ data, onNodeShell, onOwnerLogs }: { data: PodDesc
   ];
   return (
     <div className={s.desc}>
-      <PodSection data={data} now={now} onNodeShell={onNodeShell} onOwnerLogs={onOwnerLogs} />
+      <PodSection data={data} now={now} onNodeShell={onNodeShell} onOwnerLogs={onOwnerLogs} onLink={onLink} />
       <section className={s.col} aria-label="Containers">
         <h5 className={s.h}>Containers</h5>
         {containers.length === 0 ? (
           <p className={s.none}>No containers</p>
         ) : (
-          containers.map(([c, kind]) => <ContainerCard key={`${kind ?? "main"}:${c.name}`} c={c} kind={kind} now={now} />)
+          containers.map(([c, kind]) => <ContainerCard key={`${kind ?? "main"}:${c.name}`} c={c} kind={kind} now={now} onLink={onLink} />)
         )}
       </section>
       <section className={s.col} aria-label="Events">

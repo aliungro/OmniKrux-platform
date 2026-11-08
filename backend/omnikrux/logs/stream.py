@@ -35,6 +35,9 @@ MAX_FAILURES = 5  # consecutive failed reopens before a followed stream gives up
 IMMEDIATE_SECONDS = 1.0  # a reopened stream that ends sooner than this, empty, failed
 RETRY_DELAY = 1.0  # seconds before reopening after a failure
 POLL_INTERVAL = 2.0  # seconds between pod reads while a stopped container waits to restart
+# The kubelet briefly answers 400 for the previous log while a container is being replaced: a
+# `previous` read is retried after each of these delays before it is believed.
+PREVIOUS_RETRY_DELAYS = (0.5, 1.5)
 
 
 class LogLine(TypedDict):
@@ -156,7 +159,32 @@ async def open_log(
 ) -> aiohttp.ClientResponse:
     """GET .../pods/{pod}/log, unread; the caller closes it. Non-2xx raises ApiException.
 
+    A `previous` read answered 400 is tried again after each of PREVIOUS_RETRY_DELAYS.
     The generated `read_namespaced_pod_log` has no `sinceTime`, so this calls the API directly."""
+    delays = PREVIOUS_RETRY_DELAYS if previous else ()
+    for delay in delays:
+        try:
+            return await _get_log(api, namespace, pod, container, follow, previous, timestamps,
+                                  since_time, tail_lines)  # fmt: skip
+        except ApiException as exc:
+            if exc.status != 400:
+                raise
+        await asyncio.sleep(delay)
+    return await _get_log(api, namespace, pod, container, follow, previous, timestamps,
+                          since_time, tail_lines)  # fmt: skip
+
+
+async def _get_log(
+    api: ApiClient,
+    namespace: str,
+    pod: str,
+    container: str,
+    follow: bool,
+    previous: bool,
+    timestamps: bool,
+    since_time: str | None,
+    tail_lines: int | None,
+) -> aiohttp.ClientResponse:
     query: list[tuple[str, str | int]] = [("container", container)]
     query += [(name, "true") for name, on in [("follow", follow), ("previous", previous),
                                                ("timestamps", timestamps)] if on]  # fmt: skip
@@ -210,6 +238,7 @@ class LogStream:
         follow: bool,
         since_time: str | None,
         tail_lines: int | None,
+        resume: ResumePoint | None = None,
     ):
         self._connections = connections
         self._cluster_id = cluster_id
@@ -220,6 +249,7 @@ class LogStream:
         self._follow = follow and not previous  # a previous run has ended: nothing to follow
         self._since_time = since_time
         self._tail_lines = tail_lines
+        self._resume = resume
         self._action = f"read logs for pod {namespace}/{pod}"
 
     async def lines(self) -> AsyncIterator[LogLine | Marker]:
@@ -247,8 +277,11 @@ class LogStream:
         uid = (pod.get("metadata") or {}).get("uid")
         restarts = container_status(pod, container).get("restartCount", 0)
         since, tail = self._since_time, self._tail_lines
-        position = ResumePoint()
+        # `resume`: the lines up to there were already sent (a selector session's backlog).
+        position = self._resume or ResumePoint()
         skip = position.repeats()  # nothing sent yet: nothing to skip
+        if position.ts is not None:
+            since, tail = position.ts, None
         failures = 0
         opened_once = False
         while True:
@@ -369,7 +402,7 @@ def log_error_message(
             return pod_missing_message(namespace, pod)
         if exc.status == 400 and previous:
             return (
-                f'No previous run of container "{container}" in pod {namespace}/{pod}: it has not '
-                "restarted, or its earlier logs were already cleaned up. Try the current logs."
+                "No previous run to show yet: the kubelet can take about a minute to serve the "
+                "previous run after a restart. Try again in a minute, or read the current logs."
             )
     return kube_error_message(exc, f"read logs for pod {namespace}/{pod}")

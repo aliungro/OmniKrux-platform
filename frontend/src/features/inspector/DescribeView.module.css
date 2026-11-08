@@ -305,3 +305,34 @@
 .mounts li {
   color: var(--ink-2);
 }
+
+/* Volumes: name, what it is, and what it reads from. */
+.vols {
+  margin-top: 14px;
+}
+
+.volList {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.volName {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.volType {
+  color: var(--ink-3);
+  font-size: 12px;
+}

@@ -1,0 +1,76 @@
+.box {
+  position: relative;
+}
+
+/* The editing bar sits where Copy sits when reading, so the switch reads as the same YAML,
+   now open for changes. A focus-coloured rule along its left says so. */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 8px 18px;
+  border-bottom: 1px solid var(--rule);
+  box-shadow: inset 2px 0 0 var(--focus);
+}
+
+.what {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.push {
+  flex: 1;
+}
+
+.btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+
+.btn:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.go {
+  border-color: var(--focus);
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.go:disabled {
+  opacity: 0.5;
+  color: var(--bg);
+}
+
+.editor {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.note {
+  margin: 0;
+  padding: 14px 18px;
+  color: var(--ink-2);
+}
+
+.error {
+  margin: 0;
+  padding: 8px 18px;
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+  line-height: 1.45;
+}

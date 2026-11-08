@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { pressed } from "../chrome/shortcuts";
 import { LogPane } from "../logs/LogPane";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -75,9 +76,10 @@ function Grip({ height, viewport, onResize }: { height: number; viewport: number
 
 /**
  * The dock under the table: one tab per logs or shell session, each named and coloured by its
- * cluster. Sessions stay connected while their tab is in the background.
+ * cluster. Sessions stay connected while their tab is in the background. Memoized: `useDock`'s API
+ * object changes only with the dock's own state, so watch updates to the table don't re-render it.
  */
-export function Dock({ dock }: { dock: DockApi }) {
+export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
   const { state, dispatch, ask } = dock;
   const base = useId();
   const [viewport, setViewport] = useState(() => window.innerHeight);
@@ -85,7 +87,7 @@ export function Dock({ dock }: { dock: DockApi }) {
   // Ctrl \ switches between one pane and side by side, even from inside a terminal.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey || e.metaKey || (e.key !== "\\" && e.code !== "Backslash")) return;
+      if (!pressed("layout", e)) return;
       e.preventDefault();
       e.stopPropagation();
       dispatch({ type: "toggleLayout" });
@@ -172,4 +174,4 @@ export function Dock({ dock }: { dock: DockApi }) {
       {dialog}
     </section>
   );
-}
+});

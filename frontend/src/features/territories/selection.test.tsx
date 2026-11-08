@@ -1,17 +1,21 @@
 // frontend/src/features/territories/selection.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
-import { TerritoryTable } from "./TerritoryTable";
+import type { TerritoryTableProps } from "./TerritoryTable";
+import { resourceDescribe, secretDescribe } from "../../test/describe";
+import { DEPLOYMENTS, NODES, PODS, SERVICES } from "../../test/kinds";
+import { Table } from "../../test/table";
+import { ActionsProvider } from "../actions/ActionDialog";
 
 const describeBody = {
   pod: {
     name: "pod-0", namespace: "n", status: "Running", status_class: "ok", node: "node-a", pod_ip: null, host_ip: null,
     qos: null, service_account: null, owner: null, started_at: null, resource_version: "1",
   },
-  containers: [], init_containers: [], ephemeral_containers: [], conditions: [], labels: {}, annotations: {},
+  containers: [], init_containers: [], ephemeral_containers: [], volumes: [], conditions: [], labels: {}, annotations: {},
   events: [], events_error: null,
 };
 
@@ -35,22 +39,22 @@ afterEach(() => {
 
 const rows = (n: number): ResourceRow[] =>
   Array.from({ length: n }, (_, i) => ({
-    uid: String(i), cluster_id: "c1", kind: "Pod", namespace: "n", name: `pod-${i}`, created_at: null,
+    uid: String(i), cluster_id: "c1", kind: "Pod", namespace: "n", name: `pod-${i}`, created_at: null, labels: {},
     columns: { status: "Running", status_class: "ok", resource_version: "1" },
   }));
 
-const territory = (rs: ResourceRow[]): Territory => ({
+const territory = (rs: ResourceRow[], state: Territory["state"] = "ready"): Territory => ({
   cluster: { id: "c1", name: "big", context_name: "x", server: "https://x", original_server: null, provider: "gke",
     region: null, environment: "development", state: "ready", message: null },
-  state: "ready", message: null, rows: rs, total: rs.length, failing: 0, pending: 0,
+  state, message: null, rows: rs, total: rs.length, failing: 0, pending: 0,
 });
 
-function renderTable(n: number, props: Partial<Parameters<typeof TerritoryTable>[0]> = {}) {
+function renderTable(n: number, props: Partial<TerritoryTableProps> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <div style={{ height: 600 }}>
-        <TerritoryTable territories={[territory(rows(n))]} onRetry={() => {}} {...props} />
+        <Table territories={[territory(rows(n))]} kind={PODS} onRetry={() => {}} {...props} />
       </div>
     </QueryClientProvider>,
   );
@@ -146,7 +150,7 @@ describe("selection", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const ui = (n: number) => (
       <QueryClientProvider client={client}>
-        <TerritoryTable territories={[territory(rows(n))]} onRetry={() => {}} />
+        <Table territories={[territory(rows(n))]} kind={PODS} onRetry={() => {}} />
       </QueryClientProvider>
     );
     const { rerender } = render(ui(3));
@@ -178,5 +182,193 @@ describe("selection", () => {
     const rendered = screen.queryAllByText(/^pod-\d+$/).length;
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(200);
+  });
+
+  it("inspector survives a reconnect of its cluster", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (t: Territory) => (
+      <QueryClientProvider client={client}>
+        <Table territories={[t]} kind={PODS} onRetry={() => {}} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(territory(rows(3))));
+    fireEvent.keyDown(podRow("pod-1"), { key: "Enter" });
+    expect(inspector()!.getAttribute("aria-label")).toBe("Details for pod-1");
+    // The cluster reconnects: its rows are hidden until they're live again, the inspector with them.
+    rerender(ui(territory([], "syncing")));
+    expect(inspector()).toBeNull();
+    rerender(ui(territory([], "error")));
+    expect(inspector()).toBeNull();
+    // Back, with the pod still there: the inspector reopens under it.
+    rerender(ui(territory(rows(3))));
+    expect(inspector()!.getAttribute("aria-label")).toBe("Details for pod-1");
+    expect(podRow("pod-1").getAttribute("aria-selected")).toBe("true");
+    // Ready and gone: now it closes, and stays closed.
+    rerender(ui(territory(rows(1))));
+    expect(inspector()).toBeNull();
+    rerender(ui(territory(rows(3))));
+    expect(inspector()).toBeNull();
+  });
+
+  it("every kind opens details; logs and shells stay with pods", () => {
+    const onOpenLogs = vi.fn();
+    const onOpenShell = vi.fn();
+    const deps = rows(3).map((r) => ({ ...r, kind: "Deployment", name: r.name.replace("pod", "web") }));
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Table territories={[territory(deps)]} kind={DEPLOYMENTS} onRetry={() => {}} onOpenLogs={onOpenLogs} onOpenShell={onOpenShell} />
+      </QueryClientProvider>,
+    );
+    const r = podRow("web-1");
+    for (const key of ["l", "p", "s"]) fireEvent.keyDown(r, { key });
+    expect(onOpenLogs).not.toHaveBeenCalled();
+    expect(onOpenShell).not.toHaveBeenCalled();
+    fireEvent.keyDown(r, { key: "Enter" });
+    expect(inspector()).toBeTruthy();
+    expect(r.getAttribute("aria-selected")).toBe("true");
+    expect(r.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(r, { key: "Escape" });
+    expect(inspector()).toBeNull();
+    fireEvent.keyDown(r, { key: "ArrowDown" });
+    expect(podRow("web-2").getAttribute("aria-selected")).toBe("true");
+  });
+});
+
+describe("keys per kind", () => {
+  const VERBS = ["get", "list", "watch", "update", "patch", "delete"];
+  const asKind = (kind: string, name: string) => rows(2).map((r, i) => ({ ...r, kind, name: `${name}-${i}`, columns: { ...r.columns, ready: "2/3" } }));
+  const json = (body: unknown) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+  function renderKind(kind: typeof PODS, rs: ResourceRow[], props: Partial<TerritoryTableProps> = {}) {
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ActionsProvider>
+          <div style={{ height: 600 }}>
+            <Table territories={[territory(rs)]} kind={{ ...kind, verbs: VERBS }} onRetry={() => {}} {...props} />
+          </div>
+        </ActionsProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("same key acts per kind", async () => {
+    const onOpenShell = vi.fn();
+    const onNodeShell = vi.fn();
+    const pods = renderKind(PODS, rows(2), { onOpenShell });
+    fireEvent.keyDown(podRow("pod-1"), { key: "s" });
+    expect(onOpenShell).toHaveBeenCalledWith(expect.objectContaining({ uid: "1" }));
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    pods.unmount();
+
+    vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe())));
+    const deps = renderKind(DEPLOYMENTS, asKind("Deployment", "web"), { onOpenShell });
+    fireEvent.keyDown(podRow("web-1"), { key: "s" });
+    expect(((await screen.findByLabelText("Replicas")) as HTMLInputElement).value).toBe("3");
+    expect(onOpenShell).toHaveBeenCalledTimes(1);
+    deps.unmount();
+
+    const nodes = renderKind(NODES, asKind("Node", "node").map((r) => ({ ...r, namespace: null })), { onOpenShell, onNodeShell });
+    fireEvent.keyDown(podRow("node-0"), { key: "s" });
+    await waitFor(() => expect(onNodeShell).toHaveBeenCalledWith(expect.objectContaining({ name: "node-0" }), "node-0"));
+    expect(onOpenShell).toHaveBeenCalledTimes(1);
+    nodes.unmount();
+  });
+
+  it("ctrl d opens delete review", async () => {
+    const plan = {
+      plan_id: "p1", action: "delete", target: { cluster_id: "c1", kind_key: "pods", namespace: "n", name: "pod-1" }, kind: "Pod",
+      cluster: { id: "c1", name: "big", provider: "gke", environment: "development" }, title: "Delete Pod pod-1",
+      summary: ["Delete Pod n/pod-1."], warnings: [], blocked: [], diff: null, confirm_text: null, apply_label: "Delete",
+      expires_at: "2026-11-08T10:05:00Z",
+    };
+    const fetch = vi.fn((_url: string, init?: RequestInit) => json(init?.method === "POST" ? plan : describeBody));
+    vi.stubGlobal("fetch", fetch);
+    renderKind(PODS, rows(2));
+    const event = new KeyboardEvent("keydown", { key: "d", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      podRow("pod-1").dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true); // not the browser's bookmark
+    expect(await screen.findByRole("dialog", { name: "Delete Pod pod-1" })).toBeTruthy();
+    const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts.map(([url]) => url)).toEqual(["/api/actions/plan"]);
+    expect(JSON.parse(posts[0][1]!.body as string)).toMatchObject({ action: "delete", target: { name: "pod-1", kind_key: "pods" } });
+  });
+
+  it("y opens the details on the YAML tab", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => json(url.endsWith("/yaml") || url.includes("/yaml?") ? { yaml: "kind: Deployment" } : resourceDescribe())));
+    renderKind(DEPLOYMENTS, asKind("Deployment", "web"));
+    fireEvent.keyDown(podRow("web-0"), { key: "y" });
+    expect(inspector()!.getAttribute("aria-label")).toBe("Details for web-0");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true"));
+  });
+
+  it("l on a workload opens the logs of all its pods", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe({ pod_selector: "app=web" }))));
+    const onWorkloadLogs = vi.fn();
+    const onOpenLogs = vi.fn();
+    renderKind(DEPLOYMENTS, asKind("Deployment", "web"), { onWorkloadLogs, onOpenLogs });
+    fireEvent.keyDown(podRow("web-1"), { key: "l" });
+    await waitFor(() => expect(onWorkloadLogs).toHaveBeenCalledWith(expect.objectContaining({ name: "web-1" }), "app=web", { focus: true }));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("a workload that selects its pods with expressions says why its logs can't open", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe({ pod_selector: null }))));
+    const onWorkloadLogs = vi.fn();
+    renderKind(DEPLOYMENTS, asKind("Deployment", "web"), { onWorkloadLogs });
+    fireEvent.keyDown(podRow("web-1"), { key: "l" });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Deployment web-1 picks its pods with expressions, so their logs can't be opened together. Open one of its pods' logs instead.",
+    );
+    expect(onWorkloadLogs).not.toHaveBeenCalled();
+  });
+
+  it("x on a secret row opens Describe on its first key; x again reveals that key", async () => {
+    const SECRETS = { ...SERVICES, key: "secrets", kind: "Secret", plural: "secrets", label: "Secret", plural_label: "secrets" };
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return json({ key: "password", value: "hunter2", encoding: "utf-8" });
+      return json(url.includes("/yaml") ? { yaml: "kind: Secret" } : secretDescribe({ name: "db-0", namespace: "n" }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    renderKind(SECRETS, asKind("Secret", "db"));
+    const row = podRow("db-0");
+    row.focus();
+    // Whatever tab was showing, x goes to Describe, where the keys are.
+    fireEvent.keyDown(row, { key: "y" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true"));
+    row.focus();
+    fireEvent.keyDown(row, { key: "x" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("secret-key-password")));
+    expect(screen.getByRole("tab", { name: "Describe" }).getAttribute("aria-selected")).toBe("true");
+    // Nothing revealed yet: that's the next x, on the focused key, through the audited reveal.
+    expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    fireEvent.keyDown(document.activeElement!, { key: "x" });
+    expect(await screen.findByText("hunter2")).toBeTruthy();
+    const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts.map(([url]) => url)).toEqual(["/api/clusters/c1/secrets/n/db-0/reveal"]);
+    expect(JSON.parse(posts[0][1]!.body as string)).toEqual({ key: "password" });
+  });
+
+  it("holding x on a secret row never reveals: key repeats are ignored on the row and on the key", async () => {
+    const SECRETS = { ...SERVICES, key: "secrets", kind: "Secret", plural: "secrets", label: "Secret", plural_label: "secrets" };
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return json({ key: "password", value: "hunter2", encoding: "utf-8" });
+      return json(url.includes("/yaml") ? { yaml: "kind: Secret" } : secretDescribe({ name: "db-0", namespace: "n" }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    renderKind(SECRETS, asKind("Secret", "db"));
+    const row = podRow("db-0");
+    row.focus();
+    fireEvent.keyDown(row, { key: "x" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("secret-key-password")));
+    // The held key keeps repeating, wherever focus is now.
+    fireEvent.keyDown(document.activeElement!, { key: "x", repeat: true });
+    fireEvent.keyDown(row, { key: "x", repeat: true });
+    fireEvent.keyDown(document.activeElement!, { key: "x", repeat: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    expect(screen.queryByText("hunter2")).toBeNull();
   });
 });

@@ -1,0 +1,314 @@
+/* The audit log view: a ledger. One quiet card, rows separated by hairlines, the provider's colour
+   as the stripe on each row's left edge. Fills the page under the top bar; only the table scrolls. */
+.view {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+}
+
+.bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  padding: 12px 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.filters {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.lbl {
+  color: var(--ink-3);
+}
+
+.field select,
+.search {
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+}
+
+.search {
+  width: 220px;
+}
+
+.search::placeholder {
+  color: var(--ink-3);
+}
+
+.btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf-2);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+
+.btn:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 16px;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.err {
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 16px;
+}
+
+.table {
+  min-width: 1040px;
+}
+
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 138px 56px 190px minmax(170px, 1.1fr) minmax(170px, 1.2fr) 112px minmax(240px, 2fr);
+  column-gap: 12px;
+  align-items: center;
+}
+
+.cols {
+  box-sizing: border-box;
+  height: 30px;
+  padding: 8px 14px 6px 18px;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.body {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--surf);
+  overflow: hidden;
+}
+
+.item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.row {
+  composes: grid;
+  position: relative;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 14px 0 18px;
+  overflow: hidden;
+  white-space: nowrap;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
+  cursor: pointer;
+}
+
+.row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--c);
+}
+
+.row:hover {
+  background: color-mix(in srgb, var(--surf-2) 60%, var(--surf));
+}
+
+.row[aria-expanded="true"] {
+  background: var(--surf-2);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.cell,
+.when {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.when {
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.action {
+  font-weight: 600;
+}
+
+.where,
+.what {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kind {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.message {
+  color: var(--ink-2);
+}
+
+/* The open record, continuing its row's card. */
+.detail {
+  box-sizing: border-box;
+  padding: 12px 18px 16px 22px;
+  border-bottom: 1px solid var(--rule);
+  border-left: 4px solid var(--c);
+  background: color-mix(in srgb, var(--bg) 40%, var(--surf));
+}
+
+.when2 {
+  margin: 0 0 6px;
+  color: var(--ink-3);
+}
+
+.fullMessage {
+  margin: 0 0 10px;
+  max-width: 90ch;
+  line-height: 1.5;
+}
+
+.none {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+/* Diffs and details are code-like: the one place this view uses the mono face. */
+.diff,
+.json {
+  box-sizing: border-box;
+  max-height: 360px;
+  margin: 0 0 10px;
+  padding: 8px 0;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.json {
+  padding: 8px 12px;
+  color: var(--ink-2);
+}
+
+.line {
+  padding: 0 12px;
+  white-space: pre;
+}
+
+.line[data-line="add"] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
+
+.line[data-line="remove"] {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+
+.line[data-line="meta"] {
+  color: var(--ink-3);
+}
+
+.cut {
+  padding: 4px 12px 0;
+  color: var(--ink-3);
+  font-family: inherit;
+}
+
+.foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.count {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.foot .btn {
+  margin-left: auto;
+}
+
+.foot .count:last-child {
+  margin-left: auto;
+}

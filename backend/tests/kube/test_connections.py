@@ -9,7 +9,6 @@ from omnikrux.config import Settings
 from omnikrux.kube.client import ClusterUnavailable
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.main import create_app
-from omnikrux.resources.kinds import KINDS
 from tests.fakekube import kubeconfig_for
 
 
@@ -146,7 +145,7 @@ async def test_source_for_uses_connections(fake_api, tmp_path):
     async with app.router.lifespan_context(app):
         assert isinstance(app.state.connections, ClusterConnections)
         app.state.connections._registry = FakeRegistry({"c1": kubeconfig_for(fake_api)})
-        source = await app.state.hub._source_for("c1", KINDS["pods"])
+        source = await app.state.hub._source_for("c1", "pods")
         try:
             items, rv = await source.list()
         finally:

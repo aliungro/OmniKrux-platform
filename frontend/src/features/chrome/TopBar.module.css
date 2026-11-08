@@ -73,9 +73,40 @@
   white-space: nowrap;
 }
 
-.cmd {
+.tools {
   flex: none;
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audit {
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.audit:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+
+.audit[aria-pressed="true"] {
+  border-color: var(--focus);
+  color: var(--ink);
+}
+
+.cmd {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -89,4 +120,35 @@
   color: var(--ink-3);
   white-space: nowrap;
   user-select: none;
+}
+
+/* Live: the box opens the palette. The colon is the prompt you'd type, the keycap the other way in. */
+.live {
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.live:hover {
+  border-color: var(--ink-3);
+  color: var(--ink-2);
+}
+
+.live:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.prompt {
+  color: var(--focus);
+  font-weight: 700;
+}
+
+.hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cap {
+  margin-left: auto;
 }

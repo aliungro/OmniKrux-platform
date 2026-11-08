@@ -12,6 +12,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LogSession } from "../../api/types";
 import { ProviderBadge } from "../territories/ProviderBadge";
+import { capsOf, inTerminal, isEditable, pressed } from "../chrome/shortcuts";
 import k from "../chrome/key.module.css";
 import { LOG_CAPACITY, isMarker, type LogItem } from "./logBuffer";
 import { splitMatches, stepMatch, useLogSearch } from "./logSearch";
@@ -37,15 +38,6 @@ function downloadUrl(session: LogSession, container: string | null, previous: bo
   if (container) q.set("container", container);
   q.set("previous", String(previous));
   return `/api/clusters/${cluster}/pods/${ns}/${pod}/logs/download?${q.toString()}`;
-}
-
-/** Inside an xterm.js terminal (a shell pane), whose keys all belong to the shell. */
-function inTerminal(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(".xterm") !== null;
-}
-
-function isTyping(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && target.closest("input, select, textarea, [contenteditable='true']") !== null;
 }
 
 function Toggle({
@@ -285,7 +277,7 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
     if (!active) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (inTerminal(e.target)) return;
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
+      if (pressed("searchLogs", e)) {
         e.preventDefault();
         searchRef.current?.focus();
         searchRef.current?.select();
@@ -296,7 +288,7 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
   }, [active]);
 
   const onPaneKey = (e: KeyboardEvent<HTMLElement>) => {
-    if (e.key === "G" && !e.ctrlKey && !e.metaKey && !e.altKey && !isTyping(e.target)) {
+    if (pressed("jumpLive", e) && !isEditable(e.target)) {
       e.preventDefault();
       jumpToLive();
     }
@@ -394,7 +386,7 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
             onKeyDown={onSearchKey}
           />
           {query === "" ? (
-            <span className={`${k.k} ${s.k}`} aria-hidden="true">Ctrl F</span>
+            <span className={`${k.k} ${s.k}`} aria-hidden="true">{capsOf("searchLogs")[0]}</span>
           ) : (
             <>
               <span className={s.hits}>{`${count(position)} of ${count(matches.length)}`}</span>
@@ -451,7 +443,7 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
         {empty && <div className={s.empty}>{empty}</div>}
         {!follow && total > 0 && (
           <button type="button" className={s.jump} onClick={jumpToLive}>
-            Jump to live<span className={`${k.k} ${s.k}`} aria-hidden="true">G</span>
+            Jump to live<span className={`${k.k} ${s.k}`} aria-hidden="true">{capsOf("jumpLive")[0]}</span>
           </button>
         )}
       </div>

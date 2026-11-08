@@ -1,0 +1,58 @@
+/* The diff sits on the page's own background, a step below the dialog, like a sheet of paper laid
+   on it; the two sides are labelled once, above, so the eye reads left to right. */
+.diff {
+  margin: 14px 0 0;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.heads {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.heads span {
+  padding: 6px 12px;
+}
+
+.heads span + span {
+  border-left: 1px solid var(--rule);
+  color: var(--ink-2);
+}
+
+.view {
+  max-height: min(46vh, 420px);
+  overflow: auto;
+}
+
+/* The merge view's two editors side by side, split by a rule. */
+.view :global(.cm-mergeView) {
+  overflow: visible;
+}
+
+.view :global(.cm-mergeViewEditor + .cm-mergeViewEditor) {
+  border-left: 1px solid var(--rule);
+}
+
+.note {
+  margin: 0;
+  padding: 18px 14px;
+  color: var(--ink-2);
+}
+
+.bad {
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .heads {
+    display: none;
+  }
+}

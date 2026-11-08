@@ -1,6 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import pc from "../territories/provider.module.css";
+import { capsOf } from "../chrome/shortcuts";
 import k from "../chrome/key.module.css";
 import { identity, type DockLayout, type Session } from "./dockState";
 import s from "./SessionTabs.module.css";
@@ -116,7 +117,7 @@ export function SessionTabs({
         })}
       </div>
       <button type="button" className={s.lay} aria-pressed={layout === "split"} onClick={onToggleLayout}>
-        Side by side<span className={k.k} aria-hidden="true">Ctrl \</span>
+        Side by side<span className={k.k} aria-hidden="true">{capsOf("layout")[0]}</span>
       </button>
     </div>
   );

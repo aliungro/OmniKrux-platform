@@ -60,8 +60,8 @@ def will_restart(pod: dict, container: str, terminated: dict) -> bool:
     exit_code = terminated.get("exitCode")
     for init in spec.get("initContainers") or []:
         if init.get("name") == container:
-            if init.get("restartPolicy") == "Always":  # a sidecar: restarted like the pod's
-                break
+            if init.get("restartPolicy") == "Always":  # a native sidecar: always restarted,
+                return True  # whatever the pod's own restart policy says
             if exit_code == 0:  # a completed init container never runs again
                 return False
     policy = spec.get("restartPolicy", "Always")

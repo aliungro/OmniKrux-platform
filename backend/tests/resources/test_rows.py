@@ -117,3 +117,60 @@ def test_pod_row_sums_restarts_and_picks_latest_restart():
     )
     assert r.columns["restarts"] == 7
     assert r.columns["last_restart_at"] == "2026-11-06T14:04:14Z"
+
+
+def test_pod_row_requests_limits_labels_images():
+    p = pod(statuses=[c()])
+    p["metadata"]["labels"] = {"app": "web"}
+    p["spec"]["containers"] = [
+        {
+            "name": "a",
+            "image": "nginx:1",
+            "resources": {
+                "requests": {"cpu": "250m", "memory": "64Mi"},
+                "limits": {"cpu": "500m", "memory": "128Mi"},
+            },
+        },
+        {
+            "name": "b",
+            "image": "busybox",
+            "resources": {"requests": {"cpu": "0.5"}, "limits": {"cpu": "1"}},
+        },
+    ]
+    p["spec"]["initContainers"] = [
+        {"name": "i", "image": "init", "resources": {"requests": {"cpu": "4"}}}
+    ]
+    row = pod_row(p, "c1")
+    assert row.labels == {"app": "web"}
+    assert row.columns["images"] == ["nginx:1", "busybox"]
+    assert row.columns["cpu_request_m"] == 750 and row.columns["cpu_limit_m"] == 1500
+    assert row.columns["memory_request_b"] == 64 * 2**20
+    assert row.columns["memory_limit_b"] is None  # container b has no memory limit
+    p["spec"]["containers"][1]["resources"]["limits"]["memory"] = "128Mi"
+    assert pod_row(p, "c1").columns["memory_limit_b"] == 256 * 2**20
+    bare = pod_row(pod(), "c1")
+    assert bare.columns["cpu_request_m"] == 0 and bare.columns["cpu_limit_m"] is None
+    assert bare.columns["images"] == []
+
+
+def test_pod_row_unreadable_quantities_are_none_not_zero():
+    p = pod()
+    p["spec"]["containers"] = [
+        {
+            "name": "a",
+            "image": "x",
+            "resources": {"requests": {"cpu": "1e999999999", "memory": "junk"}},
+        },
+        {"name": "b", "image": "y", "resources": {"requests": {"cpu": "100m", "memory": "1Mi"}}},
+    ]
+    row = pod_row(p, "c1")
+    assert row.columns["cpu_request_m"] is None and row.columns["memory_request_b"] is None
+    assert row.columns["images"] == ["x", "y"]
+
+
+def test_node_row_survives_an_absurd_allocatable():
+    from omnikrux.resources.kind_rows import node_row
+
+    n = {"metadata": {"name": "n"}, "status": {"allocatable": {"cpu": "1e999999999", "pods": "x"}}}
+    row = node_row(n, "c1")
+    assert row.columns["allocatable_cpu_m"] is None and row.columns["allocatable_pods"] is None

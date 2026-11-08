@@ -1,0 +1,191 @@
+/* A form that opens under the details' tab bar, the way the details open under a row: inline, in
+   the cluster's card, never a drawer. */
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 10px 18px;
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--surf-2) 45%, transparent);
+  font-size: 13px;
+}
+
+.column {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.push {
+  flex: 1;
+}
+
+.field {
+  font-weight: 600;
+}
+
+.count {
+  box-sizing: border-box;
+  width: 88px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.count:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.count[aria-invalid="true"] {
+  border-color: var(--bad);
+}
+
+.hint {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+
+.btn:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.go {
+  border-color: var(--focus);
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.go:disabled {
+  opacity: 0.55;
+  color: var(--bg);
+}
+
+.error {
+  flex-basis: 100%;
+  margin: 0;
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.legend {
+  padding: 0;
+  margin-bottom: 6px;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+/* Revisions: one per line, the revision number lined up, the images after it. */
+.revisions {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.revision {
+  display: grid;
+  grid-template-columns: auto 92px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.revision:hover {
+  background: var(--surf-2);
+}
+
+.revision[data-current] {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.revision input {
+  margin: 0;
+  accent-color: var(--focus);
+}
+
+.rev {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.images {
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now {
+  color: var(--ok);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Drain options, inside the dialog. */
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.options .legend {
+  flex-basis: 100%;
+  margin-bottom: 0;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.check input {
+  margin: 0;
+  accent-color: var(--focus);
+}
+
+.options:disabled .check {
+  color: var(--ink-3);
+  cursor: progress;
+}

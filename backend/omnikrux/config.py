@@ -1,4 +1,6 @@
+import ipaddress
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -8,6 +10,33 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Host headers the console answers to (DNS-rebinding guard). "*.localhost" allows any subdomain.
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "[::1]", "*.localhost")
+
+_PORT_RANGE = re.compile(r"^\s*(\d{1,5})\s*(?:-\s*(\d{1,5})\s*)?$")
+
+
+def parse_port_range(value: str) -> range:
+    """`30000-30019` (or one port, `30000`) as a range; ValueError in plain words otherwise."""
+    match = _PORT_RANGE.match(value)
+    if match:
+        first = int(match[1])
+        last = int(match[2]) if match[2] else first
+        if 1 <= first <= last <= 65535:
+            return range(first, last + 1)
+    raise ValueError(
+        "OMNIKRUX_PORT_FORWARD_PORTS must be a range of ports like 30000-30019 (each from 1 to "
+        f"65535, the first no larger than the last), not {value!r}."
+    )
+
+
+def parse_bind_address(value: str) -> str:
+    """An IPv4 or IPv6 address to listen on; ValueError in plain words otherwise."""
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        raise ValueError(
+            "OMNIKRUX_PORT_FORWARD_BIND must be an IP address like 127.0.0.1 or 0.0.0.0, "
+            f"not {value!r}."
+        ) from None
 
 
 class Settings(BaseSettings):
@@ -26,6 +55,11 @@ class Settings(BaseSettings):
     debug_image: str = "busybox:1.36"
     # OMNIKRUX_ALLOWED_HOSTS: comma-separated; "*" turns the Host check off.
     allowed_hosts: Annotated[list[str], NoDecode] = list(DEFAULT_ALLOWED_HOSTS)
+    # OMNIKRUX_PORT_FORWARD_PORTS: the local ports port-forwards listen on, first-last.
+    port_forward_ports: str = "30000-30019"
+    # OMNIKRUX_PORT_FORWARD_BIND: the address port-forwards listen on. 127.0.0.1 everywhere, also
+    # in the container (safe with --network host); Docker's bridge publishing needs 0.0.0.0.
+    port_forward_bind: str = "127.0.0.1"
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod
@@ -41,6 +75,16 @@ class Settings(BaseSettings):
     @property
     def loopback_rewrite(self) -> bool:
         return self.in_container if self.rewrite_loopback is None else self.rewrite_loopback
+
+    @property
+    def forward_ports(self) -> range:
+        """ValueError in plain words for a malformed range (the app refuses to start)."""
+        return parse_port_range(self.port_forward_ports)
+
+    @property
+    def forward_bind(self) -> str:
+        """ValueError in plain words for something that isn't an IP (the app refuses to start)."""
+        return parse_bind_address(self.port_forward_bind)
 
     @property
     def kubeconfig_paths(self) -> list[Path]:

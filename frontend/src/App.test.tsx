@@ -6,22 +6,53 @@ import { applyMessage, emptyWatchState, type WatchState } from "./api/watchState
 import type { WatchOptions } from "./api/useWatch";
 import { FakeWebSocket } from "./features/logs/fakeWebSocket";
 import { Console } from "./App";
+import { KINDS } from "./test/kinds";
 
 // The dock imports the terminal; jsdom has no canvas for it, and these tests open no shell.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class {} }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
-const watch = vi.hoisted(() => ({ state: null as WatchState | null, opts: undefined as WatchOptions | undefined }));
+const watch = vi.hoisted(() => ({
+  state: null as WatchState | null,
+  opts: undefined as WatchOptions | undefined,
+  /** The kind the page watches for its table (the call that passes options). */
+  kind: undefined as string | undefined,
+  /** What a second watch (the Nodes view's pods) sees, and which kind it asked for. */
+  side: null as WatchState | null,
+  sideKind: undefined as string | null | undefined,
+}));
 vi.mock("./api/useWatch", () => ({
-  useWatch: (_kind: string, opts?: WatchOptions) => {
-    watch.opts = opts;
-    return watch.state;
+  useWatch: (kind: string | null, opts?: WatchOptions) => {
+    if (opts) {
+      watch.kind = kind ?? undefined;
+      watch.opts = opts;
+      return watch.state;
+    }
+    watch.sideKind = kind;
+    return watch.side;
   },
 }));
 
+// Counts renders of the real (memoized) table: the mock keeps its memo and swaps in a counting body.
+const tableRenders = vi.hoisted(() => ({ n: 0 }));
+vi.mock("./features/territories/TerritoryTable", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./features/territories/TerritoryTable")>();
+  const memoized = actual.TerritoryTable as unknown as { type: (props: unknown) => unknown };
+  return {
+    ...actual,
+    TerritoryTable: { ...memoized, type: (props: unknown) => { tableRenders.n++; return memoized.type(props); } },
+  };
+});
+
 const cluster = { id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443", original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null };
-const pod = (uid: string, status: string, cls: string) => ({ uid, cluster_id: "c1", kind: "Pod", namespace: "default", name: uid, created_at: null, columns: { status, status_class: cls, node: "n1", last_restart_at: null } });
+const pod = (uid: string, status: string, cls: string) => ({ uid, cluster_id: "c1", kind: "Pod", namespace: "default", name: uid, created_at: null, labels: {}, columns: { status, status_class: cls, node: "n1", last_restart_at: null } });
+
+/** Answers /api/kinds with the test kinds and everything else with `other`. */
+function routes(other: (url: string) => unknown) {
+  return vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(KINDS) : url === "/api/port-forwards" ? json([]) : json(other(url))));
+}
+const clusterCalls = (fetch: { mock: { calls: unknown[][] } }) => fetch.mock.calls.filter(([url]) => url === "/api/clusters").length;
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
@@ -34,7 +65,11 @@ function renderConsole() {
 
 beforeEach(() => {
   watch.state = emptyWatchState();
+  watch.side = emptyWatchState();
   watch.opts = undefined;
+  watch.kind = undefined;
+  watch.sideKind = undefined;
+  window.history.replaceState(null, "", "/");
 });
 afterEach(() => {
   cleanup();
@@ -49,20 +84,41 @@ describe("Console page states", () => {
     expect(screen.getByText("Loading clusters…")).toBeTruthy();
   });
   it("shows the load error and tries again", async () => {
-    const fetch = vi.fn()
-      .mockImplementationOnce(() => json({ detail: "database is locked" }, 500))
-      .mockImplementation(() => json([cluster]));
+    let first = true;
+    const fetch = vi.fn((url: string) => {
+      if (url.startsWith("/api/kinds")) return json(KINDS);
+      if (url === "/api/port-forwards") return json([]);
+      if (first) {
+        first = false;
+        return json({ detail: "database is locked" }, 500);
+      }
+      return json([cluster]);
+    });
     vi.stubGlobal("fetch", fetch);
     renderConsole();
     expect(await screen.findByText("Can't load clusters: database is locked")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByTestId("scope-token")).toBeTruthy();
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(clusterCalls(fetch)).toBe(2);
   });
   it("explains how to add clusters when there are none", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => json([])));
+    vi.stubGlobal("fetch", routes(() => []));
     renderConsole();
     expect(await screen.findByText("No clusters yet. Mount your kubeconfig at /kube/config and restart the console.")).toBeTruthy();
+  });
+});
+
+describe("Audit log route", () => {
+  it("the Audit log button opens the full view and back returns to the resources", async () => {
+    vi.stubGlobal("fetch", routes((url) => (url.startsWith("/api/audit") ? { records: [], next_before: null } : [cluster])));
+    renderConsole();
+    fireEvent.click(await screen.findByRole("button", { name: "Audit log" }));
+    expect(window.location.hash).toBe("#audit");
+    expect(await screen.findByText("Nothing has been changed from Omnikrux yet.")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Pods" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Back to resources" }));
+    expect(window.location.hash).toBe("#kind=pods");
+    expect(await screen.findByRole("tab", { name: "Pods" })).toBeTruthy();
   });
 });
 
@@ -72,18 +128,18 @@ describe("Console wiring", () => {
     w = applyMessage(w, { type: "snapshot", cluster_id: "c1", part: 0, last: true,
       rows: [pod("a", "Running", "ok"), pod("b", "CrashLoopBackOff", "bad"), pod("c", "Pending", "warn")] });
     watch.state = w;
-    vi.stubGlobal("fetch", vi.fn(() => json([cluster])));
+    vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
     const token = await screen.findByTestId("scope-token");
     expect(token.textContent).toBe("KINDkind-omnikrux-dev1 failing");
-    expect(screen.getByRole("tab").textContent).toBe("Pods3");
+    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Pods3");
     expect(screen.getByRole("button", { name: "Failing 1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Pending 1" })).toBeTruthy();
     expect(screen.getByRole("grid", { name: "Pods by cluster" })).toBeTruthy();
   });
   it("scope token uses the watch state over the cluster list", async () => {
     watch.state = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "error", message: "Can't reach this cluster: timeout" });
-    vi.stubGlobal("fetch", vi.fn(() => json([cluster])));
+    vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
     const token = await screen.findByTestId("scope-token");
     await waitFor(() => expect(token.getAttribute("title")).toBe("Can't reach this cluster: timeout"));
@@ -92,22 +148,22 @@ describe("Console wiring", () => {
 
 describe("Console follows cluster changes", () => {
   it("passes the known cluster ids and reloads the list for an unknown or removed cluster", async () => {
-    const fetch = vi.fn(() => json([cluster]));
+    const fetch = routes(() => [cluster]);
     vi.stubGlobal("fetch", fetch);
     renderConsole();
     await screen.findByTestId("scope-token");
     await waitFor(() => expect(watch.opts?.knownClusterIds).toEqual(new Set(["c1"])));
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(clusterCalls(fetch)).toBe(1);
     watch.opts?.onUnknownCluster?.("c2");
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(clusterCalls(fetch)).toBe(2));
     watch.opts?.onClusterRemoved?.("c1");
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(clusterCalls(fetch)).toBe(3));
   });
 });
 
 describe("Shortcut bar", () => {
   it("shortcut bar lists the keys", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => json([cluster])));
+    vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
     const bar = await screen.findByRole("navigation", { name: "Keyboard shortcuts" });
     const items = Array.from(bar.querySelectorAll("li")).map((li) => li.textContent);
@@ -117,8 +173,10 @@ describe("Shortcut bar", () => {
       "l logs",
       "p previous logs",
       "s shell",
+      "f port-forward",
       "Ctrl F search logs",
-      "Ctrl \\ layout",
+      ": kinds",
+      "Ctrl K commands",
       "/ filter",
       "? all shortcuts",
     ]);
@@ -139,7 +197,7 @@ describe("Console dock wiring", () => {
       { name: "app", state: "Waiting: CrashLoopBackOff", state_class: "bad" },
     ],
     init_containers: [{ name: "init", state: "Terminated: Completed (exit 0)", state_class: "done" }],
-    ephemeral_containers: [],
+    ephemeral_containers: [], volumes: [],
     conditions: [], labels: {}, annotations: {}, events: [], events_error: null,
   };
 
@@ -157,7 +215,7 @@ describe("Console dock wiring", () => {
       applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "ready", message: null }),
       { type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [pod("crasher-1", "CrashLoopBackOff", "bad")] },
     );
-    vi.stubGlobal("fetch", vi.fn((url: string) => json(url.endsWith("/describe") ? describeBody : [cluster])));
+    vi.stubGlobal("fetch", routes((url) => (url.endsWith("/describe") ? describeBody : [cluster])));
   });
 
   it("l opens the selected pod's logs, p its previous run, both labelled with the cluster", async () => {
@@ -187,7 +245,7 @@ describe("Console dock wiring", () => {
 
   it("the dock and its sessions stay when the last cluster goes", async () => {
     let clusters = [cluster];
-    vi.stubGlobal("fetch", vi.fn((url: string) => json(url.endsWith("/describe") ? describeBody : clusters)));
+    vi.stubGlobal("fetch", routes((url) => (url.endsWith("/describe") ? describeBody : clusters)));
     renderConsole();
     const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
     row.focus();
@@ -201,5 +259,155 @@ describe("Console dock wiring", () => {
     expect(within(screen.getByRole("tablist", { name: "Sessions" })).getAllByRole("tab")).toHaveLength(1);
     expect(ws.closedByClient).toBe(false);
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("dock dispatch does not re-render the table", async () => {
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    row.focus();
+    fireEvent.keyDown(row, { key: "l" });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    await screen.findByRole("tab", { name: "Deployments" }); // the kinds have loaded
+    const grip = screen.getByRole("separator", { name: "Resize the dock" });
+    const before = tableRenders.n;
+    const height = Number(grip.getAttribute("aria-valuenow"));
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+    fireEvent.keyDown(window, { key: "\\", ctrlKey: true });
+    await waitFor(() => expect(Number(grip.getAttribute("aria-valuenow"))).toBeGreaterThan(height));
+    expect(tableRenders.n).toBe(before);
+  });
+});
+
+describe("Console kinds", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
+  });
+
+  it("kind tabs switch the watched kind", async () => {
+    vi.stubGlobal("fetch", routes(() => [cluster]));
+    renderConsole();
+    expect(watch.kind).toBe("pods");
+    fireEvent.click(await screen.findByRole("tab", { name: "Deployments" }));
+    expect(watch.kind).toBe("deployments.apps");
+    expect(window.location.hash).toBe("#kind=deployments.apps");
+    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Deployments");
+    expect(screen.getByRole("grid", { name: "Deployments by cluster" })).toBeTruthy();
+    expect(screen.getByPlaceholderText("Filter by name, label or image")).toBeTruthy();
+    // Back goes to the previous kind.
+    window.history.back();
+    await waitFor(() => expect(watch.kind).toBe("pods"));
+    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Pods");
+  });
+
+  it("selected kind survives reload via hash", async () => {
+    window.location.hash = "#kind=events";
+    vi.stubGlobal("fetch", routes(() => [cluster]));
+    renderConsole();
+    expect(watch.kind).toBe("events");
+    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Events"));
+    // No cluster has reported events yet: the chip has no number rather than a made-up 0.
+    expect(screen.getByRole("button", { name: "Warnings" })).toBeTruthy();
+  });
+
+  it("a hash naming no valid kind shows pods", () => {
+    window.location.hash = "#kind=Not a kind";
+    vi.stubGlobal("fetch", routes(() => [cluster]));
+    renderConsole();
+    expect(watch.kind).toBe("pods");
+  });
+
+  it("the Nodes view also watches pods for its Pods column", async () => {
+    window.location.hash = "#kind=nodes";
+    const ready = { type: "cluster_status", cluster_id: "c1", state: "ready", message: null } as const;
+    const nodeRow = { uid: "n", cluster_id: "c1", kind: "Node", namespace: null, name: "worker", created_at: null, labels: {}, columns: { status: "Ready", status_class: "ok" } };
+    watch.state = applyMessage(applyMessage(emptyWatchState(), ready),
+      { type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [nodeRow] });
+    watch.side = applyMessage(applyMessage(emptyWatchState(), ready),
+      { type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [{ ...pod("p1", "Running", "ok"), labels: {}, columns: { status: "Running", status_class: "ok", node: "worker" } }] });
+    vi.stubGlobal("fetch", routes(() => [cluster]));
+    renderConsole();
+    expect(watch.kind).toBe("nodes");
+    expect(watch.sideKind).toBe("pods");
+    await screen.findByRole("tab", { name: "Deployments" }); // the kinds (and the Nodes columns) have loaded
+    const r = (await screen.findByText("worker")).closest<HTMLElement>('[role="row"]')!;
+    const cells = Array.from(r.querySelectorAll('[role="gridcell"]'));
+    expect(cells[6].textContent).toBe("1");
+    // No Namespace chip for a kind without namespaces.
+    expect(screen.queryByRole("button", { name: /^Namespace/ })).toBeNull();
+  });
+
+  it("other views don't watch pods twice", () => {
+    vi.stubGlobal("fetch", routes(() => [cluster]));
+    renderConsole();
+    expect(watch.sideKind).toBeNull();
+  });
+
+  it("retry on an absent kind refreshes the kinds, then the cluster", async () => {
+    window.location.hash = "#kind=certificates.cert-manager.io";
+    watch.state = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "absent", message: "This cluster doesn't serve certificates.cert-manager.io." });
+    const fetch = vi.fn((url: string) =>
+      url.startsWith("/api/kinds") ? json(KINDS) : url === "/api/port-forwards" ? json([]) : url.endsWith("/retry") ? Promise.resolve(new Response(null, { status: 204 })) : json([cluster]));
+    vi.stubGlobal("fetch", fetch);
+    renderConsole();
+    expect(await screen.findByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Certificates"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fetch.mock.calls.map(([u]) => u)).toContain("/api/clusters/c1/retry"));
+    const urls = fetch.mock.calls.map(([u]) => u);
+    expect(urls.indexOf("/api/kinds?refresh=true")).toBeGreaterThan(-1);
+    expect(urls.indexOf("/api/kinds?refresh=true")).toBeLessThan(urls.indexOf("/api/clusters/c1/retry"));
+  });
+});
+
+describe("Console kinds, more", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
+  });
+
+  it("a kind whose API group didn't answer says so on its band", async () => {
+    window.location.hash = "#kind=certificates.cert-manager.io";
+    watch.state = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "absent", message: "This cluster doesn't serve certificates.cert-manager.io." });
+    const reason = "The cert-manager.io API didn't answer (503: the server is currently unable to handle the request); its kinds are hidden until it does.";
+    const kinds = { kinds: KINDS.kinds.filter((k) => k.key !== "certificates.cert-manager.io"), clusters: { c1: { state: "ok", message: null, failed_groups: { "cert-manager.io": reason } } } };
+    vi.stubGlobal("fetch", vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(kinds) : url === "/api/port-forwards" ? json([]) : json([cluster]))));
+    renderConsole();
+    expect(await screen.findByText(`Can't list certificates on this cluster right now: ${reason}`)).toBeTruthy();
+    expect(screen.queryByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeNull();
+    expect(screen.getByTestId("scope-token").getAttribute("title")).toBe(`Can't list certificates on this cluster right now: ${reason}`);
+  });
+
+  it("says when the kinds can't be loaded and tries again", async () => {
+    let fail = true;
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/port-forwards") return json([]);
+      if (!url.startsWith("/api/kinds")) return json([cluster]);
+      return fail ? json({ detail: "The console's database is locked." }, 500) : json(KINDS);
+    }));
+    renderConsole();
+    expect((await screen.findByRole("alert")).textContent).toBe("Can't load the list of kinds: The console's database is locked.");
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("tab", { name: "Deployments" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("the shortcut bar drops pod-only keys on other kinds", async () => {
+    window.location.hash = "#kind=services";
+    vi.stubGlobal("fetch", routes(() => [cluster]));
+    renderConsole();
+    const bar = await screen.findByRole("navigation", { name: "Keyboard shortcuts" });
+    expect(bar.textContent).not.toContain("previous logs");
+    expect(bar.textContent).not.toContain("shell");
+    expect(bar.textContent).toContain("move");
   });
 });

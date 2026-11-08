@@ -4,14 +4,15 @@ from collections.abc import Awaitable, Callable, Iterable
 from typing import Protocol
 
 from omnikrux.clusters.registry import ClusterInfo
-from omnikrux.resources.kinds import KINDS, KindSpec
+from omnikrux.resources.kinds import is_kind_key
 from omnikrux.watch.cache import WatchCache
 from omnikrux.watch.source import ResourceSource
 
 logger = logging.getLogger(__name__)
 
 Key = tuple[str, str]  # (cluster_id, kind_key)
-SourceFor = Callable[[str, KindSpec], Awaitable[ResourceSource]]
+# (cluster id, kind key) -> a source; raises KindNotServed when the cluster doesn't serve the kind.
+SourceFor = Callable[[str, str], Awaitable[ResourceSource]]
 
 _STATE_RANK = {"error": 0, "syncing": 1, "ready": 2}
 _CLOSED = object()
@@ -98,12 +99,22 @@ class WatchHub:
     """Shares one `WatchCache` per (cluster, kind) across subscriptions.
 
     A cache starts with its first subscriber and stops `idle_seconds` after its last one leaves.
+    `on_forget` is awaited for every cluster the hub forgets (so per-cluster state elsewhere,
+    such as the kind catalog, goes with it).
     """
 
-    def __init__(self, registry: ClusterLister, source_for: SourceFor, *, idle_seconds: float = 60):
+    def __init__(
+        self,
+        registry: ClusterLister,
+        source_for: SourceFor,
+        *,
+        idle_seconds: float = 60,
+        on_forget: Callable[[str], Awaitable[None]] | None = None,
+    ):
         self._registry = registry
         self._source_for = source_for
         self._idle_seconds = idle_seconds
+        self._on_forget = on_forget
         self._caches: dict[Key, WatchCache] = {}
         self._refs: dict[Key, int] = {}
         self._evictions: dict[Key, asyncio.Task] = {}
@@ -114,8 +125,10 @@ class WatchHub:
 
     async def subscribe(self, kind_key: str, cluster_ids: list[str] | None = None) -> Subscription:
         """Stream `kind_key` from `cluster_ids`, or from every registered cluster (now and
-        later: see `clusters_changed`)."""
-        spec = KINDS[kind_key]
+        later: see `clusters_changed`). KeyError when `kind_key` isn't a kind key at all; a
+        cluster that doesn't serve the kind streams an `absent` status."""
+        if not is_kind_key(kind_key):
+            raise KeyError(kind_key)
         async with self._lock:
             scope_all = cluster_ids is None
             if cluster_ids is None:
@@ -125,7 +138,7 @@ class WatchHub:
             queues: dict[Key, asyncio.Queue[dict]] = {}
             for cid in dict.fromkeys(cluster_ids):
                 key = (cid, kind_key)
-                queues[key] = self._acquire(key, spec).subscribe()
+                queues[key] = self._acquire(key).subscribe()
             sub = Subscription(self, kind_key, queues, scope_all=scope_all)
             self._subscriptions.add(sub)
             for key in queues:
@@ -142,11 +155,10 @@ class WatchHub:
             for sub in list(self._subscriptions):
                 if sub._closed or not sub.scope_all:
                     continue
-                spec = KINDS[sub.kind_key]
                 for cid in current:
                     key = (cid, sub.kind_key)
                     if key not in sub._queues:
-                        cache = self._acquire(key, spec)
+                        cache = self._acquire(key)
                         sub._attach(key, cache.subscribe())
                         started.append(cache)
             for cache in started:
@@ -165,7 +177,10 @@ class WatchHub:
             await self._forget(cluster_id)
 
     def status(self, cluster_id: str) -> tuple[str, str | None]:
-        caches = [c for (cid, _), c in self._caches.items() if cid == cluster_id]
+        """The worst state of the cluster's watches; a kind it doesn't serve says nothing about it."""
+        caches = [
+            c for (cid, _), c in self._caches.items() if cid == cluster_id and c.state != "absent"
+        ]
         if not caches:
             return ("unknown", None)
         worst = min(caches, key=lambda c: _STATE_RANK[c.state])
@@ -214,16 +229,19 @@ class WatchHub:
         await _wait_all(tasks)
         for cache in caches:
             await cache.stop()
+        if self._on_forget is not None:
+            try:
+                await self._on_forget(cluster_id)
+            except Exception:
+                logger.warning("forgetting cluster %s elsewhere failed", cluster_id, exc_info=True)
 
-    def _acquire(self, key: Key, spec: KindSpec) -> WatchCache:
+    def _acquire(self, key: Key) -> WatchCache:
         if (pending := self._evictions.pop(key, None)) is not None:
             pending.cancel()
         cache = self._caches.get(key)
         if cache is None:
-            cid = key[0]
-            cache = self._caches[key] = WatchCache(
-                cid, lambda: self._source_for(cid, spec), spec.to_row
-            )
+            cid, kind_key = key
+            cache = self._caches[key] = WatchCache(cid, lambda: self._source_for(cid, kind_key))
         self._refs[key] = self._refs.get(key, 0) + 1
         return cache
 

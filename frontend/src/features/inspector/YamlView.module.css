@@ -29,3 +29,45 @@
   text-align: right;
   user-select: none;
 }
+
+/* "Copy" floats at the top right of the manifest and stays there as it scrolls. */
+.box {
+  position: relative;
+}
+
+.tools {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+}
+
+.btn {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--ink-3);
+}
+
+.k {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+}

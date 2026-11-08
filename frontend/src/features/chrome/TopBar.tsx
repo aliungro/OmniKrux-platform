@@ -1,13 +1,18 @@
+import type { ReactNode } from "react";
 import type { Territory } from "../territories/model";
 import { ProviderBadge } from "../territories/ProviderBadge";
+import { capsOf } from "./shortcuts";
+import k from "./key.module.css";
 import s from "./TopBar.module.css";
 
 /** What a scope token needs: the cluster plus its live state and failing count. */
-export type ScopeCluster = Pick<Territory, "cluster" | "state" | "message" | "failing">;
+export type ScopeCluster = Pick<Territory, "cluster" | "state" | "message" | "failing" | "discoveryFailed">;
 
 function tokenTitle(c: ScopeCluster): string | undefined {
   if (c.state === "error") return c.message ?? "This cluster reported an error without details";
   if (c.state === "syncing" && c.message) return c.message;
+  // Absent: the cluster lacks this kind, or (Ruling R36) couldn't read its API group.
+  if (c.state === "absent") return c.discoveryFailed ?? c.message ?? undefined;
   if (c.state !== "ready") return "Connecting…";
   return undefined;
 }
@@ -21,7 +26,22 @@ function Logo() {
   );
 }
 
-export function TopBar({ clusters }: { clusters: ScopeCluster[] }) {
+export function TopBar({
+  clusters,
+  forwards,
+  onAudit,
+  auditOpen = false,
+  onPalette,
+}: {
+  clusters: ScopeCluster[];
+  /** The port-forwards control, drawn while any forward exists. */
+  forwards?: ReactNode;
+  /** Opens the audit log view; without it there is no button. */
+  onAudit?: () => void;
+  auditOpen?: boolean;
+  /** Opens the command palette; without it the box is a quiet placeholder. */
+  onPalette?: () => void;
+}) {
   return (
     <header className={s.top}>
       <div className={s.logo}>
@@ -51,10 +71,32 @@ export function TopBar({ clusters }: { clusters: ScopeCluster[] }) {
           ))}
         </div>
       )}
-      {/* Quiet placeholder for the command palette (Plan 3): no prompt or shortcut until it works. */}
-      <div className={s.cmd} aria-hidden="true">
-        pods, deploy, svc, helm…
+      <div className={s.tools}>
+        {forwards}
+        {onAudit && (
+          <button type="button" className={s.audit} aria-pressed={auditOpen} onClick={onAudit}>
+            Audit log
+          </button>
+        )}
       </div>
+      {onPalette ? (
+        <button
+          type="button"
+          className={`${s.cmd} ${s.live}`}
+          aria-label="Commands and kinds"
+          aria-haspopup="dialog"
+          aria-keyshortcuts="Control+K :"
+          onClick={onPalette}
+        >
+          <b className={s.prompt} aria-hidden="true">{capsOf("kinds")[0]}</b>
+          <span className={s.hint}>pods, deploy, svc, helm…</span>
+          <span className={`${k.k} ${s.cap}`} aria-hidden="true">{capsOf("palette")[0]}</span>
+        </button>
+      ) : (
+        <div className={s.cmd} aria-hidden="true">
+          pods, deploy, svc, helm…
+        </div>
+      )}
     </header>
   );
 }
