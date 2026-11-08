@@ -76,9 +76,13 @@ export function messageOf(r: Pick<AuditRecord, "message" | "outcome">): string {
 
 export type DiffKind = "add" | "remove" | "meta" | "context";
 
-/** A diff line's kind: `+` added, `-` removed, the `---` and `+++` file lines are headers. */
-export function diffKind(line: string): DiffKind {
-  if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) return "meta";
+/**
+ * A diff line's kind. The server's diff is a unified diff whose file lines are always the first
+ * two (`--- before`, `+++ after`), so only those and the `@@` hunk lines are headers: a removed
+ * line whose own text starts with `--` is still a removed line.
+ */
+export function diffKind(line: string, index: number): DiffKind {
+  if ((index === 0 && line.startsWith("--- ")) || (index === 1 && line.startsWith("+++ ")) || line.startsWith("@@")) return "meta";
   if (line.startsWith("+")) return "add";
   if (line.startsWith("-")) return "remove";
   return "context";

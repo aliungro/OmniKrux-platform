@@ -33,6 +33,19 @@
   background: var(--ok);
 }
 
+/* Not confirmed: a hollow ring, and the words, so it never reads by colour alone. */
+.unsure {
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--warn);
+}
+
+.unconfirmed {
+  color: color-mix(in srgb, var(--warn) 55%, var(--ink));
+}
+
 .panel {
   position: absolute;
   top: calc(100% + 8px);
@@ -134,6 +147,11 @@
   margin: 0;
   color: var(--ink-2);
   line-height: 1.4;
+}
+
+.state[data-state="unknown"] .shape {
+  background: transparent;
+  border: 2px solid var(--warn);
 }
 
 .state[data-state="error"] {

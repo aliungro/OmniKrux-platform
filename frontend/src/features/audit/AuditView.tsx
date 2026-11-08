@@ -96,7 +96,7 @@ function Detail({ record }: { record: AuditRecord }) {
       {shown.length > 0 ? (
         <div className={s.diff} role="group" aria-label="Change">
           {shown.map((line, i) => (
-            <div key={i} className={s.line} data-line={diffKind(line)}>{line === "" ? " " : line}</div>
+            <div key={i} className={s.line} data-line={diffKind(line, i)}>{line === "" ? " " : line}</div>
           ))}
           {lines.length > shown.length && (
             <div className={s.cut}>{`Showing the first ${shown.length} of ${lines.length} lines.`}</div>

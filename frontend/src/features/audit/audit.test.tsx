@@ -108,6 +108,20 @@ describe("audit view", () => {
     expect(screen.queryByText("+replicas: 3")).toBeNull();
   });
 
+  it("only the two header lines are diff headers", async () => {
+    // A removed line whose own text starts with "--" is still a removed line.
+    serve(() => ({
+      records: [record(1, { diff: "--- before\n+++ after\n@@ -1,2 +1,2 @@\n--- yaml\n+++ added\n context" })],
+      next_before: null,
+    }));
+    show();
+    fireEvent.click(await screen.findByRole("row", { name: /web-1/ }));
+    expect((await screen.findByText("--- before")).getAttribute("data-line")).toBe("meta");
+    expect(screen.getByText("+++ after").getAttribute("data-line")).toBe("meta");
+    expect(screen.getByText("--- yaml").getAttribute("data-line")).toBe("remove");
+    expect(screen.getByText("+++ added").getAttribute("data-line")).toBe("add");
+  });
+
   it("load older pages with before cursor", async () => {
     const urls = serve((u) =>
       u.searchParams.get("before") === "5"

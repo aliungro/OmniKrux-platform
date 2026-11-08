@@ -7,8 +7,19 @@ import pc from "../territories/provider.module.css";
 import { usePortForwards } from "./usePortForwards";
 import s from "./ForwardsMenu.module.css";
 
-function ForwardItem({ forward, onStop, stopping }: { forward: ForwardOut; onStop: (id: string) => void; stopping: boolean }) {
-  const failed = forward.state === "error";
+function ForwardItem({
+  forward,
+  onStop,
+  stopping,
+  unknown,
+}: {
+  forward: ForwardOut;
+  onStop: (id: string) => void;
+  stopping: boolean;
+  /** The last poll failed: what the list said is no longer known to be true. */
+  unknown: boolean;
+}) {
+  const failed = !unknown && forward.state === "error";
   return (
     <li className={`${s.item} ${pc[knownProvider(forward.provider)]}`}>
       <div className={s.top}>
@@ -22,9 +33,13 @@ function ForwardItem({ forward, onStop, stopping }: { forward: ForwardOut; onSto
           Stop
         </button>
       </div>
-      <p className={s.state} data-state={forward.state}>
-        <span className={s.shape} data-shape={failed ? "diamond" : "dot"} aria-hidden="true" />
-        {failed ? (forward.message ?? "This port-forward failed without details. Stop it and start a new one.") : "Listening"}
+      <p className={s.state} data-state={unknown ? "unknown" : forward.state}>
+        <span className={s.shape} data-shape={unknown ? "ring" : failed ? "diamond" : "dot"} aria-hidden="true" />
+        {unknown
+          ? "Status unknown"
+          : failed
+            ? (forward.message ?? "This port-forward failed without details. Stop it and start a new one.")
+            : "Listening"}
       </p>
     </li>
   );
@@ -44,6 +59,9 @@ export function ForwardsMenu() {
   const button = useRef<HTMLButtonElement>(null);
   const id = useId();
   const forwards = query.data ?? [];
+  // The forwards live in the console: when it can't be reached they may be gone, so the last good
+  // list is shown as unconfirmed rather than as live.
+  const unknown = query.isError;
 
   // Escape and a click elsewhere close it.
   useEffect(() => {
@@ -90,8 +108,9 @@ export function ForwardsMenu() {
         aria-controls={id}
         onClick={() => setOpen((o) => !o)}
       >
-        <span className={s.pulse} aria-hidden="true" />
+        {unknown ? <span className={s.unsure} aria-hidden="true" /> : <span className={s.pulse} data-pulse aria-hidden="true" />}
         {label}
+        {unknown && <span className={s.unconfirmed} title={failure(query.error, "wait a moment")}>Not confirmed</span>}
       </button>
       {open && (
         <div id={id} role="group" aria-label="Port-forwards" className={s.panel}>
@@ -103,7 +122,7 @@ export function ForwardsMenu() {
           {error && <p className={s.warn} role="alert">{error}</p>}
           <ul className={s.list}>
             {forwards.map((f) => (
-              <ForwardItem key={f.id} forward={f} onStop={onStop} stopping={stopping === f.id} />
+              <ForwardItem key={f.id} forward={f} onStop={onStop} stopping={stopping === f.id} unknown={unknown} />
             ))}
           </ul>
         </div>

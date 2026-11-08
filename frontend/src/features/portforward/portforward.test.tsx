@@ -1,6 +1,6 @@
 // frontend/src/features/portforward/portforward.test.tsx
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { Cluster, ForwardOut, ResourceRow } from "../../api/types";
@@ -183,6 +183,32 @@ describe("forwards menu", () => {
     wrap(<ForwardsMenu />);
     fireEvent.click(await screen.findByRole("button", { name: "1 port-forward" }));
     expect((await screen.findByRole("group", { name: "Port-forwards" })).textContent).toContain(failed.message);
+  });
+
+  it("a failed poll stops claiming the forwards are listening", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let down = false;
+      serve((c) => {
+        if (c.url !== "/api/port-forwards") return undefined;
+        return down ? { status: 503, body: { detail: "The console is stopping." } } : { body: [FORWARD] };
+      });
+      wrap(<ForwardsMenu />);
+      const trigger = await screen.findByRole("button", { name: /1 port-forward/ });
+      expect(trigger.querySelector("[data-pulse]")).not.toBeNull();
+      down = true;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      await waitFor(() => expect(screen.getByRole("button", { name: /1 port-forward/ }).textContent).toContain("Not confirmed"));
+      expect(screen.getByRole("button", { name: /1 port-forward/ }).querySelector("[data-pulse]")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /1 port-forward/ }));
+      const panel = await screen.findByRole("group", { name: "Port-forwards" });
+      expect(within(panel).queryByText("Listening")).toBeNull();
+      expect(within(panel).getByText("Status unknown")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("is absent while no forward exists", async () => {
