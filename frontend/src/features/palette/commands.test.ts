@@ -81,6 +81,11 @@ describe("buildCommands", () => {
     expect(p.filter((x) => x.group === "Actions").map((x) => x.label)).toEqual([
       "Details of api-1", "YAML of api-1", "Logs of api-1", "Previous logs of api-1", "Shell in api-1", "Edit api-1…", "Port-forward api-1…", "Delete api-1…",
     ]);
+    // A Secret's row: its keys (Ruling R38), never a reveal straight from the palette.
+    const secret = row({ kind: "Secret", name: "db" });
+    const secrets = { ...SERVICES, key: "secrets", verbs: VERBS };
+    const sc = buildCommands(ctx({ selected: { row: secret, kind: secrets, clusterName: "kind-dev", actions: rowActions("secrets", VERBS, secret, ALL) } }));
+    expect(sc.filter((x) => x.group === "Actions").map((x) => x.label)).toEqual(["Details of db", "YAML of db", "Keys of db", "Delete db…"]);
     // Nothing selected: no actions.
     expect(buildCommands(ctx()).some((x) => x.group === "Actions")).toBe(false);
   });

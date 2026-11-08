@@ -43,6 +43,29 @@ function splitQuery(query: string): { kindsOnly: boolean; q: string } {
   return m ? { kindsOnly: true, q: query.slice(m[0].length) } : { kindsOnly: false, q: query };
 }
 
+const NO_KINDS: readonly KindInfo[] = [];
+
+/**
+ * Why the list is empty, in plain words: the kinds are still loading, they couldn't be loaded (and
+ * why), or nothing matches. A short-name hint only once kinds could have matched.
+ */
+function Empty({ kindsOnly, query, loading, error }: { kindsOnly: boolean; query: string; loading: boolean; error: string | null }) {
+  if (kindsOnly) {
+    if (error !== null) return <p className={s.empty} role="alert">{`Can't load the list of kinds: ${error}`}</p>;
+    if (loading) return <p className={s.empty} role="status">Loading the list of kinds…</p>;
+    return (
+      <p className={s.empty} role="status">
+        {query === "" ? "None of your clusters serves a kind Omnikrux can list." : `No kind your clusters serve matches “${query}”.`}
+      </p>
+    );
+  }
+  if (error !== null) {
+    return <p className={s.empty} role="alert">{`Nothing matches “${query}”. Kinds aren't listed: can't load the list of kinds: ${error}`}</p>;
+  }
+  if (loading) return <p className={s.empty} role="status">{`Nothing matches “${query}” yet: the list of kinds is still loading.`}</p>;
+  return <p className={s.empty} role="status">{`Nothing matches “${query}”. Try a kind's short name, like deploy or svc.`}</p>;
+}
+
 /** The ranked commands in groups, each group where its best match ranks, best first inside it. */
 function inGroups(ranked: Command[]): [CommandGroup, Command[]][] {
   const groups = new Map<CommandGroup, Command[]>();
@@ -63,21 +86,31 @@ function inGroups(ranked: Command[]): [CommandGroup, Command[]][] {
 export function CommandPalette({
   mode,
   kinds,
+  kindsError = null,
   selection,
   onKind,
   onRowAction,
   onAudit,
   onForwards,
   onClose,
+  onFocusLost,
 }: {
   mode: PaletteMode;
-  kinds: readonly KindInfo[];
+  /** Every served kind; undefined until GET /api/kinds has answered. */
+  kinds: readonly KindInfo[] | undefined;
+  /** Why the kinds couldn't be loaded, in plain words; null while they load or once they have. */
+  kindsError?: string | null;
   selection: PaletteSelection | null;
   onKind: (key: string) => void;
   onRowAction: (action: RowAction) => void;
   onAudit: () => void;
   onForwards?: () => void;
   onClose: () => void;
+  /**
+   * On close, when the element that had focus has gone (a kind jump replaced the rows) or nothing
+   * had it: put focus somewhere sensible instead of leaving it on the page's body.
+   */
+  onFocusLost?: () => void;
 }) {
   const base = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -97,7 +130,7 @@ export function CommandPalette({
         workloadLogs: true,
       }),
     };
-    return buildCommands({ kinds, onKind, selected, onRowAction, onAudit, onForwards });
+    return buildCommands({ kinds: kinds ?? NO_KINDS, onKind, selected, onRowAction, onAudit, onForwards });
   }, [kinds, selection, canChange, onKind, onRowAction, onAudit, onForwards]);
 
   const split = splitQuery(query);
@@ -113,12 +146,16 @@ export function CommandPalette({
   const at = ordered.length === 0 ? -1 : Math.min(active, ordered.length - 1);
   const optionId = (i: number) => `${base}-o${i}`;
 
-  // Focus the field on open; give focus back to where it was on close.
+  // Focus the field on open; give focus back to where it was on close, or, when that has gone,
+  // wherever the page says (the kind you jumped to).
+  const focusLost = useRef(onFocusLost);
+  focusLost.current = onFocusLost;
   useEffect(() => {
     const back = document.activeElement;
     inputRef.current?.focus();
     return () => {
-      if (back instanceof HTMLElement && back.isConnected) back.focus();
+      if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
+      else focusLost.current?.();
     };
   }, []);
 
@@ -157,7 +194,15 @@ export function CommandPalette({
 
   return (
     <div className={s.backdrop} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label={title} className={s.box} onKeyDown={onKey}>
+      {/* A click anywhere but the field keeps focus in the field, so the keys (Esc) keep working. */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={s.box}
+        onKeyDown={onKey}
+        onMouseDown={(e) => e.target !== inputRef.current && e.preventDefault()}
+      >
         <div className={s.field}>
           <span className={s.prompt} data-kinds={kindsOnly || undefined} aria-hidden="true">
             {kindsOnly ? ":" : "›"}
@@ -210,7 +255,6 @@ export function CommandPalette({
                       aria-labelledby={`${optionId(i)}-l`}
                       className={s.option}
                       onMouseMove={() => i !== at && setActive(i)}
-                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => run(c)}
                     >
                       <span id={`${optionId(i)}-l`} className={s.label} data-part="label">{c.label}</span>
@@ -226,15 +270,7 @@ export function CommandPalette({
               </div>
             );
           })}
-          {ordered.length === 0 && (
-            <p className={s.empty} role="status">
-              {split.q.trim() === ""
-                ? "The list of kinds hasn't loaded yet. Try again in a moment."
-                : kindsOnly
-                  ? `No kind your clusters serve matches “${split.q.trim()}”.`
-                  : `Nothing matches “${split.q.trim()}”. Try a kind's short name, like deploy or svc.`}
-            </p>
-          )}
+          {ordered.length === 0 && <Empty kindsOnly={kindsOnly} query={split.q.trim()} loading={kinds === undefined} error={kindsError} />}
         </div>
         <div className={s.foot}>
           <span><span className={k.k}>↑</span><span className={k.k}>↓</span> choose</span>

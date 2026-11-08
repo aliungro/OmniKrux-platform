@@ -40,10 +40,11 @@ beforeEach(() => {
     { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
   FakeWebSocket.instances = [];
   calls = [];
+  kindsAnswer = () => json(SERVED);
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
     calls.push({ url, method: init?.method ?? "GET" });
-    if (url.startsWith("/api/kinds")) return json(SERVED);
+    if (url.startsWith("/api/kinds")) return kindsAnswer();
     if (url === "/api/port-forwards") return json([]);
     if (url === "/api/actions/plan") return json(plan);
     if (url.startsWith("/api/clusters/c1/pods/")) return json(describeBody());
@@ -56,7 +57,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function renderConsole() {
+let kindsAnswer: () => Promise<Response> = () => json(SERVED);
+
+async function renderConsole({ waitForKinds = true } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
@@ -71,7 +74,7 @@ async function renderConsole() {
   });
   await screen.findByText("crasher-1");
   // The kinds have loaded once the everyday tabs show.
-  await screen.findByRole("tab", { name: "Deployments" });
+  if (waitForKinds) await screen.findByRole("tab", { name: "Deployments" });
 }
 
 const palette = () => screen.queryByRole("dialog", { name: /^Commands|^Jump to a kind/ });
@@ -119,6 +122,51 @@ describe("command palette", () => {
     expect(palette()).toBeNull();
     expect(window.location.hash).toBe("#kind=deployments.apps");
     await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Deployments"));
+    // The row that had focus went with the pods; focus lands on the kind you jumped to.
+    expect(document.activeElement).toBe(screen.getByRole("tab", { selected: true }));
+  });
+
+  it("says when the kinds are still loading, and when they can't be loaded", async () => {
+    kindsAnswer = () => new Promise<Response>(() => {});
+    await renderConsole({ waitForKinds: false });
+    fireEvent.keyDown(document.body, { key: ":" });
+    expect(within(palette()!).getByRole("status").textContent).toBe("Loading the list of kinds…");
+    fireEvent.keyDown(input(), { key: "Escape" });
+    ctrlK();
+    fireEvent.change(input(), { target: { value: "deploy" } });
+    // Not "try a kind's short name, like deploy": kinds can't match yet.
+    expect(within(palette()!).getByRole("status").textContent).toBe("Nothing matches “deploy” yet: the list of kinds is still loading.");
+    cleanup();
+    FakeWebSocket.instances = [];
+
+    kindsAnswer = () => Promise.resolve(new Response(JSON.stringify({ detail: "Discovery failed on every cluster." }), { status: 500, headers: { "content-type": "application/json" } }));
+    await renderConsole({ waitForKinds: false });
+    await screen.findByText(/Can't load the list of kinds/);
+    fireEvent.keyDown(document.body, { key: ":" });
+    expect(within(palette()!).getByRole("alert").textContent).toBe("Can't load the list of kinds: Discovery failed on every cluster.");
+    fireEvent.keyDown(input(), { key: "Escape" });
+    ctrlK();
+    fireEvent.change(input(), { target: { value: "deploy" } });
+    expect(within(palette()!).getByRole("alert").textContent).toBe(
+      "Nothing matches “deploy”. Kinds aren't listed: can't load the list of kinds: Discovery failed on every cluster.",
+    );
+  });
+
+  it("a click on the palette's frame keeps focus in its field, so Esc still closes it", async () => {
+    await renderConsole();
+    ctrlK();
+    const box = palette()!;
+    for (const part of [box.querySelector("[class*=foot]")!, box.querySelector("[class*=groupTitle]")!, box]) {
+      const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      part.dispatchEvent(down);
+      expect(down.defaultPrevented).toBe(true);
+    }
+    // The field itself still takes clicks (to place the caret).
+    const onField = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    input().dispatchEvent(onField);
+    expect(onField.defaultPrevented).toBe(false);
+    fireEvent.keyDown(input(), { key: "Escape" });
+    expect(palette()).toBeNull();
   });
 
   it("arrows move the choice and enter runs it; a leading colon narrows to kinds", async () => {

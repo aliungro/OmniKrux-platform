@@ -40,8 +40,6 @@ function downloadUrl(session: LogSession, container: string | null, previous: bo
   return `/api/clusters/${cluster}/pods/${ns}/${pod}/logs/download?${q.toString()}`;
 }
 
-/** Inside an xterm.js terminal (a shell pane), whose keys all belong to the shell. */
-
 function Toggle({
   label,
   on,

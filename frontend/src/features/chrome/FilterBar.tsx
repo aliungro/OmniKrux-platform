@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import type { ChipDef, FilterCounts, Filters } from "../territories/model";
-import { pageKey, pressed } from "./shortcuts";
+import { capsOf, pageKey, pressed } from "./shortcuts";
 import k from "./key.module.css";
 import s from "./FilterBar.module.css";
 
@@ -175,7 +175,7 @@ export function FilterBar({
         <NamespacePicker value={value.namespace} namespaces={namespaces} onPick={(namespace) => onChange({ ...value, namespace })} />
       )}
       <label className={s.search}>
-        <span className={k.k} aria-hidden="true">/</span>
+        <span className={k.k} aria-hidden="true">{capsOf("filter")[0]}</span>
         <input
           ref={inputRef}
           type="text"

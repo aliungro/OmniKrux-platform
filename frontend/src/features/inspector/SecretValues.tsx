@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { failure, postJson } from "../../api/http";
 import type { RevealIn, RevealOut, SecretKey } from "../../api/types";
-import { isEditable, pressed } from "../chrome/shortcuts";
+import { capsOf, isEditable, pressed } from "../chrome/shortcuts";
 import k from "../chrome/key.module.css";
 import { CopyButton } from "./CopyButton";
 import s from "./SecretValues.module.css";
@@ -9,6 +9,15 @@ import s from "./SecretValues.module.css";
 /** Global Constraints: the mask a Secret's value is shown as. */
 export function mask(size: number): string {
   return `•••••• (${size} bytes)`;
+}
+
+/**
+ * An ask to focus the first key (Ruling R38: `x` on a Secret's row), with where focus was when it
+ * was asked: if you've moved on by the time the keys show, focus stays where you are (Plan 2 R16).
+ */
+export interface KeysAsk {
+  seq: number;
+  from: Element | null;
 }
 
 function revealPath(clusterId: string, namespace: string, name: string): string {
@@ -30,12 +39,16 @@ export function SecretValues({
   name,
   keys,
   canReveal,
+  focusFirst = null,
+  onFocused,
 }: {
   clusterId: string;
   namespace: string;
   name: string;
   keys: SecretKey[];
   canReveal: boolean;
+  focusFirst?: KeysAsk | null;
+  onFocused?: () => void;
 }) {
   const [shown, setShown] = useState<RevealOut | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -48,6 +61,17 @@ export function SecretValues({
     setBusy(null);
     setShown(null);
   }, []);
+
+  // Asked to focus the first key: done once the keys are on screen, never pulled from elsewhere.
+  const list = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (focusFirst === null) return;
+    const active = document.activeElement;
+    if (canReveal && (active === focusFirst.from || active === null || active === document.body)) {
+      list.current?.querySelector<HTMLElement>("li")?.focus();
+    }
+    onFocused?.();
+  }, [focusFirst, onFocused, canReveal]);
 
   // An answer still on its way when this goes is dropped unread.
   useEffect(() => () => inFlight.current?.abort(), []);
@@ -93,7 +117,7 @@ export function SecretValues({
 
   return (
     <>
-      <ul className={s.keys} aria-label="Keys">
+      <ul ref={list} className={s.keys} aria-label="Keys">
         {keys.map(({ key, size }) => {
           const value = shown?.key === key ? shown : null;
           return (
@@ -123,7 +147,7 @@ export function SecretValues({
                   ) : (
                     <button type="button" className={s.btn} disabled={busy === key} onClick={() => void reveal(key)}>
                       {busy === key ? "Revealing…" : "Reveal"}
-                      {busy !== key && <span className={`${k.k} ${s.cap}`} aria-hidden="true">x</span>}
+                      {busy !== key && <span className={`${k.k} ${s.cap}`} aria-hidden="true">{capsOf("reveal")[0]}</span>}
                     </button>
                   )}
                 </span>

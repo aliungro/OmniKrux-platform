@@ -70,6 +70,7 @@ const ACTION_LABEL: Record<RowAction, (name: string) => string> = {
   previousLogs: (n) => `Previous logs of ${n}`,
   shell: (n) => `Shell in ${n}`,
   workloadLogs: (n) => `Logs of ${n}'s pods`,
+  reveal: (n) => `Keys of ${n}`,
   edit: (n) => `Edit ${n}…`,
   scale: (n) => `Scale ${n}…`,
   restart: (n) => `Restart ${n}…`,

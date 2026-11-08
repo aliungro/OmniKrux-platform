@@ -55,7 +55,6 @@ function discovery(data: unknown): KindsResponse["clusters"] | undefined {
 }
 
 const NO_CLUSTERS: Cluster[] = [];
-const NO_KINDS: KindInfo[] = [];
 
 /** The whole console page; expects a QueryClientProvider above it. */
 export function Console() {
@@ -195,6 +194,10 @@ export function Console() {
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   usePaletteKeys(setPalette);
   const onClosePalette = useCallback(() => setPalette(null), []);
+  // After a kind jump the row that had focus is gone: the kind's tab takes it.
+  const focusActiveKind = useCallback(() => {
+    document.querySelector<HTMLElement>('[role="tablist"][aria-label="Kinds"] [role="tab"][aria-selected="true"]')?.focus();
+  }, []);
   const onPalette = useCallback(() => setPalette("all"), []);
   const onAllKinds = useCallback(() => setPalette("kinds"), []);
   const selectedRow = useMemo(() => {
@@ -305,13 +308,15 @@ export function Console() {
           {palette !== null && (
             <CommandPalette
               mode={palette}
-              kinds={served ?? NO_KINDS}
+              kinds={served}
+              kindsError={kindsError}
               selection={paletteSelection}
               onKind={onSelectKind}
               onRowAction={onRowAction}
               onAudit={onAuditView}
               onForwards={onForwards}
               onClose={onClosePalette}
+              onFocusLost={focusActiveKind}
             />
           )}
         </div>

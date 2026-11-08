@@ -11,6 +11,7 @@ import { MetricsView, NodeMetricsView } from "./MetricsView";
 import { ResourceDescribeView } from "./ResourceDescribeView";
 import { useDescribe, usePodYaml } from "./useDescribe";
 import { useResourceDescribe, useResourceYaml } from "./useResourceDescribe";
+import type { KeysAsk } from "./SecretValues";
 import { useTools, type ToolIntent } from "./Tools";
 import { YamlView } from "./YamlView";
 import { knownProvider } from "../territories/ProviderBadge";
@@ -59,13 +60,13 @@ interface Props {
 }
 
 /**
- * The details' own part of a key pressed on the row: show the YAML tab, or open a workload's pods'
- * logs. Change tools are `useTools`' part.
+ * The details' own part of a key pressed on the row: show the YAML tab, open a workload's pods'
+ * logs, or go to a Secret's keys. Change tools are `useTools`' part.
  */
 function useViewIntent(
   intent: ToolIntent | null | undefined,
   onIntentDone: (() => void) | undefined,
-  on: { yaml: () => void; workloadLogs?: () => void },
+  on: { yaml: () => void; workloadLogs?: () => void; reveal?: () => void },
 ) {
   const onRef = useRef(on);
   onRef.current = on;
@@ -73,6 +74,7 @@ function useViewIntent(
     if (!intent) return;
     if (intent.tool === "yaml") onRef.current.yaml();
     else if (intent.tool === "workloadLogs") onRef.current.workloadLogs?.();
+    else if (intent.tool === "reveal") onRef.current.reveal?.();
     else return;
     onIntentDone?.();
   }, [intent, onIntentDone]);
@@ -174,10 +176,10 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
   const tools = (
     <>
       <button type="button" className={s.btn} disabled={!onOpenLogs} onClick={() => onOpenLogs?.(row)}>
-        Logs<span className={`${k.k} ${s.k}`} aria-hidden="true">l</span>
+        Logs<span className={`${k.k} ${s.k}`} aria-hidden="true">{capsOf("logs")[0]}</span>
       </button>
       <button type="button" className={s.btn} disabled={!onOpenShell} onClick={() => onOpenShell?.(row)}>
-        Shell<span className={`${k.k} ${s.k}`} aria-hidden="true">s</span>
+        Shell<span className={`${k.k} ${s.k}`} aria-hidden="true">{capsOf("shell")[0]}</span>
       </button>
       {change.buttons}
     </>
@@ -216,7 +218,17 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
   const nodes = kindKey === "nodes";
   const change = useTools({ row, kindKey, verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone });
   const logs = useWorkloadLogs(row, kindKey, describe, onWorkloadLogs);
-  useViewIntent(intent, onIntentDone, { yaml: () => setTab("YAML"), workloadLogs: logs.open });
+  // Ruling R38: `x` on a Secret's row shows its keys and focuses the first; `x` there reveals it.
+  const [keysAsk, setKeysAsk] = useState<KeysAsk | null>(null);
+  const keysFocused = useCallback(() => setKeysAsk(null), []);
+  useViewIntent(intent, onIntentDone, {
+    yaml: () => setTab("YAML"),
+    workloadLogs: logs.open,
+    reveal: () => {
+      setTab("Describe");
+      setKeysAsk((prev) => ({ seq: (prev?.seq ?? 0) + 1, from: document.activeElement }));
+    },
+  });
   const editor = change.editor(yaml.data);
   return (
     <Frame
@@ -244,7 +256,16 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
         <Loaded q={describe}>
           {/* Keyed on the row's version: a revealed Secret value goes the moment the row changes,
               not when the new describe lands. */}
-          {(d) => <ResourceDescribeView key={version} data={d} clusterId={row.cluster_id} onLink={onLink} />}
+          {(d) => (
+            <ResourceDescribeView
+              key={version}
+              data={d}
+              clusterId={row.cluster_id}
+              onLink={onLink}
+              focusKeys={keysAsk}
+              onKeysFocused={keysFocused}
+            />
+          )}
         </Loaded>
       )}
       {tab === "YAML" &&
@@ -332,7 +353,7 @@ function Frame({
           {tools}
           {onClose && (
             <button type="button" className={`${s.btn} ${s.quiet}`} onClick={onClose}>
-              Close<span className={`${k.k} ${s.k}`} aria-hidden="true">Esc</span>
+              Close<span className={`${k.k} ${s.k}`} aria-hidden="true">{capsOf("close")[0]}</span>
             </button>
           )}
         </div>

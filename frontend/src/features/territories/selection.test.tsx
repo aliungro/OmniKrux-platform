@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
 import type { TerritoryTableProps } from "./TerritoryTable";
-import { resourceDescribe } from "../../test/describe";
-import { DEPLOYMENTS, NODES, PODS } from "../../test/kinds";
+import { resourceDescribe, secretDescribe } from "../../test/describe";
+import { DEPLOYMENTS, NODES, PODS, SERVICES } from "../../test/kinds";
 import { Table } from "../../test/table";
 import { ActionsProvider } from "../actions/ActionDialog";
 
@@ -323,5 +323,31 @@ describe("keys per kind", () => {
       "Deployment web-1 picks its pods with expressions, so their logs can't be opened together. Open one of its pods' logs instead.",
     );
     expect(onWorkloadLogs).not.toHaveBeenCalled();
+  });
+
+  it("x on a secret row opens Describe on its first key; x again reveals that key", async () => {
+    const SECRETS = { ...SERVICES, key: "secrets", kind: "Secret", plural: "secrets", label: "Secret", plural_label: "secrets" };
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return json({ key: "password", value: "hunter2", encoding: "utf-8" });
+      return json(url.includes("/yaml") ? { yaml: "kind: Secret" } : secretDescribe({ name: "db-0", namespace: "n" }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    renderKind(SECRETS, asKind("Secret", "db"));
+    const row = podRow("db-0");
+    row.focus();
+    // Whatever tab was showing, x goes to Describe, where the keys are.
+    fireEvent.keyDown(row, { key: "y" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true"));
+    row.focus();
+    fireEvent.keyDown(row, { key: "x" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("secret-key-password")));
+    expect(screen.getByRole("tab", { name: "Describe" }).getAttribute("aria-selected")).toBe("true");
+    // Nothing revealed yet: that's the next x, on the focused key, through the audited reveal.
+    expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    fireEvent.keyDown(document.activeElement!, { key: "x" });
+    expect(await screen.findByText("hunter2")).toBeTruthy();
+    const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts.map(([url]) => url)).toEqual(["/api/clusters/c1/secrets/n/db-0/reveal"]);
+    expect(JSON.parse(posts[0][1]!.body as string)).toEqual({ key: "password" });
   });
 });

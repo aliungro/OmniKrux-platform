@@ -3,7 +3,7 @@ import { LinkButton } from "../navigation/navigation";
 import { formatAge } from "../territories/model";
 import { Status } from "../territories/Status";
 import { EventsTable } from "./EventsTable";
-import { SecretValues } from "./SecretValues";
+import { SecretValues, type KeysAsk } from "./SecretValues";
 import d from "./DescribeView.module.css";
 import s from "./ResourceDescribeView.module.css";
 
@@ -89,7 +89,20 @@ function SectionView({ section, now, onLink }: { section: Section; now: Date; on
  * The Describe tab for every kind but pods: the object's fields, conditions and labels; its
  * sections as compact tables (or a Secret's keys); and its events. Every link calls `onLink`.
  */
-export function ResourceDescribeView({ data, clusterId, onLink }: { data: ResourceDescribe; clusterId: string; onLink?: OnLink }) {
+export function ResourceDescribeView({
+  data,
+  clusterId,
+  onLink,
+  focusKeys = null,
+  onKeysFocused,
+}: {
+  data: ResourceDescribe;
+  clusterId: string;
+  onLink?: OnLink;
+  /** Asked to focus a Secret's first key (its row's `x`). */
+  focusKeys?: KeysAsk | null;
+  onKeysFocused?: () => void;
+}) {
   const now = new Date();
   const labels = Object.entries(data.labels);
   const annotations = Object.entries(data.annotations);
@@ -148,6 +161,8 @@ export function ResourceDescribeView({ data, clusterId, onLink }: { data: Resour
                 name={data.name}
                 keys={keys}
                 canReveal={data.kind_key === "secrets" && data.namespace !== null}
+                focusFirst={focusKeys}
+                onFocused={onKeysFocused}
               />
             </section>
           )}

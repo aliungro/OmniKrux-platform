@@ -13,12 +13,17 @@ import s from "./Inspector.module.css";
 
 /**
  * A key press on the row (or a palette command) that asks the details for something: a change tool,
- * the YAML tab or a workload's pods' logs (the last two are the inspector's). `seq` tells two apart.
+ * or one of the inspector's own (the YAML tab, a workload's pods' logs, a Secret's keys). `seq`
+ * tells two apart.
  */
 export interface ToolIntent {
-  tool: ToolId | "yaml" | "workloadLogs";
+  tool: ToolId | ViewIntent;
   seq: number;
 }
+
+/** What a row's key asks of the details themselves rather than of a change tool. */
+export type ViewIntent = "yaml" | "workloadLogs" | "reveal";
+const VIEW_INTENTS: ReadonlySet<string> = new Set<ViewIntent>(["yaml", "workloadLogs", "reveal"]);
 
 /** The count a workload runs at, from its row's Ready column ("2/3" → 3); 1 when it can't tell. */
 export function desiredReplicas(row: ResourceRow): number {
@@ -141,8 +146,8 @@ export function useTools({
 
   // A tool's key pressed on the row: run it once the details are open.
   useEffect(() => {
-    if (!intent || intent.tool === "yaml" || intent.tool === "workloadLogs") return;
-    runRef.current(intent.tool);
+    if (!intent || VIEW_INTENTS.has(intent.tool)) return;
+    runRef.current(intent.tool as ToolId);
     onIntentDone?.();
   }, [intent, onIntentDone]);
 

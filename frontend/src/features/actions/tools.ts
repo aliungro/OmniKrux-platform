@@ -63,7 +63,7 @@ export function keyedTools(tools: readonly ToolId[]): ShortcutId[] {
 }
 
 /** Everything a row offers besides its change tools: its details, and the dock's logs and shells. */
-export type RowAction = ToolId | Extract<ShortcutId, "details" | "yaml" | "logs" | "previousLogs" | "shell" | "workloadLogs">;
+export type RowAction = ToolId | Extract<ShortcutId, "details" | "yaml" | "logs" | "previousLogs" | "shell" | "workloadLogs" | "reveal">;
 
 /** What the page can do for a row: plan changes (inside the actions provider), open logs or shells. */
 export interface RowCan {
@@ -84,6 +84,8 @@ export function rowActions(kindKey: string, verbs: readonly string[], row: Resou
   if (can.logs && keyed.has("logs")) out.push("logs", "previousLogs");
   if (can.shell && keyed.has("shell")) out.push("shell");
   if (can.workloadLogs && keyed.has("workloadLogs")) out.push("workloadLogs");
+  // A Secret's keys (Ruling R38): its details open on them; revealing one is the next step.
+  if (keyed.has("reveal")) out.push("reveal");
   out.push(...toolsFor(kindKey, verbs, row).filter((t) => can.change || t === "portForward"));
   return out;
 }

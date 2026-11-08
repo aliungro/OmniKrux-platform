@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { capsOf } from "../chrome/shortcuts";
 import k from "../chrome/key.module.css";
 import { CopyButton } from "./CopyButton";
 import s from "./YamlView.module.css";
@@ -19,7 +20,7 @@ export function YamlView({ yaml, label = "Pod YAML", onEdit }: { yaml: string; l
       <div className={s.tools}>
         {onEdit && (
           <button type="button" className={s.btn} onClick={onEdit}>
-            Edit<span className={`${k.k} ${s.k}`} aria-hidden="true">e</span>
+            Edit<span className={`${k.k} ${s.k}`} aria-hidden="true">{capsOf("edit")[0]}</span>
           </button>
         )}
         <CopyButton text={yaml} className={s.btn} />

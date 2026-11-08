@@ -82,8 +82,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "uncordon", scope: "row", kinds: ["nodes"], keys: ["u"], match: ["u"], label: "Uncordon the node" },
   { id: "drain", scope: "row", kinds: ["nodes"], keys: ["r"], match: ["r"], label: "Drain the node", bar: "drain" },
   { id: "nodeShell", scope: "row", kinds: ["nodes"], keys: ["s"], match: ["s"], label: "Shell on the node", bar: "node shell" },
-  // Acts on the secret key focused in the details' Describe tab, not on the row.
-  { id: "reveal", scope: "row", kinds: ["secrets"], keys: ["x"], match: ["x"], label: "Reveal the focused secret key", bar: "reveal" },
+  // Ruling R38: on a secret's row, x opens the Describe tab on its first key; on a key, x reveals it.
+  { id: "reveal", scope: "row", kinds: ["secrets"], keys: ["x"], match: ["x"], label: "Go to the secret's keys, then reveal the focused one", bar: "reveal" },
   // Anywhere outside a field, the editor or a terminal.
   { id: "kinds", scope: "global", keys: [":"], match: [":"], label: "Jump to any kind", bar: "kinds" },
   { id: "palette", scope: "global", keys: ["Ctrl K"], match: ["k", "K"], ctrl: true, label: "Commands: kinds, views and the selected row's actions", bar: "commands" },

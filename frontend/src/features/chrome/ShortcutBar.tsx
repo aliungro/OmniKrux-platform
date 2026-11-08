@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { allGroups, barFor, pageKey, pressed, type ShortcutGroup } from "./shortcuts";
+import { allGroups, barFor, capsOf, pageKey, pressed, type ShortcutGroup } from "./shortcuts";
 import k from "./key.module.css";
 import s from "./ShortcutBar.module.css";
 
@@ -23,7 +23,7 @@ function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGroup[]; o
     };
   }, []);
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape" || e.key === "?") {
+    if (e.key === "Escape" || pressed("help", e)) {
       e.preventDefault();
       onClose();
     }
@@ -86,7 +86,7 @@ export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
           ))}
           <li className={s.item}>
             <button type="button" className={s.more} aria-haspopup="dialog" onClick={() => setOpen(true)}>
-              <span className={k.k}>?</span> all shortcuts
+              <span className={k.k}>{capsOf("help")[0]}</span> all shortcuts
             </button>
           </li>
         </ul>
