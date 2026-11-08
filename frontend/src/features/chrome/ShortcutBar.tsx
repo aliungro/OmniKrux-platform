@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { BAR, GROUPS, isEditable, keysOf } from "./shortcuts";
+import { BAR, GROUPS, isEditable, keysOf, type Shortcut } from "./shortcuts";
 import k from "./key.module.css";
 import s from "./ShortcutBar.module.css";
 
@@ -13,7 +13,7 @@ function Keys({ keys }: { keys: string[] }) {
   );
 }
 
-function AllShortcuts({ onClose }: { onClose: () => void }) {
+function AllShortcuts({ applies, onClose }: { applies: (x: Shortcut) => boolean; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const back = document.activeElement;
@@ -43,7 +43,7 @@ function AllShortcuts({ onClose }: { onClose: () => void }) {
             <section key={group} className={s.group} aria-label={group}>
               <h3 className={s.groupTitle}>{group}</h3>
               <dl className={s.list}>
-                {rows.map((x) => (
+                {rows.filter(applies).map((x) => (
                   <Fragment key={x.id}>
                     <dt><Keys keys={x.keys} /></dt>
                     <dd>{x.label}</dd>
@@ -58,7 +58,9 @@ function AllShortcuts({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function ShortcutBar() {
+/** `kind`: the kind on screen; keys that act on pods only are left out elsewhere (Ruling R14). */
+export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
+  const applies = (x: Shortcut) => !x.podsOnly || kind === "pods";
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -76,7 +78,7 @@ export function ShortcutBar() {
     <>
       <nav className={s.keys} aria-label="Keyboard shortcuts">
         <ul className={s.strip}>
-          {BAR.map((x) => (
+          {BAR.filter(applies).map((x) => (
             <li key={x.id} className={s.item}>
               <Keys keys={x.keys} /> {x.bar}
             </li>
@@ -88,7 +90,7 @@ export function ShortcutBar() {
           </li>
         </ul>
       </nav>
-      {open && <AllShortcuts onClose={() => setOpen(false)} />}
+      {open && <AllShortcuts applies={applies} onClose={() => setOpen(false)} />}
     </>
   );
 }

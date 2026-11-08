@@ -3,7 +3,8 @@ import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/reac
 import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "./api/useClusters";
 import { refreshKinds, useKinds } from "./api/useKinds";
 import { useWatch } from "./api/useWatch";
-import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "./api/types";
+import { failure } from "./api/http";
+import type { ClusterState, KindInfo, KindsResponse, OwnerRef, ResourceRow } from "./api/types";
 import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
 import { ShortcutBar } from "./features/chrome/ShortcutBar";
@@ -21,6 +22,7 @@ import {
   NO_FILTER,
   NO_SELECTION,
   podsPerNode,
+  withDiscoveryFailures,
   type Filters,
   type Selection,
 } from "./features/territories/model";
@@ -33,6 +35,14 @@ import s from "./App.module.css";
 function servedKinds(data: unknown): KindInfo[] | undefined {
   const kinds = (data as { kinds?: unknown } | undefined)?.kinds;
   return Array.isArray(kinds) ? (kinds as KindInfo[]) : undefined;
+}
+
+/** How each cluster's discovery went, from the same answer. */
+function discovery(data: unknown): KindsResponse["clusters"] | undefined {
+  const clusters = (data as { clusters?: unknown } | undefined)?.clusters;
+  return clusters !== null && typeof clusters === "object" && !Array.isArray(clusters)
+    ? (clusters as KindsResponse["clusters"])
+    : undefined;
 }
 
 /** The whole console page; expects a QueryClientProvider above it. */
@@ -48,6 +58,11 @@ export function Console() {
   const kindKey = route.view === "resources" ? route.kind : "pods";
   const kinds = useKinds();
   const served = servedKinds(kinds.data);
+  const discovered = discovery(kinds.data);
+  // Without the list, only the kind you're on has a tab: say why, with a way to ask again.
+  const kindsError = served === undefined && kinds.isError ? failure(kinds.error, "retry") : null;
+  const { refetch: refetchKinds } = kinds;
+  const onRetryKinds = useCallback(() => void refetchKinds(), [refetchKinds]);
   const kind = useMemo(() => served?.find((k) => k.key === kindKey) ?? fallbackKind(kindKey), [served, kindKey]);
 
   // The watch names clusters the moment the backend adds or drops them; reload the list then.
@@ -77,10 +92,17 @@ export function Console() {
   );
 
   // Unfiltered territories drive the scope tokens and every count, so counts never shrink as you filter.
-  const all = useMemo(() => buildTerritories(list ?? [], watch, NO_FILTER, now, kind), [list, watch, now, kind]);
+  // A cluster that couldn't read the kind's API group says so instead of "doesn't serve" (Ruling R36).
+  const all = useMemo(
+    () => withDiscoveryFailures(buildTerritories(list ?? [], watch, NO_FILTER, now, kind), discovered, kind),
+    [list, watch, now, kind, discovered],
+  );
   const shown = useMemo(
-    () => (isNoFilter(effective) ? all : buildTerritories(list ?? [], watch, effective, now, kind)),
-    [all, list, watch, effective, now, kind],
+    () =>
+      isNoFilter(effective)
+        ? all
+        : withDiscoveryFailures(buildTerritories(list ?? [], watch, effective, now, kind), discovered, kind),
+    [all, list, watch, effective, now, kind, discovered],
   );
   const chips = useMemo(() => chipsFor(kind), [kind]);
   const counts = useMemo(() => countFilters(all, now, kind), [all, now, kind]);
@@ -108,7 +130,10 @@ export function Console() {
       .catch((err: unknown) => console.error(`Retry for cluster ${id} failed:`, err));
   }, [queryClient]);
 
-  const onSelectKind = useCallback((key: string) => setRoute({ view: "resources", kind: key }), [setRoute]);
+  const onSelectKind = useCallback(
+    (key: string, opts?: { replace: boolean }) => setRoute({ view: "resources", kind: key }, opts),
+    [setRoute],
+  );
 
   let body;
   if (list === undefined) {
@@ -129,7 +154,14 @@ export function Console() {
   } else {
     body = (
       <>
-        <KindTabs kinds={served} active={kindKey} count={kindCount(all)} onSelect={onSelectKind} />
+        <KindTabs
+          kinds={served}
+          active={kindKey}
+          count={kindCount(all)}
+          onSelect={onSelectKind}
+          error={kindsError}
+          onRetry={onRetryKinds}
+        />
         <FilterBar value={filters} onChange={setFilters} chips={chips} counts={counts} namespaces={namespaces} />
         <main className={s.main}>
           <TerritoryTable
@@ -157,7 +189,7 @@ export function Console() {
       <TopBar clusters={all} />
       {body}
       {(hasTable || dock.state.sessions.length > 0) && <Dock dock={dock} />}
-      {hasTable && <ShortcutBar />}
+      {hasTable && <ShortcutBar kind={kindKey} />}
     </div>
   );
 }

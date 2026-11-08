@@ -1,6 +1,7 @@
 // frontend/src/features/chrome/chrome.test.tsx
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent, within } from "@testing-library/react";
+import { ShortcutBar } from "./ShortcutBar";
 import { FilterBar } from "./FilterBar";
 import { TopBar } from "./TopBar";
 import { KindTabs } from "./KindTabs";
@@ -110,7 +111,9 @@ describe("KindTabs", () => {
     expect(tabs.map((t) => t.textContent)).toEqual(["Pods131", "Deployments", "StatefulSets", "Services", "Nodes", "Events", "Helm releases"]);
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
     expect(tabs[1].getAttribute("aria-selected")).toBe("false");
-    expect(screen.getByTestId("all-kinds").textContent).toBe("All 8 kinds:");
+    // Ruling R35: no "All {n} kinds" or ":" keycap until the palette (Task 15) opens from them.
+    expect(screen.queryByTestId("all-kinds")).toBeNull();
+    expect(screen.queryByText(/kinds/)).toBeNull();
     fireEvent.click(tabs[1]);
     expect(onSelect).toHaveBeenCalledWith("deployments.apps");
   });
@@ -121,17 +124,42 @@ describe("KindTabs", () => {
   it("before the kinds load, only the active kind; a kind outside the tabs gets its own", () => {
     const { rerender } = render(<KindTabs kinds={undefined} active="pods" count={3} onSelect={() => {}} />);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Pods3"]);
-    expect(screen.queryByTestId("all-kinds")).toBeNull();
     rerender(<KindTabs kinds={served} active="certificates.cert-manager.io" count={2} onSelect={() => {}} />);
     expect(screen.getAllByRole("tab").at(-1)!.textContent).toBe("Certificates2");
   });
-  it("arrow keys move between tabs", () => {
-    const onSelect = vi.fn();
-    render(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES, EVENTS]} active="deployments.apps" count={null} onSelect={onSelect} />);
-    fireEvent.keyDown(screen.getByRole("tab", { selected: true }), { key: "ArrowRight" });
-    expect(onSelect).toHaveBeenLastCalledWith("nodes");
-    fireEvent.keyDown(screen.getByRole("tab", { selected: true }), { key: "ArrowLeft" });
-    expect(onSelect).toHaveBeenLastCalledWith("pods");
+  it("arrow keys move between tabs, then show the kind they rest on, replacing history", () => {
+    vi.useFakeTimers();
+    try {
+      const onSelect = vi.fn();
+      render(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES, EVENTS]} active="deployments.apps" count={4} onSelect={onSelect} />);
+      const selected = () => screen.getByRole("tab", { selected: true });
+      fireEvent.keyDown(selected(), { key: "ArrowRight" });
+      // The tab moves at once (and takes focus); the kind waits until the keys rest.
+      expect(selected().textContent).toBe("Nodes");
+      expect(document.activeElement).toBe(selected());
+      fireEvent.keyDown(selected(), { key: "ArrowRight" });
+      fireEvent.keyDown(selected(), { key: "ArrowLeft" });
+      fireEvent.keyDown(selected(), { key: "ArrowLeft" });
+      fireEvent.keyDown(selected(), { key: "ArrowLeft" });
+      expect(selected().textContent).toBe("Pods");
+      expect(onSelect).not.toHaveBeenCalled();
+      act(() => void vi.advanceTimersByTime(300));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(onSelect).toHaveBeenCalledWith("pods", { replace: true });
+      // A click is a choice of its own: at once, with its own history entry.
+      fireEvent.click(screen.getByRole("tab", { name: "Events" }));
+      expect(onSelect).toHaveBeenLastCalledWith("events");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("says when the kinds can't be loaded, with Retry", () => {
+    const onRetry = vi.fn();
+    render(<KindTabs kinds={undefined} active="pods" count={3} onSelect={() => {}} error="Can't reach the console's server. Check that it's running, then retry." onRetry={onRetry} />);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Pods3"]);
+    expect(screen.getByRole("alert").textContent).toBe("Can't load the list of kinds: Can't reach the console's server. Check that it's running, then retry.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalled();
   });
 });
 
@@ -168,5 +196,26 @@ describe("FilterBar per kind", () => {
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "Warnings 3", "Namespace: all"]);
     rerender(<FilterBar value={{ status: "all", text: "", namespace: null }} onChange={() => {}} chips={chipsFor(NODES)} counts={{ failing: 0, pending: 1 }} namespaces={null} />);
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "Failing 0", "Pending 1"]);
+  });
+});
+
+describe("FilterBar counts", () => {
+  it("chips show no number until a count is real", () => {
+    render(<FilterBar value={{ status: "all", text: "", namespace: null }} onChange={() => {}} chips={POD_CHIPS} counts={{}} namespaces={[]} />);
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "Failing", "Pending", "Restarted today", "Namespace: all"]);
+  });
+});
+
+describe("ShortcutBar per kind", () => {
+  const strip = () => Array.from(within(screen.getByRole("navigation", { name: "Keyboard shortcuts" })).getAllByRole("listitem")).map((li) => li.textContent);
+  it("pod-only keys appear only on pods", () => {
+    const { rerender } = render(<ShortcutBar kind="pods" />);
+    expect(strip()).toContain("l logs");
+    rerender(<ShortcutBar kind="deployments.apps" />);
+    expect(strip()).toEqual(["↑↓ move", "Ctrl F search logs", "Ctrl \\ layout", "/ filter", "? all shortcuts"]);
+    fireEvent.click(screen.getByRole("button", { name: /all shortcuts/ }));
+    const sheet = screen.getByRole("dialog", { name: "All shortcuts" });
+    expect(sheet.textContent).not.toContain("Logs for the selected pod");
+    expect(sheet.textContent).toContain("Move between rows");
   });
 });

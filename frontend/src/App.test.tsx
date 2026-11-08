@@ -293,7 +293,8 @@ describe("Console kinds", () => {
     renderConsole();
     expect(watch.kind).toBe("events");
     await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Events"));
-    expect(screen.getByRole("button", { name: "Warnings 0" })).toBeTruthy();
+    // No cluster has reported events yet: the chip has no number rather than a made-up 0.
+    expect(screen.getByRole("button", { name: "Warnings" })).toBeTruthy();
   });
 
   it("a hash naming no valid kind shows pods", () => {
@@ -343,5 +344,52 @@ describe("Console kinds", () => {
     const urls = fetch.mock.calls.map(([u]) => u);
     expect(urls.indexOf("/api/kinds?refresh=true")).toBeGreaterThan(-1);
     expect(urls.indexOf("/api/kinds?refresh=true")).toBeLessThan(urls.indexOf("/api/clusters/c1/retry"));
+  });
+});
+
+describe("Console kinds, more", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
+  });
+
+  it("a kind whose API group didn't answer says so on its band", async () => {
+    window.location.hash = "#kind=certificates.cert-manager.io";
+    watch.state = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "absent", message: "This cluster doesn't serve certificates.cert-manager.io." });
+    const reason = "The cert-manager.io API didn't answer (503: the server is currently unable to handle the request); its kinds are hidden until it does.";
+    const kinds = { kinds: KINDS.kinds.filter((k) => k.key !== "certificates.cert-manager.io"), clusters: { c1: { state: "ok", message: null, failed_groups: { "cert-manager.io": reason } } } };
+    vi.stubGlobal("fetch", vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(kinds) : json([cluster]))));
+    renderConsole();
+    expect(await screen.findByText(`Can't list certificates on this cluster right now: ${reason}`)).toBeTruthy();
+    expect(screen.queryByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeNull();
+    expect(screen.getByTestId("scope-token").getAttribute("title")).toBe(`Can't list certificates on this cluster right now: ${reason}`);
+  });
+
+  it("says when the kinds can't be loaded and tries again", async () => {
+    let fail = true;
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (!url.startsWith("/api/kinds")) return json([cluster]);
+      return fail ? json({ detail: "The console's database is locked." }, 500) : json(KINDS);
+    }));
+    renderConsole();
+    expect((await screen.findByRole("alert")).textContent).toBe("Can't load the list of kinds: The console's database is locked.");
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("tab", { name: "Deployments" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("the shortcut bar drops pod-only keys on other kinds", async () => {
+    window.location.hash = "#kind=services";
+    vi.stubGlobal("fetch", routes(() => [cluster]));
+    renderConsole();
+    const bar = await screen.findByRole("navigation", { name: "Keyboard shortcuts" });
+    expect(bar.textContent).not.toContain("previous logs");
+    expect(bar.textContent).not.toContain("shell");
+    expect(bar.textContent).toContain("move");
   });
 });

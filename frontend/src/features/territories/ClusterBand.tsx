@@ -22,6 +22,10 @@ function Summary({ t, kind }: { t: Territory; kind: KindInfo }) {
     // Retrying after a failure: keep the reason on screen until the retry succeeds or fails.
     return <span className={s.error} title={t.message}>{t.message}</span>;
   }
+  if (t.state === "absent" && t.discoveryFailed) {
+    // The cluster couldn't read the kind's API group: it may have the kind, so this is a failure.
+    return <span className={s.error} data-testid="band-unlisted" title={t.discoveryFailed}>{t.discoveryFailed}</span>;
+  }
   if (t.state === "absent") {
     // Not an error: this cluster just doesn't have the kind (a CRD that only some clusters install).
     const message = t.message ?? `This cluster doesn't serve ${kind.key}.`;

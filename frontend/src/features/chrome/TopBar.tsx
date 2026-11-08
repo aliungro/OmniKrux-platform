@@ -3,12 +3,13 @@ import { ProviderBadge } from "../territories/ProviderBadge";
 import s from "./TopBar.module.css";
 
 /** What a scope token needs: the cluster plus its live state and failing count. */
-export type ScopeCluster = Pick<Territory, "cluster" | "state" | "message" | "failing">;
+export type ScopeCluster = Pick<Territory, "cluster" | "state" | "message" | "failing" | "discoveryFailed">;
 
 function tokenTitle(c: ScopeCluster): string | undefined {
   if (c.state === "error") return c.message ?? "This cluster reported an error without details";
   if (c.state === "syncing" && c.message) return c.message;
-  if (c.state === "absent") return c.message ?? undefined; // the cluster is fine; it lacks this kind
+  // Absent: the cluster lacks this kind, or (Ruling R36) couldn't read its API group.
+  if (c.state === "absent") return c.discoveryFailed ?? c.message ?? undefined;
   if (c.state !== "ready") return "Connecting…";
   return undefined;
 }

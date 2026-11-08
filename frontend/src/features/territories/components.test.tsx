@@ -201,3 +201,15 @@ describe("band copy per kind", () => {
     expect(sum()).toBe("9 events");
   });
 });
+
+describe("band for a failed API group", () => {
+  it("shows the discovery failure with Retry, not that the kind is missing", () => {
+    const onRetry = vi.fn();
+    const failed = "Can't list certificates on this cluster right now: The cert-manager.io API didn't answer (503); its kinds are hidden until it does.";
+    render(<ClusterBand t={terr({ state: "absent", message: "This cluster doesn't serve certificates.cert-manager.io.", discoveryFailed: failed })} kind={CERTIFICATES} onRetry={onRetry} />);
+    expect(screen.getByTestId("band-unlisted").textContent).toBe(failed);
+    expect(screen.queryByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledWith("c1", "absent");
+  });
+});

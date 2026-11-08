@@ -1,8 +1,10 @@
-import { useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { KindInfo } from "../../api/types";
 import { kindTitle } from "../territories/model";
-import k from "./key.module.css";
 import s from "./KindTabs.module.css";
+
+/** Arrow keys show a kind once they rest this long, so moving across tabs opens one watch, not one per tab. */
+export const ARROW_SETTLE_MS = 250;
 
 /** The everyday kinds, in this order, each shown when at least one cluster serves it. */
 export const TAB_KINDS = [
@@ -23,7 +25,7 @@ interface Tab {
   title: string;
 }
 
-function tabsFor(kinds: KindInfo[] | undefined, active: string): Tab[] {
+function tabsFor(kinds: KindInfo[] | undefined, active: string, extra: string | null): Tab[] {
   const byKey = new Map((kinds ?? []).map((x) => [x.key, x]));
   // Before the kinds have loaded, only the one you're looking at: no tab that might not exist.
   const tabs: Tab[] = TAB_KINDS.filter((key) => (kinds ? byKey.has(key) : key === active)).map((key) => ({
@@ -31,8 +33,9 @@ function tabsFor(kinds: KindInfo[] | undefined, active: string): Tab[] {
     title: kindTitle(byKey.get(key) ?? { key, plural_label: key }),
   }));
   // A kind outside the everyday ones (a CRD from the palette or a link) gets its own tab while open.
-  if (!tabs.some((t) => t.key === active)) {
-    tabs.push({ key: active, title: kindTitle(byKey.get(active) ?? { key: active, plural_label: active.split(".")[0] }) });
+  for (const key of [active, extra]) {
+    if (key === null || tabs.some((t) => t.key === key)) continue;
+    tabs.push({ key, title: kindTitle(byKey.get(key) ?? { key, plural_label: key.split(".")[0] }) });
   }
   return tabs;
 }
@@ -42,33 +45,60 @@ export function KindTabs({
   active,
   count,
   onSelect,
+  error = null,
+  onRetry,
 }: {
   /** Every kind some cluster serves; undefined until GET /api/kinds has answered. */
   kinds: KindInfo[] | undefined;
   active: string;
   /** The active kind's rows across ready clusters; null until one has reported (never a made-up 0). */
   count: number | null;
-  onSelect: (key: string) => void;
+  /** `replace`: the move shouldn't add a history entry (arrowing across tabs). */
+  onSelect: (key: string, opts?: { replace: boolean }) => void;
+  /** Why the kinds couldn't be loaded, in plain words; null when they could (or are loading). */
+  error?: string | null;
+  onRetry?: () => void;
 }) {
-  const tabs = tabsFor(kinds, active);
+  /** Where the arrow keys have moved to, before that kind is shown. */
+  const [moving, setMoving] = useState<string | null>(null);
+  const shown = moving ?? active;
+  const tabs = tabsFor(kinds, active, moving);
   const refs = useRef(new Map<string, HTMLButtonElement>());
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stop = () => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  useEffect(() => stop, []);
 
-  // Left and right move between tabs (and show that kind), as a tablist should.
+  // Left and right move between tabs, as a tablist should; the kind follows once the keys rest.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    const at = tabs.findIndex((t) => t.key === active);
+    const at = tabs.findIndex((t) => t.key === shown);
     if (at < 0) return;
     e.preventDefault();
-    const next = tabs[(at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
-    onSelect(next.key);
-    refs.current.get(next.key)?.focus();
+    const next = tabs[(at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length].key;
+    setMoving(next);
+    refs.current.get(next)?.focus();
+    stop();
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setMoving(null);
+      if (next !== active) onSelect(next, { replace: true });
+    }, ARROW_SETTLE_MS);
+  };
+
+  const choose = (key: string) => {
+    stop();
+    setMoving(null);
+    onSelect(key);
   };
 
   return (
     <nav className={s.kinds} aria-label="Resource kinds">
       <div role="tablist" aria-label="Kinds" className={s.list} onKeyDown={onKey}>
         {tabs.map((t) => {
-          const on = t.key === active;
+          const on = t.key === shown;
           return (
             <button
               key={t.key}
@@ -82,19 +112,23 @@ export function KindTabs({
               tabIndex={on ? 0 : -1}
               className={`${s.tab}${on ? ` ${s.on}` : ""}`}
               title={(TAB_KINDS as readonly string[]).includes(t.key) ? undefined : t.key}
-              onClick={() => onSelect(t.key)}
+              onClick={() => choose(t.key)}
             >
               {t.title}
-              {on && count !== null && <em className={s.n}>{count}</em>}
+              {t.key === active && on && count !== null && <em className={s.n}>{count}</em>}
             </button>
           );
         })}
       </div>
-      {kinds && (
-        // The palette (Task 15) opens from here and from ":".
-        <span className={s.more} data-testid="all-kinds">
-          All {kinds.length} kinds
-          <span className={k.k} aria-hidden="true">:</span>
+      {/* Ruling R35: "All {n} kinds" and its ":" keycap arrive with the palette (Task 15). */}
+      {error !== null && (
+        <span className={s.err}>
+          <span role="alert">Can't load the list of kinds: {error}</span>
+          {onRetry && (
+            <button type="button" className={s.retry} onClick={onRetry}>
+              Retry
+            </button>
+          )}
         </span>
       )}
     </nav>

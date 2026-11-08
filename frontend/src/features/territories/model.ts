@@ -1,4 +1,4 @@
-import type { Cluster, ClusterState, ColumnSpec, KindInfo, Provider, ResourceRow, StatusClass } from "../../api/types";
+import type { Cluster, ClusterState, ColumnSpec, KindInfo, KindsResponse, Provider, ResourceRow, StatusClass } from "../../api/types";
 import type { WatchState } from "../../api/watchState";
 
 export type FilterStatus = "all" | "failing" | "pending" | "restartedToday" | "warnings";
@@ -24,6 +24,11 @@ export interface Territory {
   total: number;
   failing: number;
   pending: number;
+  /**
+   * Set on an absent territory when the cluster's discovery couldn't read the kind's API group:
+   * the kind may well be there, so the band says that, not "doesn't serve" (Ruling R36).
+   */
+  discoveryFailed?: string;
 }
 
 export type FlatItem =
@@ -331,10 +336,14 @@ export function buildTerritories(
 /** Chip counts by filter, over every live row whatever filter is active. */
 export type FilterCounts = Partial<Record<FilterStatus, number>>;
 
-/** Pass territories built with no filter. Only ready territories count (never absent or stale ones). */
+/**
+ * Pass territories built with no filter. Only ready territories count (never absent or stale ones);
+ * with none ready, there are no counts at all rather than made-up zeros.
+ */
 export function countFilters(ts: Territory[], now: Date, kind: Pick<KindInfo, "key" | "columns"> = POD_KIND): FilterCounts {
   const chips = chipsFor(kind);
   const out: FilterCounts = {};
+  if (!ts.some((t) => t.state === "ready")) return out;
   for (const c of chips) out[c.status] = 0;
   for (const t of ts) {
     if (t.state !== "ready") continue;
@@ -345,6 +354,28 @@ export function countFilters(ts: Territory[], now: Date, kind: Pick<KindInfo, "k
     }
   }
   return out;
+}
+
+/**
+ * Marks absent territories whose cluster couldn't read the kind's API group in its last discovery
+ * (GET /api/kinds `failed_groups`). Returns `ts` itself when there's nothing to mark.
+ */
+export function withDiscoveryFailures(
+  ts: Territory[],
+  clusters: KindsResponse["clusters"] | undefined,
+  kind: Pick<KindInfo, "group" | "plural_label">,
+): Territory[] {
+  if (!clusters) return ts;
+  let out: Territory[] | null = null;
+  ts.forEach((t, i) => {
+    if (t.state !== "absent") return;
+    const failed = Object.hasOwn(clusters, t.cluster.id) ? clusters[t.cluster.id].failed_groups : undefined;
+    const reason = failed && Object.hasOwn(failed, kind.group) ? failed[kind.group] : undefined;
+    if (reason === undefined) return;
+    out ??= ts.slice();
+    out[i] = { ...t, discoveryFailed: `Can't list ${kind.plural_label} on this cluster right now: ${reason}` };
+  });
+  return out ?? ts;
 }
 
 /** Rows across ready clusters; null while no cluster has reported, so the UI never shows a made-up 0. */

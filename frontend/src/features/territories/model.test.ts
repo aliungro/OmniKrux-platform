@@ -1,6 +1,6 @@
 // frontend/src/features/territories/model.test.ts
 import { describe, it, expect } from "vitest";
-import { buildTerritories, chipsFor, countFilters, flatten, formatAge, kindCount, matchesFilter, namespacesIn, podsPerNode, type Filters } from "./model";
+import { buildTerritories, chipsFor, countFilters, flatten, formatAge, kindCount, matchesFilter, namespacesIn, podsPerNode, withDiscoveryFailures, type Filters } from "./model";
 import type { KindInfo, ResourceRow } from "../../api/types";
 import { applyMessage, emptyWatchState } from "../../api/watchState";
 const now = new Date("2026-11-06T16:00:00");
@@ -148,7 +148,8 @@ describe("filter and kind counts", () => {
   });
   it("territories that are not ready count nothing", () => {
     const ts = buildTerritories([cl], state(), all, now); // snapshot but no ready status yet
-    expect(countFilters(ts, now)).toEqual({ failing: 0, pending: 0, restartedToday: 0 });
+    // No number at all until a cluster has reported: never a made-up 0.
+    expect(countFilters(ts, now)).toEqual({});
     expect(kindCount(ts)).toBeNull();
   });
   it("pod count is zero, not unknown, once a ready cluster has no pods", () => {
@@ -221,6 +222,7 @@ describe("kinds in the model", () => {
     expect(kindCount(ts)).toBe(1);
     expect(kindCount([ts[1]])).toBeNull();
     expect(countFilters(ts, now, kindInfo())).toEqual({ failing: 0, pending: 0 });
+    expect(countFilters([ts[1]], now, kindInfo())).toEqual({});
   });
   it("chips follow the kind", () => {
     const keys = (k: KindInfo) => chipsFor(k).map((c) => c.status);
@@ -244,5 +246,28 @@ describe("kinds in the model", () => {
     const counts = podsPerNode(w);
     expect(counts.get("c1")).toEqual(new Map([["n1", 2], ["n2", 1]]));
     expect(counts.has("c2")).toBe(false); // no ready status yet: no number rather than a wrong one
+  });
+});
+
+describe("discovery failures", () => {
+  const widgets = kindInfo({ key: "widgets.example.omnikrux.dev", group: "example.omnikrux.dev", plural: "widgets", plural_label: "widgets" });
+  const reason = "The example.omnikrux.dev API didn't answer (503: the server is currently unable to handle the request); its kinds are hidden until it does.";
+  const absent = (cluster_id: string) => ({ type: "cluster_status", cluster_id, state: "absent", message: "This cluster doesn't serve widgets.example.omnikrux.dev." }) as const;
+  const cl2 = { ...cl, id: "c2", name: "kind-dev" };
+  it("an absent kind whose API group failed says the group failed, not that the kind is missing", () => {
+    const w = applyMessage(applyMessage(emptyWatchState(), absent("c1")), absent("c2"));
+    const ts = buildTerritories([cl, cl2], w, ALL, now, widgets);
+    const clusters = {
+      c1: { state: "ok", message: null, failed_groups: { "example.omnikrux.dev": reason } },
+      c2: { state: "ok", message: null, failed_groups: {} },
+    } as const;
+    const out = withDiscoveryFailures(ts, clusters, widgets);
+    expect(out[0].discoveryFailed).toBe(`Can't list widgets on this cluster right now: ${reason}`);
+    expect(out[0].state).toBe("absent");
+    // The cluster whose discovery answered really doesn't serve it.
+    expect(out[1]).toBe(ts[1]);
+    // Nothing failed anywhere: the same array, so memoized views stay put.
+    expect(withDiscoveryFailures(ts, { c1: clusters.c2 }, widgets)).toBe(ts);
+    expect(withDiscoveryFailures(ts, undefined, widgets)).toBe(ts);
   });
 });

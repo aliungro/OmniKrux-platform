@@ -170,7 +170,8 @@ export function FilterBar({
   return (
     <div className={s.filters} role="group" aria-label="Filter rows">
       {chips.length > 0 && chip("all", "All")}
-      {chips.map((c) => chip(c.status, `${c.label} ${counts[c.status] ?? 0}`, c.icon))}
+      {/* No number until a cluster has reported one: never a made-up 0. */}
+      {chips.map((c) => chip(c.status, counts[c.status] === undefined ? c.label : `${c.label} ${counts[c.status]}`, c.icon))}
       {namespaces !== null && (
         <NamespacePicker value={value.namespace} namespaces={namespaces} onPick={(namespace) => onChange({ ...value, namespace })} />
       )}

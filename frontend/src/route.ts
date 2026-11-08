@@ -29,8 +29,13 @@ function sameRoute(a: Route, b: Route): boolean {
   return a.view === b.view && (a.view === "audit" || a.kind === (b as typeof a).kind);
 }
 
-/** The route from the hash; setting it adds a history entry, so back and forward walk your views. */
-export function useRoute(): [Route, (r: Route) => void] {
+export type Go = (r: Route, opts?: { replace?: boolean }) => void;
+
+/**
+ * The route from the hash. Setting it adds a history entry, so back and forward walk your views;
+ * `replace` changes the current entry instead (moves you didn't settle on, such as arrowing across tabs).
+ */
+export function useRoute(): [Route, Go] {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
 
   useEffect(() => {
@@ -47,9 +52,12 @@ export function useRoute(): [Route, (r: Route) => void] {
     };
   }, []);
 
-  const go = useCallback((r: Route) => {
+  const go = useCallback<Go>((r, opts) => {
     const hash = routeHash(r);
-    if (window.location.hash !== hash) window.history.pushState(null, "", hash);
+    if (window.location.hash !== hash) {
+      if (opts?.replace) window.history.replaceState(null, "", hash);
+      else window.history.pushState(null, "", hash);
+    }
     setRoute((prev) => (sameRoute(prev, r) ? prev : r));
   }, []);
 
