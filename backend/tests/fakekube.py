@@ -57,7 +57,8 @@ TOKEN = "fake-api-token"
 CUT = "<cut the connection>"
 
 # Seeded log lines are plain strings; line i is stamped LOG_EPOCH + i seconds, which is what
-# `timestamps` prints and `sinceTime` compares against. Followed lines are stamped with "now".
+# `timestamps` prints and `sinceTime` compares against. A line may also be `(seconds, text)`,
+# stamped LOG_EPOCH + that many seconds. Followed lines are stamped with "now".
 LOG_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
 
@@ -284,7 +285,11 @@ class FakeKubeApi:
         self.pods: dict[tuple[str, str], dict] = self.objects["pods"]
         self.pods[("demo", "web-1")] = POD
         self.events: list[dict] = []
-        self.logs: dict[tuple[str, str, str, bool], list[str]] = {}
+        self.logs: dict[tuple[str, str, str, bool], list[str | tuple[float, str]]] = {}
+        # (ns, pod, container) -> how many more requests for the previous log answer 400, as the
+        # kubelet does while a container is being replaced.
+        self.previous_refusals: dict[tuple[str, str, str], int] = {}
+        self.previous_requests = 0
         self.follow_lines: asyncio.Queue[str | None] = asyncio.Queue()
         self.execs: list[dict] = []
         self.exec_resizes: list[dict] = []
@@ -312,6 +317,8 @@ class FakeKubeApi:
         self.eviction_requests: list[dict] = []
         # Pods that stay, terminating, when deleted or evicted, until the test removes them.
         self.linger: set[tuple[str, str]] = set()
+        # Set to 403 or 405: DELETE on the pod collection is refused (no deletecollection verb).
+        self.refuse_deletecollection: int | None = None
         # Seconds each eviction takes, and the most evictions seen in flight at once.
         self.eviction_delay = 0.0
         self.evictions_in_flight_max = 0
@@ -648,7 +655,15 @@ class FakeKubeApi:
         ]
 
     def _delete_pods(self, request: web.Request, ns: str) -> web.Response:
-        """DELETE on the collection: every selected pod; none selected is fine (an empty list)."""
+        """DELETE on the collection: every selected pod; none selected is fine (an empty list); refused
+        with `refuse_deletecollection` (403 or 405)."""
+        if self.refuse_deletecollection is not None:
+            code = self.refuse_deletecollection
+            reason = "Forbidden" if code == 403 else "MethodNotAllowed"
+            message = (
+                f'pods is forbidden: cannot deletecollection resource "pods" in namespace "{ns}"'
+            )
+            return web.json_response(status_body(code, reason, message), status=code)
         selected = self._selected(request, "pods", ns)
         if isinstance(selected, web.Response):
             return selected
@@ -821,6 +836,15 @@ class FakeKubeApi:
             return f"{_stamp(moment) + ' ' if stamped else ''}{line}\n".encode()
 
         seeded = self.logs.get((key[0], key[1], container, previous))
+        if previous:
+            self.previous_requests += 1
+            refusals = (key[0], key[1], container)
+            if self.previous_refusals.get(refusals, 0) > 0:
+                self.previous_refusals[refusals] -= 1
+                return bad_request(
+                    f'container "{container}" in pod "{key[1]}" is waiting to start: '
+                    "ContainerCreating"
+                )
         if seeded is None and previous:
             return bad_request(
                 f'previous terminated container "{container}" in pod "{key[1]}" not found'
@@ -838,7 +862,12 @@ class FakeKubeApi:
             await response.write_eof()
             return response
 
-        moments = [(LOG_EPOCH + timedelta(seconds=i), line) for i, line in enumerate(seeded or [])]
+        moments = [
+            (LOG_EPOCH + timedelta(seconds=item[0]), item[1])
+            if isinstance(item, tuple)
+            else (LOG_EPOCH + timedelta(seconds=i), item)
+            for i, item in enumerate(seeded or [])
+        ]
         if since := query.get("sinceTime"):
             cutoff = datetime.fromisoformat(since)
             if cutoff.tzinfo is None:

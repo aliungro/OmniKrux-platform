@@ -6,6 +6,7 @@ import logging
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, aclosing
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import StreamingResponse
@@ -26,8 +27,10 @@ from omnikrux.logs.stream import (
     LogStream,
     LogStreamError,
     Marker,
+    ResumePoint,
     log_error_message,
     open_log,
+    ts_key,
 )
 from omnikrux.web_security import is_cross_origin
 
@@ -48,7 +51,7 @@ class LineBuffer:
 
     def __init__(self, limit: int = QUEUE_LIMIT):
         self._items: deque[LogLine | Marker] = deque()
-        self._limit = limit
+        self.limit = limit
         self._wake = asyncio.Event()
         self.dropped = 0
         self.first_at = 0.0  # loop time the oldest unsent entry arrived
@@ -61,7 +64,7 @@ class LineBuffer:
     def put(self, item: LogLine | Marker) -> None:
         if not self._items:
             self.first_at = asyncio.get_running_loop().time()
-        elif len(self._items) >= self._limit:
+        elif len(self._items) >= self.limit:
             for i, old in enumerate(self._items):
                 if "marker" not in old:
                     del self._items[i]  # almost always i == 0
@@ -217,14 +220,103 @@ async def _pump(buffer: LineBuffer, pod: str, stream: LogStream, merged: bool) -
         buffer.put(Marker(marker=f"{pod}: {exc.message}"))  # the other pods go on
 
 
+def merge_backlog(tails: list[list[LogLine]]) -> list[LogLine]:
+    """Every pod's tail as one list in time order. A pod's own order is kept: a line without a
+    stamp stays after its pod's previous line (it takes that line's place in time), and a stamp
+    earlier than the pod's previous one doesn't move the line before it."""
+    keyed: list[tuple[tuple, LogLine]] = []
+    for pod_index, lines in enumerate(tails):
+        latest = (datetime.min.replace(tzinfo=UTC), 0)
+        for seq, line in enumerate(lines):
+            key = ts_key(line["ts"]) if line["ts"] else None
+            if key is not None and key > latest:
+                latest = key
+            keyed.append(((latest, pod_index, seq), line))
+    keyed.sort(key=lambda entry: entry[0])
+    return [line for _, line in keyed]
+
+
+async def _read_tail(stream: LogStream, pod: str) -> tuple[list[LogLine], ResumePoint, str | None]:
+    """One pod's tail, not followed: its lines, where they got to, and why it failed (if it did,
+    in words that name the pod)."""
+    lines: list[LogLine] = []
+    position = ResumePoint()
+    try:
+        async with aclosing(stream.lines()) as items:
+            async for item in items:
+                if "marker" not in item:
+                    position.sent(item["ts"])
+                    lines.append(item)  # type: ignore[arg-type]
+    except LogStreamError as exc:
+        return lines, position, f"{pod}: {exc.message}"
+    return lines, position, None
+
+
+async def _put_backlog(buffer: LineBuffer, backlog: list[LogLine]) -> None:
+    """The merged backlog into the buffer, a batch at a time: a slow client holds it back
+    instead of losing its oldest lines."""
+    for start in range(0, len(backlog), BATCH_MAX):
+        while len(buffer) > buffer.limit - BATCH_MAX:
+            await asyncio.sleep(FLUSH_SECONDS / 10)
+        for line in backlog[start : start + BATCH_MAX]:
+            buffer.put(line)
+
+
+async def _produce_selector(
+    buffer: LineBuffer,
+    connections: ClusterConnections,
+    cluster: str,
+    namespace: str,
+    targets: list[tuple[str, str]],
+    *,
+    previous: bool,
+    follow: bool,
+    since_time: str | None,
+    tail_lines: int,
+) -> None:
+    """A selector session: every pod's tail is read first (not followed, all at once) and sent
+    merged in time order; then, when following, each pod is followed from where its tail ended."""
+    error = None
+    try:
+
+        def stream_of(pod: str, container: str, **kw) -> LogStream:
+            return LogStream(
+                connections, cluster, namespace, pod, container,
+                previous=previous, since_time=since_time, tail_lines=tail_lines, **kw,
+            )  # fmt: skip
+
+        reads = await asyncio.gather(
+            *(_read_tail(stream_of(p, c, follow=False), p) for p, c in targets)
+        )
+        await _put_backlog(buffer, merge_backlog([lines for lines, _, _ in reads]))
+        followed: list[tuple[str, LogStream]] = []
+        for (pod, container), (_, position, failure) in zip(targets, reads, strict=True):
+            if failure is not None:
+                buffer.put(Marker(marker=failure))  # the other pods go on
+            elif follow and not previous:
+                followed.append((pod, stream_of(pod, container, follow=True, resume=position)))
+        await _follow(buffer, followed, merged=True)
+    except Exception as exc:  # a bug: plain words out, details in the log
+        log.warning("log stream failed", exc_info=exc)
+        error = "Couldn't read the logs: something went wrong in the console. Try again."
+    finally:
+        buffer.finish(error)
+
+
+async def _follow(
+    buffer: LineBuffer, streams: list[tuple[str, LogStream]], *, merged: bool
+) -> None:
+    async with asyncio.TaskGroup() as group:
+        for pod, stream in streams:
+            group.create_task(_pump(buffer, pod, stream, merged))
+
+
 async def _produce(
     buffer: LineBuffer, streams: list[tuple[str, LogStream]], *, merged: bool
 ) -> None:
     error = None
     try:
-        async with asyncio.TaskGroup() as group:
-            for pod, stream in streams:
-                group.create_task(_pump(buffer, pod, stream, merged))
+        await _follow(buffer, streams, merged=merged)
     except* LogStreamError as group_error:
         error = group_error.exceptions[0].message
     except* Exception as group_error:  # a bug: plain words out, details in the log
@@ -280,10 +372,31 @@ async def logs(
     except LogStreamError as exc:
         await _fail(websocket, exc.message, 1011)
         return
-    streams = [
-        (
-            name,
-            LogStream(
+    what = f"pod={pod}" if pod is not None else f"selector={selector}"
+    where = f"cluster={cluster} ns={namespace} {what} container={container or targets[0][1]}"
+    log.info("log stream opened %s previous=%s follow=%s", where, previous, follow)
+    buffer = LineBuffer()
+    if notice is not None:
+        buffer.put(Marker(marker=notice))
+    try:
+        await _status(websocket, "streaming")
+        if selector is not None:
+            producer = asyncio.create_task(
+                _produce_selector(
+                    buffer,
+                    connections,
+                    cluster,
+                    namespace,
+                    targets,
+                    previous=previous,
+                    follow=follow,
+                    since_time=since_time,
+                    tail_lines=tail_lines,
+                )
+            )
+        else:
+            name, chosen = targets[0]
+            stream = LogStream(
                 connections,
                 cluster,
                 namespace,
@@ -293,19 +406,8 @@ async def logs(
                 follow=follow,
                 since_time=since_time,
                 tail_lines=tail_lines,
-            ),
-        )
-        for name, chosen in targets
-    ]
-    what = f"pod={pod}" if pod is not None else f"selector={selector}"
-    where = f"cluster={cluster} ns={namespace} {what} container={container or targets[0][1]}"
-    log.info("log stream opened %s previous=%s follow=%s", where, previous, follow)
-    buffer = LineBuffer()
-    if notice is not None:
-        buffer.put(Marker(marker=notice))
-    try:
-        await _status(websocket, "streaming")
-        producer = asyncio.create_task(_produce(buffer, streams, merged=selector is not None))
+            )
+            producer = asyncio.create_task(_produce(buffer, [(name, stream)], merged=False))
         sender = asyncio.create_task(_send_all(websocket, buffer))
         receiver = asyncio.create_task(_until_disconnect(websocket))
         tasks = (producer, sender, receiver)

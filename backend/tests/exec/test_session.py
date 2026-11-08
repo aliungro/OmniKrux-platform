@@ -180,17 +180,56 @@ NO_SH = 'OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or
 )
 async def test_exit_code_from_status_channel(status, code, message, cannot_run):
     channel, ws = FakeExecChannel(), BrowserSocket()
-    channel.emit(1, b"bye\r\n")
     channel.finish(status)
 
     await run(channel, ws)
 
-    assert ws.sent == [
-        {"type": "stdout", "data": "bye\r\n"},
-        {"type": "exit", "code": code, "message": message, "cannot_run": cannot_run},
-    ]
+    assert ws.sent == [{"type": "exit", "code": code, "message": message, "cannot_run": cannot_run}]
     assert ws.closed == (1000, None)
     assert channel.closed
+
+
+@pytest.mark.parametrize("code", [126, 127])
+@pytest.mark.parametrize("channel_id", [1, 2])
+async def test_exit_127_after_output_is_a_normal_exit(code, channel_id):
+    """A working shell whose last command failed also exits 126 or 127: not a missing shell."""
+    channel, ws = FakeExecChannel(), BrowserSocket()
+    channel.emit(channel_id, b"zsh: command not found: typo\r\n")
+    channel.finish(
+        {
+            "status": "Failure",
+            "message": f"command terminated with exit code {code}",
+            "reason": "NonZeroExitCode",
+            "details": {"causes": [{"reason": "ExitCode", "message": str(code)}]},
+        }
+    )
+
+    await run(channel, ws)
+
+    assert ws.sent[-1] == {"type": "exit", "code": code, "message": None, "cannot_run": False}
+
+
+async def test_exit_127_without_output_cannot_run_said_once():
+    channel, ws = FakeExecChannel(), BrowserSocket()
+    channel.emit(1, b"")  # Kubernetes opens each stream with an empty frame: not output
+    channel.finish(
+        {
+            "status": "Failure",
+            "message": "command terminated with exit code 127",
+            "reason": "NonZeroExitCode",
+            "details": {"causes": [{"reason": "ExitCode", "message": "127"}]},
+        }
+    )
+
+    await run(channel, ws)
+
+    [exited] = ws.sent
+    assert exited["cannot_run"] is True and exited["code"] == 127
+    assert (
+        exited["message"]
+        == "The command couldn't run in the container (exit 127: it wasn't found)."
+    )
+    assert exited["message"].count("127") == 1
 
 
 async def test_browser_close_closes_channel():

@@ -18,6 +18,9 @@ from omnikrux.logs.stream import (
 from tests.fakekube import CUT, kubeconfig_for
 
 CLUSTER = "c1"
+REAL_PREVIOUS_DELAYS = (
+    stream_module.PREVIOUS_RETRY_DELAYS if hasattr(stream_module, "PREVIOUS_RETRY_DELAYS") else None
+)
 
 
 class Registry:
@@ -104,6 +107,80 @@ async def test_missing_previous_run_is_said_plainly(fake_api, connections):
         await collect(make(connections, previous=True))
     assert e.value.message.startswith('No previous run of container "app" in pod demo/crasher')
     assert "{" not in e.value.message
+
+
+async def test_previous_logs_retry_400_then_soft_message(fake_api, connections, monkeypatch):
+    monkeypatch.setattr(stream_module, "PREVIOUS_RETRY_DELAYS", (0.01, 0.02))
+    fake_api.pods[("demo", "crasher")] = pod()
+    fake_api.previous_refusals[("demo", "crasher", "app")] = 99  # never becomes available
+
+    with pytest.raises(LogStreamError) as e:
+        await collect(make(connections, previous=True))
+
+    assert fake_api.previous_requests == 3  # the first try and two retries
+    assert e.value.message == (
+        'No previous run of container "app" in pod demo/crasher is available right now: it may '
+        "not have restarted yet, or it is restarting at this moment. Try again in a few seconds, "
+        "or read the current logs."
+    )
+
+
+async def test_previous_logs_retry_succeeds_when_the_kubelet_catches_up(
+    fake_api, connections, monkeypatch
+):
+    monkeypatch.setattr(stream_module, "PREVIOUS_RETRY_DELAYS", (0.01, 0.02))
+    fake_api.pods[("demo", "crasher")] = pod(restarts=1)
+    fake_api.logs[("demo", "crasher", "app", True)] = ["boom"]
+    fake_api.previous_refusals[("demo", "crasher", "app")] = 2
+
+    items = await collect(make(connections, previous=True))
+
+    assert [i["text"] for i in items] == ["boom"]
+    assert fake_api.previous_requests == 3
+
+
+def test_previous_logs_are_retried_after_half_a_second_then_one_and_a_half():
+    assert REAL_PREVIOUS_DELAYS == (0.5, 1.5)
+
+
+async def test_other_errors_are_not_retried(fake_api, connections, monkeypatch):
+    monkeypatch.setattr(stream_module, "PREVIOUS_RETRY_DELAYS", (0.01, 0.02))
+    with pytest.raises(LogStreamError):
+        await collect(make(connections, name="ghost", previous=True))  # 404: no such pod
+    assert fake_api.previous_requests == 0
+
+
+async def test_native_sidecar_follows_restarts(fake_api, connections, fast_retries):
+    """An init container with restartPolicy Always restarts even when the pod's policy is Never."""
+    p = pod(containers=("app",))
+    p["spec"]["restartPolicy"] = "Never"
+    p["spec"]["initContainers"] = [{"name": "proxy", "restartPolicy": "Always"}]
+    p["status"]["initContainerStatuses"] = [
+        {
+            "name": "proxy",
+            "restartCount": 0,
+            "state": {"running": {"startedAt": "2026-11-07T09:00:00Z"}},
+        }
+    ]
+    fake_api.pods[("demo", "crasher")] = p
+    async with aclosing(make(connections, container="proxy", follow=True).lines()) as lines:
+        await fake_api.follow_lines.put("up")
+        assert (await next_item(lines))["text"] == "up"
+        p["status"]["initContainerStatuses"][0]["state"] = {"terminated": {"exitCode": 1}}
+        fake_api.pods[("demo", "crasher")] = p
+        pending = asyncio.ensure_future(next_item(lines))
+        await fake_api.follow_lines.put(None)
+        await asyncio.sleep(0.2)
+        assert not pending.done()  # waiting for the restart, not ended
+
+        p["status"]["initContainerStatuses"][0] = {
+            "name": "proxy",
+            "restartCount": 1,
+            "state": {"running": {"startedAt": "2026-11-07T10:00:00Z"}},
+        }
+        fake_api.pods[("demo", "crasher")] = p
+        assert await pending == {"marker": "Container restarted at 2026-11-07T10:00:00Z, restart 1"}
+    await fake_api.follow_lines.put(None)
 
 
 async def test_default_container_tail_and_since(fake_api, connections):

@@ -99,6 +99,64 @@ async def test_selector_interleaves_pods_with_labels(app, fake_api, caplog):
     assert "selector=app=web" in caplog.text and "says hi" not in caplog.text
 
 
+async def test_selector_backlog_is_time_interleaved(app, fake_api):
+    app_, cluster_id = app
+    web = {"app": "web"}
+    fake_api.pods[("demo", "web-a")] = pod("web-a", labels=web)
+    fake_api.pods[("demo", "web-b")] = pod("web-b", labels=web)
+    fake_api.logs[("demo", "web-a", "app", False)] = [(0, "a0"), (2, "a2"), (4, "a4"), (4.5, "a5")]
+    fake_api.logs[("demo", "web-b", "app", False)] = [(1, "b1"), (3, "b3"), (5, "b5")]
+
+    ws = await run(app_, cluster_id, selector="app=web", follow=False)
+
+    assert [line["text"] for line in ws.lines()] == ["a0", "b1", "a2", "b3", "a4", "a5", "b5"]
+
+
+async def test_selector_backlog_keeps_unstamped_lines_after_their_pods_previous_line():
+    from omnikrux.logs.api import merge_backlog
+
+    def line(pod, ts, text):
+        return {"pod": pod, "container": "app", "ts": ts, "text": text}
+
+    first = [
+        line("a", "2026-01-01T00:00:00Z", "a0"),
+        line("a", None, "a0 continued"),
+        line("a", "2026-01-01T00:00:04Z", "a4"),
+    ]
+    second = [line("b", "2026-01-01T00:00:02Z", "b2")]
+
+    merged = merge_backlog([first, second])
+
+    assert [i["text"] for i in merged] == ["a0", "a0 continued", "b2", "a4"]
+
+
+async def test_selector_follow_resumes_each_pod_from_its_last_backlog_stamp(app, fake_api):
+    app_, cluster_id = app
+    web = {"app": "web"}
+    fake_api.pods[("demo", "web-a")] = pod("web-a", labels=web)
+    fake_api.pods[("demo", "web-b")] = pod("web-b", labels=web)
+    fake_api.logs[("demo", "web-a", "app", False)] = [(0, "a0"), (2, "a2")]
+    fake_api.logs[("demo", "web-b", "app", False)] = [(1, "b1")]
+    ws = FakeWebSocket(app_)
+    handler = asyncio.create_task(
+        logs(ws, cluster=cluster_id, namespace="demo", selector="app=web", tail_lines=50)
+    )
+    await until_lines(ws)
+    await asyncio.sleep(0.1)  # the follows are open
+    for key in [("demo", "web-a"), ("demo", "web-b")]:
+        del fake_api.pods[key]
+    await fake_api.follow_lines.put(None)
+    await fake_api.follow_lines.put(None)
+    await asyncio.wait_for(handler, 5)
+
+    assert [i["text"] for i in ws.lines() if "text" in i] == ["a0", "b1", "a2"]
+    reads = [q for _, path, q in fake_api.requests if path.endswith("/log")]
+    tails = [q for q in reads if q.get("follow") != "true"]
+    follows = {q["sinceTime"] for q in reads if q.get("follow") == "true"}
+    assert len(tails) == 2 and all(q["tailLines"] == "50" for q in tails)
+    assert follows == {"2026-01-01T00:00:02.000000000Z", "2026-01-01T00:00:01.000000000Z"}
+
+
 async def test_selector_pod_failure_is_a_marker_not_the_end(app, fake_api):
     app_, cluster_id = app
     fake_api.pods[("demo", "web-a")] = pod("web-a", labels={"app": "web"})

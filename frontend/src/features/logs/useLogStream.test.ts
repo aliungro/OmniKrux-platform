@@ -208,6 +208,18 @@ describe("useLogStream", () => {
     expect(result.current.retry).toBeNull();
   });
 
+  it("server 1008 offers no try again", () => {
+    const { result } = open();
+    const message = "Choose a pod or a label selector (one of them, not both).";
+    act(() => {
+      FakeWebSocket.last.emit({ type: "status", state: "error", message });
+      FakeWebSocket.last.drop(1008);
+    });
+    expect(result.current.status).toBe("error");
+    expect(result.current.message).toBe(message); // the server's words, not ours
+    expect(result.current.retry).toBeNull();
+  });
+
   it("nothing to retry while the stream is fine", () => {
     const { result } = open();
     act(() => FakeWebSocket.last.emit({ type: "status", state: "streaming", message: null }));

@@ -21,6 +21,7 @@ from omnikrux.audit.store import (
 from omnikrux.exec.debug import (
     NSENTER,
     delete_node_shell_pod,
+    failure_words,
     finish_even_if_cancelled,
     is_node_shell,
 )
@@ -124,7 +125,7 @@ async def _delete_node_shell(
             deleted = await delete_node_shell_pod(api, namespace, pod)
     except Exception as exc:  # noqa: BLE001 (it stops by itself after its deadline anyway)
         log.warning(
-            "Could not delete node-shell pod %s/%s (%s)", namespace, pod, type(exc).__name__
+            "Could not delete node-shell pod %s/%s (%s)", namespace, pod, failure_words(exc)
         )
         message = kube_error_message(exc, f"delete node-shell pod {namespace}/{pod}")
         await audit.finish_open(**where, outcome="failed", message=message)
@@ -140,7 +141,7 @@ async def _delete_node_shell(
             namespace,
             pod,
         )
-        await audit.finish_open(**where, outcome="ended", message="The pod was already gone.")
+        await audit.finish_open(**where, outcome="ended", message="No pod was left to delete")
 
 
 async def _fail(websocket: WebSocket, message: str, code: int, reason: str | None = None) -> None:

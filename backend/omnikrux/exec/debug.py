@@ -12,6 +12,7 @@ import string
 from collections.abc import Awaitable
 
 from kubernetes_asyncio.client import ApiClient, CoreV1Api
+from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.kube.http import read_json
 from omnikrux.kube.pods import (
@@ -196,25 +197,69 @@ async def delete_node_shell_pod(api: ApiClient, ns: str, name: str) -> int:
     """Delete the pod by name, but only while it carries the node-shell label (a collection
     delete by name and label), so the label is enforced even when the pod couldn't be read. One
     that is already gone (or never existed) is fine. Returns how many pods were deleted (0 or
-    1)."""
-    deleted = await read_json(
-        CoreV1Api(api).delete_collection_namespaced_pod(
-            ns,
-            label_selector=f"{NODE_SHELL_LABEL}=true",
-            field_selector=f"metadata.name={name}",
-            _preload_content=False,
-            _request_timeout=REQUEST_TIMEOUT,
+    1).
+
+    A role without the `deletecollection` verb is refused (403, or 405 from some proxies); then
+    the pod is read and, only if it carries the label, deleted by name with its uid as a
+    precondition, so a pod that replaced it under the same name is never deleted."""
+    try:
+        deleted = await read_json(
+            CoreV1Api(api).delete_collection_namespaced_pod(
+                ns,
+                label_selector=f"{NODE_SHELL_LABEL}=true",
+                field_selector=f"metadata.name={name}",
+                _preload_content=False,
+                _request_timeout=REQUEST_TIMEOUT,
+            )
         )
-    )
+    except ApiException as exc:
+        if exc.status not in (403, 405):
+            raise
+        return await _delete_by_name(api, ns, name)
     items = deleted.get("items")
     return len(items) if isinstance(items, list) else 0
+
+
+async def _delete_by_name(api: ApiClient, ns: str, name: str) -> int:
+    try:
+        found = await read_pod(api, ns, name, timeout=REQUEST_TIMEOUT)
+    except ApiException as exc:
+        if exc.status == 404:
+            return 0
+        raise
+    if not is_node_shell(found):
+        return 0  # not ours: never delete it
+    uid = (found.get("metadata") or {}).get("uid")
+    if not uid:  # without a uid the precondition can't protect against a replacement
+        return 0
+    try:
+        await read_json(
+            CoreV1Api(api).delete_namespaced_pod(
+                name,
+                ns,
+                body={"preconditions": {"uid": uid}},
+                _preload_content=False,
+                _request_timeout=REQUEST_TIMEOUT,
+            )
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return 0
+        raise
+    return 1
+
+
+def failure_words(exc: BaseException) -> str:
+    """The exception's type, and the HTTP status when the API answered with one."""
+    status = getattr(exc, "status", None)
+    return f"{type(exc).__name__} {status}" if isinstance(status, int) else type(exc).__name__
 
 
 async def _delete_quietly(api: ApiClient, ns: str, name: str) -> None:
     try:
         await delete_node_shell_pod(api, ns, name)
     except Exception as exc:  # noqa: BLE001 (it stops by itself after the deadline anyway)
-        log.warning("Could not delete node-shell pod %s/%s (%s)", ns, name, type(exc).__name__)
+        log.warning("Could not delete node-shell pod %s/%s (%s)", ns, name, failure_words(exc))
 
 
 async def finish_even_if_cancelled(work: Awaitable[None]) -> None:

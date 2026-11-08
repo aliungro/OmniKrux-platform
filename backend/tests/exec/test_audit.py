@@ -424,7 +424,7 @@ async def test_node_shell_cleanup_that_deletes_nothing_or_fails(
 
     record = next(r for r in await records(app) if r.id == record_id)
     if seen == "gone":
-        assert (record.outcome, record.message) == ("ended", "The pod was already gone.")
+        assert (record.outcome, record.message) == ("ended", "No pod was left to delete")
         assert "nothing matched" in caplog.text
     else:
         assert record.outcome == "failed"

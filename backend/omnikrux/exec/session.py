@@ -12,6 +12,7 @@ import codecs
 import contextlib
 import json
 import logging
+import re
 from contextlib import AsyncExitStack
 from typing import Literal, NamedTuple, Protocol, Self
 
@@ -128,8 +129,16 @@ class ShellExit(NamedTuple):
     cannot_run: bool  # the command couldn't start in the container (no shell there, say)
 
 
-def exit_from_status(raw: bytes | None) -> ShellExit:
-    """How the shell ended, from the status channel's `Status`."""
+def _repeats_exit(reason: str, code: int) -> bool:
+    """Whether the API's reason just says the exit code again ("command terminated with exit
+    code 127")."""
+    return re.search(rf"exit(?: status| code)? {code}\b", reason) is not None
+
+
+def exit_from_status(raw: bytes | None, *, had_output: bool) -> ShellExit:
+    """How the shell ended, from the status channel's `Status`. Exit 126 or 127 only means the
+    command couldn't run when nothing was printed first: a working shell whose last command
+    failed exits that way too."""
     if raw is None:
         return ShellExit(None, "The shell ended without an exit status.", False)
     try:
@@ -148,11 +157,13 @@ def exit_from_status(raw: bytes | None) -> ShellExit:
                 code = int(cause.get("message"))
             except (TypeError, ValueError):
                 break
-            if code not in CANNOT_RUN_CODES:
+            if code not in CANNOT_RUN_CODES or had_output:
                 return ShellExit(code, None, False)
             words = f"The command couldn't run in the container (exit {code}: "
             words += CANNOT_RUN_CODES[code] + ")"
-            return ShellExit(code, f"{words}: {reason}" if reason else f"{words}.", True)
+            if reason and not _repeats_exit(reason, code):
+                return ShellExit(code, f"{words}: {reason}", True)
+            return ShellExit(code, f"{words}.", True)
     if reason:  # the runtime couldn't start the command at all (an InternalError)
         return ShellExit(None, f"The command couldn't run: {reason}", True)
     return ShellExit(None, "The shell ended with an error.", False)
@@ -190,6 +201,7 @@ def _side(value: object) -> bool:
 class ExecBridge:
     def __init__(self, channel: ExecChannel):
         self._channel = channel
+        self._had_output = False  # any stdout or stderr bytes reached the browser
 
     async def run(self, websocket: WebSocket) -> SessionEnd:
         """Relay until either side ends, and return how it ended. The channel is always closed.
@@ -264,6 +276,7 @@ class ExecBridge:
 
         async def send(channel: int, text: str) -> None:
             if text:
+                self._had_output = True
                 await websocket.send_text(json.dumps({"type": kinds[channel], "data": text}))
 
         while True:
@@ -286,6 +299,6 @@ class ExecBridge:
                 status = data
         for channel, decoder in decoders.items():  # a character cut off at the very end
             await send(channel, decoder.decode(b"", final=True))
-        ended = exit_from_status(status)
+        ended = exit_from_status(status, had_output=self._had_output)
         await websocket.send_text(json.dumps({"type": "exit", **ended._asdict()}))
         return 1000, session_end(ended)

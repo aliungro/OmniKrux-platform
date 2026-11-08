@@ -8,6 +8,7 @@ import httpx
 import pytest
 import yaml
 from aiohttp import web
+from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
@@ -288,6 +289,88 @@ async def test_delete_node_shell_pod_needs_the_label(api, fake_api):
     assert fake_api.deleted == [] and ("default", "web-a") in fake_api.pods
 
 
+@pytest.mark.parametrize("code", [403, 405])
+async def test_fallback_delete_carries_the_uid_precondition(api, fake_api, code):
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+    fake_api.refuse_deletecollection = code
+
+    deleted = await delete_node_shell_pod(api, "default", "omnikrux-node-shell-abcde")
+
+    assert deleted == 1
+    assert fake_api.deleted == [("default", "omnikrux-node-shell-abcde")]
+    [single] = [d for d in fake_api.deletes if d["path"].endswith("/omnikrux-node-shell-abcde")]
+    assert single["body"]["preconditions"] == {"uid": "u-omnikrux-node-shell-abcde"}
+
+
+async def test_node_shell_cleanup_falls_back_on_403(api, fake_api):
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+    fake_api.refuse_deletecollection = 403
+
+    assert await delete_node_shell_pod(api, "default", "omnikrux-node-shell-abcde") == 1
+    assert ("default", "omnikrux-node-shell-abcde") not in fake_api.pods
+
+
+async def test_node_shell_cleanup_falls_back_on_405(api, fake_api):
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+    fake_api.refuse_deletecollection = 405
+
+    assert await delete_node_shell_pod(api, "default", "omnikrux-node-shell-abcde") == 1
+    assert ("default", "omnikrux-node-shell-abcde") not in fake_api.pods
+
+
+async def test_fallback_refuses_unlabelled_pod(api, fake_api):
+    fake_api.pods[("default", "web-a")] = node_shell("web-a", labels={"app": "web"})
+    fake_api.refuse_deletecollection = 403
+
+    assert await delete_node_shell_pod(api, "default", "web-a") == 0
+
+    assert fake_api.deleted == [] and ("default", "web-a") in fake_api.pods
+    assert fake_api.deletes == []
+
+
+async def test_fallback_pod_already_gone_is_zero(api, fake_api):
+    fake_api.refuse_deletecollection = 403
+
+    assert await delete_node_shell_pod(api, "default", "omnikrux-node-shell-abcde") == 0
+
+
+async def test_fallback_never_deletes_a_same_named_replacement(api, fake_api, monkeypatch):
+    """The pod is replaced (new uid) between the read and the delete: the precondition refuses."""
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+    fake_api.refuse_deletecollection = 403
+    real_read = debug.read_pod
+
+    async def read_then_replace(*args, **kwargs):
+        found = await real_read(*args, **kwargs)
+        fake_api.pods[("default", "omnikrux-node-shell-abcde")]["metadata"]["uid"] = "replacement"
+        return found
+
+    monkeypatch.setattr(debug, "read_pod", read_then_replace)
+
+    with pytest.raises(ApiException) as caught:
+        await delete_node_shell_pod(api, "default", "omnikrux-node-shell-abcde")
+
+    assert caught.value.status == 409
+    assert ("default", "omnikrux-node-shell-abcde") in fake_api.pods
+
+
+async def test_failed_cleanup_warning_names_the_status(api, fake_api, monkeypatch, caplog):
+    fake_api.refuse_deletecollection = 403
+    fake_api.pods[("default", "omnikrux-node-shell-abcde")] = node_shell()
+
+    async def broken(*args, **kwargs):
+        raise ApiException(status=500, reason="Internal Server Error")
+
+    monkeypatch.setattr(debug, "read_pod", broken)
+
+    await debug._delete_quietly(api, "default", "omnikrux-node-shell-abcde")
+
+    assert (
+        "Could not delete node-shell pod default/omnikrux-node-shell-abcde (ApiException 500)"
+        in caplog.text
+    )
+
+
 # --- HTTP routes ----------------------------------------------------------------------------
 
 
@@ -411,6 +494,27 @@ async def test_node_shell_pod_deleted_on_close(app, fake_api, fake_channel, who)
 
     assert fake_channel.closed
     assert fake_api.deleted == [("default", "omnikrux-node-shell-abcde")]
+
+
+async def test_deleted_logged_only_when_something_was_deleted(app, fake_api, caplog):
+    caplog.set_level("INFO", logger="omnikrux.exec.api")
+    _, cluster_id = app
+    name = "omnikrux-node-shell-abcde"
+
+    await exec_api._delete_node_shell(
+        app[0].state.connections, app[0].state.audit, cluster_id, "default", name
+    )
+    assert "node-shell pod deleted" not in caplog.text  # nothing was there
+    assert "nothing matched" in caplog.text
+
+    caplog.clear()
+    fake_api.pods[("default", name)] = node_shell()
+    fake_api.refuse_deletecollection = 403  # the fallback counts too
+    await exec_api._delete_node_shell(
+        app[0].state.connections, app[0].state.audit, cluster_id, "default", name
+    )
+    assert "node-shell pod deleted" in caplog.text
+    assert fake_api.deleted == [("default", name)]
 
 
 async def test_node_shell_pod_deleted_when_session_cancelled(app, fake_api, fake_channel):

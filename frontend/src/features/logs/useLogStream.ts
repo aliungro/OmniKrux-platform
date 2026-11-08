@@ -184,6 +184,8 @@ export function useLogStream(params: LogStreamParams): LogStreamState {
       const ws = new WebSocket(logsUrl(p, since));
       socket = ws;
       let finished = false;
+      /** The words of an error status the server sent on this socket. */
+      let serverError: string | null = null;
       ws.onmessage = (ev: MessageEvent) => {
         if (disposed) return;
         attempt = 0;
@@ -207,6 +209,7 @@ export function useLogStream(params: LogStreamParams): LogStreamState {
             break;
           case "status":
             if (msg.state !== "streaming") finished = true;
+            if (msg.state === "error") serverError = msg.message;
             setStatus(msg.state, msg.message);
             break;
         }
@@ -214,12 +217,14 @@ export function useLogStream(params: LogStreamParams): LogStreamState {
       ws.onclose = (ev: CloseEvent) => {
         if (disposed) return;
         socket = null;
-        if (finished) return;
+        // A refusal is checked before `finished`: the server sends its error status first and
+        // then closes with the refusal code, and trying again would only be refused again.
         const refused = refusalWords(ev.code, "log");
-        if (refused !== null) {
-          setStatus("error", refused, canRetryAfterClose(ev.code));
+        if (refused !== null && (!finished || serverError !== null)) {
+          setStatus("error", serverError ?? refused, canRetryAfterClose(ev.code));
           return;
         }
+        if (finished) return;
         if (!follow) {
           setStatus("error", LOST_FOR_GOOD);
           return;
