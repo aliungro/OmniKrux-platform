@@ -425,21 +425,19 @@ def _sentence(text: str) -> str:
     return text if text.endswith(".") else f"{text}."
 
 
-async def _gone(api: ApiClient, pod: dict) -> tuple[bool, str | None]:
-    """Whether the reviewed pod is gone (not found, or another pod, another uid, has its name),
-    and why that couldn't be read when it couldn't."""
-    ns, name = pod["namespace"], pod["name"]
+async def _gone(api: ApiClient, node: str) -> tuple[set[str] | None, str | None]:
+    """The uids still on the node, or why they couldn't be listed."""
     try:
-        live = await call_json(
-            api, "GET", f"/api/v1/namespaces/{ns}/pods/{name}", timeout=REQUEST_TIMEOUT
+        listed = await call_json(
+            api,
+            "GET",
+            "/api/v1/pods",
+            timeout=REQUEST_TIMEOUT,
+            query=(("fieldSelector", f"spec.nodeName={node}"),),
         )
-    except ApiException as exc:
-        if exc.status == 404:
-            return True, None
-        return False, kube_error_message(exc, f"read pod {ns}/{name}")
     except KUBE_ERRORS as exc:
-        return False, kube_error_message(exc, f"read pod {ns}/{name}")
-    return _uid(live) != pod["uid"], None
+        return None, kube_error_message(exc, f"list the pods on {node}")
+    return {_uid(p) for p in listed.get("items") or []}, None
 
 
 async def _left_alone(api: ApiClient, node: str, reviewed: set[str]) -> str | None:
@@ -484,8 +482,28 @@ async def drain_pods(
             message = kube_error_message(exc, "connect to the cluster")
             raise JobFailed(f"{message} {STAYS_CORDONED.format(node=node)}") from None
         slots = asyncio.Semaphore(MAX_EVICTIONS)
+        waiters: dict[str, tuple[asyncio.Future, tuple[str, str]]] = {}
+        poller: asyncio.Task | None = None
+
+        async def poll() -> None:
+            while waiters:
+                # Only release pods registered before the request: an eviction that finishes
+                # during this list must wait for a fresh observation of its uid.
+                checking = dict(waiters)
+                present, problem = await _gone(api, node)
+                for uid, (ready, key) in checking.items():
+                    if problem:
+                        unreadable[key] = problem
+                    else:
+                        unreadable.pop(key, None)
+                        if uid not in present:
+                            waiters.pop(uid)
+                            ready.set_result(None)
+                if waiters:
+                    await asyncio.sleep(POLL_SECONDS)
 
         async def one(pod: dict) -> None:
+            nonlocal poller
             key = (pod["namespace"], pod["name"])
             while True:
                 async with slots:
@@ -501,16 +519,11 @@ async def drain_pods(
             if result == "gone":
                 already_gone.append(key)
             else:
-                while True:
-                    gone, problem = await _gone(api, pod)
-                    if gone:
-                        break
-                    if problem:
-                        unreadable[key] = problem
-                    else:
-                        unreadable.pop(key, None)
-                    await asyncio.sleep(POLL_SECONDS)
-                unreadable.pop(key, None)
+                ready = asyncio.get_running_loop().create_future()
+                waiters[pod["uid"]] = (ready, key)
+                if poller is None or poller.done():
+                    poller = asyncio.create_task(poll())
+                await ready
                 evicted.append(key)
             job.done += 1
 
@@ -522,9 +535,13 @@ async def drain_pods(
                     tasks, timeout=timeout_s, return_when=asyncio.FIRST_EXCEPTION
                 )
         finally:
+            if poller is not None:
+                poller.cancel()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            if poller is not None:
+                await asyncio.gather(poller, return_exceptions=True)
 
         for task in tasks:
             if not task.cancelled() and task.exception() is not None:

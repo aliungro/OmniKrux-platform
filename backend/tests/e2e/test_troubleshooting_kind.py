@@ -52,12 +52,18 @@ def test_previous_logs_of_crasher_contain_boom(client, cluster):
     def previous_text() -> list[str] | None:
         # For about 70 s after each restart (the kubelet's 1-minute container GC) the pod's last
         # state names a container that is already removed, and the kubelet answers "unable to
-        # retrieve container logs" (kubectl logs --previous too); that passes, so ask again.
+        # retrieve container logs" (kubectl logs --previous too), sometimes as a log line
+        # in a successful response rather than an error status. Ask again in either case.
         with client.websocket_connect(url) as ws:
             messages = Reader(ws).until(ended, "the previous logs to end")
         if any(m.get("state") == "error" for m in messages):
             return None
-        return [line.get("text") for line in log_lines(messages)]
+        texts = [line.get("text") for line in log_lines(messages)]
+        if any(
+            text.startswith("unable to retrieve container logs for containerd://") for text in texts
+        ):
+            return None
+        return texts
 
     texts = wait_for(previous_text, "the previous logs of crasher", timeout=120, interval=1)
     assert "boom" in texts

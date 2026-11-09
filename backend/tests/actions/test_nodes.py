@@ -7,6 +7,7 @@ starts a job that evicts the reviewed pods, retrying those a PodDisruptionBudget
 they are gone or its time is up. The job finishes the audit record."""
 
 import asyncio
+import math
 
 import pytest
 
@@ -424,6 +425,70 @@ async def test_drain_evicts_only_the_reviewed_pods(env):
     )
 
 
+async def test_drain_waits_with_one_list_per_poll(env, monkeypatch):
+    """Polling must cost one request per node, rather than one per terminating pod."""
+    monkeypatch.setattr(nodes, "POLL_SECONDS", 0.2)
+    fake = env.fakes["dev-a"]
+    seed(env, *(pod(f"web-{i}") for i in range(20)))
+    keys = list(fake.pods)
+    fake.linger.update(keys)
+    started = await start_drain(env)
+    await wait_job(env, started["job_id"], lambda j: len(fake.deleted) == 20)
+    fake.requests.clear()
+    for batch in (keys[:7], keys[7:14], keys[14:]):
+        await asyncio.sleep(1)
+        assert (await job(env, started["job_id"]))["state"] == "running"
+        for key in batch:
+            del fake.pods[key]
+    current = await wait_job(env, started["job_id"], finished)
+    assert current["state"] == "succeeded" and current["done"] == 20
+    lists = [q for m, p, q in fake.requests if (m, p) == ("GET", "/api/v1/pods")]
+    assert 1 <= len(lists) <= math.ceil(3 / nodes.POLL_SECONDS) + 3
+    assert all(q == {"fieldSelector": "spec.nodeName=worker"} for q in lists)
+    assert not [
+        p
+        for m, p, _ in fake.requests
+        if m == "GET" and p.startswith("/api/v1/namespaces/demo/pods/")
+    ]
+
+
+async def test_drain_gone_by_uid_when_name_reused(env):
+    fake = env.fakes["dev-a"]
+    seed(env, pod("web-1"))
+    fake.linger.add(("demo", "web-1"))
+    started = await start_drain(env)
+    await wait_job(env, started["job_id"], lambda j: fake.deleted)
+    replacement = pod("web-1")
+    replacement["metadata"]["uid"] = "u-replacement"
+    fake.pods[("demo", "web-1")] = replacement
+    current = await wait_job(env, started["job_id"], finished)
+    assert current["state"] == "succeeded" and current["done"] == 1
+    assert current["message"] == (
+        "Drained worker: 1 pods evicted. "
+        "1 pods on worker weren't in the review and stay: demo/web-1. worker stays cordoned."
+    )
+
+
+@pytest.mark.parametrize("times, state", [(2, "succeeded"), (200, "failed")])
+async def test_drain_list_failure_keeps_waiting_and_reports(env, times, state):
+    fake = env.fakes["dev-a"]
+    seed(env, pod("web-1"))
+    fake.linger.add(("demo", "web-1"))
+    started = await start_drain(env, {"timeout_s": 1})
+    await wait_job(env, started["job_id"], lambda j: fake.deleted)
+    fake.fail_lists["/api/v1/pods"] = [500] * times
+    del fake.pods[("demo", "web-1")]
+    current = await wait_job(env, started["job_id"], finished)
+    assert current["state"] == state
+    if state == "failed":
+        assert "couldn't check that 1 pods left worker (demo/web-1)" in current["message"]
+        assert "Couldn't list the pods on worker:" in current["message"]
+        assert "ApiException: (500)" in current["message"]
+    else:
+        assert current["done"] == 1
+        assert fake.fail_lists["/api/v1/pods"] == []
+
+
 async def test_drain_retries_an_eviction_conflict_that_isnt_a_new_pod(env):
     """A 409 that isn't the uid precondition (the API server's own write conflict) is retried,
     never counted as evicted."""
@@ -453,7 +518,7 @@ async def test_drain_timeout_names_why_pods_couldnt_be_checked(env):
     message = current["message"]
     assert message.startswith(
         "Drain stopped after 1 s: Omnikrux couldn't check that 1 pods left worker (demo/slow-1): "
-        "Not allowed to read pod demo/slow-1: pods is forbidden"
+        "Not allowed to list the pods on worker: pods is forbidden"
     )
     assert message.endswith(" worker stays cordoned.")
 

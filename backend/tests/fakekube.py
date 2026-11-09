@@ -270,6 +270,7 @@ class FakeKubeApi:
         self.broken_groups: set[str] = set()
         self.hanging_groups: set[str] = set()
         self.forbidden_kinds: set[str] = set()
+        self.fail_lists: dict[str, list[int]] = {}
         # metrics-server: ok; missing (the group is not served: absent from discovery, 404);
         # unavailable (the aggregated API answers 503, also in discovery).
         self.metrics_mode = "ok"
@@ -498,6 +499,11 @@ class FakeKubeApi:
             if res.key == "pods" and ns is None:
                 return await self._watch(request)  # the pod watch keeps its modes
             return await self._watch_any(request, res, ns)
+        if failures := self.fail_lists.get(request.path):
+            status = failures.pop(0)
+            return web.json_response(
+                status_body(status, "InternalError", f"listing {res.plural} failed"), status=status
+            )
         selected = self._selected(request, res.key, ns)
         if isinstance(selected, web.Response):
             return selected
