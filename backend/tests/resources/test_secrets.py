@@ -218,9 +218,25 @@ async def test_reveal_needs_the_audit_and_permission(env, fake_api, monkeypatch)
     r = await http.post(reveal_url(cluster_id), json={"key": "password"})
     assert r.status_code == 503
     assert r.json() == {
-        "detail": "Nothing was changed: the audit log can't be written (no such table: audit)."
+        "detail": "The value isn't shown: the audit log can't be written (no such table: audit)."
     }
     assert not [p for _, p, _ in fake_api.requests if "/secrets/" in p]  # never read
+
+
+async def test_reveal_without_audit_says_value_not_shown(env, fake_api, caplog):
+    app, http, cluster_id = env
+    async with app.state.engine.begin() as conn:
+        await conn.execute(text("DROP TABLE audit"))
+    fake_api.requests.clear()
+
+    response = await http.post(reveal_url(cluster_id), json={"key": "password"})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "The value isn't shown: the audit log can't be written (no such table: audit)."
+    }
+    assert not [path for _, path, _ in fake_api.requests if "/secrets/" in path]
+    assert leaks(response.text) == [] and leaks(caplog.text) == []
 
 
 async def test_reveal_withholds_the_value_when_the_audit_cannot_finish(env, caplog):

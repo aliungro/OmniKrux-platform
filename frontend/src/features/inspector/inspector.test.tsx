@@ -448,6 +448,209 @@ describe("resource inspector", () => {
 
 describe("secret values", () => {
   const VALUE = "hunter2-correct-horse";
+  const USERNAME = "private-user-42";
+  const values: Record<string, string> = { password: VALUE, username: USERNAME };
+  const bothKeys = () => vi.fn((url: string, init?: RequestInit) => {
+    if (!url.endsWith("/reveal")) return json(secretDescribe());
+    const { key } = JSON.parse(String(init?.body)) as { key: string };
+    return json({ key, value: values[key], encoding: "utf-8" });
+  });
+  const clickReveal = (key: string) => fireEvent.click(within(screen.getByTestId(`secret-key-${key}`)).getByRole("button", { name: "Reveal" }));
+  const revealBoth = async () => {
+    await screen.findByTestId("secret-key-password");
+    clickReveal("password");
+    await screen.findByText(VALUE);
+    clickReveal("username");
+    await screen.findByText(USERNAME);
+  };
+
+  it("revealing a second key keeps the first", async () => {
+    vi.stubGlobal("fetch", bothKeys());
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await revealBoth();
+    expect(screen.getByText(VALUE)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide all" })).toBeTruthy();
+  });
+
+  it("hide hides only that key", async () => {
+    vi.stubGlobal("fetch", bothKeys());
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await revealBoth();
+    fireEvent.click(within(screen.getByTestId("secret-key-username")).getByRole("button", { name: "Hide" }));
+    expect(screen.queryByText(USERNAME)).toBeNull();
+    expect(screen.getByText(VALUE)).toBeTruthy();
+    expect(screen.getByTestId("secret-key-username").textContent).toContain("•••••• (5 bytes)");
+  });
+
+  it("reveals different keys independently while both requests are on their way", async () => {
+    const pending = new Map<string, { signal: AbortSignal; finish: (response: Response) => void }>();
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (!url.endsWith("/reveal")) return json(secretDescribe());
+      const { key } = JSON.parse(String(init?.body)) as { key: string };
+      return new Promise<Response>((finish) => pending.set(key, { signal: init!.signal!, finish }));
+    }));
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await screen.findByTestId("secret-key-password");
+    clickReveal("password");
+    clickReveal("username");
+    expect(screen.getAllByRole("button", { name: "Revealing…" })).toHaveLength(2);
+    expect(pending.get("password")!.signal.aborted).toBe(false);
+    await act(async () => { pending.get("username")!.finish(await json({ key: "username", value: USERNAME, encoding: "utf-8" })); });
+    expect(screen.getByText(USERNAME)).toBeTruthy();
+    expect((within(screen.getByTestId("secret-key-password")).getByRole("button", { name: "Revealing…" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { pending.get("password")!.finish(await json({ key: "password", value: VALUE, encoding: "utf-8" })); });
+    expect(screen.getByText(VALUE)).toBeTruthy();
+    expect(screen.getByText(USERNAME)).toBeTruthy();
+  });
+
+  it("hide all hides every key", async () => {
+    vi.stubGlobal("fetch", bothKeys());
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await revealBoth();
+    fireEvent.click(screen.getByRole("button", { name: "Hide all" }));
+    expect(screen.queryByText(VALUE)).toBeNull();
+    expect(screen.queryByText(USERNAME)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide all" })).toBeNull();
+  });
+
+  it("a hidden browser tab hides every value", async () => {
+    vi.stubGlobal("fetch", bothKeys());
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await revealBoth();
+    const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(screen.queryByText(VALUE)).toBeNull();
+      expect(screen.queryByText(USERNAME)).toBeNull();
+    } finally {
+      hidden.mockRestore();
+    }
+  });
+
+  it("a new resource version drops every value", async () => {
+    vi.stubGlobal("fetch", bothKeys());
+    const { rerender } = wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await revealBoth();
+    rerender(<Inspector row={{ ...secretRow, columns: { ...secretRow.columns, resource_version: "8" } }} provider="kind" kindKey="secrets" />);
+    expect(screen.queryByText(VALUE)).toBeNull();
+    expect(screen.queryByText(USERNAME)).toBeNull();
+    await screen.findByTestId("secret-key-password");
+    expect(screen.queryByText(VALUE)).toBeNull();
+    expect(screen.queryByText(USERNAME)).toBeNull();
+  });
+
+  it("an error on one key keeps the others", async () => {
+    vi.stubGlobal("fetch", answer());
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await screen.findByTestId("secret-key-password");
+    clickReveal("password");
+    await screen.findByText(VALUE);
+    clickReveal("username");
+    await screen.findByRole("alert");
+    expect(screen.getByText(VALUE)).toBeTruthy();
+  });
+
+  it("values never reach the query cache or storage", async () => {
+    const fetch = bothKeys();
+    vi.stubGlobal("fetch", fetch);
+    const { client } = wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await revealBoth();
+    const retained = [
+      JSON.stringify(client.getQueryCache().getAll().map((q) => [q.queryKey, q.state])),
+      JSON.stringify(client.getMutationCache().getAll()),
+      window.location.href,
+      JSON.stringify(window.history.state),
+      ...[window.localStorage, window.sessionStorage].flatMap((store) =>
+        Array.from({ length: store.length }, (_, i) => store.getItem(store.key(i)!) ?? "")),
+    ];
+    for (const entry of retained) {
+      expect(entry).not.toContain(VALUE);
+      expect(entry).not.toContain(USERNAME);
+    }
+    for (const [url, init] of fetch.mock.calls.filter(([url]) => url.endsWith("/reveal"))) {
+      expect(url).not.toContain(VALUE);
+      expect(init).toMatchObject({ method: "POST", cache: "no-store" });
+    }
+  });
+
+  it.each(["hide all", "hidden tab", "new version", "unmount"])("%s stops reveals on their way even when abort races response decoding", async (action) => {
+    let finish!: (value: unknown) => void;
+    let pendingSignal: AbortSignal | null | undefined;
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (!url.endsWith("/reveal")) return json(secretDescribe());
+      const { key } = JSON.parse(String(init?.body)) as { key: string };
+      if (key === "password") return json({ key, value: VALUE, encoding: "utf-8" });
+      pendingSignal = init?.signal;
+      // Deliberately ignore abort: the network has answered, JSON decoding is still on its way.
+      return Promise.resolve({ ok: true, json: () => new Promise((resolve) => { finish = resolve; }) } as Response);
+    });
+    vi.stubGlobal("fetch", fetch);
+    const { rerender, unmount, client } = wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await screen.findByTestId("secret-key-password");
+    clickReveal("password");
+    await screen.findByText(VALUE);
+    clickReveal("username");
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    let hidden: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      if (action === "hide all") fireEvent.click(screen.getByRole("button", { name: "Hide all" }));
+      if (action === "hidden tab") {
+        hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+        act(() => document.dispatchEvent(new Event("visibilitychange")));
+      }
+      if (action === "new version") rerender(<Inspector row={{ ...secretRow, columns: { ...secretRow.columns, resource_version: "8" } }} provider="kind" kindKey="secrets" />);
+      if (action === "unmount") unmount();
+      expect(pendingSignal?.aborted).toBe(true);
+      await act(async () => { finish({ key: "username", value: USERNAME, encoding: "utf-8" }); });
+      expect(screen.queryByText(VALUE)).toBeNull();
+      expect(screen.queryByText(USERNAME)).toBeNull();
+      expect(JSON.stringify(client.getQueryCache().getAll().map((q) => q.state))).not.toContain(USERNAME);
+    } finally {
+      hidden?.mockRestore();
+    }
+  });
+
+  it("a held x does not repeat a reveal or hide another key", async () => {
+    const fetch = bothKeys();
+    vi.stubGlobal("fetch", fetch);
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await screen.findByTestId("secret-key-password");
+    clickReveal("password");
+    await screen.findByText(VALUE);
+    const username = screen.getByTestId("secret-key-username");
+    username.focus();
+    fireEvent.keyDown(username, { key: "x", repeat: true });
+    expect(fetch.mock.calls.filter(([url]) => url.endsWith("/reveal"))).toHaveLength(1);
+    fireEvent.keyDown(username, { key: "x" });
+    await screen.findByText(USERNAME);
+    expect(screen.getByText(VALUE)).toBeTruthy();
+  });
+
+  it("a cancelled response cannot replace a fresh reveal or clear its busy state", async () => {
+    const finishes: ((value: unknown) => void)[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (!url.endsWith("/reveal")) return json(secretDescribe());
+      const { key } = JSON.parse(String(init?.body)) as { key: string };
+      if (key === "password") return json({ key, value: VALUE, encoding: "utf-8" });
+      return Promise.resolve({ ok: true, json: () => new Promise((resolve) => { finishes.push(resolve); }) } as Response);
+    }));
+    wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);
+    await screen.findByTestId("secret-key-password");
+    clickReveal("password");
+    await screen.findByText(VALUE);
+    clickReveal("username");
+    await waitFor(() => expect(finishes).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Hide all" }));
+    clickReveal("username");
+    await waitFor(() => expect(finishes).toHaveLength(2));
+    await act(async () => { finishes[0]({ key: "username", value: "cancelled-secret-value", encoding: "utf-8" }); });
+    expect(screen.queryByText("cancelled-secret-value")).toBeNull();
+    expect(screen.queryByText(VALUE)).toBeNull();
+    expect((within(screen.getByTestId("secret-key-username")).getByRole("button", { name: "Revealing…" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { finishes[1]({ key: "username", value: USERNAME, encoding: "utf-8" }); });
+    expect(screen.getByText(USERNAME)).toBeTruthy();
+    expect(screen.queryByText("cancelled-secret-value")).toBeNull();
+  });
   /** Answers the describe, the YAML, and the reveal of `password` (any other key: the server's 404 words). */
   const answer = () =>
     vi.fn((url: string, init?: RequestInit) => {
