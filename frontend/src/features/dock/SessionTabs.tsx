@@ -71,7 +71,7 @@ export function SessionTabs({
 
   return (
     <div className={s.bar}>
-      <div role="tablist" aria-label="Sessions" className={s.tabs} onKeyDown={onKey}>
+      <div role="tablist" aria-label="Logs and shells" className={s.tabs} onKeyDown={onKey}>
         {sessions.map((x) => {
           const on = x.id === focused;
           const provider = knownProvider(x.cluster.provider);
@@ -116,7 +116,14 @@ export function SessionTabs({
           );
         })}
       </div>
-      <button type="button" className={s.lay} aria-pressed={layout === "split"} onClick={onToggleLayout}>
+      <button
+        type="button"
+        className={s.lay}
+        aria-pressed={layout === "split"}
+        aria-disabled={sessions.length < 2}
+        title={sessions.length < 2 ? "Open a second log or shell to see two side by side." : undefined}
+        onClick={() => { if (sessions.length >= 2) onToggleLayout(); }}
+      >
         Side by side<span className={k.k} aria-hidden="true">{capsOf("layout")[0]}</span>
       </button>
     </div>

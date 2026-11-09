@@ -9,9 +9,10 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
     rows = 24;
+    input = document.createElement("textarea");
     loadAddon() {}
-    open() {}
-    focus() {}
+    open(host: HTMLElement) { host.append(this.input); }
+    focus() { this.input.focus(); }
     write() {}
     reset() {}
     dispose() {}
@@ -143,11 +144,99 @@ describe("Dock", () => {
   it("Ctrl \\ toggles the layout", async () => {
     renderDock();
     await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
     const toggle = screen.getByRole("button", { name: /side by side/i });
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.keyDown(window, { key: "\\", ctrlKey: true });
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
     expect(dock.state.layout).toBe("split");
+  });
+
+  it("side by side is disabled with one session and says why", async () => {
+    renderDock();
+    await openShell(shell("a"));
+    const toggle = screen.getByRole("button", { name: /side by side/i });
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.getAttribute("title")).toBe("Open a second log or shell to see two side by side.");
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    fireEvent.keyDown(window, { key: "\\", ctrlKey: true });
+    expect(dock.state.layout).toBe("single");
+    await openShell(shell("b", { pod: "redis-0" }));
+    expect(toggle.getAttribute("aria-disabled")).toBe("false");
+    fireEvent.click(toggle);
+    expect(shown()).toHaveLength(2);
+  });
+
+  it.each(["logs", "shell"] as const)("two %s side by side", async (kind) => {
+    renderDock();
+    if (kind === "shell") {
+      await openShell(shell("a"));
+      await openShell(shell("b", { pod: "redis-0" }));
+    } else {
+      open({ ...shell("a"), kind });
+      open({ ...shell("b", { pod: "redis-0" }), kind });
+    }
+    fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    const panes = shown();
+    expect(panes).toHaveLength(2);
+    expect(panes[0].textContent).toContain("payments-api-xk2pq");
+    expect(panes[1].textContent).toContain("redis-0");
+  });
+
+  it.each(["a", "b"])("closing one of two side-by-side sessions shows the other alone (%s)", async (id) => {
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    expect(shown()).toHaveLength(2);
+    act(() => dock.dispatch({ type: "close", id }));
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0].textContent).toContain(id === "a" ? "redis-0" : "payments-api-xk2pq");
+  });
+
+  it("dock is labelled logs and shells", async () => {
+    renderDock();
+    expect(screen.getByRole("region", { name: "Logs and shells" }).getAttribute("data-page-keys")).toBe("off");
+    await openShell(shell("a"));
+    expect(screen.getByRole("region", { name: "Logs and shells" }).getAttribute("data-page-keys")).toBe("off");
+    expect(screen.getByRole("tablist", { name: "Logs and shells" })).toBeTruthy();
+  });
+
+  it("arrowing across session tabs keeps focus on the tabs", async () => {
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    const [a, b] = screen.getAllByRole("tab");
+    act(() => b.focus());
+    fireEvent.keyDown(b, { key: "ArrowLeft" });
+    expect(a.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(a);
+    fireEvent.keyDown(a, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(b);
+    // Clicking into a terminal still moves focus there and selects its session.
+    const input = shown()[0].querySelector("textarea")!;
+    act(() => input.focus());
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("a newly opened shell takes focus after navigating the tabs", async () => {
+    renderDock();
+    await openShell(shell("a"));
+    const tab = screen.getByRole("tab");
+    act(() => tab.focus());
+    await openShell(shell("b", { pod: "redis-0" }));
+    await waitFor(() => expect(document.activeElement).toBe(shown()[0].querySelector("textarea")));
+  });
+
+  it("Ctrl F searches the focused log when two logs are side by side", () => {
+    renderDock();
+    open({ ...shell("a"), kind: "logs" });
+    open({ ...shell("b", { pod: "redis-0" }), kind: "logs" });
+    fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    expect(document.activeElement).toBe(within(shown()[1]).getByRole("searchbox", { name: "Search logs" }));
   });
 
   it("exec failure offers a debug container", async () => {
@@ -312,6 +401,29 @@ describe("Dock", () => {
       await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(3));
       expect(selected().textContent).toContain("payments-api-xk2pq");
       expect(shown()[0].textContent).toContain("aks-prod-weu / payments / payments-api-xk2pq");
+    });
+
+    it("closing a background tab keeps a pending open's focus", async () => {
+      renderDock();
+      await openShell(shell("x"));
+      await openShell(shell("y", { pod: "redis-0" }));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      fireEvent.click(screen.getAllByRole("button", { name: /^Close shell/ })[0]);
+      await act(async () => slowAnswer());
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      expect(selected().textContent).toContain("api-a");
+      expect(shown()[0].textContent).toContain("api-a");
+    });
+
+    it("closing the focused tab cancels a pending open's focus", async () => {
+      renderDock();
+      await openShell(shell("x"));
+      await openShell(shell("y", { pod: "redis-0" }));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      fireEvent.click(screen.getAllByRole("button", { name: /^Close shell/ })[1]);
+      await act(async () => slowAnswer());
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      expect(selected().textContent).toContain("payments-api-xk2pq");
     });
 
     it("a node shell you confirmed keeps the focus", async () => {

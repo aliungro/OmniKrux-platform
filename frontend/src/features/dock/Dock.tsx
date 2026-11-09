@@ -83,6 +83,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
   const { state, dispatch, ask } = dock;
   const base = useId();
   const [viewport, setViewport] = useState(() => window.innerHeight);
+  const [focusedTab, setFocusedTab] = useState<string | null>(null);
 
   // Ctrl \ switches between one pane and side by side, even from inside a terminal.
   useEffect(() => {
@@ -119,7 +120,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
 
   if (state.sessions.length === 0) {
     return (
-      <section className={`${s.dock} ${s.empty}`} aria-label="Sessions" data-page-keys="off">
+      <section className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-page-keys="off">
         <p className={s.hint}>{EMPTY_DOCK}</p>
         {dialog}
       </section>
@@ -128,11 +129,18 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
 
   const visible = visibleSessions(state);
   const split = visible.length === 2;
-  // Ctrl F belongs to the one log pane on screen, never to a background tab.
-  const activeLogs = visible.find((x) => x.kind === "logs")?.id ?? null;
+  // Ctrl F belongs to the focused log pane, or the sole visible logs beside a shell.
+  const activeLogs = visible.find((x) => x.kind === "logs" && x.id === state.focused)?.id
+    ?? visible.find((x) => x.kind === "logs")?.id ?? null;
 
   return (
-    <section className={s.dock} style={{ height }} aria-label="Sessions" data-page-keys="off">
+    <section
+      className={s.dock}
+      style={{ height }}
+      aria-label="Logs and shells"
+      data-page-keys="off"
+      onFocusCapture={(e) => setFocusedTab((e.target as HTMLElement).closest('[role="tab"]')?.id ?? null)}
+    >
       <Grip height={height} viewport={viewport} onResize={(h) => dispatch({ type: "resize", height: h, viewport })} />
       <SessionTabs
         base={base}
@@ -151,7 +159,8 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
             id={panelId(base, x.id)}
             aria-labelledby={tabId(base, x.id)}
             hidden={!visible.includes(x)}
-            className={`${s.panel} ${x.kind === "logs" ? s.logs : s.shell}`}
+            data-first-pane={split && x === visible[0] ? "true" : undefined}
+            className={s.panel}
             // Always dispatched, even inside the selected pane: a focus is your choice, so it also cancels
             // any open still on its way (the reducer keeps the state as it is when nothing changes).
             onFocus={() => dispatch({ type: "focus", id: x.id })}
@@ -162,7 +171,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
               <LazyShellPane
                 key={x.id}
                 session={toShellSession(x)}
-                active={x.id === state.focused}
+                active={x.id === state.focused && focusedTab !== tabId(base, x.id)}
                 onStartDebug={x.debug || x.node ? undefined : () => dock.askDebug(x)}
                 onRestart={x.node ? () => dock.askRestart(x) : undefined}
                 note={shellNote(x)}

@@ -74,10 +74,10 @@ describe("dockReducer", () => {
     s = run(s, { type: "close", id: "c" });
     expect(s.focused).toBe("a");
     s = run(s, { type: "close", id: "a" });
-    expect(s).toMatchObject({ sessions: [], focused: null, last: { logs: null, shell: null } });
+    expect(s).toMatchObject({ sessions: [], focused: null, previous: null });
   });
 
-  it("split shows the focused logs and shell side by side", () => {
+  it("side by side shows the focused and the previously focused session", () => {
     let s = run(
       start(),
       { type: "open", session: session("l1", { pod: "p1" }) },
@@ -87,12 +87,31 @@ describe("dockReducer", () => {
     expect(visibleSessions(s).map((x) => x.id)).toEqual(["l2"]);
     s = dockReducer(s, { type: "toggleLayout" });
     expect(s.layout).toBe("split");
-    expect(visibleSessions(s).map((x) => x.id)).toEqual(["l2", "sh"]);
+    expect(visibleSessions(s).map((x) => x.id)).toEqual(["sh", "l2"]);
     s = dockReducer(s, { type: "focus", id: "l1" });
+    expect(visibleSessions(s).map((x) => x.id)).toEqual(["l1", "l2"]);
+    s = dockReducer(s, { type: "focus", id: "l1" }); // same focus keeps the previous session
+    expect(visibleSessions(s).map((x) => x.id)).toEqual(["l1", "l2"]);
+    s = dockReducer(s, { type: "close", id: "l2" });
+    expect(s).toMatchObject({ focused: "l1", previous: "sh" });
     expect(visibleSessions(s).map((x) => x.id)).toEqual(["l1", "sh"]);
-    s = dockReducer(s, { type: "close", id: "sh" });
-    expect(visibleSessions(s).map((x) => x.id)).toEqual(["l1"]);
     expect(dockReducer(s, { type: "toggleLayout" }).layout).toBe("single");
+  });
+
+  it("cannot toggle side by side until two sessions are open", () => {
+    expect(dockReducer(start(), { type: "toggleLayout" }).layout).toBe("single");
+    const one = dockReducer(start(), { type: "open", session: session("a") });
+    expect(dockReducer(one, { type: "toggleLayout" }).layout).toBe("single");
+  });
+
+  it("closing the focused session keeps an open previous session distinct from focus", () => {
+    let s = run(start(), ...["a", "b", "c"].map((id) => ({ type: "open" as const, session: session(id, { pod: id }) })));
+    s = run(s, { type: "focus", id: "a" }, { type: "close", id: "a" }, { type: "toggleLayout" });
+    expect(s).toMatchObject({ focused: "b", previous: "c" });
+    expect(visibleSessions(s).map((x) => x.id)).toEqual(["b", "c"]);
+    s = dockReducer(s, { type: "close", id: "b" });
+    expect(s).toMatchObject({ focused: "c", previous: null });
+    expect(visibleSessions(s).map((x) => x.id)).toEqual(["c"]);
   });
 
   it("replace puts the new session in the old one's place and focuses it", () => {
@@ -104,7 +123,7 @@ describe("dockReducer", () => {
     s = dockReducer(s, { type: "replace", id: "n1", session: session("n2", { kind: "shell", pod: "node-shell-2", cleanupPod: true, node: "w1" }) });
     expect(s.sessions.map((x) => x.id)).toEqual(["n2", "l"]);
     expect(s.focused).toBe("n2");
-    expect(s.last.shell).toBe("n2");
+    expect(s.previous).toBe("l");
     // The old tab closed while the new pod was being made: the session is added, never lost.
     s = dockReducer(s, { type: "replace", id: "gone", session: session("n3", { kind: "shell", pod: "node-shell-3", cleanupPod: true, node: "w1" }) });
     expect(s.sessions.map((x) => x.id)).toEqual(["n2", "l", "n3"]);
@@ -119,22 +138,35 @@ describe("dockReducer", () => {
     );
     s = dockReducer(s, { type: "replace", id: "n1", focus: false, session: session("n2", { kind: "shell", pod: "node-shell-2", cleanupPod: true, node: "w1" }) });
     expect(s.sessions.map((x) => x.id)).toEqual(["n2", "l"]);
-    expect(s).toMatchObject({ focused: "l", last: { logs: "l", shell: "n2" } });
+    expect(s).toMatchObject({ focused: "l", previous: "n2" });
     // Still on the old tab: its replacement is where you are, so it takes the focus.
     s = dockReducer(s, { type: "focus", id: "n2" });
     s = dockReducer(s, { type: "replace", id: "n2", focus: false, session: session("n3", { kind: "shell", pod: "node-shell-3", cleanupPod: true, node: "w1" }) });
     expect(s.focused).toBe("n3");
+    expect(s.previous).toBe("l");
   });
 
   it("an open without focus adds the tab and leaves the focused one alone", () => {
     let s = run(start(), { type: "open", session: session("a") });
     s = dockReducer(s, { type: "open", session: session("b", { kind: "shell" }), focus: false });
     expect(s.sessions.map((x) => x.id)).toEqual(["a", "b"]);
-    expect(s).toMatchObject({ focused: "a", last: { logs: "a", shell: "b" } });
+    expect(s).toMatchObject({ focused: "a", previous: null });
     s = dockReducer(s, { type: "open", session: session("c"), focus: false }); // same target as "a"
     expect(s.sessions).toHaveLength(2);
     // Nothing focused yet (an empty dock): the tab is shown.
     expect(dockReducer(start(), { type: "open", session: session("d"), focus: false }).focused).toBe("d");
+  });
+
+  it("closing an unrelated background session does not invent a previous focus", () => {
+    const s = run(start(),
+      { type: "open", session: session("a") },
+      { type: "open", session: session("b", { pod: "b" }), focus: false },
+      { type: "open", session: session("c", { pod: "c" }), focus: false },
+      { type: "close", id: "b" },
+      { type: "toggleLayout" },
+    );
+    expect(s).toMatchObject({ focused: "a", previous: null });
+    expect(visibleSessions(s).map((x) => x.id)).toEqual(["a"]);
   });
 });
 

@@ -97,8 +97,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "previousMatch", scope: "logs", keys: ["Shift", "Enter"], label: "Previous match" },
   { id: "jumpLive", scope: "logs", keys: ["G"], match: ["G"], label: "Jump to live" },
   // In the dock.
-  { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch between one pane and side by side" },
-  { id: "sessionTabs", scope: "dock", keys: ["←", "→"], label: "Move between session tabs" },
+  { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch the bottom dock between one pane and side by side" },
+  { id: "sessionTabs", scope: "dock", keys: ["←", "→"], label: "Move between open logs and shells (bottom dock)" },
 ];
 
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));
@@ -127,7 +127,7 @@ export function barFor(kindKey: string): Shortcut[] {
 
 export type ShortcutGroup = readonly [title: string, rows: readonly Shortcut[]];
 
-const GROUP_TITLES: Record<Shortcut["scope"], string> = { row: "Rows", global: "Anywhere", logs: "Logs", dock: "Dock" };
+const GROUP_TITLES: Record<Shortcut["scope"], string> = { row: "Rows", global: "Anywhere", logs: "Logs", dock: "Logs and shells (bottom dock)" };
 
 /** The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's. */
 export function allGroups(kindKey?: string): ShortcutGroup[] {

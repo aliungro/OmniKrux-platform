@@ -185,7 +185,7 @@ describe("Shortcut bar", () => {
     fireEvent.keyDown(document.body, { key: "?" });
     const all = screen.getByRole("dialog", { name: "All shortcuts" });
     expect(all.textContent).toContain("Previous logs");
-    expect(all.textContent).toContain("Switch between one pane and side by side");
+    expect(all.textContent).toContain("Switch the bottom dock between one pane and side by side");
     fireEvent.keyDown(all, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "All shortcuts" })).toBeNull();
   });
@@ -230,7 +230,7 @@ describe("Console dock wiring", () => {
     expect(first.getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first, { key: "l" });
-    expect(await within(await screen.findByRole("tablist", { name: "Sessions" })).findByRole("tab")).toBeTruthy();
+    expect(await within(await screen.findByRole("tablist", { name: "Logs and shells" })).findByRole("tab")).toBeTruthy();
     await waitFor(() => expect(FakeWebSocket.last.params.get("pod")).toBe("alpha"));
   });
 
@@ -249,7 +249,7 @@ describe("Console dock wiring", () => {
     expect(document.activeElement).toBe(row);
     tab.focus();
     fireEvent.keyDown(tab, { key: "l" });
-    expect(await within(await screen.findByRole("tablist", { name: "Sessions" })).findByRole("tab")).toBeTruthy();
+    expect(await within(await screen.findByRole("tablist", { name: "Logs and shells" })).findByRole("tab")).toBeTruthy();
   });
 
   it("row keys are not taken from the dock or a dialog", async () => {
@@ -259,7 +259,7 @@ describe("Console dock wiring", () => {
     renderConsole();
     const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
     fireEvent.keyDown(row, { key: "l" });
-    const sessions = await screen.findByRole("tablist", { name: "Sessions" });
+    const sessions = await screen.findByRole("tablist", { name: "Logs and shells" });
     const tab = await within(sessions).findByRole("tab");
     tab.focus();
     await user.keyboard("lp"); // p would create a distinct previous-logs session
@@ -280,7 +280,7 @@ describe("Console dock wiring", () => {
     const input = screen.getByPlaceholderText("Filter by name, label or image");
     await user.type(input, "l");
     expect((input as HTMLInputElement).value).toBe("l");
-    expect(screen.queryByRole("tablist", { name: "Sessions" })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "Logs and shells" })).toBeNull();
   });
 
   it("enter on a chrome button still activates it", async () => {
@@ -310,7 +310,7 @@ describe("Console dock wiring", () => {
     const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
     row.focus();
     fireEvent.keyDown(row, { key: "l" });
-    const sessions = () => within(screen.getByRole("tablist", { name: "Sessions" })).getAllByRole("tab");
+    const sessions = () => within(screen.getByRole("tablist", { name: "Logs and shells" })).getAllByRole("tab");
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const [tab] = sessions();
     expect(tab.textContent).toContain("KIND");
@@ -342,7 +342,7 @@ describe("Console dock wiring", () => {
     clusters = [];
     watch.opts?.onClusterRemoved?.("c1");
     expect(await screen.findByText("No clusters yet. Mount your kubeconfig at /kube/config and restart the console.")).toBeTruthy();
-    expect(within(screen.getByRole("tablist", { name: "Sessions" })).getAllByRole("tab")).toHaveLength(1);
+    expect(within(screen.getByRole("tablist", { name: "Logs and shells" })).getAllByRole("tab")).toHaveLength(1);
     expect(ws.closedByClient).toBe(false);
     expect(FakeWebSocket.instances).toHaveLength(1);
   });

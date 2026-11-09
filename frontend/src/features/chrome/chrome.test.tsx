@@ -308,6 +308,14 @@ describe("ShortcutBar per kind", () => {
     expect(anywhere).toContain("Jump to any kind");
     expect(anywhere).toContain("Ctrl K");
     expect(within(sheet).getByRole("region", { name: "Logs" }).textContent).toContain("Jump to live");
-    expect(within(sheet).getByRole("region", { name: "Dock" }).textContent).toContain("Ctrl \\");
+    expect(within(sheet).getByRole("region", { name: "Logs and shells (bottom dock)" }).textContent).toContain("Ctrl \\");
+  });
+
+  it("help sheet names the bottom dock", () => {
+    render(<ShortcutBar kind="pods" />);
+    fireEvent.click(screen.getByRole("button", { name: /all shortcuts/ }));
+    const group = within(screen.getByRole("dialog", { name: "All shortcuts" })).getByRole("region", { name: "Logs and shells (bottom dock)" });
+    expect(group.textContent).toContain("Move between open logs and shells (bottom dock)");
+    expect(group.textContent).toContain("Switch the bottom dock between one pane and side by side");
   });
 });

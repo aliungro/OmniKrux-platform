@@ -31,7 +31,7 @@ export interface Ask {
 
 export interface DockApi {
   state: DockState;
-  /** A focus or close through here is your choice: no open still on its way takes focus after it. */
+  /** A focus choice or closing the focused tab cancels pending opens' focus. */
   dispatch: Dispatch<DockAction>;
   /** Logs (optionally the previous run) or a shell for a pod row. */
   openPod: (row: ResourceRow, kind: SessionKind, opts?: { previous?: boolean }) => void;
@@ -79,11 +79,13 @@ export function useDock(clusters: Cluster[]): DockApi {
    * The newest open request, or focus choice of yours. Opens wait for the pod's describe (or the
    * server), so they can finish out of order; one takes focus only if nothing newer happened
    * meanwhile (another open, a confirmed node shell or debug container, a tab you clicked or
-   * closed), or a slow one would pull your keystrokes to another pod (or cluster).
+   * closed while focused), or a slow one would pull your keystrokes to another pod (or cluster).
    */
   const latestOpen = useRef(0);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const dispatch = useCallback((action: DockAction) => {
-    if (action.type === "focus" || action.type === "close") latestOpen.current += 1;
+    if (action.type === "focus" || (action.type === "close" && action.id === stateRef.current.focused)) latestOpen.current += 1;
     dispatchNow(action);
   }, []);
   const newId = useCallback(() => `s${++nextId.current}`, []);
