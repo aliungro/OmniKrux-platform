@@ -77,7 +77,7 @@ export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
 
   return (
     <>
-      <nav className={s.keys} aria-label="Keyboard shortcuts">
+      <nav className={s.keys} aria-label="Keyboard shortcuts" data-page-keys>
         <ul className={s.strip}>
           {barFor(kind).map((x) => (
             <li key={x.id} className={s.item}>

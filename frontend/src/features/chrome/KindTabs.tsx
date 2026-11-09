@@ -100,7 +100,7 @@ export function KindTabs({
   };
 
   return (
-    <nav className={s.kinds} aria-label="Resource kinds">
+    <nav className={s.kinds} aria-label="Resource kinds" data-page-keys>
       <div role="tablist" aria-label="Kinds" className={s.list} onKeyDown={onKey}>
         {tabs.map((t) => {
           const on = t.key === shown;

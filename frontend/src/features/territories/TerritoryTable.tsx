@@ -16,7 +16,8 @@ import type { MetricsLookup } from "../../api/useMetrics";
 import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/types";
 import { rowActions, type RowAction } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
-import { pressed, rowShortcut } from "../chrome/shortcuts";
+import { pageKey, pressed, rowShortcut } from "../chrome/shortcuts";
+import { routesPageKeys } from "../chrome/pageKeys";
 import { Inspector, type WorkloadLogs } from "../inspector/Inspector";
 import type { ToolIntent } from "../inspector/Tools";
 import { flatten, kindTitle, rowKey, type RowRef, type Selection, type Territory } from "./model";
@@ -206,7 +207,7 @@ export const TerritoryTable = memo(function TerritoryTable({
     if (it?.type === "row") actRef.current(it.row, request.action, "palette");
   }, [request, indexByKey, items]);
 
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+  const runRowKey = (e: KeyboardEvent<HTMLDivElement> | globalThis.KeyboardEvent, at: number | undefined, fromPage = false) => {
     // Escape closes the details from the row or from inside them.
     if (pressed("close", e)) {
       if (!open) return;
@@ -214,9 +215,6 @@ export const TerritoryTable = memo(function TerritoryTable({
       close();
       return;
     }
-    // Everything else acts on a focused row, never on keys typed inside the details.
-    const key = (e.target as HTMLElement).dataset?.rowKey;
-    const at = key === undefined ? undefined : indexByKey.get(key);
     if (at === undefined) return;
     const it = items[at];
     if (it.type !== "row") return;
@@ -225,6 +223,16 @@ export const TerritoryTable = memo(function TerritoryTable({
     const id = rowShortcut(e, kind.key, rowActions(kind.key, kind.verbs, it.row, can));
     if (id === undefined) return;
     e.preventDefault();
+    if (fromPage) {
+      const key = rowKey(it.row.cluster_id, it.row.uid);
+      const el = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])
+        .find((n) => n.dataset.rowKey === key);
+      if (el) el.focus({ preventScroll: true });
+      else {
+        focusPending.current = true;
+        virtualizer.scrollToIndex(at, { align: "auto" });
+      }
+    }
     // A held `x` must not walk on into the secret's keys and reveal one (audited) by itself.
     if (id === "reveal" && e.repeat) return;
     if (id === "move") {
@@ -241,6 +249,42 @@ export const TerritoryTable = memo(function TerritoryTable({
     }
     act(it.row, id as RowAction, "key");
   };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Everything except Escape acts on a focused row, never on keys inside the details.
+    const key = (e.target as HTMLElement).dataset?.rowKey;
+    runRowKey(e, key === undefined ? undefined : indexByKey.get(key));
+  };
+
+  const onPageKey = (e: globalThis.KeyboardEvent) => {
+    if (!pageKey(e) || !routesPageKeys(e.target)) return;
+    // Keep native activation and navigation on chrome controls (including nested button icons).
+    if (["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
+      && e.target instanceof Element
+      && e.target.closest('button, a[href], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], summary')) return;
+    const at = selectedKey === null ? undefined : indexByKey.get(selectedKey);
+    if (at === undefined && pressed("move", e)) {
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      let edge = step === 1 ? 0 : items.length - 1;
+      while (edge >= 0 && edge < items.length && items[edge].type !== "row") edge += step;
+      const it = items[edge];
+      if (it?.type !== "row") return;
+      e.preventDefault();
+      focusPending.current = true;
+      scrollPending.current = true;
+      scrollAlign.current = "auto";
+      select(it.row);
+      return;
+    }
+    runRowKey(e, at, true);
+  };
+  const pageKeyRef = useRef(onPageKey);
+  pageKeyRef.current = onPageKey;
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => pageKeyRef.current(e);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   // Bring the selected row into view, then focus it once the virtualizer has rendered it.
   useLayoutEffect(() => {

@@ -167,7 +167,7 @@ export function FilterBar({
   );
 
   return (
-    <div className={s.filters} role="group" aria-label="Filter rows">
+    <div className={s.filters} role="group" aria-label="Filter rows" data-page-keys>
       {chips.length > 0 && chip("all", "All")}
       {/* No number until a cluster has reported one: never a made-up 0. */}
       {chips.map((c) => chip(c.status, counts[c.status] === undefined ? c.label : `${c.label} ${counts[c.status]}`, c.icon))}

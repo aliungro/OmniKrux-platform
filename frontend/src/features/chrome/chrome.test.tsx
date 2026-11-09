@@ -5,12 +5,70 @@ import { ShortcutBar } from "./ShortcutBar";
 import { FilterBar } from "./FilterBar";
 import { TopBar } from "./TopBar";
 import { KindTabs } from "./KindTabs";
+import { pressed, SHORTCUTS, type Shortcut } from "./shortcuts";
+import { focusTableRow, routesPageKeys } from "./pageKeys";
 import { chipsFor } from "../territories/model";
 import { DEPLOYMENTS, EVENTS, KINDS, NODES, PODS } from "../../test/kinds";
 
 const POD_CHIPS = chipsFor(PODS);
 
 afterEach(cleanup);
+
+describe("shortcut modifiers", () => {
+  it("pressed requires alt exactly when the shortcut says so", () => {
+    const event = { key: "l", code: "KeyL", ctrlKey: false, metaKey: false, altKey: false };
+    expect(pressed("logs", { ...event, altKey: true })).toBe(false);
+    // Temporarily give a registry entry the future Alt shortcut contract, without registering one.
+    const shortcut = SHORTCUTS.find((s) => s.id === "logs")!;
+    const original = { ...shortcut };
+    try {
+      Object.assign(shortcut, { alt: true, code: ["KeyL"] } as Partial<Shortcut>);
+      expect(pressed("logs", event)).toBe(false);
+      expect(pressed("logs", { ...event, key: "¬", altKey: true })).toBe(true);
+      expect(pressed("logs", { ...event, altKey: true, ctrlKey: true })).toBe(false);
+      expect(pressed("logs", { ...event, altKey: true, metaKey: true })).toBe(false);
+    } finally {
+      delete shortcut.alt;
+      delete shortcut.code;
+      Object.assign(shortcut, original);
+    }
+  });
+});
+
+describe("page key ownership", () => {
+  it("routes only the page and marked chrome, respecting nested owners", () => {
+    render(<main data-page-keys>
+      <button>Page action</button>
+      <div role="grid"><button>Row action</button></div>
+      <section data-page-keys="off"><button>Dock action</button></section>
+      <div role="dialog"><button>Dialog action</button></div>
+      <div role="listbox"><span>List option</span></div>
+      <div role="menu"><button>Menu action</button></div>
+      <input aria-label="Field" />
+      <div contentEditable suppressContentEditableWarning><span>Editor text</span></div>
+    </main>);
+    expect(routesPageKeys(null)).toBe(true);
+    expect(routesPageKeys(document.body)).toBe(true);
+    expect(routesPageKeys(document.documentElement)).toBe(true);
+    expect(routesPageKeys(screen.getByText("Page action"))).toBe(true);
+    for (const text of ["Row action", "Dock action", "Dialog action", "List option", "Menu action", "Editor text"]) {
+      expect(routesPageKeys(screen.getByText(text))).toBe(false);
+    }
+    expect(routesPageKeys(screen.getByLabelText("Field"))).toBe(false);
+    const unmarked = document.createElement("button");
+    expect(routesPageKeys(unmarked)).toBe(false);
+  });
+
+  it("focuses the grid's tab-stop row, or reports that no row is available", () => {
+    expect(focusTableRow()).toBe(false);
+    render(<div role="grid">
+      <div data-row-key="first" tabIndex={-1}>First</div>
+      <div data-row-key="selected" tabIndex={0}>Selected</div>
+    </div>);
+    expect(focusTableRow()).toBe(true);
+    expect(document.activeElement).toBe(screen.getByText("Selected"));
+  });
+});
 
 describe("FilterBar", () => {
   it("slash focuses the filter, escape clears it", () => {

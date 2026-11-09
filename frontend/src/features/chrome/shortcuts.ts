@@ -55,6 +55,8 @@ export interface Shortcut {
   code?: string[];
   /** Needs Ctrl (or Cmd) held; every other shortcut works only without them. */
   ctrl?: boolean;
+  /** Needs Alt held exactly; Ctrl+Alt (AltGr) never matches an Alt-only shortcut. */
+  alt?: boolean;
   /** For the strip along the bottom; absent: sheet only. */
   bar?: string;
 }
@@ -140,10 +142,10 @@ export const ALL_GROUPS: readonly ShortcutGroup[] = allGroups();
 
 type Pressed = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean };
 
-/** Whether a key press is this shortcut: its key, and Ctrl (or Cmd) held exactly when it needs it. */
+/** Match the key or physical code, with Alt and Ctrl (or Cmd) held exactly when required. */
 export function pressed(id: ShortcutId, e: Pressed): boolean {
   const s = byId(id);
-  if (e.altKey || !!s.ctrl !== (e.ctrlKey || e.metaKey)) return false;
+  if (e.altKey !== !!s.alt || !!s.ctrl !== (e.ctrlKey || e.metaKey)) return false;
   return (s.match?.includes(e.key) ?? false) || (e.code !== undefined && (s.code?.includes(e.code) ?? false));
 }
 

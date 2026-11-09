@@ -2,11 +2,13 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import { applyMessage, emptyWatchState, type WatchState } from "./api/watchState";
 import type { WatchOptions } from "./api/useWatch";
 import { FakeWebSocket } from "./features/logs/fakeWebSocket";
 import { Console } from "./App";
 import { KINDS } from "./test/kinds";
+import { container } from "./test/describe";
 
 // The dock imports the terminal; jsdom has no canvas for it, and these tests open no shell.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
@@ -193,10 +195,10 @@ describe("Console dock wiring", () => {
   const describeBody = {
     pod: { name: "crasher-1", namespace: "default", status: "CrashLoopBackOff", status_class: "bad", node: "n1", pod_ip: null, host_ip: null, qos: null, service_account: null, owner: null, started_at: null, resource_version: "1" },
     containers: [
-      { name: "sidecar", state: "Running", state_class: "ok" },
-      { name: "app", state: "Waiting: CrashLoopBackOff", state_class: "bad" },
+      container({ name: "sidecar", state: "Running", state_class: "ok", restarts: 0, limit_hit: [] }),
+      container({ name: "app", state: "Waiting: CrashLoopBackOff", state_class: "bad" }),
     ],
-    init_containers: [{ name: "init", state: "Terminated: Completed (exit 0)", state_class: "done" }],
+    init_containers: [container({ name: "init", state: "Terminated: Completed (exit 0)", state_class: "done" })],
     ephemeral_containers: [], volumes: [],
     conditions: [], labels: {}, annotations: {}, events: [], events_error: null,
   };
@@ -216,6 +218,90 @@ describe("Console dock wiring", () => {
       { type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [pod("crasher-1", "CrashLoopBackOff", "bad")] },
     );
     vi.stubGlobal("fetch", routes((url) => (url.endsWith("/describe") ? describeBody : [cluster])));
+  });
+
+  it("row keys work on load without a click", async () => {
+    watch.state = applyMessage(watch.state!, { type: "snapshot", cluster_id: "c1", part: 0, last: true,
+      rows: [pod("alpha", "Running", "ok"), pod("beta", "Running", "ok"), pod("gamma", "Running", "ok")] });
+    renderConsole();
+    const first = (await screen.findByText("alpha")).closest<HTMLElement>('[role="row"]')!;
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: "ArrowDown" });
+    expect(first.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "l" });
+    expect(await within(await screen.findByRole("tablist", { name: "Sessions" })).findByRole("tab")).toBeTruthy();
+    await waitFor(() => expect(FakeWebSocket.last.params.get("pod")).toBe("alpha"));
+  });
+
+  it("row keys act on the selected row while a kind tab has focus", async () => {
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.click(row);
+    const tab = screen.getByRole("tab", { name: /^Pods/ });
+    fireEvent.click(tab);
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "d" });
+    expect(screen.queryByRole("region", { name: "Details for crasher-1" })).toBeNull();
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "d" });
+    expect(screen.getByRole("region", { name: "Details for crasher-1" })).toBeTruthy();
+    expect(document.activeElement).toBe(row);
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "l" });
+    expect(await within(await screen.findByRole("tablist", { name: "Sessions" })).findByRole("tab")).toBeTruthy();
+  });
+
+  it("row keys are not taken from the dock or a dialog", async () => {
+    const user = userEvent.setup();
+    watch.state = applyMessage(watch.state!, { type: "snapshot", cluster_id: "c1", part: 0, last: true,
+      rows: [pod("crasher-1", "CrashLoopBackOff", "bad"), pod("other", "Running", "ok")] });
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.keyDown(row, { key: "l" });
+    const sessions = await screen.findByRole("tablist", { name: "Sessions" });
+    const tab = await within(sessions).findByRole("tab");
+    tab.focus();
+    await user.keyboard("lp"); // p would create a distinct previous-logs session
+    expect(within(sessions).getAllByRole("tab")).toHaveLength(1);
+    expect(document.activeElement).toBe(tab);
+    fireEvent.keyDown(document.body, { key: "?" });
+    const dialog = screen.getByRole("dialog", { name: "All shortcuts" });
+    fireEvent.keyDown(dialog, { key: "ArrowDown" });
+    expect(row.getAttribute("aria-selected")).toBe("true");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("typed keys in a field never act on rows", async () => {
+    const user = userEvent.setup();
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.click(row);
+    const input = screen.getByPlaceholderText("Filter by name, label or image");
+    await user.type(input, "l");
+    expect((input as HTMLInputElement).value).toBe("l");
+    expect(screen.queryByRole("tablist", { name: "Sessions" })).toBeNull();
+  });
+
+  it("enter on a chrome button still activates it", async () => {
+    const user = userEvent.setup();
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.keyDown(row, { key: "l" }); // select without opening details
+    const button = screen.getByRole("button", { name: "Commands and kinds" });
+    button.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("dialog", { name: "Commands" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Details for crasher-1" })).toBeNull();
+  });
+
+  it("closing the palette opened from the page puts focus on the table row", async () => {
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: ":" });
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(document.activeElement).toBe(row);
   });
 
   it("l opens the selected pod's logs, p its previous run, both labelled with the cluster", async () => {

@@ -13,6 +13,7 @@ import { FilterBar } from "./features/chrome/FilterBar";
 import { KindTabs } from "./features/chrome/KindTabs";
 import { ShortcutBar } from "./features/chrome/ShortcutBar";
 import { TopBar } from "./features/chrome/TopBar";
+import { focusTableRow } from "./features/chrome/pageKeys";
 import { ForwardsMenu } from "./features/portforward/ForwardsMenu";
 import { usePortForwards } from "./features/portforward/usePortForwards";
 import { CommandPalette, usePaletteKeys, type PaletteMode, type PaletteSelection } from "./features/palette/CommandPalette";
@@ -194,8 +195,9 @@ export function Console() {
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   usePaletteKeys(setPalette);
   const onClosePalette = useCallback(() => setPalette(null), []);
-  // After a kind jump the row that had focus is gone: the kind's tab takes it.
-  const focusActiveKind = useCallback(() => {
+  // Return to the table after a page-opened palette; an empty view falls back to its kind tab.
+  const focusAfterPalette = useCallback(() => {
+    if (focusTableRow()) return;
     document.querySelector<HTMLElement>('[role="tablist"][aria-label="Kinds"] [role="tab"][aria-selected="true"]')?.focus();
   }, []);
   const onPalette = useCallback(() => setPalette("all"), []);
@@ -232,7 +234,7 @@ export function Console() {
   if (route.view === "audit") {
     // The audit log needs no cluster to read: it is the record of what was done.
     body = (
-      <main className={s.main}>
+      <main className={s.main} data-page-keys>
         <AuditView onBack={onBackFromAudit} />
       </main>
     );
@@ -265,7 +267,7 @@ export function Console() {
         />
         <FilterBar value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} />
         <NavigationNotice text={nav.notice} waiting={nav.waiting} />
-        <main className={s.main}>
+        <main className={s.main} data-page-keys>
           <TerritoryTable
             territories={shown}
             kind={kind}
@@ -316,7 +318,7 @@ export function Console() {
               onAudit={onAuditView}
               onForwards={onForwards}
               onClose={onClosePalette}
-              onFocusLost={focusActiveKind}
+              onFocusLost={focusAfterPalette}
             />
           )}
         </div>

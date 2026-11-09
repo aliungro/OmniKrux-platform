@@ -64,6 +64,23 @@ const podRow = (name: string) => screen.getByText(name).closest('[role="row"]') 
 const inspector = () => screen.queryByRole("region", { name: /^Details for/ });
 
 describe("selection", () => {
+  it("up from the page selects and focuses the last row when no row is selected", () => {
+    renderTable(3);
+    fireEvent.keyDown(document.body, { key: "ArrowUp" });
+    expect(podRow("pod-2").getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(podRow("pod-2"));
+  });
+
+  it("page escape closes details, and unrelated keys keep their default", () => {
+    renderTable(3);
+    fireEvent.click(podRow("pod-1"));
+    podRow("pod-1").blur();
+    expect(fireEvent.keyDown(document.body, { key: "q" })).toBe(true);
+    expect(inspector()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(inspector()).toBeNull();
+  });
+
   it("enter opens inspector under the row and escape closes it", () => {
     renderTable(5);
     const r = podRow("pod-1");

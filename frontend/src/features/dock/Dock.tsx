@@ -119,7 +119,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
 
   if (state.sessions.length === 0) {
     return (
-      <section className={`${s.dock} ${s.empty}`} aria-label="Sessions">
+      <section className={`${s.dock} ${s.empty}`} aria-label="Sessions" data-page-keys="off">
         <p className={s.hint}>{EMPTY_DOCK}</p>
         {dialog}
       </section>
@@ -132,7 +132,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
   const activeLogs = visible.find((x) => x.kind === "logs")?.id ?? null;
 
   return (
-    <section className={s.dock} style={{ height }} aria-label="Sessions">
+    <section className={s.dock} style={{ height }} aria-label="Sessions" data-page-keys="off">
       <Grip height={height} viewport={viewport} onResize={(h) => dispatch({ type: "resize", height: h, viewport })} />
       <SessionTabs
         base={base}

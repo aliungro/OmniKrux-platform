@@ -43,7 +43,7 @@ export function TopBar({
   onPalette?: () => void;
 }) {
   return (
-    <header className={s.top}>
+    <header className={s.top} data-page-keys>
       <div className={s.logo}>
         <Logo />
         Omnikrux
