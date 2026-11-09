@@ -254,6 +254,17 @@ export function matchesFilter(row: ResourceRow, f: Filters, now: Date, kind: Pic
   return compileFilters(f, typeof kind === "string" ? { key: kind, columns: [] } : kind, now)(row);
 }
 
+/** Keep each independent filter that still shows a navigation target. */
+export function showingFilters(row: ResourceRow, f: Filters, kind: Pick<KindInfo, "key" | "columns">, now: Date): Filters {
+  const columns = compileColumnFilters(f.columns, kind.columns, now).matching(row);
+  const status = matchesStatus(row, f.status, now, kind.key) ? f.status : "all";
+  const q = f.text.trim().toLowerCase();
+  const text = q === "" || matchesText(row, q) ? f.text : "";
+  const namespace = f.namespace === null || row.namespace === null || f.namespace === row.namespace ? f.namespace : null;
+  return status === f.status && namespace === f.namespace && text === f.text && columns.length === f.columns.length
+    ? f : { ...f, status, namespace, text, columns };
+}
+
 const RANK: Record<StatusClass, number> = { bad: 0, warn: 1, ok: 2, done: 2 };
 const byName = new Intl.Collator(undefined, { numeric: true }).compare;
 
@@ -342,8 +353,9 @@ export function buildTerritories(
   now: Date,
   kind: KindInfo = POD_KIND,
 ): Territory[] {
-  // Filters only read `now` for its local day, which can't change within a minute.
-  const minute = Math.floor(now.getTime() / 60_000);
+  // Relative time filters can cross their boundary at any instant.
+  const minute = f.columns.some(c => c.op === "within" || c.op === "olderThan")
+    ? now.getTime() : Math.floor(now.getTime() / 60_000);
   const filterKey = [kind.key, kind.sort, f.status, f.namespace ?? "", f.text.trim().toLowerCase(), JSON.stringify(f.columns), JSON.stringify(f.sort)].join("\u0000");
   const predicate = compileFilters(f, kind, now);
   return clusters.map((cluster) => {

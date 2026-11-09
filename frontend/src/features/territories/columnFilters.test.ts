@@ -22,3 +22,28 @@ it("column filters over 10,000 rows run in one pass", () => {
   const rows = Array.from({length:10_000}, (_, i) => row(String(i), {node:`node-${i % 2}`}));
   const start = performance.now(); expect(rows.filter(predicate)).toHaveLength(5000); expect(performance.now() - start).toBeLessThan(1000);
 });
+
+it("labels every filter variant", () => {
+ const c=col("Node");
+ expect(chipLabel({key:"x",op:"contains",text:"api"},c)).toBe('Node contains "api"');
+ expect(chipLabel({key:"x",op:"oneOf",values:[""]},c)).toBe("Node: (none)");
+ expect(chipLabel({key:"x",op:"oneOf",values:["a","b"]},c)).toBe("Node: a, b");
+ expect(chipLabel({key:"x",op:"within",seconds:3600},c)).toBe("Node: within 1 h");
+ expect(chipLabel({key:"x",op:"olderThan",seconds:300},c)).toBe("Node: older than 5 min");
+ expect(chipLabel({key:"x",op:"between",min:1,max:3},c)).toBe("Node: 1–3");
+ expect(chipLabel({key:"x",op:"between",min:1,max:null},c)).toBe("Node: ≥ 1");
+ expect(chipLabel({key:"x",op:"between",min:null,max:3},c)).toBe("Node: ≤ 3");
+});
+it("missing values fail time and number filters and both numeric bounds are inclusive", () => {
+ const t=col("at","time"), n=col("n","number");
+ expect(compileColumnFilters([{key:"at",op:"within",seconds:300}],[t],now)(row("x"))).toBe(false);
+ expect(compileColumnFilters([{key:"at",op:"olderThan",seconds:300}],[t],now)(row("x"))).toBe(false);
+ const p=compileColumnFilters([{key:"n",op:"between",min:1,max:3}],[n],now);
+ expect([p(row("x")),p(row("x",{n:1})),p(row("x",{n:3})),p(row("x",{n:4}))]).toEqual([false,true,true,false]);
+});
+it("rejects malformed persisted filters and accepts UI pick values", () => {
+ expect(validColumnFilter({key:"x",op:"oneOf",values:Array(201).fill("a")})).toBeNull();
+ expect(validColumnFilter({key:"x",op:"within",seconds:-1})).toBeNull();
+ expect(validColumnFilter({key:"x",op:"between",min:null,max:null})).toBeNull();
+ expect(validColumnFilter({key:"x",op:"oneOf",values:["x".repeat(501)]})).not.toBeNull();
+});

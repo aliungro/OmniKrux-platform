@@ -12,7 +12,7 @@ import {
 } from "react";
 import type { Cluster, KindInfo, Link, ResourceRow } from "../../api/types";
 import type { WatchState } from "../../api/watchState";
-import { fallbackKind, matchesFilter, NO_FILTER, type Filters, type Selection } from "../territories/model";
+import { fallbackKind, showingFilters, type Filters, type Selection } from "../territories/model";
 import s from "./navigation.module.css";
 
 /** Where a link goes: the object, on the cluster the link was read from. */
@@ -64,15 +64,7 @@ function kindLabel(kinds: KindInfo[] | undefined, key: string): string {
 
 /** Filters that would hide `row`, reset; filters that already show it, kept. */
 function showing(row: ResourceRow, kind: Pick<KindInfo, "key" | "columns">) {
-  return (f: Filters): Filters => {
-    const now = new Date();
-    const status = matchesFilter(row, { ...NO_FILTER, status: f.status }, now, kind) ? f.status : "all";
-    // A cluster-scoped kind ignores the namespace filter (and keeps it for later).
-    const namespace = f.namespace === null || row.namespace === null || f.namespace === row.namespace ? f.namespace : null;
-    const text = matchesFilter(row, { ...NO_FILTER, text: f.text }, now, kind) ? f.text : "";
-    const columns = f.columns.filter(column => matchesFilter(row, { ...NO_FILTER, columns: [column] }, now, kind));
-    return status === f.status && namespace === f.namespace && text === f.text && columns.length === f.columns.length ? f : { ...f, status, namespace, text, columns };
-  };
+  return (f: Filters): Filters => showingFilters(row, f, kind, new Date());
 }
 
 export interface NavigatorOptions {

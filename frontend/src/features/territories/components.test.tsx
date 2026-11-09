@@ -541,3 +541,12 @@ it("events filter by last seen within 1 h", () => {
   fireEvent.click(screen.getByRole("button",{name:"Apply"}));
   expect(onFilter).toHaveBeenCalledWith("last_seen",{key:"last_seen",op:"within",seconds:3600});
 });
+
+it("limits a large pick list and lets search reach any value", () => {
+  const source = [terr({rows:Array.from({length:1000},(_,i)=>pod({uid:String(i),columns:{node:`node-${i}`}}))})];
+  render(<Table territories={source} pickSource={source} kind={PODS} onRetry={()=>{}} />);
+  fireEvent.click(screen.getByRole("button",{name:"Filter by Node"}));
+  expect(screen.getAllByRole("checkbox").length).toBeLessThanOrEqual(100);
+  fireEvent.change(screen.getByPlaceholderText("Find a value"),{target:{value:"node-999"}});
+  expect(screen.getByLabelText(/node-999/)).toBeTruthy();
+});
