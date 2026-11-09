@@ -73,32 +73,32 @@ describe("page key ownership", () => {
 describe("FilterBar", () => {
   it("slash focuses the filter, escape clears it", () => {
     const onChange = vi.fn();
-    render(<FilterBar value={{ status: "all", text: "abc", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={{ failing: 2, pending: 1, restartedToday: 4 }} />);
+    render(<FilterBar value={{ columns: [] as [], sort: null, status: "all", text: "abc", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={{ failing: 2, pending: 1, restartedToday: 4 }} />);
     fireEvent.keyDown(document.body, { key: "/" });
     const input = screen.getByPlaceholderText("Filter by name, label or image");
     expect(document.activeElement).toBe(input);
     fireEvent.keyDown(input, { key: "Escape" });
-    expect(onChange).toHaveBeenCalledWith({ status: "all", text: "", namespace: null });
+    expect(onChange).toHaveBeenCalledWith({ columns: [] as [], sort: null, status: "all", text: "", namespace: null });
   });
   it("chips show counts and select status", () => {
     const onChange = vi.fn();
-    render(<FilterBar value={{ status: "all", text: "", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={{ failing: 2, pending: 1, restartedToday: 4 }} />);
+    render(<FilterBar value={{ columns: [] as [], sort: null, status: "all", text: "", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={{ failing: 2, pending: 1, restartedToday: 4 }} />);
     fireEvent.click(screen.getByRole("button", { name: /Failing 2/ }));
-    expect(onChange).toHaveBeenCalledWith({ status: "failing", text: "", namespace: null });
+    expect(onChange).toHaveBeenCalledWith({ columns: [] as [], sort: null, status: "failing", text: "", namespace: null });
   });
 });
 
 describe("FilterBar details", () => {
   const counts = { failing: 2, pending: 1, restartedToday: 4 };
   it("escape blurs the filter", () => {
-    render(<FilterBar value={{ status: "all", text: "abc", namespace: null }} onChange={() => {}} chips={POD_CHIPS} namespaces={[]} counts={counts} />);
+    render(<FilterBar value={{ columns: [] as [], sort: null, status: "all", text: "abc", namespace: null }} onChange={() => {}} chips={POD_CHIPS} namespaces={[]} counts={counts} />);
     const input = screen.getByPlaceholderText("Filter by name, label or image");
     input.focus();
     fireEvent.keyDown(input, { key: "Escape" });
     expect(document.activeElement).not.toBe(input);
   });
   it("slash is ignored while typing in another field", () => {
-    render(<><input aria-label="other" /><FilterBar value={{ status: "all", text: "", namespace: null }} onChange={() => {}} chips={POD_CHIPS} namespaces={[]} counts={counts} /></>);
+    render(<><input aria-label="other" /><FilterBar value={{ columns: [] as [], sort: null, status: "all", text: "", namespace: null }} onChange={() => {}} chips={POD_CHIPS} namespaces={[]} counts={counts} /></>);
     const other = screen.getByLabelText("other");
     other.focus();
     fireEvent.keyDown(other, { key: "/" });
@@ -106,17 +106,17 @@ describe("FilterBar details", () => {
   });
   it("marks the active chip and keeps the text when switching status", () => {
     const onChange = vi.fn();
-    render(<FilterBar value={{ status: "pending", text: "pay", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={counts} />);
+    render(<FilterBar value={{ columns: [] as [], sort: null, status: "pending", text: "pay", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={counts} />);
     expect(screen.getByRole("button", { name: "Pending 1" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(screen.getByRole("button", { name: "Restarted today 4" }));
-    expect(onChange).toHaveBeenCalledWith({ status: "restartedToday", text: "pay", namespace: null });
+    expect(onChange).toHaveBeenCalledWith({ columns: [] as [], sort: null, status: "restartedToday", text: "pay", namespace: null });
   });
   it("typing updates the text", () => {
     const onChange = vi.fn();
-    render(<FilterBar value={{ status: "failing", text: "", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={counts} />);
+    render(<FilterBar value={{ columns: [] as [], sort: null, status: "failing", text: "", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={counts} />);
     fireEvent.change(screen.getByPlaceholderText("Filter by name, label or image"), { target: { value: "api" } });
-    expect(onChange).toHaveBeenCalledWith({ status: "failing", text: "api", namespace: null });
+    expect(onChange).toHaveBeenCalledWith({ columns: [] as [], sort: null, status: "failing", text: "api", namespace: null });
   });
 });
 
@@ -236,7 +236,7 @@ describe("KindTabs", () => {
 describe("FilterBar per kind", () => {
   it("namespace chip filters rows", () => {
     const onChange = vi.fn();
-    const value = { status: "failing", text: "api", namespace: null } as const;
+    const value = { columns: [] as [], sort: null, status: "failing", text: "api", namespace: null } as const;
     const { rerender } = render(<FilterBar value={value} onChange={onChange} chips={POD_CHIPS} counts={{ failing: 1, pending: 0, restartedToday: 0 }} namespaces={["kube-system", "payments"]} />);
     const chip = screen.getByRole("button", { name: "Namespace: all" });
     expect(chip.getAttribute("aria-haspopup")).toBe("listbox");
@@ -247,7 +247,7 @@ describe("FilterBar per kind", () => {
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     fireEvent.keyDown(document.activeElement!, { key: "Enter" });
-    expect(onChange).toHaveBeenLastCalledWith({ status: "failing", text: "api", namespace: "payments" });
+    expect(onChange).toHaveBeenLastCalledWith({ columns: [] as [], sort: null, status: "failing", text: "api", namespace: "payments" });
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(document.activeElement).toBe(chip);
 
@@ -255,23 +255,23 @@ describe("FilterBar per kind", () => {
     fireEvent.click(screen.getByRole("button", { name: "Namespace: payments" }));
     expect(screen.getByRole("option", { name: "payments" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("option", { name: "All namespaces" }));
-    expect(onChange).toHaveBeenLastCalledWith({ status: "failing", text: "api", namespace: null });
+    expect(onChange).toHaveBeenLastCalledWith({ columns: [] as [], sort: null, status: "failing", text: "api", namespace: null });
     rerender(<FilterBar value={value} onChange={onChange} chips={POD_CHIPS} counts={{ failing: 1, pending: 0, restartedToday: 0 }} namespaces={["kube-system", "payments"]} />);
     fireEvent.click(screen.getByRole("button", { name: "Namespace: all" }));
     fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
     expect(screen.queryByRole("listbox")).toBeNull();
   });
   it("chips follow the kind; cluster-wide kinds have no namespace chip", () => {
-    const { rerender } = render(<FilterBar value={{ status: "all", text: "", namespace: null }} onChange={() => {}} chips={chipsFor(EVENTS)} counts={{ warnings: 3 }} namespaces={["default"]} />);
+    const { rerender } = render(<FilterBar value={{ columns: [] as [], sort: null, status: "all", text: "", namespace: null }} onChange={() => {}} chips={chipsFor(EVENTS)} counts={{ warnings: 3 }} namespaces={["default"]} />);
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "Warnings 3", "Namespace: all"]);
-    rerender(<FilterBar value={{ status: "all", text: "", namespace: null }} onChange={() => {}} chips={chipsFor(NODES)} counts={{ failing: 0, pending: 1 }} namespaces={null} />);
+    rerender(<FilterBar value={{ columns: [] as [], sort: null, status: "all", text: "", namespace: null }} onChange={() => {}} chips={chipsFor(NODES)} counts={{ failing: 0, pending: 1 }} namespaces={null} />);
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "Failing 0", "Pending 1"]);
   });
 });
 
 describe("FilterBar counts", () => {
   it("chips show no number until a count is real", () => {
-    render(<FilterBar value={{ status: "all", text: "", namespace: null }} onChange={() => {}} chips={POD_CHIPS} counts={{}} namespaces={[]} />);
+    render(<FilterBar value={{ columns: [] as [], sort: null, status: "all", text: "", namespace: null }} onChange={() => {}} chips={POD_CHIPS} counts={{}} namespaces={[]} />);
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "Failing", "Pending", "Restarted today", "Namespace: all"]);
   });
 });
@@ -318,4 +318,20 @@ describe("ShortcutBar per kind", () => {
     expect(group.textContent).toContain("Move between open logs and shells (bottom dock)");
     expect(group.textContent).toContain("Switch the bottom dock between one pane and side by side");
   });
+});
+
+
+it("chips remove their filter and clear all removes every column filter", () => {
+  const filters = { status:"all" as const, text:"", namespace:null, sort:null, columns:[{key:"name",op:"contains" as const,text:"api"},{key:"node",op:"oneOf" as const,values:["n1"]}] };
+  const onChange = vi.fn(); render(<FilterBar value={filters} onChange={onChange} chips={[]} counts={{}} namespaces={null} columns={PODS.columns} />);
+  fireEvent.click(screen.getByRole("button",{name:'Remove filter Name contains "api"'}));
+  expect(onChange.mock.lastCall?.[0].columns).toEqual([filters.columns[1]]);
+  fireEvent.click(screen.getByRole("button",{name:"Clear all"})); expect(onChange.mock.lastCall?.[0].columns).toEqual([]);
+});
+it("add filter reaches filterable columns and Escape restores focus", () => {
+  render(<FilterBar value={{status:"all", text:"", namespace:null, columns:[], sort:null}} onChange={()=>{}} chips={[]} counts={{}} namespaces={null} columns={PODS.columns} />);
+  const add = screen.getByRole("button",{name:"Add filter"}); fireEvent.click(add);
+  fireEvent.click(screen.getByRole("button",{name:"Node"}));
+  expect(screen.getByRole("dialog",{name:"Filter by Node"})).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("dialog"),{key:"Escape"}); expect(document.activeElement).toBe(add);
 });

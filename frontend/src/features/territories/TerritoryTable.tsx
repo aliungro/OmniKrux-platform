@@ -1,3 +1,5 @@
+import { ColumnHeader } from "./ColumnHeader";
+import type { ColumnFilter, SortSpec } from "./columnFilters";
 import {
   memo,
   useCallback,
@@ -37,6 +39,11 @@ const OVERSCAN = 10;
 
 export interface TerritoryTableProps {
   territories: Territory[];
+  columnFilters?: readonly ColumnFilter[];
+  sort?: SortSpec | null;
+  onColumnFilter?: (key: string, f: ColumnFilter | null) => void;
+  onSort?: (s: SortSpec | null) => void;
+  pickSource?: Territory[];
   kind: KindInfo;
   /** The current row and whether its details are open; held by Console so other views can set it. */
   selection: Selection;
@@ -85,6 +92,7 @@ const NOT_LIVE: ReadonlySet<ClusterState> = new Set(["syncing", "error", "unknow
  */
 export const TerritoryTable = memo(function TerritoryTable({
   territories,
+  columnFilters = [], sort = null, onColumnFilter = () => {}, onSort = () => {}, pickSource = territories,
   kind,
   selection,
   onSelection,
@@ -258,6 +266,7 @@ export const TerritoryTable = memo(function TerritoryTable({
 
   const onPageKey = (e: globalThis.KeyboardEvent) => {
     if (!pageKey(e) || !routesPageKeys(e.target)) return;
+    if (["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key) && e.target instanceof Element && e.target.closest('button, a[href], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], summary')) return;
     // Keep native activation and navigation on chrome controls (including nested button icons).
     if (["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
       && e.target instanceof Element
@@ -343,7 +352,7 @@ export const TerritoryTable = memo(function TerritoryTable({
       >
         <div role="rowgroup" className={s.head}>
           <div role="row" aria-rowindex={1} className={`${rv.grid} ${s.cols}`}>
-            {columns.map((c) => <span key={c.key} role="columnheader">{c.label}</span>)}
+            {columns.map((c) => <ColumnHeader key={c.key} col={c} filter={columnFilters.find(f => f.key === c.key)} sort={sort} source={pickSource} onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} />)}
           </div>
         </div>
         <div role="rowgroup" className={s.body} style={{ height: virtualizer.getTotalSize() }}>

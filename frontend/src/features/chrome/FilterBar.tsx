@@ -1,3 +1,7 @@
+import type { ColumnSpec } from "../../api/types";
+import { chipLabel, filterUiFor, type ColumnFilter } from "../territories/columnFilters";
+import { ColumnFilterMenu } from "../territories/ColumnFilterMenu";
+import type { Territory } from "../territories/model";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import type { ChipDef, FilterCounts, Filters } from "../territories/model";
 import { capsOf, pageKey, pressed } from "./shortcuts";
@@ -124,7 +128,7 @@ export function FilterBar({
   onChange,
   chips,
   counts,
-  namespaces,
+  namespaces, columns = [], pickSource = [],
 }: {
   value: Filters;
   onChange: (f: Filters) => void;
@@ -133,8 +137,15 @@ export function FilterBar({
   counts: FilterCounts;
   /** Namespaces to pick from; null for a kind without namespaces (no chip). */
   namespaces: string[] | null;
+  columns?: ColumnSpec[];
+  pickSource?: Territory[];
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [openColumn, setOpenColumn] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const menuTrigger = useRef<HTMLElement | null>(null);
+  const closeColumn = () => { setOpenColumn(null); menuTrigger.current?.focus(); };
+  const updateColumn = (key: string, f: ColumnFilter | null) => onChange({ ...value, columns: [...value.columns.filter(x => x.key !== key), ...(f ? [f] : [])] });
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
@@ -174,6 +185,9 @@ export function FilterBar({
       {namespaces !== null && (
         <NamespacePicker value={value.namespace} namespaces={namespaces} onPick={(namespace) => onChange({ ...value, namespace })} />
       )}
+      {value.columns.map(f => { const col = columns.find(c => c.key === f.key); if (!col) return null; const label = chipLabel(f,col); return <div className={s.pick} key={f.key}><span className={`${s.fchip} ${s.on}`}><button type="button" className={s.chipButton} onClick={e => { menuTrigger.current = e.currentTarget; setOpenColumn(openColumn === f.key ? null : f.key); }}>{label}</button><button type="button" className={s.chipButton} aria-label={`Remove filter ${label}`} onClick={() => updateColumn(f.key,null)}>×</button></span>{openColumn === f.key && <ColumnFilterMenu col={col} filter={f} source={pickSource} onApply={next => updateColumn(f.key,next)} onClose={closeColumn} />}</div>; })}
+      {value.columns.length >= 2 && <button type="button" className={s.fchip} onClick={() => onChange({...value, columns: []})}>Clear all</button>}
+      {columns.some(c => filterUiFor(c)) && <div className={s.pick}><button type="button" className={s.fchip} aria-expanded={adding} onClick={() => setAdding(!adding)}>Add filter</button>{adding && <div className={s.menu}>{columns.filter(c => filterUiFor(c)).map(c => <button type="button" className={s.addOption} key={c.key} onClick={e => { menuTrigger.current = e.currentTarget.parentElement?.previousElementSibling as HTMLElement | null; setAdding(false); setOpenColumn(c.key); }}>{c.label}</button>)}</div>}{openColumn && !value.columns.some(f => f.key === openColumn) && (() => { const col = columns.find(c => c.key === openColumn); return col && <ColumnFilterMenu col={col} source={pickSource} onApply={f => updateColumn(col.key,f)} onClose={closeColumn} />; })()}</div>}
       <label className={s.search}>
         <span className={k.k} aria-hidden="true">{capsOf("filter")[0]}</span>
         <input

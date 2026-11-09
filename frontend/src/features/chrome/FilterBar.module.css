@@ -165,3 +165,8 @@
   padding: 6px 10px;
   color: var(--ink-3);
 }
+
+.chipButton { border:0; padding:0; color:inherit; background:none; font:inherit; cursor:pointer; }
+.addOption { display:block; width:100%; border:0; padding:6px 10px; color:var(--ink); background:none; text-align:left; font:inherit; cursor:pointer; }
+.addOption:hover,.addOption:focus { background:var(--surf-2); }
+.filters { flex-wrap:wrap; }

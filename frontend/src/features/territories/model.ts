@@ -1,3 +1,4 @@
+import { compileColumnFilters, compareKeys, sortKey, type ColumnFilter, type SortSpec } from "./columnFilters";
 import type { Cluster, ClusterState, ColumnSpec, KindInfo, KindsResponse, Provider, ResourceRow, StatusClass } from "../../api/types";
 import type { WatchState } from "../../api/watchState";
 
@@ -5,15 +6,17 @@ export type FilterStatus = "all" | "failing" | "pending" | "restartedToday" | "w
 
 export interface Filters {
   status: FilterStatus;
+  columns: ColumnFilter[];
+  sort: SortSpec | null;
   text: string;
   /** One namespace, or null for all of them. */
   namespace: string | null;
 }
 
-export const NO_FILTER: Filters = { status: "all", text: "", namespace: null };
+export const NO_FILTER: Filters = { status: "all", text: "", namespace: null, columns: [], sort: null };
 
 export function isNoFilter(f: Filters): boolean {
-  return f.status === "all" && f.text.trim() === "" && f.namespace === null;
+  return f.status === "all" && f.text.trim() === "" && f.namespace === null && f.columns.length === 0 && f.sort === null;
 }
 
 export interface Territory {
@@ -242,11 +245,13 @@ function matchesText(row: ResourceRow, q: string): boolean {
   return false;
 }
 
-export function matchesFilter(row: ResourceRow, f: Filters, now: Date, kindKey = "pods"): boolean {
-  if (!matchesStatus(row, f.status, now, kindKey)) return false;
-  if (f.namespace !== null && row.namespace !== f.namespace) return false;
+export function compileFilters(f: Filters, kind: Pick<KindInfo, "key" | "columns">, now: Date): (row: ResourceRow) => boolean {
+  const columns = compileColumnFilters(f.columns, kind.columns, now);
   const q = f.text.trim().toLowerCase();
-  return q === "" || matchesText(row, q);
+  return row => matchesStatus(row, f.status, now, kind.key) && (f.namespace === null || row.namespace === f.namespace) && (q === "" || matchesText(row, q)) && columns(row);
+}
+export function matchesFilter(row: ResourceRow, f: Filters, now: Date, kind: Pick<KindInfo, "key" | "columns"> | string = POD_KIND): boolean {
+  return compileFilters(f, typeof kind === "string" ? { key: kind, columns: [] } : kind, now)(row);
 }
 
 const RANK: Record<StatusClass, number> = { bad: 0, warn: 1, ok: 2, done: 2 };
@@ -260,7 +265,9 @@ function recency(row: ResourceRow): number {
 }
 
 /** `status`: failing first, then pending, then the rest, by name within each. `recent`: newest first. */
-function sortRows(rows: ResourceRow[], sort: KindInfo["sort"]): ResourceRow[] {
+function sortRows(rows: ResourceRow[], sort: KindInfo["sort"], spec: SortSpec | null, columns: readonly ColumnSpec[]): ResourceRow[] {
+  const col = spec && columns.find(c => c.key === spec.key && !["cpu", "memory", "pods"].includes(c.type));
+  if (col && spec) return rows.map(row => ({row, key: sortKey(row, col)})).sort((a,b) => compareKeys(a.key,b.key,spec.dir) || byName(a.row.name,b.row.name)).map(x => x.row);
   if (sort === "recent") {
     return rows
       .map((row) => ({ row, at: recency(row) }))
@@ -291,8 +298,8 @@ function buildTerritory(
   live: LiveStatus,
   rows: Map<string, ResourceRow> | undefined,
   f: Filters,
-  now: Date,
   kind: KindInfo,
+  predicate: (row: ResourceRow) => boolean,
 ): Territory {
   const all = rows ? Array.from(rows.values()) : [];
   let failing = 0;
@@ -306,7 +313,7 @@ function buildTerritory(
     cluster,
     state: live ? live.state : fallback.state,
     message: live ? live.message : fallback.message,
-    rows: sortRows(all.filter((row) => matchesFilter(row, f, now, kind.key)), kind.sort),
+    rows: sortRows(all.filter(predicate), kind.sort, f.sort, kind.columns),
     total: all.length,
     failing,
     pending,
@@ -337,7 +344,8 @@ export function buildTerritories(
 ): Territory[] {
   // Filters only read `now` for its local day, which can't change within a minute.
   const minute = Math.floor(now.getTime() / 60_000);
-  const filterKey = [kind.key, kind.sort, f.status, f.namespace ?? "", f.text.trim().toLowerCase()].join("\u0000");
+  const filterKey = [kind.key, kind.sort, f.status, f.namespace ?? "", f.text.trim().toLowerCase(), JSON.stringify(f.columns), JSON.stringify(f.sort)].join("\u0000");
+  const predicate = compileFilters(f, kind, now);
   return clusters.map((cluster) => {
     const live: LiveStatus = Object.hasOwn(w.clusters, cluster.id) ? w.clusters[cluster.id] : undefined;
     const state = live ? live.state : notYetWatched(cluster).state;
@@ -353,7 +361,7 @@ export function buildTerritories(
     const hit = byFilter.get(filterKey);
     if (hit && hit.cluster === cluster && hit.live === live && hit.minute === minute) return hit.territory;
 
-    const territory = buildTerritory(cluster, live, rows, f, now, kind);
+    const territory = buildTerritory(cluster, live, rows, f, kind, predicate);
     if (!hit && byFilter.size >= MAX_FILTERS_PER_ROWS) byFilter.clear();
     byFilter.set(filterKey, { cluster, live, minute, territory });
     return territory;

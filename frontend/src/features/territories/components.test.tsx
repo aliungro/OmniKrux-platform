@@ -511,3 +511,33 @@ describe("usage basis in rows", () => {
     expect(screen.getByText("\u2014").getAttribute("title")).toBe(live?.why ?? null);
   });
 });
+
+it("header sorts asc, desc, then default", () => {
+  const onSort = vi.fn(); const props = { territories:[terr()], kind:PODS, onRetry:()=>{}, onSort };
+  const {rerender} = render(<Table {...props} />);
+  fireEvent.click(screen.getByTitle("Sort by Name")); expect(onSort).toHaveBeenLastCalledWith({key:"name",dir:"asc"});
+  rerender(<Table {...props} sort={{key:"name",dir:"asc"}} />);
+  fireEvent.click(screen.getByTitle("Sort by Name")); expect(onSort).toHaveBeenLastCalledWith({key:"name",dir:"desc"});
+  rerender(<Table {...props} sort={{key:"name",dir:"desc"}} />);
+  fireEvent.click(screen.getByTitle("Sort by Name")); expect(onSort).toHaveBeenLastCalledWith(null);
+});
+
+it("pods filter by node from a pick-list", () => {
+  const onFilter = vi.fn(); const source = [terr({ rows:[pod({columns:{node:"worker-1"}})] })];
+  render(<Table territories={source} pickSource={source} kind={PODS} onRetry={()=>{}} onColumnFilter={onFilter} />);
+  fireEvent.click(screen.getByRole("button",{name:"Filter by Node"}));
+  fireEvent.click(screen.getByLabelText(/worker-1/)); fireEvent.click(screen.getByRole("button",{name:"Apply"}));
+  expect(onFilter).toHaveBeenCalledWith("node",{key:"node",op:"oneOf",values:["worker-1"]});
+});
+it("restarts min filter", () => {
+  const onFilter = vi.fn(); render(<Table territories={[terr()]} kind={PODS} onRetry={()=>{}} onColumnFilter={onFilter} />);
+  fireEvent.click(screen.getByRole("button",{name:"Filter by Restarts"}));
+  fireEvent.change(screen.getByLabelText("Min"),{target:{value:"2"}}); fireEvent.click(screen.getByRole("button",{name:"Apply"}));
+  expect(onFilter).toHaveBeenCalledWith("restarts",{key:"restarts",op:"between",min:2,max:null});
+});
+it("events filter by last seen within 1 h", () => {
+  const onFilter = vi.fn(); render(<Table territories={[terr()]} kind={EVENTS} onRetry={()=>{}} onColumnFilter={onFilter} />);
+  fireEvent.click(screen.getByRole("button",{name:"Filter by Last seen"}));
+  fireEvent.click(screen.getByRole("button",{name:"Apply"}));
+  expect(onFilter).toHaveBeenCalledWith("last_seen",{key:"last_seen",op:"within",seconds:3600});
+});

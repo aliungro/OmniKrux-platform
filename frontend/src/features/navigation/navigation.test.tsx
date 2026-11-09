@@ -40,8 +40,8 @@ function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
 }
 
-const POD = row("p1", "Pod", "payments", "payments-api-1", { status: "CrashLoopBackOff", status_class: "bad", resource_version: "1" });
-const OTHER_POD = row("p0", "Pod", "payments", "aaa-first", { status: "Running", status_class: "ok", resource_version: "1" });
+const POD = row("p1", "Pod", "payments", "payments-api-1", { columns: [], sort: null, status: "CrashLoopBackOff", status_class: "bad", resource_version: "1" });
+const OTHER_POD = row("p0", "Pod", "payments", "aaa-first", { columns: [], sort: null, status: "Running", status_class: "ok", resource_version: "1" });
 const RS = row("rs1", "ReplicaSet", "payments", "payments-api-7f9c4", { ready: "0/1" });
 const SECRET = row("s1", "Secret", "payments", "payments-db", { type: "Opaque", keys: 2 });
 
@@ -164,7 +164,7 @@ describe("links in the console", () => {
   it("an object cell in the table jumps to its object", async () => {
     window.location.hash = "#kind=events";
     const object = { kind_key: "pods", namespace: "payments", name: "payments-api-1", label: "Pod/payments-api-1" };
-    watches.byKind.events = ready([row("e1", "Event", "payments", "payments-api-1.17", { status: "Warning", status_class: "warn", object, reason: "BackOff" })]);
+    watches.byKind.events = ready([row("e1", "Event", "payments", "payments-api-1.17", { columns: [], sort: null, status: "Warning", status_class: "warn", object, reason: "BackOff" })]);
     renderConsole();
     fireEvent.click(await screen.findByRole("button", { name: "Pod/payments-api-1" }));
     await waitFor(() => expect(window.location.hash).toBe("#kind=pods"));
@@ -208,12 +208,21 @@ describe("useNavigator", () => {
     const sel = setSelection.mock.calls.at(-1)![0];
     expect(typeof sel === "function" ? sel(NO_SELECTION) : sel).toEqual({ selected: { clusterId: "c1", uid: "s1" }, open: true });
     const next = setFilters.mock.calls.at(-1)![0];
-    const filters: Filters = { status: "failing", text: "zzz", namespace: "kube-system" };
+    const filters: Filters = { columns: [], sort: null, status: "failing", text: "zzz", namespace: "kube-system" };
     expect(typeof next === "function" ? next(filters) : next).toEqual(NO_FILTER);
     // A filter that already shows it is kept.
-    const keep: Filters = { status: "all", text: "payments", namespace: "payments" };
+    const keep: Filters = { columns: [], sort: null, status: "all", text: "payments", namespace: "payments" };
     expect(typeof next === "function" ? next(keep) : next).toEqual(keep);
     expect(hook.result.current.reveal).toBe(before + 1);
+  });
+
+  it("a link keeps column filters that show the target and drops those that hide it", () => {
+    const { hook, setFilters } = harness(ready([SECRET]));
+    act(() => hook.result.current.goTo({ clusterId: "c1", kind_key: "secrets", namespace: "payments", name: "payments-db" }));
+    const next = setFilters.mock.calls.at(-1)![0];
+    const f: Filters = { ...NO_FILTER, columns: [{key:"name",op:"contains",text:"payments"}, {key:"age",op:"within",seconds:0}] };
+    const result = typeof next === "function" ? next(f) : next;
+    expect(result.columns).toEqual([f.columns[0]]);
   });
 
   it("asks for the link's kind, then waits for it", () => {

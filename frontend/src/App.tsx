@@ -103,7 +103,7 @@ export function Console() {
     setShownKind(kindKey);
     setSelection(NO_SELECTION);
     setRowRequest(null);
-    if (filters.status !== "all") setFilters({ ...filters, status: "all" });
+    if (filters.status !== "all" || filters.columns.length || filters.sort) setFilters({ ...filters, status: "all", columns: [], sort: null });
   }
   // A kind without namespaces ignores the namespace you picked for another one (and keeps it for later).
   const effective = useMemo(
@@ -175,6 +175,8 @@ export function Console() {
     cancelJump();
     setFilters(next);
   }, [cancelJump]);
+  const onColumnFilter = useCallback((key: string, f: import("./features/territories/columnFilters").ColumnFilter | null) => { cancelJump(); setFilters(prev => ({...prev, columns: [...prev.columns.filter(x => x.key !== key), ...(f ? [f] : [])]})); }, [cancelJump]);
+  const onSort = useCallback((sort: import("./features/territories/columnFilters").SortSpec | null) => { cancelJump(); setFilters(prev => ({...prev, sort})); }, [cancelJump]);
   const onSelectKind = useCallback(
     (key: string, opts?: { replace: boolean }) => {
       cancelJump();
@@ -265,11 +267,16 @@ export function Console() {
           onRetry={onRetryKinds}
           onAllKinds={onAllKinds}
         />
-        <FilterBar value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} />
+        <FilterBar value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
         <NavigationNotice text={nav.notice} waiting={nav.waiting} />
         <main className={s.main} data-page-keys>
           <TerritoryTable
             territories={shown}
+            columnFilters={filters.columns}
+            sort={filters.sort}
+            onColumnFilter={onColumnFilter}
+            onSort={onSort}
+            pickSource={all}
             kind={kind}
             selection={selection}
             onSelection={onSelection}
