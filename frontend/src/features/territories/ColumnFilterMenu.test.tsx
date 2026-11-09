@@ -16,3 +16,13 @@ it("memoizes pick counts while searching and limits selection to storable values
  expect(screen.getByText("Select up to 200 values.")).toBeTruthy();
  fireEvent.click(screen.getByRole("button",{name:"Apply"})); expect(validColumnFilter(apply.mock.lastCall?.[0])).toEqual(filter);
 });
+
+it("clamps the current page when a live source shrinks", () => {
+ const makeSource=(count:number)=>[{state:"ready",rows:Array.from({length:count},(_,i)=>({uid:String(i),name:String(i),columns:{node:`node-${String(i).padStart(3,"0")}`}}))}] as unknown as Territory[];
+ const col={key:"node",label:"Node",type:"text" as const,width:"m" as const};
+ const props={col,onApply:()=>{},onClose:()=>{}};
+ const {rerender}=render(<ColumnFilterMenu {...props} source={makeSource(101)} />);
+ fireEvent.click(screen.getByRole("button",{name:"Next values"})); expect(screen.getByLabelText(/node-100/)).toBeTruthy();
+ rerender(<ColumnFilterMenu {...props} source={makeSource(100)} />);
+ expect(screen.getByLabelText(/node-000/)).toBeTruthy();
+});
