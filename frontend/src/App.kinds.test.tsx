@@ -1,10 +1,11 @@
 // frontend/src/App.kinds.test.tsx — Console with the real watch (App.test.tsx mocks it).
 import { Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { FakeWebSocket } from "./features/logs/fakeWebSocket";
-import { Console } from "./App";
+import { Shell as Console } from "./features/shell/Shell";
+import { seedPodsWorkspace } from "./test/seedWorkspace";
 import { KINDS } from "./test/kinds";
 
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
@@ -19,6 +20,7 @@ function json(body: unknown) {
 }
 
 beforeEach(() => {
+  seedPodsWorkspace();
   window.history.replaceState(null, "", "/");
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
@@ -43,7 +45,7 @@ describe("kind switches", () => {
     const record = () => commits.push({
       grid: document.querySelector('[role="grid"]')?.getAttribute("aria-label") ?? null,
       crasher: document.body.textContent?.includes("crasher-1") ?? false,
-      tab: document.querySelector('[role="tab"][aria-selected="true"]')?.textContent ?? null,
+      tab: document.querySelector('[aria-label="Kinds"] [role="tab"][aria-selected="true"]')?.textContent ?? null,
     });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -60,7 +62,7 @@ describe("kind switches", () => {
       pods.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [pod] });
     });
     expect(await screen.findByText("crasher-1")).toBeTruthy();
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Pods1"));
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Pods1"));
 
     const tab = await screen.findByRole("tab", { name: "Deployments" });
     commits.length = 0;
@@ -74,4 +76,14 @@ describe("kind switches", () => {
     }
     expect(pods.closedByClient).toBe(true);
   });
+});
+
+it("unmounts the background Kubernetes view when a home tab opens", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
+  await waitFor(() => expect(FakeWebSocket.instances.some(w => w.params.get("kind") === "pods")).toBe(true));
+  const socket = FakeWebSocket.instances.find(w => w.params.get("kind") === "pods")!;
+  fireEvent.click(screen.getByRole("button", {name:"New tab"}));
+  expect(screen.getByRole("heading",{name:"Where do you want to look?"})).toBeTruthy();
+  expect(socket.closedByClient).toBe(true);
 });

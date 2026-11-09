@@ -1,8 +1,11 @@
 import { NO_AUDIT_FILTER, type AuditFilters } from "../audit/useAudit";
-import type { Filters, RowRef } from "../territories/model";
+import { NO_FILTER, type Filters, type RowRef } from "../territories/model";
 
 export type AppId = "kubernetes" | "audit" | "settings";
 export type KubeView = { page: "home" } | { page: "kind"; kind: string; clusters: string[] | null; filters: Filters; selected: RowRef | null; open: boolean };
+export function kindView(from: KubeView, kind: string, clusters?: string[] | null): KubeView {
+  return { page:"kind", kind, clusters: clusters ?? (from.page === "kind" ? from.clusters : null), filters:{...(from.page === "kind" ? from.filters : NO_FILTER),status:"all",columns:[],sort:null},selected:null,open:false };
+}
 export interface Tab<V> { id: string; view: V; back: V[]; forward: V[]; scrollTop: number }
 export interface ClosedTab<V> { tab: Tab<V>; closedAt: number }
 export interface AppTabs<V> { tabs: Tab<V>[]; active: string; closed: ClosedTab<V>[] }
@@ -20,7 +23,7 @@ export function sameView(a: KubeView, b: KubeView): boolean {
   const sameArray = (x: string[] | null, y: string[] | null) => x === y || (x !== null && y !== null && x.length === y.length && x.every((v,i)=>v===y[i]));
   return a.kind===b.kind && sameArray(a.clusters,b.clusters) && a.open===b.open && (a.selected === b.selected || (a.selected !== null && b.selected !== null && a.selected.clusterId===b.selected.clusterId && a.selected.uid===b.selected.uid)) && a.filters.status===b.filters.status && a.filters.text===b.filters.text && a.filters.namespace===b.filters.namespace && a.filters.columns.length===b.filters.columns.length && a.filters.columns.every((x,i)=>{ const y=b.filters.columns[i]; if (x.key!==y.key || x.op!==y.op) return false; if (x.op==="contains" && y.op==="contains") return x.text===y.text; if (x.op==="oneOf" && y.op==="oneOf") return sameArray(x.values,y.values); if (x.op==="between" && y.op==="between") return x.min===y.min && x.max===y.max; return "seconds" in x && "seconds" in y && x.seconds===y.seconds; }) && a.filters.sort?.key===b.filters.sort?.key && a.filters.sort?.dir===b.filters.sort?.dir;
 }
-export type WorkspaceAction = {type:"switchApp";app:AppId} | {type:"newTab";view?:KubeView} | {type:"closeTab";id:string} | {type:"activateTab"|"back"|"forward";id:string} | {type:"nextTab"|"previousTab"} | {type:"navigate";id:string;view:KubeView;mode:"push"|"replace"} | {type:"reopenClosed";index:number} | {type:"scroll";id:string;top:number} | {type:"auditFilters";filters:AuditFilters};
+export type WorkspaceAction = {type:"switchApp";app:AppId} | {type:"newTab";view?:KubeView} | {type:"closeTab";id:string} | {type:"activateTab"|"back"|"forward";id:string} | {type:"nextTab"|"previousTab"} | {type:"navigate";id:string;view:KubeView | ((v: KubeView) => KubeView);mode:"push"|"replace"} | {type:"reopenClosed";index:number} | {type:"scroll";id:string;top:number} | {type:"auditFilters";filters:AuditFilters};
 /** Reducer actions carry generated data so reducing the same state and action is deterministic. */
 export type PreparedWorkspaceAction = Exclude<WorkspaceAction, {type:"newTab"} | {type:"closeTab"}> | {type:"newTab";view?:KubeView;id:string} | {type:"closeTab";id:string;replacementId:string;closedAt:number};
 /** Call once at the dispatch boundary, never from inside the reducer. */
@@ -44,7 +47,7 @@ export function workspaceReducer(ws: Workspace, action: PreparedWorkspaceAction)
   if (action.type === "closeTab") { const tabs=k.tabs.filter((_,i)=>i!==index); if (!tabs.length) tabs.push(newTab(action.replacementId)); const active=k.active===tab.id ? tabs[Math.min(index,tabs.length-1)].id : k.active; const closed=tab.view.page==="home" ? k.closed : [{tab,closedAt:action.closedAt},...k.closed].slice(0,MAX_CLOSED); return set({tabs,active,closed}); }
   let next: Tab<KubeView>;
   if (action.type === "scroll") { if (tab.scrollTop===action.top) return ws; next={...tab,scrollTop:action.top}; }
-  else if (action.type === "navigate") { if (sameView(tab.view,action.view)) return ws; next=action.mode==="replace" ? {...tab,view:action.view} : {...tab,view:action.view,back:[...tab.back,tab.view].slice(-MAX_BACK),forward:[]}; }
+  else if (action.type === "navigate") { const view=typeof action.view === "function" ? action.view(tab.view) : action.view; if (sameView(tab.view,view)) return ws; next=action.mode==="replace" ? {...tab,view} : {...tab,view,back:[...tab.back,tab.view].slice(-MAX_BACK),forward:[]}; }
   else if (action.type === "back") { if (!tab.back.length) return ws; next={...tab,view:tab.back[tab.back.length-1],back:tab.back.slice(0,-1),forward:[...tab.forward,tab.view].slice(-MAX_BACK)}; }
   else { if (!tab.forward.length) return ws; next={...tab,view:tab.forward[tab.forward.length-1],forward:tab.forward.slice(0,-1),back:[...tab.back,tab.view].slice(-MAX_BACK)}; }
   const tabs=[...k.tabs]; tabs[index]=next; return set({...k,tabs});

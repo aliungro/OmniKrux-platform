@@ -91,7 +91,7 @@ export function CommandPalette({
   selection,
   onKind,
   onRowAction,
-  onAudit,
+  onAudit, onSettings, onNewTab, onCloseTab,
   onForwards,
   onClose,
   onFocusLost,
@@ -105,6 +105,7 @@ export function CommandPalette({
   onKind: (key: string) => void;
   onRowAction: (action: RowAction) => void;
   onAudit: () => void;
+  onSettings?: () => void; onNewTab?: () => void; onCloseTab?: () => void;
   onForwards?: () => void;
   onClose: () => void;
   /**
@@ -131,8 +132,8 @@ export function CommandPalette({
         workloadLogs: true,
       }),
     };
-    return buildCommands({ kinds: kinds ?? NO_KINDS, onKind, selected, onRowAction, onAudit, onForwards });
-  }, [kinds, selection, canChange, onKind, onRowAction, onAudit, onForwards]);
+    return buildCommands({ kinds: kinds ?? NO_KINDS, onKind, selected, onRowAction, onAudit, onSettings, onNewTab, onCloseTab, onForwards });
+  }, [kinds, selection, canChange, onKind, onRowAction, onAudit, onSettings, onNewTab, onCloseTab, onForwards]);
 
   const split = splitQuery(query);
   const kindsOnly = mode === "kinds" || split.kindsOnly;
@@ -149,13 +150,14 @@ export function CommandPalette({
 
   // Focus the field on open; give focus back to where it was on close, or, when that has gone,
   // wherever the page says (the kind you jumped to).
+  const changedView = useRef(false);
   const focusLost = useRef(onFocusLost);
   focusLost.current = onFocusLost;
   useEffect(() => {
     const back = document.activeElement;
     inputRef.current?.focus();
     return () => {
-      if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
+      if (!changedView.current && back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
       else focusLost.current?.();
     };
   }, []);
@@ -167,6 +169,7 @@ export function CommandPalette({
 
   const run = (c: Command | undefined) => {
     if (!c) return;
+    changedView.current = c.id.startsWith("view:") || c.id.startsWith("kind:");
     onClose();
     c.run();
   };

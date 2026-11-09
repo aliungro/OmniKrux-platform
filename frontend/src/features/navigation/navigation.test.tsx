@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { applyMessage, emptyWatchState, type WatchState } from "../../api/watchState";
-import { Console } from "../../App";
+import { Shell as Console } from "../../features/shell/Shell";
+import { seedPodsWorkspace } from "../../test/seedWorkspace";
 import { describeBody, container, resourceDescribe, secretDescribe } from "../../test/describe";
 import { KINDS } from "../../test/kinds";
 import { NO_FILTER, NO_SELECTION, type Filters, type Selection } from "../territories/model";
@@ -80,6 +81,7 @@ async function openPod() {
 }
 
 beforeEach(() => {
+  seedPodsWorkspace();
   window.history.replaceState(null, "", "/");
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
@@ -105,7 +107,7 @@ describe("links in the console", () => {
   it("owner link navigates to the replicaset and opens it", async () => {
     const details = await openPod();
     fireEvent.click(await within(details).findByRole("button", { name: "ReplicaSet payments-api-7f9c4" }));
-    await waitFor(() => expect(window.location.hash).toBe("#kind=replicasets.apps"));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/kubernetes\//));
     const opened = await screen.findByRole("region", { name: "Details for payments-api-7f9c4" });
     expect(await within(opened).findByText("1 desired, 0 current, 0 ready")).toBeTruthy();
     const r = rowOf("payments-api-7f9c4");
@@ -113,13 +115,13 @@ describe("links in the console", () => {
     expect(r.getAttribute("aria-expanded")).toBe("true");
     // Back returns to the pods.
     window.history.back();
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toContain("Pods"));
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toContain("Pods"));
   });
 
   it("env secret link navigates to the secret", async () => {
     const details = await openPod();
     fireEvent.click(await within(details).findByRole("button", { name: "Secret payments-db key password" }));
-    await waitFor(() => expect(window.location.hash).toBe("#kind=secrets"));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/kubernetes\//));
     const opened = await screen.findByRole("region", { name: "Details for payments-db" });
     expect(await within(opened).findByTestId("secret-key-password")).toBeTruthy();
     expect(rowOf("payments-db").getAttribute("aria-selected")).toBe("true");
@@ -139,7 +141,7 @@ describe("links in the console", () => {
     watches.byKind.secrets = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "syncing", message: null });
     const details = await openPod();
     fireEvent.click(await within(details).findByRole("button", { name: "Secret payments-db key password" }));
-    await waitFor(() => expect(window.location.hash).toBe("#kind=secrets"));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/kubernetes\//));
     const filter = screen.getByPlaceholderText("Filter by name, label or image");
     fireEvent.change(filter, { target: { value: "x" } });
     // The Secret arrives; the next render sees it, but the jump was dropped.
@@ -167,7 +169,7 @@ describe("links in the console", () => {
     watches.byKind.events = ready([row("e1", "Event", "payments", "payments-api-1.17", { columns: [], sort: null, status: "Warning", status_class: "warn", object, reason: "BackOff" })]);
     renderConsole();
     fireEvent.click(await screen.findByRole("button", { name: "Pod/payments-api-1" }));
-    await waitFor(() => expect(window.location.hash).toBe("#kind=pods"));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/kubernetes\//));
     expect(await screen.findByRole("region", { name: "Details for payments-api-1" })).toBeTruthy();
   });
 });

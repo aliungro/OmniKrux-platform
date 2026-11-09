@@ -1,4 +1,6 @@
 // frontend/src/features/audit/audit.test.tsx
+import { useState } from "react";
+import { NO_AUDIT_FILTER } from "./useAudit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -47,9 +49,10 @@ function serve(pages: (url: URL) => { records: AuditRecord[]; next_before: numbe
   return urls;
 }
 
+function AuditFixture() { const [filters,setFilters]=useState(NO_AUDIT_FILTER); return <AuditView filters={filters} onFilters={setFilters}/>; }
 function show() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><AuditView onBack={() => {}} /></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><AuditFixture /></QueryClientProvider>);
 }
 
 describe("audit view", () => {

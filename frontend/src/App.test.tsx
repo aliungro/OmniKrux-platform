@@ -6,7 +6,8 @@ import userEvent from "@testing-library/user-event";
 import { applyMessage, emptyWatchState, type WatchState } from "./api/watchState";
 import type { WatchOptions } from "./api/useWatch";
 import { FakeWebSocket } from "./features/logs/fakeWebSocket";
-import { Console } from "./App";
+import { Shell as Console } from "./features/shell/Shell";
+import { seedPodsWorkspace } from "./test/seedWorkspace";
 import { KINDS } from "./test/kinds";
 import { container } from "./test/describe";
 
@@ -66,6 +67,7 @@ function renderConsole() {
 }
 
 beforeEach(() => {
+  seedPodsWorkspace();
   watch.state = emptyWatchState();
   watch.side = emptyWatchState();
   watch.opts = undefined;
@@ -115,11 +117,11 @@ describe("Audit log route", () => {
     vi.stubGlobal("fetch", routes((url) => (url.startsWith("/api/audit") ? { records: [], next_before: null } : [cluster])));
     renderConsole();
     fireEvent.click(await screen.findByRole("button", { name: "Audit log" }));
-    expect(window.location.hash).toBe("#audit");
+    expect(window.location.hash).toBe("#/audit");
     expect(await screen.findByText("Nothing has been changed from Omnikrux yet.")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Pods" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Back to resources" }));
-    expect(window.location.hash).toBe("#kind=pods");
+    fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
+    expect(window.location.hash).toMatch(/^#\/kubernetes\//);
     expect(await screen.findByRole("tab", { name: "Pods" })).toBeTruthy();
   });
 });
@@ -134,7 +136,7 @@ describe("Console wiring", () => {
     renderConsole();
     const token = await screen.findByTestId("scope-token");
     expect(token.textContent).toBe("KINDkind-omnikrux-dev1 failing");
-    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Pods3");
+    expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Pods3");
     expect(screen.getByRole("button", { name: "Failing 1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Pending 1" })).toBeTruthy();
     expect(screen.getByRole("grid", { name: "Pods by cluster" })).toBeTruthy();
@@ -238,7 +240,7 @@ describe("Console dock wiring", () => {
     renderConsole();
     const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
     fireEvent.click(row);
-    const tab = screen.getByRole("tab", { name: /^Pods/ });
+    const tab = within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { name: /^Pods/ });
     fireEvent.click(tab);
     tab.focus();
     fireEvent.keyDown(tab, { key: "d" });
@@ -250,6 +252,20 @@ describe("Console dock wiring", () => {
     tab.focus();
     fireEvent.keyDown(tab, { key: "l" });
     expect(await within(await screen.findByRole("tablist", { name: "Logs and shells" })).findByRole("tab")).toBeTruthy();
+  });
+
+  it("switching tabs and apps keeps dock sessions", async () => {
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.keyDown(row, { key: "l" });
+    const sessions = await screen.findByRole("tablist", { name: "Logs and shells" });
+    expect(within(sessions).getAllByRole("tab")).toHaveLength(1);
+    const socket = FakeWebSocket.last;
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Audit log" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
+    expect(within(screen.getByRole("tablist", { name: "Logs and shells" })).getAllByRole("tab")).toHaveLength(1);
+    expect(socket.closedByClient).toBe(false);
   });
 
   it("row keys are not taken from the dock or a dialog", async () => {
@@ -380,14 +396,14 @@ describe("Console kinds", () => {
     expect(watch.kind).toBe("pods");
     fireEvent.click(await screen.findByRole("tab", { name: "Deployments" }));
     expect(watch.kind).toBe("deployments.apps");
-    expect(window.location.hash).toBe("#kind=deployments.apps");
-    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Deployments");
+    expect(window.location.hash).toMatch(/^#\/kubernetes\//);
+    expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Deployments");
     expect(screen.getByRole("grid", { name: "Deployments by cluster" })).toBeTruthy();
     expect(screen.getByPlaceholderText("Filter by name, label or image")).toBeTruthy();
     // Back goes to the previous kind.
     window.history.back();
     await waitFor(() => expect(watch.kind).toBe("pods"));
-    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Pods");
+    expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Pods");
   });
 
   it("selected kind survives reload via hash", async () => {
@@ -395,7 +411,7 @@ describe("Console kinds", () => {
     vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
     expect(watch.kind).toBe("events");
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Events"));
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Events"));
     // No cluster has reported events yet: the chip has no number rather than a made-up 0.
     expect(screen.getByRole("button", { name: "Warnings" })).toBeTruthy();
   });
@@ -441,7 +457,7 @@ describe("Console kinds", () => {
     vi.stubGlobal("fetch", fetch);
     renderConsole();
     expect(await screen.findByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeTruthy();
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Certificates"));
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Certificates"));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(fetch.mock.calls.map(([u]) => u)).toContain("/api/clusters/c1/retry"));
     const urls = fetch.mock.calls.map(([u]) => u);

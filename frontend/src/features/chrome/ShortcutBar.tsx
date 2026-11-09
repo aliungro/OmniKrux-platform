@@ -13,7 +13,7 @@ function Keys({ keys }: { keys: string[] }) {
   );
 }
 
-function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGroup[]; onClose: () => void }) {
+export function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGroup[]; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const back = document.activeElement;
@@ -62,19 +62,13 @@ function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGroup[]; o
  * The key strip along the bottom and the "?" sheet, both for the kind on screen: `s` reads "shell"
  * on pods and "scale" on deployments, as the registry says.
  */
-export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
-  const [open, setOpen] = useState(false);
-
+export function ShortcutBar({ kind = "pods", onOpen }: { kind?: string; onOpen?: () => void }) {
+  const [open,setOpen] = useState(false);
   useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!pressed("help", e) || !pageKey(e)) return;
-      e.preventDefault();
-      setOpen(true);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
-
+    if (onOpen) return;
+    const onKey=(e:globalThis.KeyboardEvent)=>{ if(pressed("help",e) && pageKey(e)) { e.preventDefault(); setOpen(true); } };
+    document.addEventListener("keydown",onKey); return ()=>document.removeEventListener("keydown",onKey);
+  },[onOpen]);
   return (
     <>
       <nav className={s.keys} aria-label="Keyboard shortcuts" data-page-keys>
@@ -85,13 +79,13 @@ export function ShortcutBar({ kind = "pods" }: { kind?: string }) {
             </li>
           ))}
           <li className={s.item}>
-            <button type="button" className={s.more} aria-haspopup="dialog" onClick={() => setOpen(true)}>
+            <button type="button" className={s.more} aria-haspopup="dialog" onClick={onOpen ?? (()=>setOpen(true))}>
               <span className={k.k}>{capsOf("help")[0]}</span> all shortcuts
             </button>
           </li>
         </ul>
       </nav>
-      {open && <AllShortcuts groups={allGroups(kind)} onClose={() => setOpen(false)} />}
+      {open && <AllShortcuts groups={allGroups(kind)} onClose={()=>setOpen(false)}/>}
     </>
   );
 }

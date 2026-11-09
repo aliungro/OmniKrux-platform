@@ -37,6 +37,9 @@ export interface CommandContext {
   /** Runs an action on the selected row the way its key would: the same forms and reviews. */
   onRowAction: (action: RowAction) => void;
   onAudit: () => void;
+  onSettings?: () => void;
+  onNewTab?: () => void;
+  onCloseTab?: () => void;
   /** Opens the port-forwards menu; absent while there are none. */
   onForwards?: () => void;
 }
@@ -100,6 +103,9 @@ export function buildCommands(ctx: CommandContext): Command[] {
     }
   }
   out.push({ id: "view:audit", label: "Audit log", group: "Views", keywords: ["audit", "history", "changes"], run: ctx.onAudit });
+  if (ctx.onSettings) out.push({id:"view:settings",label:"Settings",group:"Views",keywords:["settings","preferences","pinned kinds"],run:ctx.onSettings});
+  if (ctx.onNewTab) out.push({id:"view:new-tab",label:"New tab",group:"Views",keywords:["new tab"],run:ctx.onNewTab});
+  if (ctx.onCloseTab) out.push({id:"view:close-tab",label:"Close tab",group:"Views",keywords:["close tab"],run:ctx.onCloseTab});
   if (ctx.onForwards) {
     out.push({ id: "view:forwards", label: "Port-forwards", group: "Views", keywords: ["forwards", "ports"], run: ctx.onForwards });
   }

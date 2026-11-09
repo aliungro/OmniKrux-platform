@@ -266,6 +266,7 @@ export const TerritoryTable = memo(function TerritoryTable({
 
   const onPageKey = (e: globalThis.KeyboardEvent) => {
     if (!pageKey(e) || !routesPageKeys(e.target)) return;
+    if (["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key) && e.target instanceof Element && e.target.closest('button, a[href], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], summary')) return;
     // Keep native activation and navigation on chrome controls (including nested button icons).
     if (["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
       && e.target instanceof Element

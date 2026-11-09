@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { KindsResponse, Plan } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
-import { Console } from "../../App";
+import { Shell as Console } from "../../features/shell/Shell";
+import { seedPodsWorkspace } from "../../test/seedWorkspace";
 import { describeBody } from "../../test/describe";
 import { KINDS, PODS } from "../../test/kinds";
 
@@ -31,6 +32,7 @@ function json(body: unknown) {
 let calls: { url: string; method: string }[] = [];
 
 beforeEach(() => {
+  seedPodsWorkspace();
   window.history.replaceState(null, "", "/");
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
@@ -121,10 +123,10 @@ describe("command palette", () => {
     expect(options()[0]).toBe("Deployments");
     fireEvent.keyDown(input(), { key: "Enter" });
     expect(palette()).toBeNull();
-    expect(window.location.hash).toBe("#kind=deployments.apps");
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Deployments"));
+    expect(window.location.hash).toMatch(/^#\/kubernetes\//);
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Deployments"));
     // The row that had focus went with the pods; focus lands on the kind you jumped to.
-    expect(document.activeElement).toBe(screen.getByRole("tab", { selected: true }));
+    expect(document.activeElement).toBe(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }));
   });
 
   it("says when the kinds are still loading, and when they can't be loaded", async () => {
