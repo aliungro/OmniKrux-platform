@@ -83,7 +83,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
   const { state, dispatch, ask } = dock;
   const base = useId();
   const [viewport, setViewport] = useState(() => window.innerHeight);
-  const [focusedTab, setFocusedTab] = useState<string | null>(null);
+  const [autofocusSuppressedTab, setAutofocusSuppressedTab] = useState<string | null>(null);
 
   // Ctrl \ switches between one pane and side by side, even from inside a terminal.
   useEffect(() => {
@@ -139,7 +139,12 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
       style={{ height }}
       aria-label="Logs and shells"
       data-page-keys="off"
-      onFocusCapture={(e) => setFocusedTab((e.target as HTMLElement).closest('[role="tab"]')?.id ?? null)}
+      onFocusCapture={(e) => {
+        const tab = (e.target as HTMLElement).closest('[role="tab"]');
+        // Tab navigation suppresses this session's autofocus; new sessions can still activate.
+        // Moving to a close button, layout control or grip must not re-enable it.
+        if (tab) setAutofocusSuppressedTab(tab.id);
+      }}
     >
       <Grip height={height} viewport={viewport} onResize={(h) => dispatch({ type: "resize", height: h, viewport })} />
       <SessionTabs
@@ -171,7 +176,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
               <LazyShellPane
                 key={x.id}
                 session={toShellSession(x)}
-                active={x.id === state.focused && focusedTab !== tabId(base, x.id)}
+                active={x.id === state.focused && autofocusSuppressedTab !== tabId(base, x.id)}
                 onStartDebug={x.debug || x.node ? undefined : () => dock.askDebug(x)}
                 onRestart={x.node ? () => dock.askRestart(x) : undefined}
                 note={shellNote(x)}

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import type { Session } from "./dockState";
@@ -230,6 +231,42 @@ describe("Dock", () => {
     await waitFor(() => expect(document.activeElement).toBe(shown()[0].querySelector("textarea")));
   });
 
+  it("Tab from a shell tab keeps focus on its close button", async () => {
+    const user = userEvent.setup();
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    await user.click(screen.getAllByRole("tab")[1]);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getAllByRole("button", { name: /^Close shell/ })[1]);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /side by side/i }));
+    await user.tab();
+    expect(document.activeElement).toBe(shown()[0].querySelector("textarea"));
+  });
+
+  it("clicking the layout after shell tab navigation keeps focus on the control", async () => {
+    const user = userEvent.setup();
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    await user.click(screen.getAllByRole("tab")[1]);
+    const target = screen.getByRole("button", { name: /side by side/i });
+    await user.click(target);
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("Tabbing back to the grip after shell tab navigation keeps focus on the grip", async () => {
+    const user = userEvent.setup();
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    await user.click(screen.getAllByRole("tab")[1]);
+    await user.tab({ shift: true }); // the background tab's close button
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(screen.getByRole("separator", { name: "Resize the dock" }));
+  });
+
   it("Ctrl F searches the focused log when two logs are side by side", () => {
     renderDock();
     open({ ...shell("a"), kind: "logs" });
@@ -404,11 +441,13 @@ describe("Dock", () => {
     });
 
     it("closing a background tab keeps a pending open's focus", async () => {
+      const user = userEvent.setup();
       renderDock();
       await openShell(shell("x"));
       await openShell(shell("y", { pod: "redis-0" }));
+      await user.click(screen.getAllByRole("tab")[1]);
       act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
-      fireEvent.click(screen.getAllByRole("button", { name: /^Close shell/ })[0]);
+      await user.click(screen.getAllByRole("button", { name: /^Close shell/ })[0]);
       await act(async () => slowAnswer());
       await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
       expect(selected().textContent).toContain("api-a");
