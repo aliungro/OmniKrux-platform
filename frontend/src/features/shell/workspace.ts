@@ -12,28 +12,36 @@ export const MAX_CLOSED = 10;
 export const HOME: KubeView = { page: "home" };
 let counter = 0;
 export function newTabId(): string { return typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `t${Date.now()}-${++counter}`; }
-const newTab = (view: KubeView = HOME): Tab<KubeView> => ({ id: newTabId(), view, back: [], forward: [], scrollTop: 0 });
-export function defaultWorkspace(): Workspace { const tab = newTab(); return {version:1,app:"kubernetes",kubernetes:{tabs:[tab],active:tab.id,closed:[]},audit:{filters:{...NO_AUDIT_FILTER}}}; }
+const newTab = (id: string, view: KubeView = HOME): Tab<KubeView> => ({ id, view, back: [], forward: [], scrollTop: 0 });
+export function defaultWorkspace(): Workspace { const tab = newTab(newTabId()); return {version:1,app:"kubernetes",kubernetes:{tabs:[tab],active:tab.id,closed:[]},audit:{filters:{...NO_AUDIT_FILTER}}}; }
 export function sameView(a: KubeView, b: KubeView): boolean {
   if (a.page !== b.page) return false;
   if (a.page === "home" || b.page === "home") return true;
   const sameArray = (x: string[] | null, y: string[] | null) => x === y || (x !== null && y !== null && x.length === y.length && x.every((v,i)=>v===y[i]));
   return a.kind===b.kind && sameArray(a.clusters,b.clusters) && a.open===b.open && (a.selected === b.selected || (a.selected !== null && b.selected !== null && a.selected.clusterId===b.selected.clusterId && a.selected.uid===b.selected.uid)) && a.filters.status===b.filters.status && a.filters.text===b.filters.text && a.filters.namespace===b.filters.namespace && a.filters.columns.length===b.filters.columns.length && a.filters.columns.every((x,i)=>{ const y=b.filters.columns[i]; if (x.key!==y.key || x.op!==y.op) return false; if (x.op==="contains" && y.op==="contains") return x.text===y.text; if (x.op==="oneOf" && y.op==="oneOf") return sameArray(x.values,y.values); if (x.op==="between" && y.op==="between") return x.min===y.min && x.max===y.max; return "seconds" in x && "seconds" in y && x.seconds===y.seconds; }) && a.filters.sort?.key===b.filters.sort?.key && a.filters.sort?.dir===b.filters.sort?.dir;
 }
-export type WorkspaceAction = {type:"switchApp";app:AppId} | {type:"newTab";view?:KubeView} | {type:"closeTab"|"activateTab"|"back"|"forward";id:string} | {type:"nextTab"|"previousTab"} | {type:"navigate";id:string;view:KubeView;mode:"push"|"replace"} | {type:"reopenClosed";index:number} | {type:"scroll";id:string;top:number} | {type:"auditFilters";filters:AuditFilters};
-export function workspaceReducer(ws: Workspace, action: WorkspaceAction): Workspace {
+export type WorkspaceAction = {type:"switchApp";app:AppId} | {type:"newTab";view?:KubeView} | {type:"closeTab";id:string} | {type:"activateTab"|"back"|"forward";id:string} | {type:"nextTab"|"previousTab"} | {type:"navigate";id:string;view:KubeView;mode:"push"|"replace"} | {type:"reopenClosed";index:number} | {type:"scroll";id:string;top:number} | {type:"auditFilters";filters:AuditFilters};
+/** Reducer actions carry generated data so reducing the same state and action is deterministic. */
+export type PreparedWorkspaceAction = Exclude<WorkspaceAction, {type:"newTab"} | {type:"closeTab"}> | {type:"newTab";view?:KubeView;id:string} | {type:"closeTab";id:string;replacementId:string;closedAt:number};
+/** Call once at the dispatch boundary, never from inside the reducer. */
+export function prepareWorkspaceAction(action: WorkspaceAction): PreparedWorkspaceAction {
+  if (action.type === "newTab") return {...action,id:newTabId()};
+  if (action.type === "closeTab") return {...action,replacementId:newTabId(),closedAt:Date.now()};
+  return action;
+}
+export function workspaceReducer(ws: Workspace, action: PreparedWorkspaceAction): Workspace {
   if (action.type === "switchApp") return ws.app===action.app ? ws : {...ws,app:action.app};
   if (action.type === "auditFilters") { const a=ws.audit.filters,b=action.filters; return a.cluster===b.cluster && a.action===b.action && a.text===b.text ? ws : {...ws,audit:{filters:b}}; }
   const k=ws.kubernetes, activeIndex=k.tabs.findIndex(t=>t.id===k.active);
   const set = (next: AppTabs<KubeView>): Workspace => ({...ws,kubernetes:next});
-  if (action.type === "newTab") { const tab=newTab(action.view); const tabs=[...k.tabs]; tabs.splice(activeIndex+1,0,tab); return set({...k,tabs,active:tab.id}); }
+  if (action.type === "newTab") { const tab=newTab(action.id,action.view); const tabs=[...k.tabs]; tabs.splice(activeIndex+1,0,tab); return set({...k,tabs,active:tab.id}); }
   if (action.type === "nextTab" || action.type === "previousTab") { const id=k.tabs[(activeIndex+(action.type==="nextTab"?1:-1)+k.tabs.length)%k.tabs.length].id; return id===k.active?ws:set({...k,active:id}); }
   if (action.type === "reopenClosed") { if (!Number.isInteger(action.index) || action.index<0 || action.index>=k.closed.length) return ws; const entry=k.closed[action.index]; const tabs=[...k.tabs]; tabs.splice(activeIndex+1,0,entry.tab); return set({...k,tabs,active:entry.tab.id,closed:k.closed.filter((_,i)=>i!==action.index)}); }
   if (!("id" in action)) return ws;
   const index=k.tabs.findIndex(t=>t.id===action.id); if (index<0) return ws;
   const tab=k.tabs[index];
   if (action.type === "activateTab") return k.active===tab.id ? ws : set({...k,active:tab.id});
-  if (action.type === "closeTab") { const tabs=k.tabs.filter((_,i)=>i!==index); if (!tabs.length) tabs.push(newTab()); const active=k.active===tab.id ? tabs[Math.min(index,tabs.length-1)].id : k.active; const closed=tab.view.page==="home" ? k.closed : [{tab,closedAt:Date.now()},...k.closed].slice(0,MAX_CLOSED); return set({tabs,active,closed}); }
+  if (action.type === "closeTab") { const tabs=k.tabs.filter((_,i)=>i!==index); if (!tabs.length) tabs.push(newTab(action.replacementId)); const active=k.active===tab.id ? tabs[Math.min(index,tabs.length-1)].id : k.active; const closed=tab.view.page==="home" ? k.closed : [{tab,closedAt:action.closedAt},...k.closed].slice(0,MAX_CLOSED); return set({tabs,active,closed}); }
   let next: Tab<KubeView>;
   if (action.type === "scroll") { if (tab.scrollTop===action.top) return ws; next={...tab,scrollTop:action.top}; }
   else if (action.type === "navigate") { if (sameView(tab.view,action.view)) return ws; next=action.mode==="replace" ? {...tab,view:action.view} : {...tab,view:action.view,back:[...tab.back,tab.view].slice(-MAX_BACK),forward:[]}; }

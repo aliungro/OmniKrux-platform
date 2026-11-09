@@ -71,3 +71,46 @@ describe("storage boundaries", () => {
     hook.unmount();
   });
 });
+
+it("reports blocked saves after a getItem failure and a throwing localStorage getter", () => {
+  vi.useFakeTimers();
+  const blocked = {getItem:()=>{throw new DOMException("denied","SecurityError");},setItem:()=>{},removeItem:()=>{},clear:()=>{},key:()=>null,length:0} satisfies Storage;
+  const first=renderHook(()=>useWorkspace(blocked));
+  act(()=>first.result.current.dispatch({type:"newTab"})); act(()=>vi.advanceTimersByTime(300));
+  expect(first.result.current.saveProblem).toBe("this browser blocks site storage");
+  first.unmount();
+  const getter=vi.spyOn(window,"localStorage","get").mockImplementation(()=>{throw new Error("getter unavailable");});
+  try {
+    const second=renderHook(()=>useWorkspace());
+    expect(second.result.current.loadProblem).toContain("this browser blocks site storage");
+    act(()=>second.result.current.dispatch({type:"newTab"})); act(()=>vi.advanceTimersByTime(300));
+    expect(second.result.current.saveProblem).toBe("this browser blocks site storage");
+    second.unmount();
+  } finally { getter.mockRestore(); }
+});
+
+it("validates closed tabs, caps them, and falls back to the first active tab", () => {
+  const closed=Array.from({length:12},(_,i)=>({tab:{...tab(kind),id:`closed${i}`},closedAt:i}));
+  const input=JSON.parse(raw([tab(kind)]));
+  input.kubernetes.active="missing";
+  input.kubernetes.closed=[{tab:tab(kind),closedAt:2},{tab:{...tab(kind),id:"bad"},closedAt:"bad"},...closed];
+  const ws=parseWorkspace(JSON.stringify(input)).workspace;
+  expect(ws.kubernetes.active).toBe("a");
+  expect(ws.kubernetes.closed).toHaveLength(10);
+  expect(ws.kubernetes.closed.map(c=>c.tab.id)).toEqual(Array.from({length:10},(_,i)=>`closed${i}`));
+});
+it("round trips tabs, histories, closed tabs and audit filters", () => {
+  const ws=defaultWorkspace();
+  const v=kind as typeof ws.kubernetes.tabs[0]["view"];
+  ws.kubernetes.tabs[0]={id:"a",view:v,back:[{page:"home"}],forward:[v],scrollTop:17};
+  ws.kubernetes.tabs.push({id:"b",view:{page:"home"},back:[v],forward:[],scrollTop:2});
+  ws.kubernetes.active="b";
+  ws.kubernetes.closed=[{tab:{id:"c",view:v,back:[{page:"home"}],forward:[],scrollTop:3},closedAt:123}];
+  ws.audit.filters={cluster:"c",action:"scale",text:"needle"}; ws.app="audit";
+  expect(parseWorkspace(serializeWorkspace(ws)).workspace).toEqual(ws);
+});
+it("preserves UI pick values longer than the user-entered text limit", () => {
+  const picked={...kind,filters:{...kind.filters,columns:[{key:"node",op:"oneOf",values:["x".repeat(501)]}]}};
+  const restored=parseWorkspace(raw([tab(picked)])).workspace.kubernetes.tabs[0].view;
+  expect(restored.page === "kind" && restored.filters.columns).toEqual(picked.filters.columns);
+});

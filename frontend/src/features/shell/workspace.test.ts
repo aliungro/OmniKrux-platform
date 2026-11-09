@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { defaultWorkspace, workspaceReducer, type KubeView } from "./workspace";
+import { defaultWorkspace, prepareWorkspaceAction, workspaceReducer as reducePrepared, type KubeView, type Workspace, type WorkspaceAction } from "./workspace";
 import { NO_FILTER } from "../territories/model";
 
+const workspaceReducer = (ws: Workspace, action: WorkspaceAction) => reducePrepared(ws, prepareWorkspaceAction(action));
 const view = (kind: string): KubeView => ({ page: "kind", kind, clusters: null, filters: NO_FILTER, selected: null, open: false });
 
 describe("workspace", () => {
@@ -77,4 +78,24 @@ it("treats filters with the same fields in different property order as the same 
   const b: KubeView = {...a,filters:{...a.filters,columns:[{values:["n"],op:"oneOf",key:"node"}]}};
   const next = workspaceReducer(ws,{type:"navigate",id,view:a,mode:"push"});
   expect(workspaceReducer(next,{type:"navigate",id,view:b,mode:"push"})).toBe(next);
+});
+
+it("reduces the same prepared new-tab and close actions deterministically", () => {
+  const ws = defaultWorkspace();
+  const newAction = {type:"newTab", id:"prepared-id"} as const;
+  expect(reducePrepared(ws,newAction)).toEqual(reducePrepared(ws,newAction));
+  const kindWs = workspaceReducer(ws,{type:"navigate",id:ws.kubernetes.active,view:view("pods"),mode:"push"});
+  const closeAction = {type:"closeTab", id:kindWs.kubernetes.active, replacementId:"replacement", closedAt:123} as const;
+  expect(reducePrepared(kindWs,closeAction)).toEqual(reducePrepared(kindWs,closeAction));
+});
+
+it("selects the left neighbor and clears forward history on a divergent push", () => {
+  let ws=defaultWorkspace(); const first=ws.kubernetes.active;
+  ws=workspaceReducer(ws,{type:"navigate",id:first,view:view("pods"),mode:"push"});
+  ws=workspaceReducer(ws,{type:"back",id:first});
+  ws=workspaceReducer(ws,{type:"navigate",id:first,view:view("jobs"),mode:"push"});
+  expect(ws.kubernetes.tabs[0].forward).toEqual([]);
+  ws=workspaceReducer(ws,{type:"newTab"});
+  ws=workspaceReducer(ws,{type:"closeTab",id:ws.kubernetes.active});
+  expect(ws.kubernetes.active).toBe(first);
 });

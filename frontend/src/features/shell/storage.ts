@@ -3,7 +3,7 @@ import { isKindKey } from "../../route";
 import { NO_AUDIT_FILTER, type AuditFilters } from "../audit/useAudit";
 import { validColumnFilter, validSort } from "../territories/columnFilters";
 import { FILTER_STATUSES, type FilterStatus } from "../territories/model";
-import { defaultWorkspace, HOME, MAX_BACK, MAX_CLOSED, newTabId, workspaceReducer, type AppId, type KubeView, type Tab, type Workspace, type WorkspaceAction } from "./workspace";
+import { defaultWorkspace, HOME, MAX_BACK, MAX_CLOSED, newTabId, prepareWorkspaceAction, workspaceReducer, type AppId, type KubeView, type Tab, type Workspace, type WorkspaceAction } from "./workspace";
 
 export const STORAGE_KEY = "omnikrux.workspace";
 export const SAVE_DEBOUNCE_MS = 300;
@@ -44,12 +44,18 @@ export function parseWorkspace(raw: string | null): {workspace:Workspace;problem
 export function serializeWorkspace(ws: Workspace): string { return JSON.stringify(parseWorkspace(JSON.stringify(ws)).workspace); }
 export function storageProblem(err: unknown): string { if (record(err) || err instanceof Error || err instanceof DOMException) { if (err.name==="QuotaExceededError") return "storage is full"; if (err.name==="SecurityError") return "this browser blocks site storage"; if (typeof err.message==="string") return err.message; } return String(err); }
 export function useWorkspace(storage?: Storage | null): {ws:Workspace;dispatch:(a:WorkspaceAction)=>void;loadProblem:string|null;saveProblem:string|null;dismissLoadProblem:()=>void} {
-  const [initial] = useState(() => { try { const store=storage===undefined ? window.localStorage : storage; return {...parseWorkspace(store?.getItem(STORAGE_KEY) ?? null),store}; } catch (error) { return {workspace:defaultWorkspace(),problem:{text:storageProblem(error),reset:true},store:null}; } });
-  const [ws,dispatch] = useReducer(workspaceReducer,initial.workspace);
+  const [initial] = useState(() => {
+    const failed = (message: string) => ({workspace:defaultWorkspace(),problem:{text:message,reset:true},store:null,accessProblem:message});
+    let store: Storage | null;
+    try { store=storage===undefined ? window.localStorage : storage; } catch { return failed("this browser blocks site storage"); }
+    try { return {...parseWorkspace(store?.getItem(STORAGE_KEY) ?? null),store,accessProblem:null}; } catch (error) { return failed(storageProblem(error)); }
+  });
+  const [ws,reduceDispatch] = useReducer(workspaceReducer,initial.workspace);
+  const dispatch = useCallback((action: WorkspaceAction) => reduceDispatch(prepareWorkspaceAction(action)), []);
   const [loadProblem,setLoadProblem]=useState<string|null>(()=>initial.problem ? initial.problem.reset ? `Your saved tabs couldn't be read (${initial.problem.text}), so Omnikrux started with a fresh Home tab.` : `${initial.problem.text}; the rest are back.` : null);
   const [saveProblem,setSaveProblem]=useState<string|null>(null);
   const latest=useRef(ws); const pending=useRef(false); const timer=useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flush=useCallback(() => { if (!pending.current) return; pending.current=false; if (timer.current!==null) {clearTimeout(timer.current); timer.current=null;} try { initial.store?.setItem(STORAGE_KEY,serializeWorkspace(latest.current)); setSaveProblem(null); } catch (error) { setSaveProblem(storageProblem(error)); } },[initial.store]);
+  const flush=useCallback(() => { if (!pending.current) return; pending.current=false; if (timer.current!==null) {clearTimeout(timer.current); timer.current=null;} try { if (initial.accessProblem !== null) { setSaveProblem(initial.accessProblem); return; } initial.store?.setItem(STORAGE_KEY,serializeWorkspace(latest.current)); setSaveProblem(null); } catch (error) { setSaveProblem(storageProblem(error)); } },[initial.store,initial.accessProblem]);
   useEffect(()=>{ if (latest.current===ws) return; latest.current=ws; pending.current=true; if (timer.current!==null) clearTimeout(timer.current); timer.current=setTimeout(flush,SAVE_DEBOUNCE_MS); },[ws,flush]);
   useEffect(()=>{ window.addEventListener("pagehide",flush); return ()=>{window.removeEventListener("pagehide",flush); flush();}; },[flush]);
   return {ws,dispatch,loadProblem,saveProblem,dismissLoadProblem:()=>setLoadProblem(null)};
