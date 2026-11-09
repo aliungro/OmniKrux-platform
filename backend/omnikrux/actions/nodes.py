@@ -502,6 +502,14 @@ async def drain_pods(
                 if waiters:
                     await asyncio.sleep(POLL_SECONDS)
 
+        def poll_finished(task: asyncio.Task) -> None:
+            # Unexpected read/parse failures must reach the monitored pod tasks too.
+            if not task.cancelled() and (failure := task.exception()) is not None:
+                for ready, _ in waiters.values():
+                    if not ready.done():
+                        ready.set_exception(failure)
+                waiters.clear()
+
         async def one(pod: dict) -> None:
             nonlocal poller
             key = (pod["namespace"], pod["name"])
@@ -523,6 +531,7 @@ async def drain_pods(
                 waiters[pod["uid"]] = (ready, key)
                 if poller is None or poller.done():
                     poller = asyncio.create_task(poll())
+                    poller.add_done_callback(poll_finished)
                 await ready
                 evicted.append(key)
             job.done += 1

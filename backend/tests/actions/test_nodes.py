@@ -8,10 +8,13 @@ they are gone or its time is up. The job finishes the audit record."""
 
 import asyncio
 import math
+from json import JSONDecodeError
 
 import pytest
+from aiohttp import web
 
 from omnikrux.actions import nodes
+from omnikrux.actions.jobs import Job
 from omnikrux.actions.nodes import classify_pods
 from tests.actions.clusters import apply, plan, records
 from tests.fakekube import FakeResource
@@ -487,6 +490,37 @@ async def test_drain_list_failure_keeps_waiting_and_reports(env, times, state):
     else:
         assert current["done"] == 1
         assert fake.fail_lists["/api/v1/pods"] == []
+
+
+async def test_drain_reports_unexpected_node_poll_failure(env, monkeypatch):
+    """Malformed successful list responses must reach the job, never masquerade as a timeout."""
+    fake = env.fakes["dev-a"]
+    seed(env, pod("web-1"), pod("web-2"))
+    fake.linger.update(fake.pods)
+    original = fake._get
+
+    async def malformed_list(request, match):
+        if request.path == "/api/v1/pods":
+            return web.Response(text="{broken", content_type="application/json")
+        return await original(request, match)
+
+    monkeypatch.setattr(fake, "_get", malformed_list)
+    current = Job(id="drain-test", action="drain", actor="test", audit_id=0, cancelled_message="")
+    with pytest.raises(JSONDecodeError):
+        await asyncio.wait_for(
+            nodes.drain_pods(
+                current,
+                connections=env.app.state.connections,
+                cluster_id=env.ids["dev-a"],
+                node="worker",
+                pods=[
+                    {"namespace": "demo", "name": f"web-{i}", "uid": f"u-web-{i}"} for i in (1, 2)
+                ],
+                timeout_s=0.2,
+            ),
+            timeout=1,
+        )
+    assert current.done == 0
 
 
 async def test_drain_retries_an_eviction_conflict_that_isnt_a_new_pod(env):
