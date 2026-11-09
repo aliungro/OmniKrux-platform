@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from omnikrux.config import Settings
 from omnikrux.portforward import manager
 from omnikrux.portforward.manager import PortForwardManager
@@ -20,6 +22,30 @@ from tests.portforward.conftest import (
 from tests.portforward.test_channel import KUBELET_REFUSED, REFUSED
 
 GONE = "Pod web-1 is gone; stop this forward and start a new one."
+
+
+@pytest.mark.parametrize(
+    ("bind", "address"),
+    [
+        ("0.0.0.0", "127.0.0.1:30100"),
+        ("127.0.0.1", "127.0.0.1:30100"),
+        ("::", "[::1]:30100"),
+        ("::1", "[::1]:30100"),
+        ("192.0.2.10", "192.0.2.10:30100"),
+        ("2001:db8::10", "[2001:db8::10]:30100"),
+    ],
+)
+def test_forward_address_follows_bind(bind, address):
+    assert manager.forward_address(bind, 30100) == address
+
+
+async def test_forward_output_keeps_the_listener_bind(env):
+    cluster = await env.app.state.registry.get(env.cluster_id)
+    forward = manager.Forward(
+        id="forward", req=env.request(), cluster=cluster, local_port=30100, pod="web-1"
+    )
+    forward.bind = "2001:db8::10"
+    assert forward.out().address == "[2001:db8::10]:30100"
 
 
 async def test_forward_pod_port_relays_bytes(env):

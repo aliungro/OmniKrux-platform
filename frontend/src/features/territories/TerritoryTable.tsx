@@ -282,9 +282,10 @@ export const TerritoryTable = memo(function TerritoryTable({
   const tabKey = selectedKey !== null && indexByKey.has(selectedKey) ? selectedKey : indexByKey.keys().next().value;
   const margin = virtualizer.options.scrollMargin;
   const columns = kind.columns;
+  const titleKey = kind.key === "helm-releases" ? "release" : "name";
   const tableStyle = useMemo(
-    () => ({ "--cols": gridTemplate(columns), minWidth: minTableWidth(columns) }) as CSSProperties,
-    [columns],
+    () => ({ "--cols": gridTemplate(columns, titleKey), minWidth: minTableWidth(columns, titleKey) }) as CSSProperties,
+    [columns, titleKey],
   );
 
   return (

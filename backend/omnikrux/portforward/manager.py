@@ -60,6 +60,16 @@ IDLE_AFTER_EOF_SECONDS = 5.0
 CLOSE_SECONDS = 5.0  # for a stopped forward's connections to close
 
 
+def forward_address(bind: str, port: int) -> str:
+    """A reachable address for the listener, using loopback for wildcard binds."""
+    if bind == "0.0.0.0":
+        bind = "127.0.0.1"
+    elif bind == "::":
+        bind = "::1"
+    host = f"[{bind}]" if ":" in bind else bind
+    return f"{host}:{port}"
+
+
 class ForwardIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -80,7 +90,7 @@ class ForwardOut(BaseModel):
     name: str
     remote_port: int
     local_port: int
-    address: str  # "127.0.0.1:30001": the listener (or the published port) is IPv4 only
+    address: str  # A reachable host:port; IPv6 hosts are bracketed.
     pod: str | None  # the pod the latest connection went to
     state: Literal["listening", "error"]
     message: str | None
@@ -112,6 +122,7 @@ class Forward:
     cluster: ClusterInfo
     local_port: int
     pod: str | None
+    bind: str = "127.0.0.1"
     audit_id: int = 0
     server: asyncio.Server | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -138,7 +149,7 @@ class Forward:
             name=req.name,
             remote_port=req.port,
             local_port=self.local_port,
-            address=f"127.0.0.1:{self.local_port}",
+            address=forward_address(self.bind, self.local_port),
             pod=self.pod,
             state=self.state,
             message=self.message,
@@ -234,7 +245,12 @@ class PortForwardManager:
             raise ForwardRefused(404, "Unknown cluster") from exc
         target = await self._resolve(req)
         forward = Forward(
-            id=secrets.token_urlsafe(9), req=req, cluster=cluster, local_port=0, pod=target.pod
+            id=secrets.token_urlsafe(9),
+            req=req,
+            cluster=cluster,
+            local_port=0,
+            pod=target.pod,
+            bind=self._bind,
         )
         async with self._lock:  # stop_cluster and close sweep under it too: none slips by
             if self._closed:

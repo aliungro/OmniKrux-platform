@@ -2,7 +2,7 @@ import type { KindInfo, ResourceRow } from "../../api/types";
 import type { RowAction } from "../actions/tools";
 import { capsOf } from "../chrome/shortcuts";
 import { TAB_KINDS } from "../chrome/KindTabs";
-import { kindTitle } from "../territories/model";
+import { kindTitle, rowTitle } from "../territories/model";
 
 export type CommandGroup = "Kinds" | "Actions" | "Views" | "Flux" | "Custom resources";
 
@@ -87,12 +87,13 @@ export function buildCommands(ctx: CommandContext): Command[] {
   const out: Command[] = [];
   const sel = ctx.selected;
   if (sel) {
+    const title = rowTitle(sel.row);
     for (const action of sel.actions) {
       out.push({
         id: `action:${action}`,
-        label: ACTION_LABEL[action](sel.row.name),
+        label: ACTION_LABEL[action](title),
         group: "Actions",
-        keywords: [action, sel.row.name, sel.kind.label, sel.row.kind],
+        keywords: [action, title, sel.row.name, sel.kind.label, sel.row.kind],
         keys: action === "rollback" ? undefined : capsOf(action),
         run: () => ctx.onRowAction(action),
       });

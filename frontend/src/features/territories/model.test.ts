@@ -10,6 +10,14 @@ const state = () => applyMessage(emptyWatchState(), { type: "snapshot", cluster_
   rows: [r("ok-1", "Running", "ok"), r("crash", "CrashLoopBackOff", "bad", { last_restart_at: "2026-11-06T14:04:14" }), r("wait", "Pending", "warn")] });
 
 describe("territories model", () => {
+  it("text filter matches helm release name", () => {
+    const helm: ResourceRow = { ...r("revision-secret", "deployed", "ok", { release: "shop-web" }), kind: "HelmRelease" };
+    const filter: Filters = { status: "all", text: "SHOP-WEB", namespace: null };
+    expect(matchesFilter(helm, filter, now, "helm-releases")).toBe(true);
+    expect(matchesFilter(helm, { ...filter, text: "revision-secret" }, now, "helm-releases")).toBe(true);
+    expect(matchesFilter(helm, { ...filter, text: "missing-release" }, now, "helm-releases")).toBe(false);
+  });
+
   it("sorts failing first and counts ignore filters", () => {
     const [t] = buildTerritories([cl], state(), { status: "failing", text: "", namespace: null }, now);
     expect(t.rows.map(x => x.uid)).toEqual(["crash"]);

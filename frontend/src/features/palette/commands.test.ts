@@ -41,6 +41,15 @@ const VERBS = ["get", "list", "watch", "update", "patch", "delete"];
 const ALL = { change: true, logs: true, shell: true, workloadLogs: true };
 
 describe("buildCommands", () => {
+  it("helm release palette label is the release name", () => {
+    const helm = row({ kind: "HelmRelease", name: "revision-secret", columns: { release: "shop-web" } });
+    const cmds = buildCommands(ctx({ selected: { row: helm, kind: HELM, clusterName: "kind-dev", actions: ["details", "rollback"] } }));
+    const actions = cmds.filter((c) => c.group === "Actions");
+    expect(actions.map((c) => c.label)).toEqual(["Details of shop-web", "Roll back shop-web…"]);
+    expect(actions[0].keywords).toContain("shop-web");
+    expect(rankCommands("revision-secret", cmds)).toContain(actions[0]);
+  });
+
   it("every served kind is a command that jumps to it", () => {
     const c = ctx();
     const cmds = buildCommands(c);

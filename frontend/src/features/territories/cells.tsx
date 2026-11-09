@@ -14,15 +14,30 @@ const isMeter = (c: ColumnSpec) => c.type === "cpu" || c.type === "memory";
 const METER_WIDTH = "minmax(150px, 1fr)";
 
 /** One grid template for the header and every row, from the columns' widths. */
-export function gridTemplate(columns: readonly ColumnSpec[]): string {
+export function gridTemplate(columns: readonly ColumnSpec[], titleKey: string = "name"): string {
+  // The built-in pod schema has restarts; other kinds keep their existing status width.
+  const podColumns = columns.some((c) => c.key === "restarts");
   return columns
-    .map((c) => (c.key === "name" ? "minmax(200px, 2fr)" : isMeter(c) ? METER_WIDTH : c.width === "s" ? "70px" : c.width === "l" ? "2fr" : "1fr"))
+    .map((c) => {
+      if (c.key === titleKey) return "minmax(200px, 2fr)";
+      if (c.key === "name") return "1fr";
+      if (podColumns && c.key === "status") return "minmax(180px, 1fr)";
+      if (isMeter(c)) return METER_WIDTH;
+      return c.width === "s" ? "70px" : c.width === "l" ? "2fr" : "1fr";
+    })
     .join(" ");
 }
 
 /** Wide enough that every column keeps a readable share; the table scrolls sideways below it. */
-export function minTableWidth(columns: readonly ColumnSpec[]): number {
-  const cols = columns.reduce((w, c) => w + (c.key === "name" ? 200 : isMeter(c) ? 150 : c.width === "s" ? 70 : c.width === "l" ? 180 : 100), 0);
+export function minTableWidth(columns: readonly ColumnSpec[], titleKey: string = "name"): number {
+  const podColumns = columns.some((c) => c.key === "restarts");
+  const cols = columns.reduce((w, c) => {
+    if (c.key === titleKey) return w + 200;
+    if (c.key === "name") return w + 100;
+    if (podColumns && c.key === "status") return w + 180;
+    if (isMeter(c)) return w + 150;
+    return w + (c.width === "s" ? 70 : c.width === "l" ? 180 : 100);
+  }, 0);
   // Column gaps, the row's own padding and the table's.
   return cols + 12 * (columns.length - 1) + 32 + 32;
 }

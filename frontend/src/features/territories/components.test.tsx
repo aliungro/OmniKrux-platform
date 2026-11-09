@@ -6,7 +6,7 @@ import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
 import { Status } from "./Status";
 import { CERTIFICATES, DEPLOYMENTS, EVENTS, HELM, NODES, PODS, SERVICES } from "../../test/kinds";
-import { Cell } from "./cells";
+import { Cell, gridTemplate, minTableWidth } from "./cells";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { Usage } from "../../api/types";
 import { Table } from "../../test/table";
@@ -132,6 +132,20 @@ const row = (over: Record<string, unknown> = {}, columns: Record<string, unknown
 const cells = (r: HTMLElement) => Array.from(r.querySelectorAll('[role="gridcell"]')).map((c) => c.textContent);
 
 describe("kinds in the table", () => {
+  it("secret column does not take the name column's width", () => {
+    expect(gridTemplate(HELM.columns, "release")).toBe("minmax(200px, 2fr) 1fr 70px 1fr 70px 1fr");
+    expect(minTableWidth(HELM.columns, "release")).toBe(764);
+    layout();
+    render(<Table territories={[terr()]} kind={HELM} onRetry={() => {}} />);
+    expect(screen.getByRole("grid").style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 70px 1fr 70px 1fr");
+    expect(screen.getByRole("grid").style.minWidth).toBe("764px");
+  });
+
+  it("pod status keeps room for its label and container bullets", () => {
+    expect(gridTemplate(PODS.columns)).toContain("minmax(180px, 1fr)");
+    expect(minTableWidth(PODS.columns)).toBe(1250);
+  });
+
   it("columns follow the kind's column specs", () => {
     layout();
     vi.useFakeTimers({ now: new Date("2026-11-06T16:00:00Z"), toFake: ["Date"] });

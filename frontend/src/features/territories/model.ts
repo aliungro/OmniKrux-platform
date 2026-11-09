@@ -225,8 +225,9 @@ export function chipsFor(kind: Pick<KindInfo, "key" | "columns">): ChipDef[] {
   return hasStatus(kind) ? [FAILING, PENDING] : [];
 }
 
-/** Whether the text is in a row's name, namespace, node, one of its `k=v` labels or images. */
+/** Whether the text is in a row's title, name, namespace, node, labels or images. */
 function matchesText(row: ResourceRow, q: string): boolean {
+  if (rowTitle(row).toLowerCase().includes(q)) return true;
   if (row.name.toLowerCase().includes(q)) return true;
   if (row.namespace !== null && row.namespace.toLowerCase().includes(q)) return true;
   const node = textColumn(row, "node");
