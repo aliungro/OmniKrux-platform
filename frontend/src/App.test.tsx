@@ -254,6 +254,31 @@ describe("Console dock wiring", () => {
     expect(await within(await screen.findByRole("tablist", { name: "Logs and shells" })).findByRole("tab")).toBeTruthy();
   });
 
+  it("row shortcuts work after switching apps without clicking the view", async () => {
+    renderConsole();
+    await screen.findByText("crasher-1");
+    fireEvent.keyDown(document.body, {key:"8",code:"Digit8",altKey:true});
+    fireEvent.keyDown(document.body, {key:"1",code:"Digit1",altKey:true});
+    const main=screen.getByRole("main");
+    await waitFor(()=>expect(document.activeElement).toBe(main));
+    fireEvent.keyDown(main,{key:"ArrowDown"});
+    fireEvent.keyDown(document.activeElement!,{key:"l"});
+    expect(await within(await screen.findByRole("tablist",{name:"Logs and shells"})).findByRole("tab")).toBeTruthy();
+  });
+
+  it("row shortcuts work after activating a workspace tab", async () => {
+    renderConsole();
+    await screen.findByText("crasher-1");
+    fireEvent.click(screen.getByRole("button",{name:"New tab"}));
+    fireEvent.click(screen.getByRole("tab",{name:"Pods · all clusters"}));
+    const main=screen.getByRole("main");
+    await waitFor(()=>expect(document.activeElement).toBe(main));
+    await screen.findByText("crasher-1");
+    fireEvent.keyDown(main,{key:"ArrowDown"});
+    fireEvent.keyDown(document.activeElement!,{key:"l"});
+    expect(await within(await screen.findByRole("tablist",{name:"Logs and shells"})).findByRole("tab")).toBeTruthy();
+  });
+
   it("switching tabs and apps keeps dock sessions", async () => {
     renderConsole();
     const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
