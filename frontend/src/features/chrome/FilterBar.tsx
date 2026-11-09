@@ -1,5 +1,6 @@
-import type { ColumnSpec } from "../../api/types";
+import type { Cluster, ColumnSpec } from "../../api/types";
 import { chipLabel, filterUiFor, type ColumnFilter } from "../territories/columnFilters";
+import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { ColumnFilterMenu } from "../territories/ColumnFilterMenu";
 import type { Territory } from "../territories/model";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
@@ -123,12 +124,32 @@ function NamespacePicker({
   );
 }
 
+function ClusterPicker({ clusters, scope, onScope }: { clusters: Cluster[]; scope: string[] | null; onScope: (scope: string[] | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const label = scope === null ? "All clusters" : scope.length === 1 ? clusters.find(c => c.id === scope[0])?.name ?? scope[0] : `${scope.length} clusters`;
+  return <div className={s.pick} ref={box} onKeyDown={e => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
+    <button ref={button} type="button" aria-label="Clusters" aria-expanded={open} className={`${s.fchip}${scope !== null ? ` ${s.on}` : ""}`} onClick={() => setOpen(!open)}>{label}<i className={s.caret} aria-hidden="true" /></button>
+    {open && <div className={s.menu} role="group" aria-label="Cluster scope">
+      <button type="button" className={s.addOption} onClick={() => { onScope(null); setOpen(false); button.current?.focus(); }}>All clusters</button>
+      {clusters.map(c => <label className={s.option} key={c.id}><input type="checkbox" checked={scope === null || scope.includes(c.id)} onChange={e => { const next = scope === null ? (e.target.checked ? [c.id] : clusters.filter(x => x.id !== c.id).map(x => x.id)) : e.target.checked ? [...scope, c.id] : scope.filter(id => id !== c.id); onScope(next.length === 0 || next.length === clusters.length ? null : next); }} /><ProviderBadge provider={knownProvider(c.provider)} />{c.name}</label>)}
+    </div>}
+  </div>;
+}
+
 export function FilterBar({
   value,
   onChange,
   chips,
   counts,
-  namespaces, columns = [], pickSource = [],
+  namespaces, columns = [], pickSource = [], clusters, scope = null, onScope,
 }: {
   value: Filters;
   onChange: (f: Filters) => void;
@@ -139,6 +160,9 @@ export function FilterBar({
   namespaces: string[] | null;
   columns?: ColumnSpec[];
   pickSource?: Territory[];
+  clusters?: Cluster[];
+  scope?: string[] | null;
+  onScope?: (scope: string[] | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [openColumn, setOpenColumn] = useState<string | null>(null);
@@ -179,6 +203,7 @@ export function FilterBar({
 
   return (
     <div className={s.filters} role="group" aria-label="Filter rows" data-page-keys>
+      {clusters && onScope && <ClusterPicker clusters={clusters} scope={scope} onScope={onScope} />}
       {chips.length > 0 && chip("all", "All")}
       {/* No number until a cluster has reported one: never a made-up 0. */}
       {chips.map((c) => chip(c.status, counts[c.status] === undefined ? c.label : `${c.label} ${counts[c.status]}`, c.icon))}
@@ -197,6 +222,7 @@ export function FilterBar({
           placeholder={PLACEHOLDER}
           aria-label={PLACEHOLDER}
           aria-keyshortcuts="/"
+          maxLength={500}
           spellCheck={false}
           autoComplete="off"
           value={value.text}

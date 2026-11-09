@@ -39,6 +39,9 @@ const OVERSCAN = 10;
 
 export interface TerritoryTableProps {
   territories: Territory[];
+  initialScrollTop?: number;
+  onScroll?: (top: number) => void;
+  onMissingSelection?: () => void;
   columnFilters?: readonly ColumnFilter[];
   sort?: SortSpec | null;
   onColumnFilter?: (key: string, f: ColumnFilter | null) => void;
@@ -91,7 +94,7 @@ const NOT_LIVE: ReadonlySet<ClusterState> = new Set(["syncing", "error", "unknow
  * doesn't re-render the table.
  */
 export const TerritoryTable = memo(function TerritoryTable({
-  territories,
+  territories, initialScrollTop = 0, onScroll, onMissingSelection,
   columnFilters = [], sort = null, onColumnFilter = () => {}, onSort = () => {}, pickSource = territories,
   kind,
   selection,
@@ -118,6 +121,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [items]);
   const selectedKey = selected ? rowKey(selected.clusterId, selected.uid) : null;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const restored = useRef(false);
   /** Set when the keyboard moved the selection; the row takes focus once it has rendered. */
   const focusPending = useRef(false);
   /**
@@ -294,6 +298,14 @@ export const TerritoryTable = memo(function TerritoryTable({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  useLayoutEffect(() => {
+    if (restored.current || !territories.some(t => t.state === "ready" && t.rows.length > 0)) return;
+    restored.current = true;
+    const index = selectedKey === null ? undefined : indexByKey.get(selectedKey);
+    if (index !== undefined) virtualizer.scrollToIndex(index, { align: "auto" });
+    else if (scrollRef.current) scrollRef.current.scrollTop = initialScrollTop;
+  }, [territories, selectedKey, indexByKey, virtualizer, initialScrollTop]);
+
   // Bring the selected row into view, then focus it once the virtualizer has rendered it.
   useLayoutEffect(() => {
     if (revealed.current !== reveal) {
@@ -314,7 +326,7 @@ export const TerritoryTable = memo(function TerritoryTable({
       const home = territories.find((t) => t.cluster.id === selected?.clusterId);
       if (home && NOT_LIVE.has(home.state)) return;
       // Deleted or filtered out on a live cluster: nothing left to inspect.
-      if (open) onSelection((prev) => (prev.open ? { ...prev, open: false } : prev));
+      if (open) { if (onMissingSelection) onMissingSelection(); else onSelection((prev) => (prev.open ? { ...prev, open: false } : prev)); }
       return;
     }
     if (scrollPending.current) {
@@ -341,7 +353,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   );
 
   return (
-    <div ref={scrollRef} className={s.scroll} onKeyDown={onKeyDown}>
+    <div ref={scrollRef} className={s.scroll} onKeyDown={onKeyDown} onScroll={e => onScroll?.(e.currentTarget.scrollTop)}>
       <div
         role="grid"
         aria-label={`${kindTitle(kind)} by cluster`}

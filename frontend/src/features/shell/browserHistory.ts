@@ -23,7 +23,9 @@ export function useTabNav(ws: Workspace, dispatch: (action:WorkspaceAction)=>voi
  const back=useCallback(()=>{const action={type:"back" as const,id:tab.id};current.current=workspaceReducer(current.current,action);dispatch(action);replace();},[dispatch,tab.id,replace]);
  const forward=useCallback(()=>{const action={type:"forward" as const,id:tab.id};current.current=workspaceReducer(current.current,action);dispatch(action);replace();},[dispatch,tab.id,replace]);
  const timer=useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
- const setScroll=useCallback((top:number)=>{clearTimeout(timer.current);timer.current=setTimeout(()=>dispatch({type:"scroll",id:tab.id,top}),200);},[dispatch,tab.id]);
- useEffect(()=>()=>clearTimeout(timer.current),[]);
+ const pendingScroll=useRef<{id:string;top:number} | null>(null);
+ const flushScroll=useCallback(()=>{clearTimeout(timer.current);const pending=pendingScroll.current;pendingScroll.current=null;if(pending) dispatch({type:"scroll",...pending});},[dispatch]);
+ const setScroll=useCallback((top:number)=>{if(pendingScroll.current && pendingScroll.current.id!==tab.id) flushScroll();clearTimeout(timer.current);pendingScroll.current={id:tab.id,top};timer.current=setTimeout(flushScroll,200);},[tab.id,flushScroll]);
+ useEffect(()=>()=>flushScroll(),[tab.id,flushScroll]);
  return {view:tab.view,navigate,back,forward,canBack:tab.back.length>0,canForward:tab.forward.length>0,setScroll,scrollTop:tab.scrollTop};
 }

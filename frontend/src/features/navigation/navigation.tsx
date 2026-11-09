@@ -77,6 +77,7 @@ export interface NavigatorOptions {
   onKind: (key: string) => void;
   setFilters: Dispatch<SetStateAction<Filters>>;
   setSelection: Dispatch<SetStateAction<Selection>>;
+  onLand?: (row: ResourceRow, kind: Pick<KindInfo, "key" | "columns">, sameKind: boolean) => void;
 }
 
 export interface Navigator {
@@ -108,7 +109,7 @@ export function useNavigator(opts: NavigatorOptions): Navigator {
     latest.current = opts;
   });
   /** `arrived`: the view has been on the link's kind since the jump. */
-  const pending = useRef<{ target: Target; arrived: boolean } | null>(null);
+  const pending = useRef<{ target: Target; arrived: boolean; sameKind: boolean } | null>(null);
   const [asked, setAsked] = useState(0);
   const [notice, setNotice] = useState<{ text: string; waiting: boolean } | null>(null);
   const [reveal, setReveal] = useState(0);
@@ -146,7 +147,7 @@ export function useNavigator(opts: NavigatorOptions): Navigator {
   const goTo = useCallback<GoTo>((target) => {
     settle();
     say(null);
-    const jump = { target, arrived: false };
+    const jump = { target, arrived: false, sameKind: target.kind_key === latest.current.kindKey };
     pending.current = jump;
     timers.current.expiry = setTimeout(() => {
       if (pending.current !== jump) return;
@@ -155,8 +156,8 @@ export function useNavigator(opts: NavigatorOptions): Navigator {
       say(notReadyCopy(w.kind, target.namespace, target.name, w.cluster));
     }, WAIT_FOR_MS);
     setAsked((n) => n + 1);
-    const { kindKey: now, onKind } = latest.current;
-    if (target.kind_key !== now) onKind(target.kind_key);
+    const { onKind } = latest.current;
+    if (!jump.sameKind) onKind(target.kind_key);
   }, [say, settle]);
 
   const cancel = settle;
@@ -200,8 +201,12 @@ export function useNavigator(opts: NavigatorOptions): Navigator {
     }
     if (!row) return end(missingCopy(kind, t.namespace, t.name, name));
     settle();
-    setFilters(showing(row, kinds?.find(k => k.key === kindKey) ?? fallbackKind(kindKey)));
-    setSelection({ selected: { clusterId: row.cluster_id, uid: row.uid }, open: true });
+    const landedKind = kinds?.find(k => k.key === kindKey) ?? fallbackKind(kindKey);
+    if (latest.current.onLand) latest.current.onLand(row, landedKind, p.sameKind);
+    else {
+      setFilters(showing(row, landedKind));
+      setSelection({ selected: { clusterId: row.cluster_id, uid: row.uid }, open: true });
+    }
     setReveal((n) => n + 1);
   }, [asked, kindKey, watch, clusters, kinds, say, settle, setFilters, setSelection]);
 

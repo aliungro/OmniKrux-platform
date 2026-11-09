@@ -74,7 +74,19 @@ export function KindTabs({
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
   };
+  const run = useRef(false);
+  const expected = useRef<string | null>(null);
+  const previousActive = useRef(active);
   useEffect(() => stop, []);
+  useEffect(() => {
+    if (previousActive.current === active) return;
+    previousActive.current = active;
+    if (expected.current === active) { expected.current = null; return; }
+    expected.current = null;
+    run.current = false;
+    stop();
+    setMoving(null);
+  }, [active]);
 
   // Left and right move between tabs, as a tablist should; the kind follows once the keys rest.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -89,19 +101,25 @@ export function KindTabs({
     timer.current = setTimeout(() => {
       timer.current = null;
       setMoving(null);
-      if (next !== active) onSelect(next, { replace: true });
+      if (next !== active) {
+        expected.current = next;
+        onSelect(next, { replace: run.current });
+        run.current = true;
+      }
     }, ARROW_SETTLE_MS);
   };
 
   const choose = (key: string) => {
     stop();
+    run.current = false;
+    expected.current = null;
     setMoving(null);
     onSelect(key);
   };
 
   return (
     <nav className={s.kinds} aria-label="Resource kinds" data-page-keys>
-      <div role="tablist" aria-label="Kinds" className={s.list} onKeyDown={onKey}>
+      <div role="tablist" aria-label="Kinds" className={s.list} onKeyDown={onKey} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { run.current = false; stop(); setMoving(null); } }}>
         {tabs.map((t) => {
           const on = t.key === shown;
           return (

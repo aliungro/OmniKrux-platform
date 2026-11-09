@@ -215,7 +215,7 @@ describe("KindTabs", () => {
       expect(onSelect).not.toHaveBeenCalled();
       act(() => void vi.advanceTimersByTime(300));
       expect(onSelect).toHaveBeenCalledTimes(1);
-      expect(onSelect).toHaveBeenCalledWith("pods", { replace: true });
+      expect(onSelect).toHaveBeenCalledWith("pods", { replace: false });
       // A click is a choice of its own: at once, with its own history entry.
       fireEvent.click(screen.getByRole("tab", { name: "Events" }));
       expect(onSelect).toHaveBeenLastCalledWith("events");
@@ -334,4 +334,32 @@ it("add filter reaches filterable columns and Escape restores focus", () => {
   fireEvent.click(screen.getByRole("button",{name:"Node"}));
   expect(screen.getByRole("dialog",{name:"Filter by Node"})).toBeTruthy();
   fireEvent.keyDown(screen.getByRole("dialog"),{key:"Escape"}); expect(document.activeElement).toBe(add);
+});
+
+it("back during a pending arrow kind move wins", () => {
+  vi.useFakeTimers();
+  try {
+    const onSelect = vi.fn();
+    const { rerender } = render(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES]} active="pods" count={0} onSelect={onSelect} />);
+    fireEvent.keyDown(screen.getByRole("tab", { selected: true }), { key: "ArrowRight" });
+    rerender(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES]} active="nodes" count={0} onSelect={onSelect} />);
+    act(() => void vi.advanceTimersByTime(300));
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { selected: true }).textContent).toContain("Nodes");
+  } finally { vi.useRealTimers(); }
+});
+
+it("settled arrow moves preserve the origin as one history entry", () => {
+  vi.useFakeTimers();
+  try {
+    const onSelect = vi.fn();
+    const { rerender } = render(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES]} active="pods" count={0} onSelect={onSelect} />);
+    fireEvent.keyDown(screen.getByRole("tab", { selected: true }), { key: "ArrowRight" });
+    act(() => void vi.advanceTimersByTime(300));
+    expect(onSelect).toHaveBeenLastCalledWith("deployments.apps", { replace: false });
+    rerender(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES]} active="deployments.apps" count={0} onSelect={onSelect} />);
+    fireEvent.keyDown(screen.getByRole("tab", { selected: true }), { key: "ArrowRight" });
+    act(() => void vi.advanceTimersByTime(300));
+    expect(onSelect).toHaveBeenLastCalledWith("nodes", { replace: true });
+  } finally { vi.useRealTimers(); }
 });

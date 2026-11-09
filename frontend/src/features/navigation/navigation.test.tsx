@@ -299,3 +299,24 @@ describe("useNavigator", () => {
     expect(setSelection).not.toHaveBeenCalled();
   });
 });
+
+it("revealed values stay out of storage and are dropped on tab switch", async () => {
+  const base = server();
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.endsWith("/reveal")
+    ? json({ key: "password", value: "never-store-this-value", encoding: "utf-8" })
+    : base(url)));
+  const details = await openPod();
+  fireEvent.click(await within(details).findByRole("button", { name: "Secret payments-db key password" }));
+  const key = await screen.findByTestId("secret-key-password");
+  fireEvent.click(within(key).getByRole("button", { name: "Reveal" }));
+  await screen.findByText("never-store-this-value");
+  expect(JSON.stringify(localStorage)).not.toContain("never-store-this-value");
+  expect(location.hash).not.toContain("never-store-this-value");
+  expect(JSON.stringify(history.state)).not.toContain("never-store-this-value");
+  fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+  const tabs = screen.getByRole("tablist", { name: "Kubernetes tabs" });
+  fireEvent.click(within(tabs).getAllByRole("tab")[0]);
+  const restored = await screen.findByTestId("secret-key-password");
+  expect(within(restored).getByRole("button", { name: "Reveal" })).toBeTruthy();
+  expect(screen.queryByText("never-store-this-value")).toBeNull();
+});

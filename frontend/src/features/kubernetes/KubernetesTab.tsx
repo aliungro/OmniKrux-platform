@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "../../api/useClusters";
 import { refreshKinds, useKinds } from "../../api/useKinds";
@@ -19,9 +19,10 @@ import {
   kindCount,
   namespacesIn,
   NO_FILTER,
-  NO_SELECTION,
+
   podsPerNode,
   rowKey,
+  showingFilters,
   withDiscoveryFailures,
   type Filters,
   type Selection,
@@ -51,6 +52,7 @@ function discovery(data: unknown): KindsResponse["clusters"] | undefined {
 }
 
 const NO_CLUSTERS: Cluster[] = [];
+export const TEXT_COALESCE_MS = 1000;
 
 /** The whole console page; expects a QueryClientProvider above it. */
 export interface KubernetesTabProps { nav:TabNav<KubeView>; dock:ReturnType<typeof useDock>; closed:readonly ClosedTab<KubeView>[]; onReopen:(index:number)=>void; loadProblem:string|null; onDismissLoadProblem:()=>void; onEditPinned:()=>void }
@@ -88,18 +90,47 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
   const metrics = useLiveMetrics(kindKey === "nodes" ? "nodes" : "pods", kindKey === "pods" || kindKey === "nodes");
   const now = useNow(60_000);
 
-  const [filters, setFilters] = useState<Filters>(NO_FILTER);
-  const [selection, setSelection] = useState<Selection>(NO_SELECTION);
-  /** An action the palette asked for on the selected row; the table runs it as the row's key would. */
+  const view = tabNav.view.page === "kind" ? tabNav.view : kindView(tabNav.view, "pods") as Extract<KubeView, {page:"kind"}>;
+  const { filters } = view;
+  const selection = useMemo<Selection>(() => ({ selected: view.selected, open: view.open }), [view.selected, view.open]);
+  const latestSelection = useRef(selection);
+  latestSelection.current = selection;
+  const lastText = useRef(0);
+  const lastTextView = useRef<KubeView | null>(null);
+  useEffect(() => {
+    if (lastTextView.current && lastTextView.current !== tabNav.view) {
+      lastText.current = 0;
+      lastTextView.current = null;
+    }
+  }, [tabNav.view]);
+  const initialScrollTop = useRef(tabNav.scrollTop).current;
+  const [scopeNotice, setScopeNotice] = useState<string | null>(null);
+  const clusterNames = useRef(new Map<string, string>());
+  useEffect(() => { list?.forEach(c => clusterNames.current.set(c.id, c.name)); }, [list]);
+  useEffect(() => {
+    if (!list || clusters.isError || view.clusters === null) return;
+    const ids = new Set(list.map(c => c.id));
+    const gone = view.clusters.filter(id => !ids.has(id));
+    if (!gone.length) return;
+    const rest = view.clusters.filter(id => ids.has(id));
+    const names = gone.map(id => clusterNames.current.get(id) ?? id).join(", ");
+    setScopeNotice(rest.length ? `${names} ${gone.length === 1 ? "is" : "are"} gone from Omnikrux, so this tab shows the rest.` : `The ${gone.length === 1 ? "cluster" : "clusters"} this tab looked at ${gone.length === 1 ? "is" : "are"} gone from Omnikrux, so it shows every cluster.`);
+    tabNav.navigate(v => v.page === "kind" ? { ...v, clusters: rest.length ? rest : null } : v, "replace");
+  }, [list, clusters.isError, view.clusters, tabNav.navigate]);
+  const scoped = useMemo(() => view.clusters === null ? list ?? NO_CLUSTERS : (list ?? NO_CLUSTERS).filter(c => view.clusters!.includes(c.id)), [list, view.clusters]);
+  const setFilters = useCallback<React.Dispatch<React.SetStateAction<Filters>>>(next => {
+    tabNav.navigate(v => v.page === "kind" ? { ...v, filters: typeof next === "function" ? next(v.filters) : next } : v, "replace");
+  }, [tabNav.navigate]);
+  const setSelection = useCallback<React.Dispatch<React.SetStateAction<Selection>>>(next => {
+    tabNav.navigate(v => {
+      if (v.page !== "kind") return v;
+      const old = { selected: v.selected, open: v.open };
+      const value = typeof next === "function" ? next(old) : next;
+      return { ...v, ...value };
+    }, "replace");
+  }, [tabNav.navigate]);
+  /** An action the palette asked for on the selected row. */
   const [rowRequest, setRowRequest] = useState<RowRequest | null>(null);
-  // Another kind starts with nothing selected, and without a status chip it may not offer.
-  const [shownKind, setShownKind] = useState(kindKey);
-  if (shownKind !== kindKey) {
-    setShownKind(kindKey);
-    setSelection(NO_SELECTION);
-    setRowRequest(null);
-    if (filters.status !== "all" || filters.columns.length || filters.sort) setFilters({ ...filters, status: "all", columns: [], sort: null });
-  }
   // A kind without namespaces ignores the namespace you picked for another one (and keeps it for later).
   const effective = useMemo(
     () => (kind.namespaced || filters.namespace === null ? filters : { ...filters, namespace: null }),
@@ -109,15 +140,15 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
   // Unfiltered territories drive the scope tokens and every count, so counts never shrink as you filter.
   // A cluster that couldn't read the kind's API group says so instead of "doesn't serve" (Ruling R36).
   const all = useMemo(
-    () => withDiscoveryFailures(buildTerritories(list ?? [], watch, NO_FILTER, now, kind), discovered, kind),
-    [list, watch, now, kind, discovered],
+    () => withDiscoveryFailures(buildTerritories(scoped, watch, NO_FILTER, now, kind), discovered, kind),
+    [scoped, watch, now, kind, discovered],
   );
   const shown = useMemo(
     () =>
       isNoFilter(effective)
         ? all
-        : withDiscoveryFailures(buildTerritories(list ?? [], watch, effective, now, kind), discovered, kind),
-    [all, list, watch, effective, now, kind, discovered],
+        : withDiscoveryFailures(buildTerritories(scoped, watch, effective, now, kind), discovered, kind),
+    [all, scoped, watch, effective, now, kind, discovered],
   );
   const chips = useMemo(() => chipsFor(kind), [kind]);
   const counts = useMemo(() => countFilters(all, now, kind), [all, now, kind]);
@@ -158,25 +189,49 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
     onKind,
     setFilters,
     setSelection,
+    onLand: (row, landedKind, sameKind) => {
+      lastText.current = 0;
+      tabNav.navigate(v => v.page === "kind" ? { ...v, filters: showingFilters(row, v.filters, landedKind, new Date()), selected: {clusterId: row.cluster_id, uid: row.uid}, open: true } : v, sameKind ? "push" : "replace");
+    },
   });
   const { cancel: cancelJump } = nav;
   // Picking a row, a kind or a filter yourself drops a jump still waiting for its row.
   const onSelection = useCallback<typeof setSelection>((next) => {
     cancelJump();
-    setSelection(next);
-  }, [cancelJump]);
+    const previous = latestSelection.current;
+    const value = typeof next === "function" ? next(previous) : next;
+    latestSelection.current = value;
+    lastText.current = 0;
+    tabNav.navigate(v => v.page === "kind" ? { ...v, ...value } : v, previous.open !== value.open ? "push" : "replace");
+  }, [cancelJump, tabNav.navigate]);
   const onFilters = useCallback((next: Filters) => {
     cancelJump();
-    setFilters(next);
-  }, [cancelJump]);
-  const onColumnFilter = useCallback((key: string, f: import("../territories/columnFilters").ColumnFilter | null) => { cancelJump(); setFilters(prev => ({...prev, columns: [...prev.columns.filter(x => x.key !== key), ...(f ? [f] : [])]})); }, [cancelJump]);
-  const onSort = useCallback((sort: import("../territories/columnFilters").SortSpec | null) => { cancelJump(); setFilters(prev => ({...prev, sort})); }, [cancelJump]);
+    const textOnly = next.text !== filters.text && next.status === filters.status && next.namespace === filters.namespace && next.columns === filters.columns && next.sort === filters.sort;
+    const now = Date.now();
+    const mode = textOnly && lastText.current && now - lastText.current < TEXT_COALESCE_MS ? "replace" : "push";
+    lastText.current = textOnly ? now : 0;
+    tabNav.navigate(v => {
+      if (v.page !== "kind") return v;
+      const updated = { ...v, filters: next };
+      lastTextView.current = textOnly ? updated : null;
+      return updated;
+    }, mode);
+  }, [cancelJump, filters, tabNav.navigate]);
+  const onMissingSelection = useCallback(() => {
+    const id = selection.selected?.clusterId;
+    if (id && (!Object.hasOwn(watch.rows, id) || Object.hasOwn(watch.pending, id))) return;
+    setSelection(prev => ({...prev, open:false}));
+  }, [selection.selected, watch.rows, watch.pending, setSelection]);
+  const onColumnFilter = useCallback((key: string, f: import("../territories/columnFilters").ColumnFilter | null) => { cancelJump(); lastText.current = 0; tabNav.navigate(v => v.page === "kind" ? {...v, filters: {...v.filters, columns: [...v.filters.columns.filter(x => x.key !== key), ...(f ? [f] : [])]}} : v, "push"); }, [cancelJump, tabNav.navigate]);
+  const onSort = useCallback((sort: import("../territories/columnFilters").SortSpec | null) => { cancelJump(); lastText.current = 0; tabNav.navigate(v => v.page === "kind" ? {...v, filters: {...v.filters, sort}} : v, "push"); }, [cancelJump, tabNav.navigate]);
   const onSelectKind = useCallback(
     (key: string, opts?: { replace: boolean }) => {
       cancelJump();
+      if (key === kindKey) return;
+      lastText.current = 0;
       tabNav.navigate(v => kindView(v,key), opts?.replace ? "replace" : "push");
     },
-    [tabNav.navigate, cancelJump],
+    [tabNav.navigate, cancelJump, kindKey],
   );
 
   const selectedRow = useMemo(() => {
@@ -220,7 +275,7 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
     );
   } else if (list.length === 0) {
     body = (
-      <div className={s.note}>No clusters yet. Mount your kubeconfig at /kube/config and restart the console.</div>
+      <><NavigationNotice text={scopeNotice} /><div className={s.note}>No clusters yet. Mount your kubeconfig at /kube/config and restart the console.</div></>
     );
   } else {
     body = (
@@ -234,10 +289,13 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
           onRetry={onRetryKinds}
           onAllKinds={onAllKinds}
         />
-        <FilterBar value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
-        <NavigationNotice text={nav.notice} waiting={nav.waiting} />
+        <FilterBar clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
+        <NavigationNotice text={nav.notice ?? scopeNotice} waiting={nav.waiting} />
         <div className={s.main}>
           <TerritoryTable
+            initialScrollTop={initialScrollTop}
+            onScroll={tabNav.setScroll}
+            onMissingSelection={onMissingSelection}
             territories={shown}
             columnFilters={filters.columns}
             sort={filters.sort}
