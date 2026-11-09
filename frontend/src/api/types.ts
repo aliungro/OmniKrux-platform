@@ -29,6 +29,14 @@ export interface ResourceRow {
   labels: Record<string, string>;
 }
 
+export interface ContainerState {
+  name: string;
+  init: boolean;
+  state: "ready" | "running" | "waiting" | "failing" | "done";
+  reason: string | null;
+  restarts: number;
+}
+
 /* Kinds — mirrors backend/omnikrux/resources/catalog.py (GET /api/kinds). */
 
 export type ColumnType = "text" | "number" | "status" | "age" | "time" | "cpu" | "memory" | "object" | "pods";
@@ -372,12 +380,18 @@ export interface Usage {
   stale: boolean;
 }
 
+export interface NodeSize {
+  cpu_m: number | null;
+  memory_b: number | null;
+}
+
 export interface ClusterMetrics {
   state: MetricsState;
   message: string | null;
   fetched_at: string | null;
   /** "ns/name" for pods, "name" for nodes; empty unless `state` is ok. */
   items: Record<string, Usage>;
+  nodes?: Record<string, NodeSize>;
 }
 
 export interface MetricsOut {

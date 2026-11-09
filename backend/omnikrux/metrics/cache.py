@@ -10,21 +10,25 @@ from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from typing import Literal
 
+from kubernetes_asyncio.client import ApiClient
+
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.metrics.client import (
     NOT_ANSWERING,
     NOT_INSTALLED,
     UnknownCluster,
     failure_of,
+    fetch_node_sizes,
     fetch_usage,
 )
-from omnikrux.metrics.models import ClusterMetrics
+from omnikrux.metrics.models import ClusterMetrics, NodeSize
 
 __all__ = ["NOT_ANSWERING", "NOT_INSTALLED", "MetricsCache"]
 
 log = logging.getLogger(__name__)
 
 Kind = Literal["pods", "nodes"]
+NODE_SIZES_TTL = 300
 
 
 class _Entry:
@@ -40,6 +44,7 @@ class MetricsCache:
         self.ttl = ttl
         self.timeout = timeout  # per cluster: a slow one answers `error`, the others go on
         self._entries: dict[tuple[str, str], _Entry] = {}
+        self._node_sizes_cache: dict[str, tuple[float, dict[str, NodeSize]]] = {}
         self._tasks: set[asyncio.Task] = set()
 
     @property
@@ -81,10 +86,38 @@ class MetricsCache:
             except KeyError as exc:  # only the cluster lookup says "unknown cluster"
                 raise UnknownCluster(cluster_id) from exc
             fetched = datetime.now(UTC)
-            items = await fetch_usage(api, kind, timeout=self.timeout, fetched=fetched)
+            nodes = {}
+            if kind == "pods":
+                items, nodes = await asyncio.gather(
+                    fetch_usage(api, kind, timeout=self.timeout, fetched=fetched),
+                    self._node_sizes(api, cluster_id),
+                    return_exceptions=True,
+                )
+                if isinstance(items, BaseException):
+                    raise items
+                if isinstance(nodes, BaseException):
+                    raise nodes
+            else:
+                items = await fetch_usage(api, kind, timeout=self.timeout, fetched=fetched)
         return ClusterMetrics(
-            state="ok", fetched_at=fetched.isoformat().replace("+00:00", "Z"), items=items
+            state="ok",
+            fetched_at=fetched.isoformat().replace("+00:00", "Z"),
+            items=items,
+            nodes=nodes,
         )
+
+    async def _node_sizes(self, api: ApiClient, cluster_id: str) -> dict[str, NodeSize]:
+        cached = self._node_sizes_cache.get(cluster_id)
+        if cached is not None and time.monotonic() - cached[0] < NODE_SIZES_TTL:
+            return cached[1]
+        timeout = min(5, self.timeout / 2)
+        try:
+            nodes = await asyncio.wait_for(fetch_node_sizes(api, timeout=timeout), timeout)
+        except Exception as exc:  # noqa: BLE001 (optional sizes never fail valid pod usage)
+            log.info("Could not read node sizes (%s)", type(exc).__name__)
+            return {}
+        self._node_sizes_cache[cluster_id] = (time.monotonic(), nodes)
+        return nodes
 
     async def close(self) -> None:
         tasks = list(self._tasks)

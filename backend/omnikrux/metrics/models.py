@@ -15,12 +15,18 @@ class Usage(BaseModel):
     stale: bool  # metrics-server has nothing newer than STALE_SECONDS before we asked
 
 
+class NodeSize(BaseModel):
+    cpu_m: int | None
+    memory_b: int | None
+
+
 class ClusterMetrics(BaseModel):
     state: State
     message: str | None = None
     fetched_at: str | None = None
     # "ns/name" for pods, "name" for nodes. Empty unless `state` is ok.
     items: dict[str, Usage] = {}
+    nodes: dict[str, NodeSize] = {}
 
 
 class MetricsOut(BaseModel):

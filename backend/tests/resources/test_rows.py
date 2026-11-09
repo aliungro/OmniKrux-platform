@@ -174,3 +174,127 @@ def test_node_row_survives_an_absurd_allocatable():
     n = {"metadata": {"name": "n"}, "status": {"allocatable": {"cpu": "1e999999999", "pods": "x"}}}
     row = node_row(n, "c1")
     assert row.columns["allocatable_cpu_m"] is None and row.columns["allocatable_pods"] is None
+
+
+def states_for(containers, statuses=(), init_containers=(), init_statuses=()):
+    p = pod(statuses=statuses, init=init_statuses)
+    p["spec"]["containers"] = containers
+    p["spec"]["initContainers"] = init_containers
+    return pod_row(p, "c1").columns["containers"]
+
+
+def test_container_states_ready_running_waiting():
+    assert states_for(
+        [{"name": "ready"}, {"name": "starting"}, {"name": "creating"}],
+        [
+            {**c(waiting="ContainerCreating"), "name": "creating"},
+            {**c(), "name": "ready"},
+            {**c(ready=False), "name": "starting"},
+        ],
+    ) == [
+        {"name": "ready", "init": False, "state": "ready", "reason": None, "restarts": 0},
+        {"name": "starting", "init": False, "state": "running", "reason": None, "restarts": 0},
+        {
+            "name": "creating",
+            "init": False,
+            "state": "waiting",
+            "reason": "ContainerCreating",
+            "restarts": 0,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "state,reason",
+    [
+        ({"waiting": {"reason": "CrashLoopBackOff"}}, "CrashLoopBackOff"),
+        ({"waiting": {"reason": "ErrImagePull"}}, "ErrImagePull"),
+        ({"terminated": {"reason": "OOMKilled", "exitCode": 137}}, "OOMKilled"),
+        ({"terminated": {"exitCode": 2}}, "Exit code 2"),
+    ],
+)
+def test_container_states_failing_reasons(state, reason):
+    assert states_for([{"name": "app"}], [{"name": "app", "state": state}]) == [
+        {"name": "app", "init": False, "state": "failing", "reason": reason, "restarts": 0}
+    ]
+
+
+@pytest.mark.parametrize("reason,expected", [(None, "Completed"), ("Succeeded", "Succeeded")])
+def test_container_states_done_is_exit_zero(reason, expected):
+    p = pod(
+        "Succeeded",
+        statuses=[{"name": "job", "state": {"terminated": {"exitCode": 0, "reason": reason}}}],
+    )
+    p["spec"]["containers"] = [{"name": "job"}]
+    assert pod_row(p, "c1").columns["containers"] == [
+        {"name": "job", "init": False, "state": "done", "reason": expected, "restarts": 0}
+    ]
+
+
+def test_init_containers_only_while_running_or_failing():
+    assert states_for(
+        [{"name": "app"}],
+        [{**c(), "name": "app"}],
+        [{"name": name} for name in ["finished", "running", "crashing", "pending", "absent"]],
+        [
+            {"name": "finished", "state": {"terminated": {"exitCode": 0}}},
+            {**c(), "name": "running"},
+            {**c(waiting="CrashLoopBackOff"), "name": "crashing"},
+            {**c(waiting="PodInitializing"), "name": "pending"},
+        ],
+    ) == [
+        {"name": "running", "init": True, "state": "running", "reason": None, "restarts": 0},
+        {
+            "name": "crashing",
+            "init": True,
+            "state": "failing",
+            "reason": "CrashLoopBackOff",
+            "restarts": 0,
+        },
+        {"name": "app", "init": False, "state": "ready", "reason": None, "restarts": 0},
+    ]
+
+
+@pytest.mark.parametrize(
+    "status,expected,reason",
+    [
+        (c(), "ready", None),
+        (c(ready=False), "running", None),
+        (c(waiting="ContainerCreating"), "waiting", "ContainerCreating"),
+        (c(waiting="CrashLoopBackOff"), "failing", "CrashLoopBackOff"),
+        ({"state": {"terminated": {"exitCode": 0}}}, "done", "Completed"),
+    ],
+)
+def test_native_sidecar_init_states_are_retained(status, expected, reason):
+    assert states_for(
+        [],
+        init_containers=[{"name": "sidecar", "restartPolicy": "Always"}],
+        init_statuses=[{**status, "name": "sidecar"}],
+    ) == [{"name": "sidecar", "init": True, "state": expected, "reason": reason, "restarts": 0}]
+
+
+def test_container_states_without_statuses_are_waiting():
+    assert states_for([{"name": "a"}, {"name": "b"}]) == [
+        {"name": "a", "init": False, "state": "waiting", "reason": None, "restarts": 0},
+        {"name": "b", "init": False, "state": "waiting", "reason": None, "restarts": 0},
+    ]
+
+
+def test_container_restarts_are_per_container():
+    assert states_for(
+        [{"name": "a"}, {"name": "b"}],
+        [{**c(restarts=3), "name": "b"}, {**c(restarts=7), "name": "a"}],
+    ) == [
+        {"name": "a", "init": False, "state": "ready", "reason": None, "restarts": 7},
+        {"name": "b", "init": False, "state": "ready", "reason": None, "restarts": 3},
+    ]
+
+
+def test_ephemeral_and_unmatched_statuses_are_excluded():
+    p = pod(statuses=[{**c(), "name": "removed"}])
+    p["spec"]["containers"] = [{"name": "app"}]
+    p["spec"]["ephemeralContainers"] = [{"name": "debug"}]
+    p["status"]["ephemeralContainerStatuses"] = [{**c(), "name": "debug"}]
+    assert pod_row(p, "c1").columns["containers"] == [
+        {"name": "app", "init": False, "state": "waiting", "reason": None, "restarts": 0}
+    ]

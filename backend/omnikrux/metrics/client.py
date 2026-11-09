@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from urllib.parse import quote
 
@@ -10,7 +11,7 @@ from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.kube.connections import kube_error_message
 from omnikrux.kube.http import call_json
-from omnikrux.metrics.models import State, Usage
+from omnikrux.metrics.models import NodeSize, State, Usage
 from omnikrux.resources.quantity import parse_bytes, parse_cpu_m
 
 STALE_SECONDS = 120
@@ -98,6 +99,29 @@ async def fetch_one(
     return await call_json(
         api, "GET", f"{BASE}{where}/{kind}/{quote(name, safe='')}", timeout=timeout
     )
+
+
+def _quantity(value: object, parse: Callable[[str], int]) -> int | None:
+    try:
+        return parse(value)
+    except ValueError:
+        return None
+
+
+async def fetch_node_sizes(api: ApiClient, *, timeout: float) -> dict[str, NodeSize]:
+    """Node allocatable sizes; unreadable or missing quantities remain unknown."""
+    body = await call_json(api, "GET", "/api/v1/nodes", timeout=timeout)
+    nodes = {}
+    for item in body.get("items") or []:
+        name = (item.get("metadata") or {}).get("name")
+        if not name:
+            continue
+        allocatable = (item.get("status") or {}).get("allocatable") or {}
+        nodes[name] = NodeSize(
+            cpu_m=_quantity(allocatable.get("cpu"), parse_cpu_m),
+            memory_b=_quantity(allocatable.get("memory"), parse_bytes),
+        )
+    return nodes
 
 
 def _names_missing_metrics(exc: ApiException) -> bool:
