@@ -278,7 +278,7 @@ describe("cpu and memory cells", () => {
     render(
       <Cell
         col={NODES.columns.find((c) => c.key === "cpu")!}
-        row={pod({ columns: { allocatable_cpu_m: 1000 } })}
+        row={pod({ kind: "Node", columns: { allocatable_cpu_m: 1000 } })}
         now={new Date()}
         live={{ usage: usage({ cpu_m: 950 }), why: null }}
       />,
@@ -294,7 +294,7 @@ describe("cpu and memory cells", () => {
   it("stale item dimmed with measured-ago title", () => {
     renderCell("cpu", { usage: usage({ stale: true, at: "2026-11-07T14:07:00Z" }), why: null });
     const meter = screen.getByText("110m").parentElement!;
-    expect(meter.getAttribute("title")).toBe("Measured 3m ago; metrics-server has nothing newer.");
+    expect(meter.getAttribute("title")).toBe("22% of its limit (500m)\nMeasured 3m ago; metrics-server has nothing newer.");
     expect(meter.className).toMatch(/stale/);
     cleanup();
     renderCell("cpu", { usage: usage(), why: null });
@@ -313,6 +313,7 @@ describe("cpu and memory cells", () => {
     const metrics: MetricsLookup = {
       usage: () => ({ usage: null, why: message }),
       why: () => message,
+      nodeSize: () => null,
       now: Date.now(),
     };
     render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} metrics={metrics} />);
@@ -324,5 +325,58 @@ describe("cpu and memory cells", () => {
   it("the band says nothing when metrics are fine", () => {
     render(<ClusterBand t={terr()} kind={PODS} onRetry={() => {}} metricsNote={null} />);
     expect(screen.queryByTestId("band-metrics")).toBeNull();
+  });
+});
+
+
+describe("usage basis in rows", () => {
+  const MIB = 1024 ** 2;
+  const cpu = PODS.columns.find(c => c.type === "cpu")!;
+  const memory = PODS.columns.find(c => c.type === "memory")!;
+  const usage: Usage = { cpu_m: 900, memory_b: 512 * MIB, at: "2026-11-07T14:00:00Z", window_s: 15, stale: false };
+  const size = { cpu_m: 1000, memory_b: 1024 * MIB };
+
+  it("every pod row with metrics shows a bar using its live node size", () => {
+    const metrics: MetricsLookup = {
+      usage: () => ({ usage: { ...usage, cpu_m: 0 }, why: null }), why: () => null,
+      nodeSize: (clusterId, node) => clusterId === "c1" && node === "worker" ? size : null,
+      now: Date.now(),
+    };
+    const { container } = render(<ResourceRowView row={pod({ columns: { node: "worker" } })} kind={PODS} provider="aks" metrics={metrics} />);
+    const bars = container.querySelectorAll("i");
+    expect(bars).toHaveLength(2);
+    expect(bars[0].getAttribute("style")).toContain("--v: 0%");
+    expect(bars[1].getAttribute("style")).toContain("--v: 50%");
+  });
+
+  it.each([
+    ["Pod", { cpu_limit_m: 1000, cpu_request_m: 500 }, "90% of its limit (1000m)", true],
+    ["Pod", { cpu_limit_m: 0, cpu_request_m: 1000 }, "90% of its request (1000m); no limit set", false],
+    ["Pod", { cpu_limit_m: 0, cpu_request_m: 0 }, "90% of node worker (1000m allocatable); no request or limit set", true],
+    ["Node", { allocatable_cpu_m: 1000, cpu_limit_m: 500 }, "90% of what the node can allocate (1000m)", true],
+  ])("tooltip names the basis and hot applies only against limit or node: %s %j", (kind, columns, title, hot) => {
+    const { container } = render(<Cell col={cpu} row={pod({ kind, columns: { ...columns, node: "worker" } })} now={new Date()} live={{ usage, why: null }} nodeSize={size} />);
+    const bar = container.querySelector("i")!;
+    expect(bar.getAttribute("style")).toContain("--v: 90%");
+    expect(bar.parentElement!.title).toBe(`${title}\nMeasured over 15 s`);
+    expect(screen.queryByLabelText("near its limit") !== null).toBe(hot);
+  });
+
+  it("node memory measures against allocatable and formats the amount", () => {
+    const { container } = render(<Cell col={memory} row={pod({ kind: "Node", columns: { allocatable_memory_b: 1024 * MIB } })} now={new Date()} live={{ usage, why: null }} />);
+    expect(container.querySelector("i")?.getAttribute("style")).toContain("--v: 50%");
+    expect(container.querySelector("i")?.parentElement!.title).toBe("50% of what the node can allocate (1 Gi)\nMeasured over 15 s");
+  });
+
+  it("unknown node size shows text with the reason and no bar", () => {
+    const { container } = render(<Cell col={cpu} row={pod({ columns: {} })} now={new Date()} live={{ usage, why: null }} />);
+    expect(container.querySelector("i")).toBeNull();
+    expect(screen.getByText("900m").parentElement!.title).toBe("No limit, request or node size to compare with.\nMeasured over 15 s");
+  });
+
+  it.each([null, { usage: null, why: "Metrics-server is unavailable." }])("no metrics shows a dash, never an empty bar", live => {
+    const { container } = render(<Cell col={cpu} row={pod()} now={new Date()} live={live} nodeSize={size} />);
+    expect(container.querySelector("i")).toBeNull();
+    expect(screen.getByText("\u2014").getAttribute("title")).toBe(live?.why ?? null);
   });
 });

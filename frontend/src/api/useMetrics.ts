@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { failure, getJson } from "./http";
-import type { MetricsOut, Usage } from "./types";
+import type { MetricsOut, NodeSize, Usage } from "./types";
 
 export const METRICS_POLL_MS = 15_000;
 /** Numbers older than this are hidden: a stale number looks like a live one. */
@@ -75,6 +75,8 @@ export function liveUsage(q: MetricsSnapshot, clusterId: string, key: string, no
 export interface MetricsLookup {
   usage: (clusterId: string, key: string) => Live;
   why: (clusterId: string) => string | null;
+  /** Node capacity from this live pods answer only. */
+  nodeSize: (clusterId: string, node: string) => NodeSize | null;
   /** The moment the answers are judged at (ms). */
   now: number;
 }
@@ -132,7 +134,12 @@ export function useLiveMetrics(kind: "pods" | "nodes", enabled: boolean): Metric
     return {
       usage: (clusterId, key) => liveUsage(snap, clusterId, key, now),
       why: (clusterId) => clusterWhy(snap, clusterId, now),
+      nodeSize: (clusterId, node) => {
+        if (kind !== "pods" || snap.data?.kind !== "pods" || snap.awaiting || hiddenWhy(snap, now)) return null;
+        const cluster = clusterOf(snap, clusterId);
+        return cluster?.state === "ok" ? (cluster.nodes?.[node] ?? null) : null;
+      },
       now,
     };
-  }, [enabled, snap, now]);
+  }, [enabled, kind, snap, now]);
 }

@@ -1,7 +1,7 @@
 import type { KindInfo, Provider, ResourceRow } from "../../api/types";
 import type { MetricsLookup } from "../../api/useMetrics";
 import { Cell } from "./cells";
-import { rowKey } from "./model";
+import { rowKey, textColumn } from "./model";
 import { knownProvider } from "./ProviderBadge";
 import s from "./ResourceRowView.module.css";
 import pc from "./provider.module.css";
@@ -62,6 +62,7 @@ export function ResourceRowView({
           now={at}
           podsOnNode={c.type === "pods" ? podsOnNode : null}
           live={metrics && (c.type === "cpu" || c.type === "memory") ? metrics.usage(row.cluster_id, metricsKey) : null}
+          nodeSize={row.kind === "Pod" && (c.type === "cpu" || c.type === "memory") ? metrics?.nodeSize(row.cluster_id, textColumn(row, "node") ?? "") ?? null : null}
           nowMs={metrics?.now}
         />
       ))}
