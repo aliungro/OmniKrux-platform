@@ -2,7 +2,8 @@ import { compileColumnFilters, compareKeys, sortKey, type ColumnFilter, type Sor
 import type { Cluster, ClusterState, ColumnSpec, KindInfo, KindsResponse, Provider, ResourceRow, StatusClass } from "../../api/types";
 import type { WatchState } from "../../api/watchState";
 
-export type FilterStatus = "all" | "failing" | "pending" | "restartedToday" | "warnings";
+export const FILTER_STATUSES = ["all", "failing", "pending", "restartedToday", "warnings"] as const;
+export type FilterStatus = typeof FILTER_STATUSES[number];
 
 export interface Filters {
   status: FilterStatus;
