@@ -66,6 +66,16 @@
   font-weight: 600;
 }
 
+/* Keep the container group intact; the status label gives up its space first. */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.status > :first-child {
+  flex-shrink: 1;
+}
+
 .dim {
   color: var(--ink-2);
 }

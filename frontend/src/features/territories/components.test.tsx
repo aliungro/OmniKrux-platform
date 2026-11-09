@@ -8,8 +8,24 @@ import { Status } from "./Status";
 import { CERTIFICATES, DEPLOYMENTS, EVENTS, HELM, NODES, PODS, SERVICES } from "../../test/kinds";
 import { Cell, gridTemplate, minTableWidth } from "./cells";
 import type { MetricsLookup } from "../../api/useMetrics";
-import type { Usage } from "../../api/types";
+import type { ContainerState, Usage } from "../../api/types";
 import { Table } from "../../test/table";
+import { readFileSync } from "node:fs";
+import rowStyles from "./ResourceRowView.module.css";
+import statusStyles from "./Status.module.css";
+import bulletStyles from "./ContainerBullets.module.css";
+
+// Vitest stubs CSS imports. Apply real rules to their module class names for
+// computed-style integration checks; pixel layout remains a browser check.
+function componentCss(file: string, classes: Record<string, string>) {
+  return readFileSync(new URL(file, import.meta.url), "utf8").replace(/\.([a-zA-Z][\w-]*)/g,
+    (selector, name: string) => classes[name] ? `.${classes[name].split(" ")[0]}` : selector);
+}
+
+const rowCss = componentCss("./ResourceRowView.module.css", rowStyles);
+const statusCss = componentCss("./Status.module.css", statusStyles);
+const bulletsCss = componentCss("./ContainerBullets.module.css", bulletStyles);
+const tokensCss = componentCss("../../design/tokens.css", {});
 
 afterEach(() => {
   cleanup();
@@ -114,6 +130,121 @@ describe("status and pod row", () => {
     expect(screen.getByText("0/2")).toBeTruthy();
     expect(screen.getByText("14")).toBeTruthy();
     expect(screen.getAllByText("—")).toHaveLength(4);
+  });
+});
+
+describe("container status bullets", () => {
+  const state = (over: Partial<ContainerState> = {}): ContainerState =>
+    ({ name: "web", init: false, state: "ready", reason: null, restarts: 0, ...over });
+  const renderPod = (containers: unknown) => render(<ResourceRowView row={pod({ columns: {
+    status: "CrashLoopBackOff", status_class: "bad", containers,
+  } })} kind={PODS} provider="aks" />);
+
+  it("one bullet per container in order", () => {
+    renderPod([state(), state({ name: "sidecar", state: "waiting" }), state({ name: "worker", state: "running" })]);
+    const group = screen.getByRole("img", { name: "Containers: 1 ready, 2 not ready" });
+    expect(Array.from(group.children).map((el) => el.getAttribute("title"))).toEqual([
+      "web: running and ready · 0 restarts", "sidecar: waiting · 0 restarts", "worker: running, not ready · 0 restarts",
+    ]);
+    expect(Array.from(group.children).map((el) => el.getAttribute("data-shape"))).toEqual(["dot", "dot", "dot"]);
+    expect(group.previousElementSibling?.textContent).toBe("CrashLoopBackOff");
+  });
+
+  it("failing is a rose diamond", () => {
+    renderPod([state({ state: "failing", reason: "Error" })]);
+    expect(screen.getByTitle("web: failing (Error) · 0 restarts").getAttribute("data-shape")).toBe("diamond");
+  });
+
+  it("finished is hollow", () => {
+    renderPod([state({ state: "done", reason: "Completed" })]);
+    expect(screen.getByTitle("web: finished (Completed)").getAttribute("data-shape")).toBe("ring");
+  });
+
+  it.each([
+    ["ready", null, 1, "web: running and ready · 1 restart"],
+    ["running", null, 2, "web: running, not ready · 2 restarts"],
+    ["waiting", "ContainerCreating", 0, "web: waiting (ContainerCreating) · 0 restarts"],
+    ["waiting", null, 0, "web: waiting · 0 restarts"],
+    ["failing", "CrashLoopBackOff", 3, "web: failing (CrashLoopBackOff) · 3 restarts"],
+    ["done", "Completed", 5, "web: finished (Completed)"],
+  ] as const)("tooltip names container, state, reason and restarts: %s %s", (value, reason, restarts, title) => {
+    renderPod([state({ state: value, reason, restarts })]);
+    expect(screen.getByTitle(title)).toBeTruthy();
+  });
+
+  it("init containers are labelled init", () => {
+    renderPod([state({ name: "setup", init: true })]);
+    expect(screen.getByTitle("init setup: running and ready · 0 restarts")).toBeTruthy();
+  });
+
+  it("group label counts the states", () => {
+    renderPod([state(), state({ state: "waiting" }), state({ state: "running" }), state({ state: "failing" }), state({ state: "done" })]);
+    expect(screen.getByRole("img", { name: "Containers: 1 ready, 2 not ready, 1 failing, 1 finished" })).toBeTruthy();
+  });
+
+  it("more than six containers collapse into +n", () => {
+    renderPod(Array.from({ length: 8 }, (_, i) => state({ name: `web-${i}` })));
+    const group = screen.getByRole("img", { name: "Containers: 8 ready" });
+    expect(group.querySelectorAll("[data-shape]")).toHaveLength(6);
+    expect(screen.getByText("+2").title).toBe("web-6: running and ready · 0 restarts\nweb-7: running and ready · 0 restarts");
+  });
+
+  it.each([undefined, null, "ready", {}, [], [null], [{ name: "web", state: "ready" }]])("rows without a containers column show no bullets: %j", (containers) => {
+    renderPod(containers);
+    expect(screen.queryByRole("img", { name: /^Containers:/ })).toBeNull();
+  });
+
+  it("non-pod rows do not show container bullets", () => {
+    render(<ResourceRowView row={pod({ kind: "Deployment", columns: { status: "Available", containers: [state()] } })} kind={DEPLOYMENTS} provider="aks" />);
+    expect(screen.queryByRole("img", { name: /^Containers:/ })).toBeNull();
+  });
+
+  it("status label truncates before the fixed-size container marks in a 36px row", () => {
+    const css = document.createElement("style");
+    css.textContent = tokensCss + rowCss + statusCss + bulletsCss;
+    document.head.append(css);
+    try {
+      renderPod(Array.from({ length: 7 }, (_, i) => state({ name: `web-${i}` })));
+      const label = screen.getByText("CrashLoopBackOff");
+      const group = screen.getByRole("img", { name: "Containers: 7 ready" });
+      const cell = label.closest('[role="gridcell"]')!;
+      expect(getComputedStyle(cell).display).toBe("flex");
+      expect(getComputedStyle(cell).alignItems).toBe("center");
+      expect(getComputedStyle(label.parentElement!).minWidth).toBe("0px");
+      expect(getComputedStyle(label.parentElement!).flexShrink).toBe("1");
+      expect(getComputedStyle(label).textOverflow).toBe("ellipsis");
+      expect(getComputedStyle(label).overflow).toBe("hidden");
+      expect(getComputedStyle(label).whiteSpace).toBe("nowrap");
+      expect(getComputedStyle(group).flexShrink).toBe("0");
+      expect(getComputedStyle(group).whiteSpace).toBe("nowrap");
+      expect(getComputedStyle(group.firstElementChild!).width).toBe("7px");
+      expect(getComputedStyle(group.firstElementChild!).height).toBe("7px");
+      expect(getComputedStyle(group.closest('[role="row"]')!).height).toBe("36px");
+    } finally { css.remove(); }
+  });
+
+  it("container shapes use the status palette and a hollow finished ring", () => {
+    const css = document.createElement("style");
+    css.textContent = tokensCss + rowCss + statusCss + bulletsCss;
+    document.head.append(css);
+    try {
+      renderPod([state(), state({ state: "running" }), state({ state: "waiting" }), state({ state: "failing" }), state({ state: "done" })]);
+      const marks = Array.from(screen.getByRole("img").children).map((el) => getComputedStyle(el));
+      expect(marks[0].backgroundColor).toBe("rgb(79, 214, 160)");
+      expect(marks[1].backgroundColor).toBe("rgb(242, 193, 78)");
+      expect(marks[2].backgroundColor).toBe("rgb(242, 193, 78)");
+      expect(marks[3].backgroundColor).toBe("rgb(255, 79, 160)");
+      expect(marks[3].transform).toBe("rotate(45deg)");
+      expect(marks[3].borderRadius).toBe("1px");
+      expect(marks[4].backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      // CSSOM retains the specified subpixel border; computed used widths round it.
+      const ring = screen.getByRole("img").lastElementChild!;
+      const ringRule = Array.from(css.sheet!.cssRules).find((rule) =>
+        rule instanceof CSSStyleRule && ring.matches(rule.selectorText) && rule.style.getPropertyValue("border")) as CSSStyleRule;
+      expect(ringRule.style.getPropertyValue("border")).toBe("1.5px solid var(--ink-3)");
+      expect(marks[4].borderStyle).toBe("solid");
+      expect(marks[4].borderColor).toBe("rgb(119, 113, 143)");
+    } finally { css.remove(); }
   });
 });
 

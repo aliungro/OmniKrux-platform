@@ -6,6 +6,7 @@ import { Meter } from "../metrics/Meter";
 import { LinkButton, useGoTo } from "../navigation/navigation";
 import { formatAge, formatAgo, statusClass, textColumn, titleColumn } from "./model";
 import { Status } from "./Status";
+import { ContainerBullets, isContainerStates } from "./ContainerBullets";
 import s from "./ResourceRowView.module.css";
 
 export const UNKNOWN = "—";
@@ -100,9 +101,12 @@ export function Cell({
   switch (col.type) {
     case "status": {
       const label = col.key === "status" ? textColumn(row, "status") : typeof v === "string" ? v : null;
+      const containers = row.kind === "Pod" && col.key === "status" && isContainerStates(row.columns.containers)
+        ? row.columns.containers : null;
       return (
-        <span role="gridcell" className={s.cell}>
+        <span role="gridcell" className={`${s.cell} ${s.status}`}>
           <Status label={label ?? "Unknown"} cls={statusClass(row)} />
+          {containers && <ContainerBullets containers={containers} />}
         </span>
       );
     }
