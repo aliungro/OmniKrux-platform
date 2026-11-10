@@ -68,6 +68,32 @@ The container runs as uid 10001, but `~/.kube/config` is normally mode 0600 and 
 
 Clusters imported through the API are treated as coming from your kubeconfig file; if their context isn't in the mounted file they are removed on first start — upload them again.
 
+## Finding your way
+
+The left rail switches between Kubernetes, Audit and Settings. Kubernetes starts on Home, with a search for clusters, kinds and pods and a live card for each cluster. Open a cluster card to browse its pods; Home health reports failing pods in rose and pods needing attention in amber. A connection problem is shown with its cause rather than a healthy result.
+
+The workspace tabs above Kubernetes each hold their own kind, cluster scope, filters, sort, selected row, scroll position and back/forward history. Use `+` to open a fresh Home tab and `×` to close a tab. Back and Forward step through the active tab's views; the browser's Back and Forward buttons work too. Switching to Audit or Settings and back returns to the same Kubernetes tab. Only the active tab's view is live; background tabs do not keep their own watches or open details.
+
+Settings lets you reorder, add or remove pinned kinds (including Secrets), or reset the kind row to its defaults. Tabs and pinned kinds are saved in this browser only, never shared with another browser or person. To start fresh, clear this site's data in your browser; this resets tabs and preferences, not clusters in the server's data volume. If browser storage is blocked, full or unreadable, Omnikrux explains the problem and keeps working in memory. Workspace and pinned-kind storage problems can have separate notices.
+
+| Shortcut | Action |
+| --- | --- |
+| `Alt 1` / `Alt 8` / `Alt 9` | Kubernetes / Audit / Settings |
+| `Alt T` / `Alt W` | New / close Kubernetes tab |
+| `Alt PgUp` / `Alt PgDn` | Previous / next workspace tab |
+| `Alt ←` / `Alt →` | Back / forward in this tab |
+| `↑` / `↓` | Select the previous / next row |
+| `Enter` / `d` | Open or close the selected row's details |
+| `/` | Focus the row filter |
+| `:` / `Ctrl K` | Jump to a kind / open commands |
+| `?` | Show all shortcuts, including this kind's row actions |
+
+Row keys work as soon as a kind view opens, without clicking the table: press `↓`, then `l` on Pods to open logs. Keys typed in a field, YAML editor or terminal belong there; page shortcuts pause under a modal dialog. AltGr does not switch apps or tabs.
+
+### Upgrading from Plan 3
+
+Old `#kind=` and `#audit` links still open. The new workspace starts on Home when there is no saved workspace or link to open.
+
 ## Troubleshooting
 
 You can work a problem from the pod list without leaving Omnikrux.
@@ -75,7 +101,7 @@ You can work a problem from the pod list without leaving Omnikrux.
 - Describe, YAML and events open inline under the row (press Enter on a pod). Events show why a container was killed or can't start.
 - Logs are live and searchable. Open the previous run's logs for a container that keeps restarting, or open every pod's logs for a workload in one view (each line says which pod it came from). At most 50,000 lines are kept in the browser; Omnikrux says when older ones were dropped.
 - Shells open in a pod's container. If a container can't run a shell, start a debug container next to it. Node shells open on a node.
-- The bottom dock holds your log and shell sessions as tabs, each labelled with its cluster, namespace and pod, so you can see which cluster your keystrokes go to.
+- The bottom dock holds your log and shell sessions as tabs, each labelled with its cluster, namespace and pod, so you can see which cluster your keystrokes go to. "Side by side" (or `Ctrl \`) shows two open logs or shells together. Open a second session to enable it; with only one, the button explains why it is disabled. The dock stays available when you switch apps or workspace tabs.
 
 Keyboard shortcuts: `↑` `↓` move, `Enter` details, `l` logs, `p` previous logs, `s` shell, `Ctrl F` search logs, `Ctrl \` layout, `/` filter, `?` all shortcuts.
 
@@ -117,15 +143,23 @@ Every change follows the same steps: Omnikrux shows what it will do, you confirm
 - On a production cluster the review says so. Deleting or draining on a production cluster asks you to type the object's name. So does deleting a namespace, PersistentVolume, PersistentVolumeClaim or custom resource definition, or deleting or draining a node, on any cluster.
 - No audit, no change: if the audit log can't be written, nothing is applied.
 - Edit, scale, restart, roll back (deployments), delete, cordon, uncordon and drain all work this way. Drain runs as a job you can watch and cancel; the node stays cordoned if it stops.
-- The audit log is the Audit log view (button in the top bar). It records what was done, on which cluster, when and how it ended (Omnikrux has no login yet, so it doesn't record who), and is kept in the data volume next to your clusters. Exec, debug containers, node shells, port-forwards and secret reveals write a row too.
+- The audit log is the Audit app (Audit in the left rail). It records what was done, on which cluster, when and how it ended (Omnikrux has no login yet, so it doesn't record who), and is kept in the data volume next to your clusters. Exec, debug containers, node shells, port-forwards and secret reveals write a row too.
 
 ### Secrets
 
-Secret values stay on the server. Rows, the details, the YAML and diffs show each key masked as `•••••• ({n} bytes)`. Reveal one key at a time; each reveal is audited by key name only, never by value, and the answer is never cached. Secrets can't be edited in Omnikrux: use `kubectl`.
+Until explicitly revealed, secret values stay on the server. Rows, the details, the YAML and diffs show each key masked as `•••••• ({n} bytes)`. Reveal keys individually; several keys can stay revealed together. "Hide" drops one revealed value; "Hide all" masks every key and drops all revealed values and pending reveals. Values are also dropped when the browser tab is hidden, the details close, you select another row or workspace tab, or the resource version changes. Each reveal is audited by key name only, never by value. Values live only in the open details' memory: never in browser storage, the URL, history or the query cache. Secrets can't be edited in Omnikrux: use `kubectl`.
+
+### Column filters, sorting and container status
+
+Use a column header's filter control for text, pick-list, number or age filters, depending on the column. For example, Events' Last seen can be filtered to "within 1 h". Active filters appear as chips; remove a chip to remove its filter. Filters combine with the main text, namespace and status filters. Click a sortable column heading to cycle ascending, descending and unsorted; sorting stays within each cluster. Filters and sort belong to the workspace tab and return after reload.
+
+Pods show one bullet per container beside their status, including init containers. A green dot means running and ready; an amber dot means running but not ready, or waiting; a rose diamond means failing; a muted hollow ring means finished. Hover a bullet for its container name, reason and restart count (finished containers show their completion reason). At most six bullets are shown; `+n` holds the remaining containers' details.
 
 ### Metrics
 
 CPU and memory for pods and nodes need metrics-server on the cluster. Without it, or while it isn't answering, the cluster's band says why and the CPU and memory columns stay empty. Metrics are only shown while they are live: after a failed poll, or 45 seconds without a good one, the numbers disappear rather than freeze. `bash scripts/dev-kind.sh` installs metrics-server on the local kind cluster.
+
+For each resource independently, a pod's CPU or memory bar compares live usage with a positive limit first, otherwise its request, otherwise its node's allocatable capacity. Node rows use the node's allocatable capacity. Hover the bar to see the basis and amount; "of node" explicitly means no request or limit is set. If no basis is available, Omnikrux shows the live number without a bar. Usage above a request is not treated as a limit breach.
 
 ### Port-forwards
 
