@@ -145,6 +145,7 @@ metadata:
   namespace: demo
 type: Opaque
 stringData:
+  username: omnikrux-demo
   password: s3cr3t-omnikrux
 ---
 apiVersion: v1

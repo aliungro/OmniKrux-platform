@@ -87,3 +87,19 @@ def test_event_rows_have_last_seen(client, cluster):
     for row in rows:
         seen = datetime.fromisoformat(row["columns"]["last_seen"])
         assert seen.tzinfo is not None, row
+
+
+def test_demo_secret_has_two_revealable_keys(client, cluster):
+    row = next(
+        r
+        for r in snapshot_rows(client, "secrets")
+        if r["namespace"] == "demo" and r["name"] == "db-credentials"
+    )
+    assert row["columns"]["keys"] >= 2
+    for key in ("password", "username"):
+        response = client.post(
+            f"/api/clusters/{cluster}/secrets/demo/db-credentials/reveal", json={"key": key}
+        )
+        assert response.status_code == 200
+        assert response.json()["key"] == key
+        assert response.headers["cache-control"] == "no-store"
