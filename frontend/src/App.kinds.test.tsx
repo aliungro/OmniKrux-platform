@@ -217,3 +217,76 @@ it("keeps the removed-scope notice when no clusters remain", async () => {
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
   expect(await screen.findByText("The cluster this tab looked at is gone from Omnikrux, so it shows every cluster.")).toBeTruthy();
 });
+
+it("a removed-scope notice disappears when Back restores a different scope", async () => {
+  const saved = JSON.parse(localStorage.getItem("omnikrux.workspace")!);
+  const tab = saved.kubernetes.tabs[0];
+  tab.back = [{ ...tab.view, clusters: ["c1"] }];
+  tab.view.clusters = ["missing"];
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(saved));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
+  const notice = "The cluster this tab looked at is gone from Omnikrux, so it shows every cluster.";
+  expect(await screen.findByText(notice)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(screen.getByRole("button", { name: "Clusters" }).textContent).toContain("kind-omnikrux-dev");
+  expect(screen.queryByText(notice)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+  expect(screen.getByText(notice)).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Deployments" }));
+  expect(screen.queryByText(notice)).toBeNull();
+});
+
+it("reload restores the saved scroll position when rows arrive", async () => {
+  const client = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const first = render(<QueryClientProvider client={client()}><Console /></QueryClientProvider>);
+  await waitFor(() => expect(FakeWebSocket.instances.some(w => w.params.get("kind") === "pods")).toBe(true));
+  const rows = Array.from({ length: 80 }, (_, i) => ({ ...pod, uid: `p${i}`, name: `pod-${i}` }));
+  const send = (socket: FakeWebSocket) => act(() => {
+    socket.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    socket.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows });
+  });
+  send(FakeWebSocket.instances[0]);
+  const grid = await screen.findByRole("grid", { name: "Pods by cluster" });
+  await screen.findByText("pod-0", { selector: '[role="gridcell"]' });
+  const scroller = grid.parentElement!;
+  fireEvent.scroll(scroller, { target: { scrollTop: 360 } });
+  await waitFor(() => expect(JSON.parse(localStorage.getItem("omnikrux.workspace")!).kubernetes.tabs[0].scrollTop).toBe(360), { timeout: 2000 });
+  first.unmount();
+  render(<QueryClientProvider client={client()}><Console /></QueryClientProvider>);
+  await waitFor(() => expect(FakeWebSocket.instances.filter(w => w.params.get("kind") === "pods")).toHaveLength(2));
+  send(FakeWebSocket.instances.filter(w => w.params.get("kind") === "pods")[1]);
+  const restored = (await screen.findByRole("grid", { name: "Pods by cluster" })).parentElement!;
+  await waitFor(() => expect(restored.scrollTop).toBe(360));
+});
+
+it("Back to deleted details returns to a closed list", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
+  await waitFor(() => expect(FakeWebSocket.instances.some(w => w.params.get("kind") === "pods")).toBe(true));
+  const socket = FakeWebSocket.instances.find(w => w.params.get("kind") === "pods")!;
+  act(() => {
+    socket.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    socket.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [pod] });
+  });
+  fireEvent.click(await screen.findByText("crasher-1", { selector: '[role="gridcell"]' }));
+  expect(await screen.findByRole("region", { name: "Details for crasher-1" })).toBeTruthy();
+  fireEvent.click(screen.getByText("crasher-1", { selector: '[role="gridcell"]' }));
+  act(() => socket.emit({ type: "delete", cluster_id: "c1", uid: "p1" }));
+  await waitFor(() => expect(screen.queryByText("crasher-1", { selector: '[role="gridcell"]' })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(screen.queryByRole("region", { name: "Details for crasher-1" })).toBeNull();
+  expect(screen.getByRole("grid", { name: "Pods by cluster" })).toBeTruthy();
+});
+
+it("a restored kind no cluster serves shows the absent band", async () => {
+  const saved = JSON.parse(localStorage.getItem("omnikrux.workspace")!);
+  saved.kubernetes.tabs[0].view.kind = "widgets.example.io";
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(saved));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
+  await waitFor(() => expect(FakeWebSocket.instances.some(w => w.params.get("kind") === "widgets.example.io")).toBe(true));
+  const socket = FakeWebSocket.instances.find(w => w.params.get("kind") === "widgets.example.io")!;
+  act(() => socket.emit({ type: "cluster_status", cluster_id: "c1", state: "absent", message: "This cluster doesn't serve widgets.example.io." }));
+  expect((await screen.findByTestId("band-absent")).textContent).toContain("doesn't serve widgets.example.io");
+});

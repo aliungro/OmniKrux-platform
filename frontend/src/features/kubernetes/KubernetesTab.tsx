@@ -104,7 +104,8 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
     }
   }, [tabNav.view]);
   const initialScrollTop = useRef(tabNav.scrollTop).current;
-  const [scopeNotice, setScopeNotice] = useState<string | null>(null);
+  const [scopeNotice, setScopeNotice] = useState<{text:string; view:KubeView} | null>(null);
+  const scopeNoticeText = scopeNotice?.view === tabNav.view ? scopeNotice.text : null;
   const clusterNames = useRef(new Map<string, string>());
   useEffect(() => { list?.forEach(c => clusterNames.current.set(c.id, c.name)); }, [list]);
   useEffect(() => {
@@ -114,8 +115,14 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
     if (!gone.length) return;
     const rest = view.clusters.filter(id => ids.has(id));
     const names = gone.map(id => clusterNames.current.get(id) ?? id).join(", ");
-    setScopeNotice(rest.length ? `${names} ${gone.length === 1 ? "is" : "are"} gone from Omnikrux, so this tab shows the rest.` : `The ${gone.length === 1 ? "cluster" : "clusters"} this tab looked at ${gone.length === 1 ? "is" : "are"} gone from Omnikrux, so it shows every cluster.`);
-    tabNav.navigate(v => v.page === "kind" ? { ...v, clusters: rest.length ? rest : null } : v, "replace");
+    const text = rest.length ? `${names} ${gone.length === 1 ? "is" : "are"} gone from Omnikrux, so this tab shows the rest.` : `The ${gone.length === 1 ? "cluster" : "clusters"} this tab looked at ${gone.length === 1 ? "is" : "are"} gone from Omnikrux, so it shows every cluster.`;
+    let next: KubeView | null = null;
+    tabNav.navigate(v => {
+      if (v.page !== "kind" || v.clusters !== view.clusters) return v;
+      next = { ...v, clusters: rest.length ? rest : null };
+      return next;
+    }, "replace");
+    if (next) setScopeNotice({ text, view: next });
   }, [list, clusters.isError, view.clusters, tabNav.navigate]);
   const scoped = useMemo(() => view.clusters === null ? list ?? NO_CLUSTERS : (list ?? NO_CLUSTERS).filter(c => view.clusters!.includes(c.id)), [list, view.clusters]);
   const setFilters = useCallback<React.Dispatch<React.SetStateAction<Filters>>>(next => {
@@ -191,7 +198,7 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
     setSelection,
     onLand: (row, landedKind, sameKind) => {
       lastText.current = 0;
-      tabNav.navigate(v => v.page === "kind" ? { ...v, filters: showingFilters(row, v.filters, landedKind, new Date()), selected: {clusterId: row.cluster_id, uid: row.uid}, open: true } : v, sameKind ? "push" : "replace");
+      tabNav.navigate(v => v.page === "kind" ? { ...v, filters: showingFilters(row, v.filters, landedKind, new Date()), clusters: v.clusters === null || v.clusters.includes(row.cluster_id) ? v.clusters : [...v.clusters, row.cluster_id], selected: {clusterId: row.cluster_id, uid: row.uid}, open: true } : v, sameKind ? "push" : "replace");
     },
   });
   const { cancel: cancelJump } = nav;
@@ -275,7 +282,7 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
     );
   } else if (list.length === 0) {
     body = (
-      <><NavigationNotice text={scopeNotice} /><div className={s.note}>No clusters yet. Mount your kubeconfig at /kube/config and restart the console.</div></>
+      <><NavigationNotice text={scopeNoticeText} /><div className={s.note}>No clusters yet. Mount your kubeconfig at /kube/config and restart the console.</div></>
     );
   } else {
     body = (
@@ -290,7 +297,7 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
           onAllKinds={onAllKinds}
         />
         <FilterBar clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
-        <NavigationNotice text={nav.notice ?? scopeNotice} waiting={nav.waiting} />
+        <NavigationNotice text={nav.notice ?? scopeNoticeText} waiting={nav.waiting} />
         <div className={s.main}>
           <TerritoryTable
             initialScrollTop={initialScrollTop}
