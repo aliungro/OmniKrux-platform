@@ -200,7 +200,7 @@ it("background tabs hold no watch", async () => {
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
   await waitFor(() => expect(FakeWebSocket.instances.some(w => w.params.get("kind") === "pods")).toBe(true));
   fireEvent.click(screen.getByRole("button", { name: "New tab" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Open pods" }));
+  fireEvent.click(await screen.findByRole("button", { name: /kind-omnikrux-dev/ }));
   fireEvent.click(await screen.findByRole("tab", { name: "Deployments" }));
   await waitFor(() => expect(FakeWebSocket.instances.some(w => w.params.get("kind") === "deployments.apps" && !w.closedByClient)).toBe(true));
   expect(FakeWebSocket.instances.filter(w => !w.closedByClient).map(w => w.params.get("kind"))).toEqual(["deployments.apps"]);

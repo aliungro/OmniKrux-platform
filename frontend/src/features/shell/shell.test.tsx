@@ -7,10 +7,15 @@ import { WorkspaceTabs } from "./WorkspaceTabs";
 import { HOME, kindView } from "./workspace";
 import { KINDS } from "../../test/kinds";
 import type { Cluster } from "../../api/types";
+import { FakeWebSocket } from "../logs/fakeWebSocket";
 vi.mock("@xterm/xterm", () => ({Terminal:class {}}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon:class {}}));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-beforeEach(()=>{vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?{kinds:[],clusters:{}}:url.startsWith("/api/audit")?{records:[],next_before:null}:[]),{status:200,headers:{"content-type":"application/json"}}))));});
+beforeEach(()=>{
+ vi.stubGlobal("WebSocket",FakeWebSocket);
+ const cluster:Cluster={id:"c1",name:"East",provider:"aks",context_name:"x",server:"https://east",original_server:null,region:null,environment:"development",state:"ready",message:null};
+ vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?KINDS:url==="/api/clusters"?[cluster]:url.startsWith("/api/audit")?{records:[],next_before:null}:[]),{status:200,headers:{"content-type":"application/json"}}))));
+});
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 function renderShell(){return render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><Shell/></QueryClientProvider>);}
 it("lists the built apps and marks the current app", () => {
@@ -61,8 +66,8 @@ it.each(["Audit log", "Settings"])("does not offer Close tab in %s", (app)=>{
  expect(within(screen.getByRole("tablist",{name:"Kubernetes tabs"})).getAllByRole("tab")).toHaveLength(2);
 });
 
-it("Alt+Left prevents the browser default and steps back once",()=>{
- renderShell();fireEvent.click(screen.getByRole("button",{name:"Open pods"}));
+it("Alt+Left prevents the browser default and steps back once",async()=>{
+ renderShell();fireEvent.click(await screen.findByRole("button",{name:/East/}));
  const event=new KeyboardEvent("keydown",{key:"ArrowLeft",altKey:true,bubbles:true,cancelable:true});
  fireEvent(document.body,event);
  expect(event.defaultPrevented).toBe(true);

@@ -1,0 +1,11 @@
+.card { position:relative; min-width:0; text-align:left; padding:12px 14px; border:0; border-radius:10px; background:var(--surf); color:var(--ink); font:inherit; cursor:pointer; overflow:hidden; }
+.card::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--c); }
+.card:hover { background:var(--surf-2); }
+.name { display:block; font-size:14px; margin:6px 0 2px; overflow-wrap:anywhere; }
+.location { display:block; color:var(--ink-3); font-size:12.5px; overflow-wrap:anywhere; }
+.environment { display:inline-block; margin-top:6px; padding:1px 5px; border:1px solid var(--rule); border-radius:4px; font-size:11px; }
+.production { color:var(--warn); }
+.development { color:var(--ok); }
+.health { display:block; margin-top:8px; font-size:12.5px; color:var(--ink-2); overflow-wrap:anywhere; }
+.failed { color:var(--bad); }
+.warning { color:var(--warn); }

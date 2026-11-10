@@ -57,8 +57,8 @@ export const TEXT_COALESCE_MS = 1000;
 
 /** The whole console page; expects a QueryClientProvider above it. */
 export interface KubernetesTabProps { nav:TabNav<KubeView>; dock:ReturnType<typeof useDock>; closed:readonly ClosedTab<KubeView>[]; onReopen:(index:number)=>void; loadProblem:string|null; onDismissLoadProblem:()=>void; onEditPinned:()=>void }
-export function KubernetesTab({ nav, dock, onEditPinned }: KubernetesTabProps) {
- return nav.view.page === "home" ? <KubernetesHome nav={nav}/> : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned}/>;
+export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned }: KubernetesTabProps) {
+ return nav.view.page === "home" ? <KubernetesHome nav={nav} closed={closed} onReopen={onReopen} loadProblem={loadProblem} onDismissLoadProblem={onDismissLoadProblem} onEditPinned={onEditPinned}/> : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned}/>;
 }
 function KindView({nav: tabNav,dock,onEditPinned}: {nav:TabNav<KubeView>;dock:ReturnType<typeof useDock>;onEditPinned:()=>void}) {
   const pinned = usePinnedKinds();

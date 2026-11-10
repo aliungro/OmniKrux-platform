@@ -1,4 +1,4 @@
-import type { ClusterState, KindInfo } from "../../api/types";
+import type { Cluster, ClusterState, KindInfo } from "../../api/types";
 import { countNoun, hasStatus, type Territory } from "./model";
 import { PROVIDER_CODE, ProviderBadge, knownProvider } from "./ProviderBadge";
 import s from "./ClusterBand.module.css";
@@ -11,6 +11,13 @@ function serverHost(server: string | undefined): string | null {
   } catch {
     return server;
   }
+}
+
+/** The shared location on a cluster band, card or search result. */
+export function bandLocation(cluster: Cluster): string {
+  const host = serverHost(cluster.server);
+  const original = cluster.original_server ? serverHost(cluster.original_server) : null;
+  return [cluster.region, original && host ? `via ${host}` : host].filter(Boolean).join(" · ");
 }
 
 function Summary({ t, kind }: { t: Territory; kind: KindInfo }) {
@@ -69,7 +76,7 @@ export function ClusterBand({
   const host = serverHost(cluster.server);
   // Spec §11: say so when the console reaches the cluster at another address than the kubeconfig's.
   const original = cluster.original_server ? serverHost(cluster.original_server) : null;
-  const loc = [cluster.region, original && host ? `via ${host}` : host].filter(Boolean).join(" · ");
+  const loc = bandLocation(cluster);
   return (
     <div role="row" aria-rowindex={rowIndex} className={`${s.band} ${pc[provider]}${t.rows.length === 0 ? ` ${s.alone}` : ""}`} tabIndex={-1}>
       <div role="rowheader" aria-colspan={kind.columns.length} className={s.cell}>

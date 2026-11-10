@@ -133,8 +133,9 @@ function subsequence(q: string, text: string): boolean {
 }
 
 /** 0: a keyword is the query (a short name, a plural); 1: something starts with it; 2: its letters in order. */
-function tier(q: string, c: Command): number | null {
-  const words = [c.label, ...c.keywords].map((w) => w.toLowerCase());
+export function matchTier(query: string, keywords: readonly string[]): number | null {
+  const q = query.trim().toLowerCase();
+  const words = keywords.map((w) => w.toLowerCase());
   if (words.some((w) => w === q)) return 0;
   const parts = words.flatMap((w) => [w, ...w.split(/[^a-z0-9]+/)]);
   if (parts.some((w) => w.startsWith(q))) return 1;
@@ -151,7 +152,7 @@ export function rankCommands(query: string, cmds: readonly Command[]): Command[]
   if (q === "") return cmds.slice(0, MAX_RESULTS);
   const scored: [number, Command][] = [];
   for (const c of cmds) {
-    const t = tier(q, c);
+    const t = matchTier(q, [c.label, ...c.keywords]);
     if (t !== null) scored.push([t, c]);
   }
   return scored
