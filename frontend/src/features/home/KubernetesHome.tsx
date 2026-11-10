@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CLUSTERS_QUERY_KEY, useClusters } from "../../api/useClusters";
 import { useKinds } from "../../api/useKinds";
 import { useWatch } from "../../api/useWatch";
+import { failure } from "../../api/http";
 import { useNow } from "../../hooks/useNow";
 import { pageKey } from "../chrome/shortcuts";
 import { usePinnedKinds } from "../settings/pinnedKinds";
@@ -61,6 +62,10 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
   const results = useMemo(() => searchHome(query, { clusters: clusters.data ?? [], kinds: kinds.data?.kinds ?? [], pods: territories, pinned: pinned.pinned }), [query, clusters.data, kinds.data, territories, pinned.pinned]);
   const selected = Math.min(active, Math.max(0, results.length - 1));
   const searching = query.trim() !== "";
+  const catalogIncomplete = kinds.data === undefined || kinds.isError;
+  useEffect(() => {
+    if (searching && results.length) document.getElementById(`${listId}-${selected}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [searching, results, listId, selected]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "/" || event.altKey || event.ctrlKey || event.metaKey || !pageKey(event)) return;
@@ -106,7 +111,10 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
             return entries.length ? <div role="group" aria-label={group} key={group}><div className={s.group} aria-hidden="true">{group}</div>{entries.map(({ result, index }) => <div key={index} id={`${listId}-${index}`} role="option" aria-selected={selected === index} className={s.result} onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => open(result)}><ResultLabel result={result}/></div>)}</div> : null;
           })}
         </div>
-        {results.length === 0 && <p role="status" className={s.empty}>Nothing matches "{query.trim()}".</p>}
+        {catalogIncomplete && (kinds.isError
+          ? <div role="alert" className={s.catalog}><span>Can't load the list of kinds: {failure(kinds.error, "try kinds again")}. Search results are incomplete.</span> <button type="button" disabled={kinds.isFetching} onClick={() => void kinds.refetch()}>Try kinds again</button></div>
+          : <p role="status" className={s.empty}>Loading the list of kinds… Search results are incomplete.</p>)}
+        {results.length === 0 && !catalogIncomplete && <p role="status" className={s.empty}>Nothing matches "{query.trim()}".</p>}
         {results.some(r => r.group === "Find") && <button type="button" className={s.edit} onClick={onEditPinned}>Edit pinned kinds…</button>}
       </div>}
     </div>

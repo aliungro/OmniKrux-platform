@@ -49,13 +49,26 @@ it("a save problem is said in this browser and clears after a successful save", 
   const set=vi.spyOn(Storage.prototype,"setItem").mockImplementation(()=>{throw new DOMException("full","QuotaExceededError");});
   render(<SettingsView kinds={KINDS.kinds}/>);
   fireEvent.click(screen.getByRole("button",{name:"Remove Pods"}));
-  expect(within(screen.getByRole("region",{name:"This browser"})).getByRole("alert").textContent).toBe("Tabs can't be saved in this browser (storage is full). They last until you close this page.");
+  expect(within(screen.getByRole("region",{name:"This browser"})).getByRole("alert").textContent).toBe("Pinned kinds can't be saved in this browser (storage is full). Your changes last until you close this page.");
   set.mockRestore(); fireEvent.click(screen.getByRole("button",{name:"Reset to default"}));
   expect(screen.queryByRole("alert")).toBeNull();
 });
 it("workspace save problems are also said in this browser", () => {
   render(<SettingsView kinds={KINDS.kinds} saveProblem="this browser blocks site storage"/>);
   expect(screen.getByRole("alert").textContent).toContain("this browser blocks site storage");
+});
+it("workspace and pinned save failures remain independently visible in Settings", () => {
+  const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("full", "QuotaExceededError"); });
+  const view = render(<SettingsView kinds={KINDS.kinds} saveProblem="this browser blocks site storage"/>);
+  fireEvent.click(screen.getByRole("button", { name: "Remove Pods" }));
+  expect(screen.getAllByRole("alert").map(el => el.textContent)).toEqual([
+    "Tabs can't be saved in this browser (this browser blocks site storage). They last until you close this page.",
+    "Pinned kinds can't be saved in this browser (storage is full). Your changes last until you close this page.",
+  ]);
+  view.rerender(<SettingsView kinds={KINDS.kinds}/>);
+  expect(screen.getByRole("alert").textContent).toContain("Pinned kinds can't be saved");
+  set.mockRestore(); fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 it("edit pinned kinds reaches the section without writing its anchor into the route", () => {
   const scroll=vi.fn(); Object.defineProperty(HTMLElement.prototype,"scrollIntoView",{configurable:true,value:scroll});

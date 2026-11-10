@@ -264,3 +264,90 @@ it("cards share rewritten host locations and omit unknown environments", async (
   expect(within(card).queryByText("Production")).toBeNull();
   expect(within(card).queryByText("Development")).toBeNull();
 });
+
+it("a failed kind catalog keeps healthy partial results honest and can be retried", async () => {
+  let failed = true;
+  const originalFetch = vi.mocked(fetch);
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("/api/kinds") ? failed ? json({ detail: "discovery timed out" }, 503) : json(KINDS) : originalFetch(url)));
+  show(); await ready();
+  fireEvent.change(search(), { target: { value: "deploy" } });
+  expect(await screen.findByText("Can't load the list of kinds: discovery timed out. Search results are incomplete.")).toBeTruthy();
+  expect(screen.queryByText('Nothing matches "deploy".')).toBeNull();
+  fireEvent.change(search(), { target: { value: "prod" } });
+  expect(within(screen.getByRole("group", { name: "Clusters" })).getByRole("option", { name: /prod-east/ })).toBeTruthy();
+  failed = false; fireEvent.click(screen.getByRole("button", { name: "Try kinds again" }));
+  fireEvent.change(search(), { target: { value: "deploy" } });
+  expect(await screen.findByRole("group", { name: "Kinds" })).toBeTruthy();
+  expect(screen.queryByText(/Search results are incomplete/)).toBeNull();
+});
+
+it("a loading kind catalog never claims a completed no-match search", async () => {
+  let complete!: (value: Response) => void;
+  const originalFetch = vi.mocked(fetch);
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("/api/kinds") ? new Promise<Response>(resolve => { complete = resolve; }) : originalFetch(url)));
+  show(); await ready();
+  fireEvent.change(search(), { target: { value: "deploy" } });
+  expect(screen.getByText("Loading the list of kinds… Search results are incomplete.")).toBeTruthy();
+  expect(screen.queryByText('Nothing matches "deploy".')).toBeNull();
+  await act(async () => { complete(await json(KINDS)); });
+  expect(await screen.findByRole("group", { name: "Kinds" })).toBeTruthy();
+  expect(screen.queryByText(/Search results are incomplete/)).toBeNull();
+});
+
+it("keyboard selection scrolls overflowing search results into view and wraps visibly", async () => {
+  const calls: { element: Element; options: ScrollIntoViewOptions }[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: function(this: Element, options: ScrollIntoViewOptions) { calls.push({ element: this, options }); } });
+  try {
+    clusters = Array.from({ length: 8 }, (_, i) => ({ ...cluster, id: `c${i}`, name: `web-cluster-${i}` }));
+    const kinds = Array.from({ length: 8 }, (_, i) => ({ ...KINDS.kinds[1], key: `web-${i}.apps`, plural_label: `web kind ${i}` }));
+    localStorage.setItem("omnikrux.pinnedKinds", JSON.stringify({ version: 1, kinds: kinds.map(k => k.key) }));
+    const originalFetch = vi.mocked(fetch);
+    vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("/api/kinds") ? json({ ...KINDS, kinds }) : originalFetch(url)));
+    show(); await ready(Array.from({ length: 8 }, (_, i) => ({ ...pod, uid: `p${i}`, name: `web-pod-${i}` })));
+    fireEvent.change(search(), { target: { value: "web" } });
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(32);
+    for (let i = 1; i < options.length; i++) {
+      fireEvent.keyDown(search(), { key: "ArrowDown" });
+      expect(calls.at(-1)).toEqual({ element: options[i], options: { block: "nearest" } });
+    }
+    screen.getByRole("listbox").scrollTop = 700;
+    fireEvent.keyDown(search(), { key: "ArrowDown" });
+    expect(calls.at(-1)).toEqual({ element: options[0], options: { block: "nearest" } });
+  } finally { delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView; }
+});
+
+it("a workspace write failure is visible outside Settings and clears after a successful save", async () => {
+  show(); await screen.findByRole("button", { name: /prod-east/ });
+  const originalSet = Storage.prototype.setItem;
+  const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key, value) {
+    if (key === "omnikrux.workspace") throw new DOMException("full", "QuotaExceededError");
+    originalSet.call(this, key, value);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+  act(() => window.dispatchEvent(new Event("pagehide")));
+  expect(screen.getByRole("alert").textContent).toBe("Tabs can't be saved in this browser (storage is full). They last until you close this page.");
+  fireEvent.click(await screen.findByRole("button", { name: /prod-east/ }));
+  expect(screen.getByRole("alert").textContent).toContain("Tabs can't be saved");
+  set.mockRestore();
+  fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+  act(() => window.dispatchEvent(new Event("pagehide")));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("a pinned-only write failure stays accurately visible after leaving Settings", async () => {
+  show(); await screen.findByRole("button", { name: /prod-east/ });
+  const originalSet = Storage.prototype.setItem;
+  const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key, value) {
+    if (key === "omnikrux.pinnedKinds") throw new DOMException("full", "QuotaExceededError");
+    originalSet.call(this, key, value);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove Pods" }));
+  fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
+  expect(screen.getByRole("alert").textContent).toBe("Pinned kinds can't be saved in this browser (storage is full). Your changes last until you close this page.");
+  set.mockRestore(); fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+  fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+});

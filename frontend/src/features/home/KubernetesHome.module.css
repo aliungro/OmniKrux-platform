@@ -18,6 +18,9 @@
 .result b { font-weight:500; }
 .result > span:last-child { color:var(--ink-3); font-size:12px; }
 .empty { margin:0; padding:16px; color:var(--ink-2); font-size:13px; overflow-wrap:anywhere; }
+.catalog { padding:12px 14px; color:var(--warn); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+.catalog button { margin-top:8px; padding:4px 8px; border:1px solid var(--rule); border-radius:5px; background:var(--surf-2); color:var(--ink); font:inherit; cursor:pointer; }
+.catalog button:disabled { opacity:.5; cursor:default; }
 .edit { width:100%; border:0; border-top:1px solid var(--rule); background:none; color:var(--ink-2); text-align:left; padding:10px 14px; font:inherit; font-size:12px; cursor:pointer; }
 .edit:hover { color:var(--focus); }
 .recent { border-top:1px solid var(--rule); }
