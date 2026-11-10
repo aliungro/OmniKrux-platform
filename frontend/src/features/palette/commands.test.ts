@@ -145,3 +145,8 @@ it("the palette lists kinds in pinned order", () => {
  const commands=buildCommands(ctx({pinned:["nodes","services","pods"]}));
  expect(commands.filter(c=>c.group==="Kinds").map(c=>c.label)).toEqual(["Nodes","Services","Pods","Config maps","Deployments","Events","Helm releases","StatefulSets"]);
 });
+
+it("pinned custom and Flux kinds precede builtins in user order", () => {
+ const cmds=buildCommands(ctx({pinned:["certificates.cert-manager.io", "pods", KUSTOMIZATIONS.key, "services"]}));
+ expect(cmds.filter(c=>c.id.startsWith("kind:")).slice(0,4).map(c=>c.label)).toEqual(["Certificates","Pods","Kustomizations","Services"]);
+});

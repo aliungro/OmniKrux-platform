@@ -19,6 +19,7 @@ export function SettingsView({ kinds, saveProblem = null, section }: {
     <section id="this-browser" aria-labelledby="browser-heading" className={s.section}>
       <h2 id="browser-heading">This browser</h2>
       <p className={s.lede}>Tabs and pinned kinds are saved in this browser only, not shared with anyone.</p>
+      {pinned.loadProblem && <div role="alert" className={s.problem}>{pinned.loadProblem} <button type="button" aria-label="Dismiss pinned kinds notice" onClick={pinned.dismissLoadProblem}>Dismiss</button></div>}
       {problem && <p role="alert" className={s.problem}>Tabs can't be saved in this browser ({problem}). They last until you close this page.</p>}
     </section>
   </div></div>;

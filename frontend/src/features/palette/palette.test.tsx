@@ -8,6 +8,7 @@ import { Shell as Console } from "../../features/shell/Shell";
 import { seedPodsWorkspace } from "../../test/seedWorkspace";
 import { describeBody } from "../../test/describe";
 import { KINDS, PODS } from "../../test/kinds";
+import { CommandPalette } from "./CommandPalette";
 
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class {} }));
@@ -84,6 +85,23 @@ const input = () => within(palette()!).getByRole("combobox");
 const label = (o: Element) => o.querySelector("[data-part=label]")?.textContent ?? null;
 const options = () => within(palette()!).queryAllByRole("option").map(label);
 const ctrlK = (target: Element = document.body) => fireEvent.keyDown(target, { key: "k", ctrlKey: true });
+
+it.each(["all", "kinds"] as const)("the rendered %s palette keeps pins across repeated group headings", mode => {
+  const flux={...KINDS.kinds.at(-1)!, key:"widgets.example.toolkit.fluxcd.io", kind:"Widget", plural_label:"widgets"};
+  localStorage.setItem("omnikrux.pinnedKinds",JSON.stringify({version:1,kinds:["certificates.cert-manager.io","pods",flux.key,"services"]}));
+  const onKind=vi.fn();
+  render(<CommandPalette mode={mode} kinds={[...KINDS.kinds,flux]} selection={null} onKind={onKind} onRowAction={()=>{}} onAudit={()=>{}} onClose={()=>{}}/>);
+  const kinds=options().filter(label=>label!=="Audit log");
+  expect(kinds.slice(0,4)).toEqual(["Certificates","Pods","Widgets","Services"]);
+  if(mode==="all") fireEvent.keyDown(input(),{key:"ArrowDown"});
+  fireEvent.keyDown(input(),{key:"ArrowDown"});
+  fireEvent.keyDown(input(),{key:"Enter"});
+  expect(onKind).toHaveBeenCalledWith("pods");
+  fireEvent.click(within(palette()!).getByRole("option",{name:"Widgets"}));
+  expect(onKind).toHaveBeenLastCalledWith(flux.key);
+  const heads=Array.from(palette()!.querySelectorAll('[role="group"]')).map(g=>g.getAttribute("aria-labelledby"));
+  expect(new Set(heads).size).toBe(heads.length);
+});
 
 describe("command palette", () => {
   it("ctrl k opens the palette and esc restores focus", async () => {

@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { KindInfo } from "../../api/types";
 import { fallbackKind, kindTitle } from "../territories/model";
 import { usePinnedKinds } from "./pinnedKinds";
@@ -10,6 +10,7 @@ export function PinnedKindsSection({ kinds }: { kinds: readonly KindInfo[] | und
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  const removeButtons = useRef(new Map<string, HTMLButtonElement>());
   const id = useId();
   const byKey = new Map((kinds ?? []).map(k => [k.key, k]));
   const served = new Map([...byKey].filter(([, k]) => k.clusters.length > 0));
@@ -17,6 +18,14 @@ export function PinnedKindsSection({ kinds }: { kinds: readonly KindInfo[] | und
     `${kindTitle(k)} ${k.key}`.toLowerCase().includes(query.trim().toLowerCase())).sort((a, b) => kindTitle(a).localeCompare(kindTitle(b)));
   const at = Math.min(active, options.length - 1);
   const add = (key: string) => { pin(key); setQuery(""); setActive(0); setOpen(false); input.current?.focus(); };
+  const remove = (key: string, index: number) => {
+    const next = pinned[index + 1] ?? pinned[index - 1];
+    unpin(key);
+    (removeButtons.current.get(next) ?? input.current)?.focus();
+  };
+  useEffect(() => {
+    if (open && at >= 0) document.getElementById(`${id}-option-${at}`)?.scrollIntoView?.({ block: "nearest" });
+  });
 
   return <section id="pinned-kinds" aria-labelledby={`${id}-heading`} className={s.section}>
     <h2 id={`${id}-heading`}>Pinned kinds</h2>
@@ -30,7 +39,7 @@ export function PinnedKindsSection({ kinds }: { kinds: readonly KindInfo[] | und
           <div className={s.controls}>
             <button type="button" aria-label={`Move ${title} up`} disabled={i === 0} onClick={() => move(key, -1)}>Move up</button>
             <button type="button" aria-label={`Move ${title} down`} disabled={i === pinned.length - 1} onClick={() => move(key, 1)}>Move down</button>
-            <button type="button" aria-label={`Remove ${title}`} onClick={() => unpin(key)}>Remove</button>
+            <button ref={button => { if (button) removeButtons.current.set(key, button); else removeButtons.current.delete(key); }} type="button" aria-label={`Remove ${title}`} onClick={() => remove(key, i)}>Remove</button>
           </div>
         </li>;
       })}</ul>}

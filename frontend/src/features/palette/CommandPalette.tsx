@@ -6,7 +6,7 @@ import { capsOf, pageKey, pressed } from "../chrome/shortcuts";
 import { usePinnedKinds } from "../settings/pinnedKinds";
 import { rowTitle } from "../territories/model";
 import { ProviderBadge } from "../territories/ProviderBadge";
-import { GROUP_ORDER, KIND_GROUPS, MAX_RESULTS, buildCommands, rankCommands, type Command, type CommandGroup } from "./commands";
+import { KIND_GROUPS, MAX_RESULTS, buildCommands, rankCommands, type Command, type CommandGroup } from "./commands";
 import k from "../chrome/key.module.css";
 import s from "./CommandPalette.module.css";
 
@@ -68,15 +68,15 @@ function Empty({ kindsOnly, query, loading, error }: { kindsOnly: boolean; query
   return <p className={s.empty} role="status">{`Nothing matches “${query}”. Try a kind's short name, like deploy or svc.`}</p>;
 }
 
-/** The ranked commands in groups, each group where its best match ranks, best first inside it. */
+/** Consecutive group headings preserve command ranking and pinned order across kind groups. */
 function inGroups(ranked: Command[]): [CommandGroup, Command[]][] {
-  const groups = new Map<CommandGroup, Command[]>();
+  const groups: [CommandGroup, Command[]][] = [];
   for (const c of ranked) {
-    const list = groups.get(c.group);
-    if (list) list.push(c);
-    else groups.set(c.group, [c]);
+    const last = groups.at(-1);
+    if (last?.[0] === c.group) last[1].push(c);
+    else groups.push([c.group, [c]]);
   }
-  return [...groups];
+  return groups;
 }
 
 /**
@@ -141,11 +141,7 @@ export function CommandPalette({
   const kindsOnly = mode === "kinds" || split.kindsOnly;
   const pool = useMemo(() => (kindsOnly ? commands.filter((c) => KIND_GROUPS.has(c.group)) : commands), [kindsOnly, commands]);
   const ranked = useMemo(() => rankCommands(split.q, pool), [split.q, pool]);
-  const sections = useMemo(() => {
-    const groups = inGroups(ranked);
-    // Nothing typed: the groups in their usual order (actions first); typed: where each best matches.
-    return split.q.trim() === "" ? groups.sort((a, b) => GROUP_ORDER.indexOf(a[0]) - GROUP_ORDER.indexOf(b[0])) : groups;
-  }, [ranked, split.q]);
+  const sections = useMemo(() => inGroups(ranked), [ranked]);
   const ordered = useMemo(() => sections.flatMap(([, cmds]) => cmds), [sections]);
   const at = ordered.length === 0 ? -1 : Math.min(active, ordered.length - 1);
   const optionId = (i: number) => `${base}-o${i}`;
@@ -235,10 +231,10 @@ export function CommandPalette({
           <span className={k.k} aria-hidden="true">Esc</span>
         </div>
         <div id={`${base}-list`} role="listbox" aria-label={title} className={s.list}>
-          {sections.map(([group, cmds]) => {
-            const head = `${base}-g-${group}`;
+          {sections.map(([group, cmds], sectionIndex) => {
+            const head = `${base}-g-${sectionIndex}`;
             return (
-              <div key={group} role="group" aria-labelledby={head} className={s.group}>
+              <div key={`${group}-${sectionIndex}`} role="group" aria-labelledby={head} className={s.group}>
                 <div id={head} className={s.groupTitle}>
                   {group}
                   {group === "Actions" && selection && (

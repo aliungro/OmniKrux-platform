@@ -57,12 +57,12 @@ function kindGroup(k: KindInfo): CommandGroup {
   return k.builtin ? "Kinds" : "Custom resources";
 }
 
-/** The everyday kinds in tab order, then the rest by title. */
+/** Pins across every kind group, followed by unpinned groups in title order. */
 function kindOrder(a: KindInfo, b: KindInfo, tabs: readonly string[]): number {
   const ia = tabs.indexOf(a.key);
   const ib = tabs.indexOf(b.key);
   if (ia >= 0 || ib >= 0) return (ia < 0 ? tabs.length : ia) - (ib < 0 ? tabs.length : ib);
-  return kindTitle(a).localeCompare(kindTitle(b));
+  return GROUP_ORDER.indexOf(kindGroup(a)) - GROUP_ORDER.indexOf(kindGroup(b)) || kindTitle(a).localeCompare(kindTitle(b));
 }
 
 /** "Scale web…": an ellipsis where a form or a review comes first. */
@@ -110,17 +110,15 @@ export function buildCommands(ctx: CommandContext): Command[] {
     out.push({ id: "view:forwards", label: "Port-forwards", group: "Views", keywords: ["forwards", "ports"], run: ctx.onForwards });
   }
   const kinds = [...ctx.kinds].sort((a, b) => kindOrder(a, b, ctx.pinned ?? DEFAULT_PINNED));
-  for (const group of ["Kinds", "Flux", "Custom resources"] as const) {
-    for (const k of kinds.filter((x) => kindGroup(x) === group)) {
-      out.push({
-        id: `kind:${k.key}`,
-        label: kindTitle(k),
-        hint: k.key,
-        group,
-        keywords: [k.plural_label, k.plural, k.kind, k.label, k.key, ...k.short_names],
-        run: () => ctx.onKind(k.key),
-      });
-    }
+  for (const k of kinds) {
+    out.push({
+      id: `kind:${k.key}`,
+      label: kindTitle(k),
+      hint: k.key,
+      group: kindGroup(k),
+      keywords: [k.plural_label, k.plural, k.kind, k.label, k.key, ...k.short_names],
+      run: () => ctx.onKind(k.key),
+    });
   }
   return out;
 }
