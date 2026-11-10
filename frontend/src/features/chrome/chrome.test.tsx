@@ -5,11 +5,13 @@ import { ShortcutBar } from "./ShortcutBar";
 import { FilterBar } from "./FilterBar";
 import { TopBar } from "./TopBar";
 import { KindTabs } from "./KindTabs";
+import { DEFAULT_PINNED, usePinnedKinds } from "../settings/pinnedKinds";
 import { pressed, SHORTCUTS, type Shortcut } from "./shortcuts";
 import { focusTableRow, routesPageKeys } from "./pageKeys";
 import { chipsFor } from "../territories/model";
-import { DEPLOYMENTS, EVENTS, KINDS, NODES, PODS } from "../../test/kinds";
+import { DEPLOYMENTS, EVENTS, KINDS, NODES, PODS, SECRETS } from "../../test/kinds";
 
+const pinProps = {pinned: DEFAULT_PINNED, onPin: () => {}, onUnpin: () => {}, onMove: () => {}, onEditPinned: () => {}};
 const POD_CHIPS = chipsFor(PODS);
 
 afterEach(cleanup);
@@ -167,7 +169,7 @@ describe("KindTabs", () => {
   const served = KINDS.kinds;
   it("shows the served everyday kinds in order, a count on the active one only, then all kinds", () => {
     const onSelect = vi.fn();
-    render(<KindTabs kinds={served} active="pods" count={131} onSelect={onSelect} />);
+    render(<KindTabs {...pinProps} kinds={served} active="pods" count={131} onSelect={onSelect} />);
     const tabs = screen.getAllByRole("tab");
     // StatefulSets, Services, Nodes, Events, Helm releases and Deployments are served; jobs, daemonsets and ingresses aren't.
     expect(tabs.map((t) => t.textContent)).toEqual(["Pods131", "Deployments", "StatefulSets", "Services", "Nodes", "Events", "Helm releases"]);
@@ -178,30 +180,30 @@ describe("KindTabs", () => {
   });
   it("all kinds, with its colon keycap, opens the palette's kind mode", () => {
     const onAllKinds = vi.fn();
-    const { rerender } = render(<KindTabs kinds={served} active="pods" count={1} onSelect={() => {}} onAllKinds={onAllKinds} />);
+    const { rerender } = render(<KindTabs {...pinProps} kinds={served} active="pods" count={1} onSelect={() => {}} onAllKinds={onAllKinds} />);
     const all = screen.getByRole("button", { name: "All 8 kinds" });
     expect(all.textContent).toBe("All 8 kinds:");
     fireEvent.click(all);
     expect(onAllKinds).toHaveBeenCalled();
     // Before the kinds load there is no number to show, so no button.
-    rerender(<KindTabs kinds={undefined} active="pods" count={1} onSelect={() => {}} onAllKinds={onAllKinds} />);
+    rerender(<KindTabs {...pinProps} kinds={undefined} active="pods" count={1} onSelect={() => {}} onAllKinds={onAllKinds} />);
     expect(screen.queryByRole("button", { name: /kinds/ })).toBeNull();
   });
   it("shows no count while no cluster has reported", () => {
-    render(<KindTabs kinds={served} active="deployments.apps" count={null} onSelect={() => {}} />);
+    render(<KindTabs {...pinProps} kinds={served} active="deployments.apps" count={null} onSelect={() => {}} />);
     expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Deployments");
   });
   it("before the kinds load, only the active kind; a kind outside the tabs gets its own", () => {
-    const { rerender } = render(<KindTabs kinds={undefined} active="pods" count={3} onSelect={() => {}} />);
+    const { rerender } = render(<KindTabs {...pinProps} kinds={undefined} active="pods" count={3} onSelect={() => {}} />);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Pods3"]);
-    rerender(<KindTabs kinds={served} active="certificates.cert-manager.io" count={2} onSelect={() => {}} />);
+    rerender(<KindTabs {...pinProps} kinds={served} active="certificates.cert-manager.io" count={2} onSelect={() => {}} />);
     expect(screen.getAllByRole("tab").at(-1)!.textContent).toBe("Certificates2");
   });
   it("arrow keys move between tabs, then show the kind they rest on, replacing history", () => {
     vi.useFakeTimers();
     try {
       const onSelect = vi.fn();
-      render(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES, EVENTS]} active="deployments.apps" count={4} onSelect={onSelect} />);
+      render(<KindTabs {...pinProps} kinds={[PODS, DEPLOYMENTS, NODES, EVENTS]} active="deployments.apps" count={4} onSelect={onSelect} />);
       const selected = () => screen.getByRole("tab", { selected: true });
       fireEvent.keyDown(selected(), { key: "ArrowRight" });
       // The tab moves at once (and takes focus); the kind waits until the keys rest.
@@ -225,7 +227,7 @@ describe("KindTabs", () => {
   });
   it("says when the kinds can't be loaded, with Retry", () => {
     const onRetry = vi.fn();
-    render(<KindTabs kinds={undefined} active="pods" count={3} onSelect={() => {}} error="Can't reach the console's server. Check that it's running, then retry." onRetry={onRetry} />);
+    render(<KindTabs {...pinProps} kinds={undefined} active="pods" count={3} onSelect={() => {}} error="Can't reach the console's server. Check that it's running, then retry." onRetry={onRetry} />);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Pods3"]);
     expect(screen.getByRole("alert").textContent).toBe("Can't load the list of kinds: Can't reach the console's server. Check that it's running, then retry.");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -340,9 +342,9 @@ it("back during a pending arrow kind move wins", () => {
   vi.useFakeTimers();
   try {
     const onSelect = vi.fn();
-    const { rerender } = render(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES]} active="pods" count={0} onSelect={onSelect} />);
+    const { rerender } = render(<KindTabs {...pinProps} kinds={[PODS, DEPLOYMENTS, NODES]} active="pods" count={0} onSelect={onSelect} />);
     fireEvent.keyDown(screen.getByRole("tab", { selected: true }), { key: "ArrowRight" });
-    rerender(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES]} active="nodes" count={0} onSelect={onSelect} />);
+    rerender(<KindTabs {...pinProps} kinds={[PODS, DEPLOYMENTS, NODES]} active="nodes" count={0} onSelect={onSelect} />);
     act(() => void vi.advanceTimersByTime(300));
     expect(onSelect).not.toHaveBeenCalled();
     expect(screen.getByRole("tab", { selected: true }).textContent).toContain("Nodes");
@@ -353,13 +355,64 @@ it("settled arrow moves preserve the origin as one history entry", () => {
   vi.useFakeTimers();
   try {
     const onSelect = vi.fn();
-    const { rerender } = render(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES]} active="pods" count={0} onSelect={onSelect} />);
+    const { rerender } = render(<KindTabs {...pinProps} kinds={[PODS, DEPLOYMENTS, NODES]} active="pods" count={0} onSelect={onSelect} />);
     fireEvent.keyDown(screen.getByRole("tab", { selected: true }), { key: "ArrowRight" });
     act(() => void vi.advanceTimersByTime(300));
     expect(onSelect).toHaveBeenLastCalledWith("deployments.apps", { replace: false });
-    rerender(<KindTabs kinds={[PODS, DEPLOYMENTS, NODES]} active="deployments.apps" count={0} onSelect={onSelect} />);
+    rerender(<KindTabs {...pinProps} kinds={[PODS, DEPLOYMENTS, NODES]} active="deployments.apps" count={0} onSelect={onSelect} />);
     fireEvent.keyDown(screen.getByRole("tab", { selected: true }), { key: "ArrowRight" });
     act(() => void vi.advanceTimersByTime(300));
     expect(onSelect).toHaveBeenLastCalledWith("nodes", { replace: true });
   } finally { vi.useRealTimers(); }
+});
+
+function PinnedRow({active="pods", onEditPinned=()=>{}}: {active?:string;onEditPinned?:()=>void}) {
+  const pins=usePinnedKinds();
+  return <KindTabs kinds={[...KINDS.kinds, SECRETS]} active={active} count={null} onSelect={()=>{}} pinned={pins.pinned} onPin={pins.pin} onUnpin={pins.unpin} onMove={pins.move} onEditPinned={onEditPinned}/>;
+}
+it("the secrets tab shows by default",()=>{
+ render(<PinnedRow/>); expect(screen.getByRole("tab",{name:"Secrets"})).toBeTruthy();
+});
+it("pin button keeps an opened kind in the row",()=>{
+ const view=render(<PinnedRow active="certificates.cert-manager.io"/>);
+ const pin=screen.getByRole("button",{name:"Pin Certificates"});
+ expect(pin.title).toBe("Keep Certificates in the tab row"); fireEvent.click(pin);
+ view.rerender(<PinnedRow/>); expect(screen.getByRole("tab",{name:"Certificates"})).toBeTruthy();
+});
+it("unpin from the tab's menu",()=>{
+ render(<PinnedRow/>); fireEvent.contextMenu(screen.getByRole("tab",{name:"Secrets"}));
+ fireEvent.click(within(screen.getByRole("menu",{name:"Secrets tab"})).getByRole("menuitem",{name:"Unpin Secrets"}));
+ expect(screen.queryByRole("tab",{name:"Secrets"})).toBeNull();
+});
+it("move left and right from the tab's menu",()=>{
+ render(<PinnedRow/>);
+ const order=()=>screen.getAllByRole("tab").map(t=>t.textContent);
+ fireEvent.contextMenu(screen.getByRole("tab",{name:"Deployments"}));fireEvent.click(screen.getByRole("menuitem",{name:"Move left"}));
+ expect(order().slice(0,2)).toEqual(["Deployments","Pods"]);
+ fireEvent.contextMenu(screen.getByRole("tab",{name:"Deployments"}));fireEvent.click(screen.getByRole("menuitem",{name:"Move right"}));
+ expect(order().slice(0,2)).toEqual(["Pods","Deployments"]);
+});
+it.each([{key:"F10",shiftKey:true},{key:"ContextMenu"}])("the tab menu opens from the keyboard: %s",key=>{
+ render(<PinnedRow/>); const tab=screen.getByRole("tab",{name:"Pods"}); tab.focus(); fireEvent.keyDown(tab,key);
+ expect(screen.getByRole("menu",{name:"Pods tab"})).toBeTruthy();
+ fireEvent.keyDown(document.activeElement!,{key:"ArrowDown"});
+ expect(document.activeElement?.textContent).toBe("Unpin Pods");
+ fireEvent.keyDown(document.activeElement!,{key:"Escape"});expect(screen.queryByRole("menu")).toBeNull();expect(document.activeElement).toBe(tab);
+});
+it("edit pinned kinds invokes the settings section action",()=>{
+ const edit=vi.fn(); render(<PinnedRow onEditPinned={edit}/>);
+ fireEvent.contextMenu(screen.getByRole("tab",{name:"Pods"}));fireEvent.click(screen.getByRole("menuitem",{name:"Edit pinned kinds…"}));expect(edit).toHaveBeenCalledOnce();
+});
+it("a pinned kind no cluster serves is hidden from the row",()=>{
+ render(<KindTabs {...pinProps} pinned={["pods","missing.example.io"]} kinds={KINDS.kinds} active="pods" count={null} onSelect={()=>{}}/>);
+ expect(screen.getAllByRole("tab").map(t=>t.textContent)).toEqual(["Pods"]);
+});
+it("an active pinned kind disappears from the row when no cluster serves it",()=>{
+ render(<KindTabs {...pinProps} pinned={["pods","secrets"]} kinds={[PODS, {...SECRETS,clusters:[]}]} active="secrets" count={null} onSelect={()=>{}}/>);
+ expect(screen.getAllByRole("tab").map(t=>t.textContent)).toEqual(["Pods"]);
+});
+it("unpinning an inactive tab leaves focus on the active tab",()=>{
+ render(<PinnedRow/>); fireEvent.contextMenu(screen.getByRole("tab",{name:"Secrets"}));
+ fireEvent.click(screen.getByRole("menuitem",{name:"Unpin Secrets"}));
+ expect(document.activeElement).toBe(screen.getByRole("tab",{name:"Pods"}));
 });

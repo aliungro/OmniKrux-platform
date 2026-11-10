@@ -140,3 +140,8 @@ describe("rankCommands", () => {
     expect(rankCommands("kind", many)).toHaveLength(50);
   });
 });
+
+it("the palette lists kinds in pinned order", () => {
+ const commands=buildCommands(ctx({pinned:["nodes","services","pods"]}));
+ expect(commands.filter(c=>c.group==="Kinds").map(c=>c.label)).toEqual(["Nodes","Services","Pods","Config maps","Deployments","Events","Helm releases","StatefulSets"]);
+});

@@ -34,6 +34,7 @@ import { kindView, type ClosedTab, type KubeView } from "../shell/workspace";
 import type { TabNav } from "../shell/browserHistory";
 import type { useDock } from "../dock/useDock";
 import type { PaletteSelection } from "../palette/CommandPalette";
+import { usePinnedKinds } from "../settings/pinnedKinds";
 import { KubernetesHome } from "../home/KubernetesHome";
 import s from "../../App.module.css";
 
@@ -56,10 +57,11 @@ export const TEXT_COALESCE_MS = 1000;
 
 /** The whole console page; expects a QueryClientProvider above it. */
 export interface KubernetesTabProps { nav:TabNav<KubeView>; dock:ReturnType<typeof useDock>; closed:readonly ClosedTab<KubeView>[]; onReopen:(index:number)=>void; loadProblem:string|null; onDismissLoadProblem:()=>void; onEditPinned:()=>void }
-export function KubernetesTab({ nav, dock }: KubernetesTabProps) {
- return nav.view.page === "home" ? <KubernetesHome nav={nav}/> : <KindView nav={nav} dock={dock}/>;
+export function KubernetesTab({ nav, dock, onEditPinned }: KubernetesTabProps) {
+ return nav.view.page === "home" ? <KubernetesHome nav={nav}/> : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned}/>;
 }
-function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<typeof useDock>}) {
+function KindView({nav: tabNav,dock,onEditPinned}: {nav:TabNav<KubeView>;dock:ReturnType<typeof useDock>;onEditPinned:()=>void}) {
+  const pinned = usePinnedKinds();
   const queryClient = useQueryClient();
   const clusters = useClusters();
   const list = clusters.data;
@@ -288,6 +290,7 @@ function KindView({nav: tabNav,dock}: {nav:TabNav<KubeView>;dock:ReturnType<type
     body = (
       <>
         <KindTabs
+          pinned={pinned.pinned} onPin={pinned.pin} onUnpin={pinned.unpin} onMove={pinned.move} onEditPinned={onEditPinned}
           kinds={served}
           active={kindKey}
           count={kindCount(all)}

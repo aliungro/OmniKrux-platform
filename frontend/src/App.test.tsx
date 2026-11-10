@@ -66,6 +66,27 @@ function renderConsole() {
   return render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
 }
 
+it("edit pinned kinds opens settings at the section and changes the live row", async () => {
+  vi.stubGlobal("fetch", routes(() => [cluster]));
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype,"scrollIntoView",{configurable:true,value:scroll});
+  try {
+    renderConsole();
+    const tab = await screen.findByRole("tab",{name:"Pods"});
+    fireEvent.contextMenu(tab);
+    fireEvent.click(screen.getByRole("menuitem",{name:"Edit pinned kinds…"}));
+    expect(screen.getByRole("heading",{name:"Settings",level:1})).toBeTruthy();
+    expect(scroll).toHaveBeenCalled();
+    expect(location.hash).toBe("#/settings");
+    fireEvent.click(screen.getByRole("button",{name:"Remove Services"}));
+    fireEvent.click(screen.getByRole("button",{name:"Kubernetes"}));
+    expect(screen.queryByRole("tab",{name:"Services"})).toBeNull();
+    expect(screen.getByRole("tab",{name:"Pods"})).toBeTruthy();
+  } finally {
+    delete (HTMLElement.prototype as {scrollIntoView?: unknown}).scrollIntoView;
+  }
+});
+
 beforeEach(() => {
   seedPodsWorkspace();
   watch.state = emptyWatchState();

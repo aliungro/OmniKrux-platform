@@ -3,6 +3,7 @@ import type { Cluster, KindInfo, ResourceRow } from "../../api/types";
 import { rowActions, type RowAction } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
 import { capsOf, pageKey, pressed } from "../chrome/shortcuts";
+import { usePinnedKinds } from "../settings/pinnedKinds";
 import { rowTitle } from "../territories/model";
 import { ProviderBadge } from "../territories/ProviderBadge";
 import { GROUP_ORDER, KIND_GROUPS, MAX_RESULTS, buildCommands, rankCommands, type Command, type CommandGroup } from "./commands";
@@ -114,6 +115,7 @@ export function CommandPalette({
    */
   onFocusLost?: () => void;
 }) {
+  const { pinned } = usePinnedKinds();
   const base = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -132,8 +134,8 @@ export function CommandPalette({
         workloadLogs: true,
       }),
     };
-    return buildCommands({ kinds: kinds ?? NO_KINDS, onKind, selected, onRowAction, onAudit, onSettings, onNewTab, onCloseTab, onForwards });
-  }, [kinds, selection, canChange, onKind, onRowAction, onAudit, onSettings, onNewTab, onCloseTab, onForwards]);
+    return buildCommands({ pinned, kinds: kinds ?? NO_KINDS, onKind, selected, onRowAction, onAudit, onSettings, onNewTab, onCloseTab, onForwards });
+  }, [pinned, kinds, selection, canChange, onKind, onRowAction, onAudit, onSettings, onNewTab, onCloseTab, onForwards]);
 
   const split = splitQuery(query);
   const kindsOnly = mode === "kinds" || split.kindsOnly;

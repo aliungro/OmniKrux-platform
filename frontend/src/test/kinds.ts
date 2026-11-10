@@ -28,6 +28,7 @@ export const DEPLOYMENTS = kind("deployments.apps", "Deployment", [
 ]);
 export const STATEFULSETS = kind("statefulsets.apps", "StatefulSet", [NAME, NAMESPACE, STATUS, READY, AGE]);
 export const SERVICES = kind("services", "Service", [NAME, NAMESPACE, col("type", "Type", "text", "s"), col("ports", "Ports"), AGE]);
+export const SECRETS = kind("secrets", "Secret", [NAME, NAMESPACE, col("type", "Type"), col("keys", "Keys", "number", "s"), AGE]);
 export const NODES = kind("nodes", "Node", [
   NAME, STATUS, col("roles", "Roles"), col("version", "Version", "text", "s"), col("cpu", "CPU", "cpu", "s"),
   col("memory", "Memory", "memory", "s"), col("pods", "Pods", "pods", "s"), col("pressure", "Pressure"),

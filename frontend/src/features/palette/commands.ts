@@ -1,7 +1,7 @@
 import type { KindInfo, ResourceRow } from "../../api/types";
 import type { RowAction } from "../actions/tools";
 import { capsOf } from "../chrome/shortcuts";
-import { TAB_KINDS } from "../chrome/KindTabs";
+import { DEFAULT_PINNED } from "../settings/pinnedKinds";
 import { kindTitle, rowTitle } from "../territories/model";
 
 export type CommandGroup = "Kinds" | "Actions" | "Views" | "Flux" | "Custom resources";
@@ -32,6 +32,7 @@ export interface SelectedRow {
 export interface CommandContext {
   /** Every kind some cluster serves. */
   kinds: readonly KindInfo[];
+  pinned?: readonly string[];
   onKind: (key: string) => void;
   selected: SelectedRow | null;
   /** Runs an action on the selected row the way its key would: the same forms and reviews. */
@@ -57,8 +58,7 @@ function kindGroup(k: KindInfo): CommandGroup {
 }
 
 /** The everyday kinds in tab order, then the rest by title. */
-function kindOrder(a: KindInfo, b: KindInfo): number {
-  const tabs = TAB_KINDS as readonly string[];
+function kindOrder(a: KindInfo, b: KindInfo, tabs: readonly string[]): number {
   const ia = tabs.indexOf(a.key);
   const ib = tabs.indexOf(b.key);
   if (ia >= 0 || ib >= 0) return (ia < 0 ? tabs.length : ia) - (ib < 0 ? tabs.length : ib);
@@ -109,7 +109,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
   if (ctx.onForwards) {
     out.push({ id: "view:forwards", label: "Port-forwards", group: "Views", keywords: ["forwards", "ports"], run: ctx.onForwards });
   }
-  const kinds = [...ctx.kinds].sort(kindOrder);
+  const kinds = [...ctx.kinds].sort((a, b) => kindOrder(a, b, ctx.pinned ?? DEFAULT_PINNED));
   for (const group of ["Kinds", "Flux", "Custom resources"] as const) {
     for (const k of kinds.filter((x) => kindGroup(x) === group)) {
       out.push({

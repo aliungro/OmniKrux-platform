@@ -8,35 +8,22 @@ import s from "./KindTabs.module.css";
 /** Arrow keys show a kind once they rest this long, so moving across tabs opens one watch, not one per tab. */
 export const ARROW_SETTLE_MS = 250;
 
-/** The everyday kinds, in this order, each shown when at least one cluster serves it. */
-export const TAB_KINDS = [
-  "pods",
-  "deployments.apps",
-  "statefulsets.apps",
-  "daemonsets.apps",
-  "jobs.batch",
-  "services",
-  "ingresses.networking.k8s.io",
-  "nodes",
-  "events",
-  "helm-releases",
-] as const;
-
 interface Tab {
   key: string;
   title: string;
 }
 
-function tabsFor(kinds: KindInfo[] | undefined, active: string, extra: string | null): Tab[] {
+function tabsFor(kinds: KindInfo[] | undefined, active: string, extra: string | null, pinned: readonly string[]): Tab[] {
   const byKey = new Map((kinds ?? []).map((x) => [x.key, x]));
   // Before the kinds have loaded, only the one you're looking at: no tab that might not exist.
-  const tabs: Tab[] = TAB_KINDS.filter((key) => (kinds ? byKey.has(key) : key === active)).map((key) => ({
+  const tabs: Tab[] = pinned.filter((key) => (kinds ? (byKey.get(key)?.clusters.length ?? 0) > 0 : key === active)).map((key) => ({
     key,
     title: kindTitle(byKey.get(key) ?? { key, plural_label: key }),
   }));
   // A kind outside the everyday ones (a CRD from the palette or a link) gets its own tab while open.
   for (const key of [active, extra]) {
     if (key === null || tabs.some((t) => t.key === key)) continue;
+    if (kinds !== undefined && pinned.includes(key) && !(byKey.get(key)?.clusters.length)) continue;
     tabs.push({ key, title: kindTitle(byKey.get(key) ?? { key, plural_label: key.split(".")[0] }) });
   }
   return tabs;
@@ -50,6 +37,7 @@ export function KindTabs({
   error = null,
   onRetry,
   onAllKinds,
+  pinned, onPin, onUnpin, onMove, onEditPinned,
 }: {
   /** Every kind some cluster serves; undefined until GET /api/kinds has answered. */
   kinds: KindInfo[] | undefined;
@@ -63,11 +51,18 @@ export function KindTabs({
   onRetry?: () => void;
   /** Opens the palette on every kind (its `:` mode). */
   onAllKinds?: () => void;
+  pinned: readonly string[];
+  onPin: (key: string) => void;
+  onUnpin: (key: string) => void;
+  onMove: (key: string, by: -1 | 1) => void;
+  onEditPinned: () => void;
 }) {
   /** Where the arrow keys have moved to, before that kind is shown. */
   const [moving, setMoving] = useState<string | null>(null);
   const shown = moving ?? active;
-  const tabs = tabsFor(kinds, active, moving);
+  const tabs = tabsFor(kinds, active, moving, pinned);
+  const [menu, setMenu] = useState<{ key: string; left: number; top: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const refs = useRef(new Map<string, HTMLButtonElement>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stop = () => {
@@ -87,6 +82,35 @@ export function KindTabs({
     stop();
     setMoving(null);
   }, [active]);
+
+  const closeMenu = (restore = true) => {
+    if (restore && menu) refs.current.get(menu.key)?.focus();
+    setMenu(null);
+  };
+  const openMenu = (key: string) => {
+    if (!pinned.includes(key)) return;
+    stop(); setMoving(null); run.current = false;
+    const rect = refs.current.get(key)?.getBoundingClientRect();
+    setMenu({ key, left: Math.max(8, Math.min(rect?.left ?? 8, window.innerWidth - 228)), top: Math.min(rect?.bottom ?? 8, window.innerHeight - 180) });
+  };
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    const outside = (e: PointerEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenu(null); };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [menu]);
+  const menuKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+      e.preventDefault();
+      const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : (at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+      items[next]?.focus();
+    } else if (e.key === "Escape") { e.preventDefault(); closeMenu(); }
+    else if (e.key === "Tab") closeMenu(false);
+  };
 
   // Left and right move between tabs, as a tablist should; the kind follows once the keys rest.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -123,8 +147,8 @@ export function KindTabs({
         {tabs.map((t) => {
           const on = t.key === shown;
           return (
+            <div key={t.key} className={s.tabGroup}>
             <button
-              key={t.key}
               ref={(el) => {
                 if (el) refs.current.set(t.key, el);
                 else refs.current.delete(t.key);
@@ -134,15 +158,30 @@ export function KindTabs({
               aria-selected={on}
               tabIndex={on ? 0 : -1}
               className={`${s.tab}${on ? ` ${s.on}` : ""}`}
-              title={(TAB_KINDS as readonly string[]).includes(t.key) ? undefined : t.key}
+              title={pinned.includes(t.key) ? undefined : t.key}
+              aria-haspopup={pinned.includes(t.key) ? "menu" : undefined}
+              aria-expanded={pinned.includes(t.key) ? menu?.key === t.key : undefined}
+              onContextMenu={e => { if (pinned.includes(t.key)) { e.preventDefault(); openMenu(t.key); } }}
+              onKeyDown={e => { if (e.key === "ContextMenu" || e.shiftKey && e.key === "F10") { e.preventDefault(); e.stopPropagation(); openMenu(t.key); } }}
               onClick={() => choose(t.key)}
             >
               {t.title}
               {t.key === active && on && count !== null && <em className={s.n}>{count}</em>}
             </button>
+            {t.key === active && !pinned.includes(t.key) && <button type="button" className={s.pin}
+              aria-label={`Pin ${t.title}`} title={`Keep ${t.title} in the tab row`} onClick={() => onPin(t.key)}>＋</button>}
+            </div>
           );
         })}
       </div>
+      {menu && <div ref={menuRef} role="menu" aria-label={`${tabs.find(t => t.key === menu.key)?.title ?? menu.key} tab`}
+        className={s.menu} style={{left:menu.left,top:menu.top}} onKeyDown={menuKey}
+        onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setMenu(null); }}>
+        <button role="menuitem" type="button" disabled={pinned.indexOf(menu.key) === 0} onClick={() => { onMove(menu.key,-1); closeMenu(); }}>Move left</button>
+        <button role="menuitem" type="button" disabled={pinned.indexOf(menu.key) === pinned.length - 1} onClick={() => { onMove(menu.key,1); closeMenu(); }}>Move right</button>
+        <button role="menuitem" type="button" onClick={() => { onUnpin(menu.key); closeMenu(false); refs.current.get(active)?.focus(); }}>Unpin {tabs.find(t => t.key === menu.key)?.title ?? menu.key}</button>
+        <button role="menuitem" type="button" onClick={() => { closeMenu(false); onEditPinned(); }}>Edit pinned kinds…</button>
+      </div>}
       {kinds !== undefined && onAllKinds && (
         <button type="button" className={s.more} aria-haspopup="dialog" aria-keyshortcuts=":" onClick={onAllKinds}>
           All {kinds.length} kinds
