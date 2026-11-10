@@ -306,7 +306,12 @@ describe("Console dock wiring", () => {
     fireEvent.keyDown(row, { key: "l" });
     const sessions = await screen.findByRole("tablist", { name: "Logs and shells" });
     expect(within(sessions).getAllByRole("tab")).toHaveLength(1);
-    const socket = FakeWebSocket.last;
+    const targetSocket = () => FakeWebSocket.instances.find(ws =>
+      new URL(ws.url).pathname === "/api/logs" && ws.params.get("cluster") === "c1" &&
+      ws.params.get("namespace") === "default" && ws.params.get("pod") === "crasher-1");
+    await waitFor(() => expect(targetSocket()).toBeDefined());
+    const socket = targetSocket()!;
+    expect(socket.closedByClient).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "New tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Audit log" }));
     fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
