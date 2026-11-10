@@ -294,6 +294,7 @@ function KindView({nav: tabNav,dock,onEditPinned}: {nav:TabNav<KubeView>;dock:Re
           kinds={served}
           active={kindKey}
           count={kindCount(all)}
+          navigationView={tabNav.view}
           onSelect={onSelectKind}
           error={kindsError}
           onRetry={onRetryKinds}

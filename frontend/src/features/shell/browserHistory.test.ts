@@ -83,3 +83,17 @@ it("browser back after selecting the current view returns one real step", () => 
  expect(result.current.view.page).toBe("kind");
  if(result.current.view.page === "kind") expect(result.current.view.kind).toBe("pods");
 });
+
+it.each(["audit", "settings"] as const)("numbered history leaves hidden Kubernetes unchanged in %s", (app)=>{
+ const {result}=renderHook(()=>{const {ws,dispatch}=useWorkspace(null);return {ws,dispatch,nav:useTabNav(ws,dispatch)};});
+ act(()=>result.current.nav.navigate(v=>kindView(v,"pods"),"push"));
+ act(()=>result.current.nav.navigate(v=>kindView(v,"nodes"),"push"));
+ act(()=>result.current.dispatch({type:"switchApp",app}));
+ act(()=>window.dispatchEvent(new PopStateEvent("popstate",{state:{omnikrux:1}})));
+ expect(result.current.ws.app).toBe(app);
+ expect(result.current.nav.view).toMatchObject({page:"kind",kind:"nodes"});
+ expect(history.state.omnikrux).toBe(1); expect(location.hash).toBe(`#/`+app);
+ act(()=>window.dispatchEvent(new PopStateEvent("popstate",{state:{omnikrux:2}})));
+ act(()=>result.current.dispatch({type:"switchApp",app:"kubernetes"}));
+ expect(result.current.nav.view).toMatchObject({page:"kind",kind:"nodes"});
+});

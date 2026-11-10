@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Rail } from "./Rail";
 import { Shell } from "./Shell";
 import { WorkspaceTabs } from "./WorkspaceTabs";
-import { HOME, kindView } from "./workspace";
+import { HOME, kindView, defaultWorkspace } from "./workspace";
 import { KINDS } from "../../test/kinds";
 import type { Cluster } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
@@ -95,4 +95,42 @@ it("reopening Audit refetches its first page",async()=>{
  fireEvent.click(screen.getByRole("button",{name:"Audit log"}));
  await waitFor(()=>expect(calls().length).toBeGreaterThan(first));
  expect(String(calls().at(-1)![0])).not.toContain("before=");
+});
+
+it("shows a Home notice for malformed saved tabs",()=>{
+ localStorage.setItem("omnikrux.workspace",JSON.stringify({version:1,kubernetes:{tabs:"bad"}})); renderShell();
+ expect(screen.getByText(/Your saved tabs couldn't be read/)).toBeTruthy();
+});
+it.each(["Kinds","Kubernetes tabs"])("Alt history from %s moves exactly one entry in both directions",async (strip)=>{
+ const ws=defaultWorkspace(); const tab=ws.kubernetes.tabs[0];
+ const pods=kindView(HOME,"pods"); if(pods.page!=="kind") throw new Error("expected kind"); const filtered={...pods,filters:{...pods.filters,text:"needle"}};
+ tab.view=filtered; tab.back=[HOME,pods]; localStorage.setItem("omnikrux.workspace",JSON.stringify(ws));
+ renderShell(); await screen.findByRole("tablist",{name:"Kinds"});
+ const target=within(screen.getByRole("tablist",{name:strip})).getByRole("tab",{selected:true}); target.focus();
+ fireEvent.keyDown(target,{key:"ArrowLeft",code:"ArrowLeft",altKey:true});
+ expect((screen.getByPlaceholderText(/filter/i) as HTMLInputElement).value).toBe("");
+ fireEvent.keyDown(document.activeElement!,{key:"ArrowRight",code:"ArrowRight",altKey:true});
+ expect((screen.getByPlaceholderText(/filter/i) as HTMLInputElement).value).toBe("needle");
+ await new Promise(r=>setTimeout(r,300));
+ expect(within(screen.getByRole("tablist",{name:"Kinds"})).getByRole("tab",{name:/Pods/,selected:true})).toBeTruthy();
+});
+it("browser Back and Forward cancel pending kind arrows for same-kind filter history",async()=>{
+ const ws=defaultWorkspace();const tab=ws.kubernetes.tabs[0]; const pods=kindView(HOME,"pods");
+ tab.view=pods;localStorage.setItem("omnikrux.workspace",JSON.stringify(ws));
+ history.replaceState({omnikrux:0},"","/"); renderShell(); await screen.findByRole("tablist",{name:"Kinds"});
+ fireEvent.change(screen.getByPlaceholderText(/filter/i),{target:{value:"needle"}});
+ const arrow=()=>{const current=within(screen.getByRole("tablist",{name:"Kinds"})).getByRole("tab",{selected:true});current.focus();fireEvent.keyDown(current,{key:"ArrowRight"});};
+ arrow();fireEvent(window,new PopStateEvent("popstate",{state:{omnikrux:0}})); await new Promise(r=>setTimeout(r,300));
+ expect((screen.getByPlaceholderText(/filter/i) as HTMLInputElement).value).toBe("");
+ expect(within(screen.getByRole("tablist",{name:"Kinds"})).getByRole("tab",{name:/Pods/,selected:true})).toBeTruthy();
+ arrow();fireEvent(window,new PopStateEvent("popstate",{state:{omnikrux:1}}));await new Promise(r=>setTimeout(r,300));
+ expect((screen.getByPlaceholderText(/filter/i) as HTMLInputElement).value).toBe("needle");
+ expect(within(screen.getByRole("tablist",{name:"Kinds"})).getByRole("tab",{name:/Pods/,selected:true})).toBeTruthy();
+});
+
+it.each(["Kinds","Kubernetes tabs"])("modified navigation keys do not rove %s",async strip=>{
+ const ws=defaultWorkspace(); ws.kubernetes.tabs[0].view=kindView(HOME,"pods"); localStorage.setItem("omnikrux.workspace",JSON.stringify(ws));
+ renderShell(); await screen.findByRole("tablist",{name:"Kinds"}); const target=within(screen.getByRole("tablist",{name:strip})).getByRole("tab",{selected:true});target.focus();
+ for(const key of ["ArrowLeft","ArrowRight","Home","End"]) {fireEvent.keyDown(target,{key,altKey:true,ctrlKey:true}); expect(document.activeElement).toBe(target);}
+ await new Promise(r=>setTimeout(r,300));expect(document.activeElement).toBe(target);
 });

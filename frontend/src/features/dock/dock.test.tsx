@@ -399,6 +399,9 @@ describe("Dock", () => {
     expect(tabA.getAttribute("aria-selected")).toBe("false");
     const [pane] = shown();
     expect(pane.textContent).toContain("eks-staging / payments / api-b");
+    fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    expect(shown()).toHaveLength(2);
+    expect(tabB.getAttribute("aria-selected")).toBe("true");
   });
 
   describe("a late open never moves focus past a newer choice of yours", () => {

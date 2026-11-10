@@ -178,7 +178,9 @@ export function visibleSessions(state: DockState): Session[] {
   const focused = state.sessions.find((s) => s.id === state.focused);
   if (!focused) return [];
   if (state.layout === "single") return [focused];
-  return state.sessions.filter((s) => s.id === state.focused || s.id === state.previous);
+  const previous = state.sessions.find((s) => s.id === state.previous && s.id !== focused.id)
+    ?? state.sessions.find((s) => s.id !== focused.id);
+  return state.sessions.filter((s) => s.id === focused.id || s.id === previous?.id);
 }
 
 export function toLogSession(s: Session): LogSession {

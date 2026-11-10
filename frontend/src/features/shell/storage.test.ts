@@ -114,3 +114,11 @@ it("preserves UI pick values longer than the user-entered text limit", () => {
   const restored=parseWorkspace(raw([tab(picked)])).workspace.kubernetes.tabs[0].view;
   expect(restored.page === "kind" && restored.filters.columns).toEqual(picked.filters.columns);
 });
+
+it.each([undefined, null, [], "bad", {}, {tabs:null}, {tabs:"bad"}])("reports malformed Kubernetes containers: %s", (kubernetes) => {
+ const parsed=parseWorkspace(JSON.stringify({version:1,kubernetes,audit:{filters:{cluster:"east",action:"",text:""}}}));
+ expect(parsed.problem?.reset).toBe(true);
+ expect(parsed.workspace.kubernetes.tabs[0].view.page).toBe("home");
+ expect(parsed.workspace.audit.filters.cluster).toBe("east");
+});
+it("missing storage is normal",()=>expect(parseWorkspace(null).problem).toBeNull());

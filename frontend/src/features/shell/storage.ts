@@ -29,6 +29,7 @@ export function parseWorkspace(raw: string | null): {workspace:Workspace;problem
   if (raw===null) return {workspace:defaultWorkspace(),problem:null};
   let value: unknown; try { value=JSON.parse(raw); } catch { return {workspace:defaultWorkspace(),problem:{text:"they aren't valid JSON",reset:true}}; }
   if (!record(value) || value.version!==1) return {workspace:defaultWorkspace(),problem:{text:"they're from another version of Omnikrux",reset:true}};
+  const malformedTabs=!record(value.kubernetes) || !Array.isArray(value.kubernetes.tabs);
   const k=record(value.kubernetes)?value.kubernetes:{}; const seen=new Set<string>(); let dropped=0;
   const tabs: Tab<KubeView>[]=[];
   if (Array.isArray(k.tabs)) for (const item of k.tabs) { const t=tab(item); if (!t || seen.has(t.id)) { dropped++; continue; } seen.add(t.id); tabs.push(t); }
@@ -39,7 +40,7 @@ export function parseWorkspace(raw: string | null): {workspace:Workspace;problem
   const app: AppId = value.app === "audit" || value.app === "settings" ? value.app : "kubernetes";
   const workspace: Workspace={version:1,app,kubernetes:{tabs,active:typeof k.active==="string" && tabs.some(t=>t.id===k.active) ? k.active : tabs[0].id,closed},audit:{filters:audit(record(value.audit)?value.audit.filters:null)}};
   const message=dropped===1 ? "1 saved tab couldn't be read and was left out" : `${dropped} saved tabs couldn't be read and were left out`;
-  return {workspace,problem:dropped?{text:message,reset}:null};
+  return {workspace,problem:malformedTabs?{text:"the saved tab list is missing or invalid",reset:true}:dropped?{text:message,reset}:null};
 }
 export function serializeWorkspace(ws: Workspace): string { return JSON.stringify(parseWorkspace(JSON.stringify(ws)).workspace); }
 export function storageProblem(err: unknown): string { if (record(err) || err instanceof Error || err instanceof DOMException) { if (err.name==="QuotaExceededError") return "storage is full"; if (err.name==="SecurityError") return "this browser blocks site storage"; if (typeof err.message==="string") return err.message; } return String(err); }

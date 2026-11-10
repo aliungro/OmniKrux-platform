@@ -166,7 +166,7 @@ describe("dockReducer", () => {
       { type: "toggleLayout" },
     );
     expect(s).toMatchObject({ focused: "a", previous: null });
-    expect(visibleSessions(s).map((x) => x.id)).toEqual(["a"]);
+    expect(visibleSessions(s).map((x) => x.id)).toEqual(["a", "c"]);
   });
 });
 

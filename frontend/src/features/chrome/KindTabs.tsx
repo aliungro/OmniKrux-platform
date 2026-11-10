@@ -32,6 +32,7 @@ function tabsFor(kinds: KindInfo[] | undefined, active: string, extra: string | 
 export function KindTabs({
   kinds,
   active,
+  navigationView,
   count,
   onSelect,
   error = null,
@@ -42,6 +43,7 @@ export function KindTabs({
   /** Every kind some cluster serves; undefined until GET /api/kinds has answered. */
   kinds: KindInfo[] | undefined;
   active: string;
+  navigationView?: unknown;
   /** The active kind's rows across ready clusters; null until one has reported (never a made-up 0). */
   count: number | null;
   /** `replace`: the move shouldn't add a history entry (arrowing across tabs). */
@@ -72,16 +74,18 @@ export function KindTabs({
   const run = useRef(false);
   const expected = useRef<string | null>(null);
   const previousActive = useRef(active);
+  const previousView = useRef(navigationView);
   useEffect(() => stop, []);
   useEffect(() => {
-    if (previousActive.current === active) return;
+    if (previousActive.current === active && previousView.current === navigationView) return;
     previousActive.current = active;
+    previousView.current = navigationView;
     if (expected.current === active) { expected.current = null; return; }
     expected.current = null;
     run.current = false;
     stop();
     setMoving(null);
-  }, [active]);
+  }, [active, navigationView]);
 
   const closeMenu = (restore = true) => {
     if (restore && menu) refs.current.get(menu.key)?.focus();
@@ -114,7 +118,7 @@ export function KindTabs({
 
   // Left and right move between tabs, as a tablist should; the kind follows once the keys rest.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
     const at = tabs.findIndex((t) => t.key === shown);
     if (at < 0) return;
     e.preventDefault();
