@@ -29,6 +29,7 @@ import { flatten, kindTitle, rowKey, type RowRef, type Selection, type Territory
 import { gridTemplate, minTableWidth } from "./cells";
 import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
+import { SelectionCheckbox } from "./SelectionCheckbox";
 import rv from "./ResourceRowView.module.css";
 import s from "./TerritoryTable.module.css";
 
@@ -40,7 +41,8 @@ const INSPECTOR_ESTIMATE = 360;
 const HEADER_HEIGHT = 30;
 const OVERSCAN = 10;
 const MAX_DELETE_SELECTION = 50;
-const CHECKBOX_COLUMN_WIDTH = 32;
+const CHECKBOX_WIDTH = 28;
+const BULK_BAR_CLEARANCE = 80;
 
 export interface TerritoryTableProps {
   territories: Territory[];
@@ -186,6 +188,8 @@ export const TerritoryTable = memo(function TerritoryTable({
   const partial = checked.length > 0 && !allChecked;
   const atLimit = checked.length >= MAX_DELETE_SELECTION;
   const showCheckboxes = deletableRows.size > 0;
+  // Keep room to scroll past the overlay at the bottom, including before any row is checked.
+  const endPadding = showCheckboxes ? BULK_BAR_CLEARANCE : 16;
   useLayoutEffect(() => {
     setMarked(old => {
       const current = [...old].filter(key => deletableRows.has(key));
@@ -229,10 +233,11 @@ export const TerritoryTable = memo(function TerritoryTable({
     estimateSize,
     getItemKey,
     overscan: OVERSCAN,
-    paddingEnd: 16,
+    paddingEnd: endPadding,
     // The body starts below the sticky header, which also covers the top of the viewport.
     scrollMargin: HEADER_HEIGHT,
     scrollPaddingStart: HEADER_HEIGHT,
+    scrollPaddingEnd: endPadding,
   });
   const now = new Date();
 
@@ -488,14 +493,15 @@ export const TerritoryTable = memo(function TerritoryTable({
   const titleKey = kind.key === "helm-releases" ? "release" : "name";
   const tableStyle = useMemo(
     () => ({
-      "--cols": `${showCheckboxes ? "20px " : ""}${gridTemplate(columns, titleKey)}`,
-      minWidth: minTableWidth(columns, titleKey) + (showCheckboxes ? CHECKBOX_COLUMN_WIDTH : 0),
+      "--cols": `${showCheckboxes ? `${CHECKBOX_WIDTH}px ` : ""}${gridTemplate(columns, titleKey)}`,
+      minWidth: minTableWidth(columns, titleKey) + (showCheckboxes ? CHECKBOX_WIDTH + 12 : 0),
     }) as CSSProperties,
     [columns, titleKey, showCheckboxes],
   );
 
   const table = (
     <div ref={scrollRef} className={s.scroll} tabIndex={-1} onKeyDown={onKeyDown} onContextMenu={onContextMenu}
+      style={{ scrollPaddingBottom: endPadding }}
       onScroll={(e) => {
         onScroll?.(e.currentTarget.scrollTop);
         if (!rowMenu) return;
@@ -517,8 +523,8 @@ export const TerritoryTable = memo(function TerritoryTable({
       >
         <div role="rowgroup" className={s.head}>
           <div role="row" aria-rowindex={1} className={`${rv.grid} ${s.cols}`}>
-            {showCheckboxes && <span role="columnheader" className={rv.check}>
-              <input ref={checkAll} type="checkbox" aria-label="Select all visible resources"
+            {showCheckboxes && <span role="columnheader">
+              <SelectionCheckbox ref={checkAll} aria-label="Select all visible resources"
                 checked={allChecked} disabled={deletableRows.size > MAX_DELETE_SELECTION}
                 title={deletableRows.size > MAX_DELETE_SELECTION ? `Filter to ${MAX_DELETE_SELECTION} or fewer resources to select all` : undefined}
                 onChange={() => setMarked(allChecked ? new Set() : new Set(deletableRows.keys()))} />
@@ -609,15 +615,25 @@ export const TerritoryTable = memo(function TerritoryTable({
 
   return (
     <div className={s.frame}>
+      {table}
+      <span className={s.selectionStatus} role="status" aria-atomic="true">
+        {checked.length > 0 ? `${checked.length} selected${atLimit ? ` (limit of ${MAX_DELETE_SELECTION})` : ""}` : ""}
+      </span>
       {checked.length > 0 && <div className={s.bulkBar} role="group" aria-label="Selected resources">
-        <span role="status">{checked.length} selected{atLimit ? ` (limit of ${MAX_DELETE_SELECTION})` : ""}</span>
-        <button type="button" className={s.bulkDelete} onClick={() => setDeleteReview(checked)}>Delete selected</button>
-        <button type="button" onClick={() => {
+        <span aria-hidden="true" className={s.bulkCount} title={atLimit ? `Limit of ${MAX_DELETE_SELECTION} per batch` : undefined}>
+          {checked.length} selected
+        </span>
+        <button type="button" className={s.bulkDelete} onClick={() => setDeleteReview(checked)}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6" />
+          </svg>
+          Delete selected
+        </button>
+        <button type="button" className={s.bulkClear} aria-label="Clear selection" onClick={() => {
           setMarked(new Set());
           scrollRef.current?.focus({ preventScroll: true });
-        }}>Clear selection</button>
+        }}>Clear</button>
       </div>}
-      {table}
       {deleteReview && <BulkDeleteDialog selected={deleteReview} onClose={closeDeleteReview} />}
     </div>
   );

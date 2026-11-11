@@ -3,6 +3,7 @@ import type { MetricsLookup } from "../../api/useMetrics";
 import { Cell } from "./cells";
 import { rowKey, textColumn } from "./model";
 import { knownProvider } from "./ProviderBadge";
+import { SelectionCheckbox } from "./SelectionCheckbox";
 import s from "./ResourceRowView.module.css";
 import pc from "./provider.module.css";
 
@@ -57,8 +58,8 @@ export function ResourceRowView({
       onClick={onActivate ? () => onActivate(row) : undefined}
       className={`${s.row} ${pc[knownProvider(provider)]}${last ? ` ${s.last}` : ""}${selected ? ` ${s.sel}` : ""}${onActivate ? ` ${s.active}` : ""}`}
     >
-      {bulk && <span role="gridcell" className={s.check}>
-        <input type="checkbox" aria-label={`Select ${row.name}`} checked={bulk.checked}
+      {bulk && <span role="gridcell">
+        <SelectionCheckbox aria-label={`Select ${row.name}`} checked={bulk.checked}
           disabled={!bulk.onToggle} tabIndex={focusable ? 0 : -1}
           onChange={bulk.onToggle} onClick={event => event.stopPropagation()} />
       </span>}
