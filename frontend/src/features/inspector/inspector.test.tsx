@@ -59,29 +59,67 @@ describe("describe view", () => {
     expect(screen.getByText("Terminated (exit 2)").getAttribute("data-tone")).toBe("bad");
   });
 
-  it("secret env shows source but no value", () => {
+  it("shows each container's declared environment and source links", () => {
+    const secret: Link = { kind_key: "secrets", namespace: "payments", name: "payments-db" };
+    const config: Link = { kind_key: "configmaps", namespace: "payments", name: "settings" };
     const env = [
-      { name: "DB_PASSWORD", value: null, source: "Secret payments-db key password", link: null },
+      { name: "DB_PASSWORD", value: null, source: "Secret payments-db key password", link: secret },
+      { name: "FEATURE_MODE", value: null, source: "ConfigMap settings key mode", link: config },
+      { name: "(all keys)", value: null, source: "ConfigMap settings (prefix APP_)", link: config },
       { name: "LOG_LEVEL", value: "info", source: null, link: null },
+      { name: "EMPTY", value: "", source: null, link: null },
+      { name: "TARGET", value: "$(POD_NAMESPACE)/data", source: null, link: null },
+      { name: "POD_NAMESPACE", value: "payments", source: "Field metadata.namespace", link: null },
     ];
-    render(<DescribeView data={describeBody({ containers: [container({ env })] })} />);
-    const secret = screen.getByTestId("env-DB_PASSWORD");
-    expect(secret.textContent).toContain("Secret payments-db key password");
-    expect(within(secret).queryByTestId("env-value")).toBeNull();
-    expect(within(screen.getByTestId("env-LOG_LEVEL")).getByTestId("env-value").textContent).toBe("info");
+    const onLink = vi.fn<(link: Link) => void>();
+    const empty = container({ name: "sidecar", state_class: "ok", restarts: 0, limit_hit: [] });
+    render(<DescribeView data={describeBody({ containers: [container({ env }), empty] })} onLink={onLink} />);
+    const main = within(screen.getByRole("article", { name: "Container payments-api" }));
+    const namespace = within(main.getByTestId("env-POD_NAMESPACE"));
+    expect(namespace.getByTestId("env-value").textContent).toBe("payments");
+    expect(namespace.getByText("Field metadata.namespace")).toBeTruthy();
+    for (const [name, value] of [["LOG_LEVEL", "info"], ["EMPTY", '""'], ["TARGET", "$(POD_NAMESPACE)/data"]]) {
+      expect(within(main.getByTestId(`env-${name}`)).getByTestId("env-value").textContent).toBe(value);
+    }
+    for (const [name, source, link] of [
+      ["DB_PASSWORD", "Secret payments-db key password", secret],
+      ["FEATURE_MODE", "ConfigMap settings key mode", config],
+      ["(all keys)", "ConfigMap settings (prefix APP_)", config],
+    ] as const) {
+      const reference = within(main.getByTestId(`env-${name}`));
+      expect(reference.queryByTestId("env-value")).toBeNull();
+      fireEvent.click(reference.getByRole("button", { name: source }));
+      expect(onLink).toHaveBeenLastCalledWith(link);
+    }
+    const sidecar = within(screen.getByRole("article", { name: "Container sidecar" }));
+    fireEvent.click(sidecar.getByRole("button", { name: /sidecar/ }));
+    expect(sidecar.getByText("No environment variables declared")).toBeTruthy();
+    expect(sidecar.queryByTestId("env-POD_NAMESPACE")).toBeNull();
   });
 
-  it("marks init and ephemeral containers", () => {
+  it("marks init and ephemeral containers and shows their own environment", () => {
     render(
       <DescribeView
         data={describeBody({
-          init_containers: [container({ name: "migrate", state: "Terminated: Completed (exit 0)", state_class: "done" })],
-          ephemeral_containers: [container({ name: "debugger-x1", state: "Running", state_class: "ok" })],
+          init_containers: [container({
+            name: "migrate", state: "Terminated: Completed (exit 0)", state_class: "done",
+            env: [{ name: "MIGRATE", value: "yes", source: null, link: null }],
+          })],
+          ephemeral_containers: [container({
+            name: "debugger-x1", state: "Running", state_class: "ok",
+            env: [{ name: "DEBUG", value: "on", source: null, link: null }],
+          })],
         })}
       />,
     );
-    expect(within(screen.getByTestId("ctr-migrate")).getByText("Init")).toBeTruthy();
-    expect(within(screen.getByTestId("ctr-debugger-x1")).getByText("Ephemeral")).toBeTruthy();
+    const init = within(screen.getByTestId("ctr-migrate"));
+    const debug = within(screen.getByTestId("ctr-debugger-x1"));
+    expect(init.getByText("Init")).toBeTruthy();
+    expect(init.getByTestId("env-MIGRATE")).toBeTruthy();
+    expect(init.queryByTestId("env-DEBUG")).toBeNull();
+    expect(debug.getByText("Ephemeral")).toBeTruthy();
+    expect(debug.getByTestId("env-DEBUG")).toBeTruthy();
+    expect(debug.queryByTestId("env-MIGRATE")).toBeNull();
   });
 
   it("shows conditions as true and false chips and labels as tags", () => {

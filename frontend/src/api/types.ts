@@ -143,7 +143,7 @@ export interface PodInfo {
 
 export interface EnvVar {
   name: string;
-  /** Always null for anything read from a Secret (or any other reference); `source` names it. */
+  /** A declared literal or the pod namespace for `metadata.namespace`. Other references are null. */
   value: string | null;
   source: string | null;
   /** The ConfigMap or Secret it is read from. */

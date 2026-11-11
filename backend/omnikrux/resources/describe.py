@@ -76,7 +76,7 @@ class PodInfo(BaseModel):
 
 class EnvVar(BaseModel):
     name: str
-    value: str | None  # always None for anything read from a Secret
+    value: str | None  # a literal or the pod's namespace for a metadata.namespace reference
     source: str | None
     link: Link | None = None  # the ConfigMap or Secret it is read from
 
@@ -311,9 +311,7 @@ def _env(spec: dict, namespace: str) -> list[EnvVar]:
         if not ref:
             out.append(EnvVar(name=name, value=e.get("value") or "", source=None))
             continue
-        # A reference never carries a value to the browser, whatever else the entry holds.
-        source, link = _env_source(ref), _env_link(ref, namespace)
-        out.append(EnvVar(name=name, value=None, source=source, link=link))
+        out.append(_env_reference(name, ref, namespace))
     for e in spec.get("envFrom") or []:
         if (secret := e.get("secretRef")) is not None:
             source = f"Secret {secret.get('name')}"
@@ -323,28 +321,28 @@ def _env(spec: dict, namespace: str) -> list[EnvVar]:
             link = link_to("configmaps", namespace, config.get("name"))
         else:
             continue
+        if prefix := e.get("prefix"):
+            source += f" (prefix {prefix})"
         out.append(EnvVar(name="(all keys)", value=None, source=source, link=link))
     return out
 
 
-def _env_link(ref: dict, namespace: str) -> Link | None:
+def _env_reference(name: str, ref: dict, namespace: str) -> EnvVar:
+    value, source, link = None, None, None
     if (secret := ref.get("secretKeyRef")) is not None:
-        return link_to("secrets", namespace, secret.get("name"))
-    if (config := ref.get("configMapKeyRef")) is not None:
-        return link_to("configmaps", namespace, config.get("name"))
-    return None
-
-
-def _env_source(ref: dict) -> str | None:
-    if (secret := ref.get("secretKeyRef")) is not None:
-        return f"Secret {secret.get('name')} key {secret.get('key')}"
-    if (config := ref.get("configMapKeyRef")) is not None:
-        return f"ConfigMap {config.get('name')} key {config.get('key')}"
-    if (field := ref.get("fieldRef")) is not None:
-        return f"Field {field.get('fieldPath')}"
-    if (resource := ref.get("resourceFieldRef")) is not None:
-        return f"Resource {resource.get('resource')}"
-    return None
+        source = f"Secret {secret.get('name')} key {secret.get('key')}"
+        link = link_to("secrets", namespace, secret.get("name"))
+    elif (config := ref.get("configMapKeyRef")) is not None:
+        source = f"ConfigMap {config.get('name')} key {config.get('key')}"
+        link = link_to("configmaps", namespace, config.get("name"))
+    elif (field := ref.get("fieldRef")) is not None:
+        path = field.get("fieldPath")
+        source = f"Field {path}"
+        if path == "metadata.namespace":
+            value = namespace or None
+    elif (resource := ref.get("resourceFieldRef")) is not None:
+        source = f"Resource {resource.get('resource')}"
+    return EnvVar(name=name, value=value, source=source, link=link)
 
 
 def _when(stamp: str | None) -> datetime | None:
