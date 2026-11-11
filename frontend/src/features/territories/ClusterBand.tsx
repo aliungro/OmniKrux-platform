@@ -61,6 +61,7 @@ export function ClusterBand({
   kind,
   onRetry,
   rowIndex,
+  columnCount = kind.columns.length,
   metricsNote = null,
 }: {
   t: Territory;
@@ -68,6 +69,7 @@ export function ClusterBand({
   /** With the band's state: an absent kind is retried by asking the cluster for its kinds again. */
   onRetry: (clusterId: string, state: ClusterState) => void;
   rowIndex?: number;
+  columnCount?: number;
   /** Why this cluster's CPU and memory columns have no numbers (metrics-server missing, not answering). */
   metricsNote?: string | null;
 }) {
@@ -79,7 +81,7 @@ export function ClusterBand({
   const loc = bandLocation(cluster);
   return (
     <div role="row" aria-rowindex={rowIndex} className={`${s.band} ${pc[provider]}${t.rows.length === 0 ? ` ${s.alone}` : ""}`} tabIndex={-1}>
-      <div role="rowheader" aria-colspan={kind.columns.length} className={s.cell}>
+      <div role="rowheader" aria-colspan={columnCount} className={s.cell}>
         <ProviderBadge provider={provider} large />
         <b className={s.name}>{cluster.name}</b>
         {loc && <span className={s.loc} title={loc}>{loc}</span>}

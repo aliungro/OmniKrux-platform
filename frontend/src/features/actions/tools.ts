@@ -34,6 +34,10 @@ export function cordoned(row: ResourceRow): boolean | null {
   return status === "Ready" ? false : null;
 }
 
+export function canDelete(kindKey: string, verbs: readonly string[]): boolean {
+  return !READ_ONLY.has(kindKey) && verbs.includes("delete");
+}
+
 /**
  * The tools a kind has, in the order the details show them. Edit needs the `update` verb and is
  * never offered for a Secret (its values never reach the browser); Delete needs `delete`. A node
@@ -55,7 +59,7 @@ export function toolsFor(kindKey: string, verbs: readonly string[], row?: Resour
   // Port-forwards read the cluster only (no plan, no diff); each start is audited.
   if (kindKey === "pods" || kindKey === "services") tools.push("portForward");
   if (kindKey === "pods") tools.push("evict");
-  if (verbs.includes("delete")) tools.push("delete");
+  if (canDelete(kindKey, verbs)) tools.push("delete");
   return tools;
 }
 

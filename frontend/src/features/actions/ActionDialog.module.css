@@ -11,6 +11,40 @@
   width: min(980px, 100%);
 }
 
+.bulkList {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bulkItem {
+  padding: 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+}
+
+.bulkItem p {
+  margin: 5px 0 0;
+}
+
+.bulkPath {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.bulkPath .production {
+  margin: 0;
+}
+
+.bulkWarning {
+  color: var(--warn);
+}
+
 .path {
   color: var(--ink);
   font-weight: 600;

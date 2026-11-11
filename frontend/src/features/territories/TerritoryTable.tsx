@@ -17,7 +17,8 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/types";
-import { rowActions, TOOL_LABEL, type RowAction, type ToolId } from "../actions/tools";
+import { BulkDeleteDialog, type DeleteSelection } from "../actions/BulkDeleteDialog";
+import { canDelete, rowActions, TOOL_LABEL, type RowAction, type ToolId } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
 import { pageKey, pressed, rowShortcut } from "../chrome/shortcuts";
 import { routesPageKeys } from "../chrome/pageKeys";
@@ -38,6 +39,8 @@ const INSPECTOR_ESTIMATE = 360;
 /** The sticky column header's height; keep in step with `.cols` in TerritoryTable.module.css. */
 const HEADER_HEIGHT = 30;
 const OVERSCAN = 10;
+const MAX_DELETE_SELECTION = 50;
+const CHECKBOX_COLUMN_WIDTH = 32;
 
 export interface TerritoryTableProps {
   territories: Territory[];
@@ -158,6 +161,57 @@ export const TerritoryTable = memo(function TerritoryTable({
     logs: onOpenLogs !== undefined,
     shell: onOpenShell !== undefined,
     workloadLogs: onWorkloadLogs !== undefined,
+  };
+  const [marked, setMarked] = useState<ReadonlySet<string>>(() => new Set());
+  const [deleteReview, setDeleteReview] = useState<DeleteSelection[] | null>(null);
+  const checkAll = useRef<HTMLInputElement>(null);
+  const deletableRows = useMemo(() => {
+    const choices = new Map<string, DeleteSelection>();
+    if (!can.change) return choices;
+    for (const territory of territories) {
+      if (territory.state !== "ready" || !canDelete(kind.key, kind.verbs_by_cluster?.[territory.cluster.id] ?? kind.verbs)) continue;
+      for (const row of territory.rows) {
+        if (!row.uid) continue;
+        const key = rowKey(row.cluster_id, row.uid);
+        choices.set(key, {
+          key, uid: row.uid, clusterName: territory.cluster.name,
+          target: { cluster_id: row.cluster_id, kind_key: kind.key, namespace: row.namespace, name: row.name },
+        });
+      }
+    }
+    return choices;
+  }, [can.change, kind, territories]);
+  const checked = Array.from(deletableRows.values()).filter(choice => marked.has(choice.key));
+  const allChecked = checked.length > 0 && checked.length === deletableRows.size;
+  const partial = checked.length > 0 && !allChecked;
+  const atLimit = checked.length >= MAX_DELETE_SELECTION;
+  const showCheckboxes = deletableRows.size > 0;
+  useLayoutEffect(() => {
+    setMarked(old => {
+      const current = [...old].filter(key => deletableRows.has(key));
+      return current.length === old.size ? old : new Set(current);
+    });
+  }, [deletableRows]);
+  useLayoutEffect(() => {
+    if (checkAll.current) checkAll.current.indeterminate = partial;
+  }, [partial, showCheckboxes]);
+
+  const toggleMarked = (key: string) => {
+    setMarked(old => {
+      const next = new Set(old);
+      if (next.delete(key)) return next;
+      if (next.size >= MAX_DELETE_SELECTION || !deletableRows.has(key)) return old;
+      next.add(key);
+      return next;
+    });
+  };
+  const closeDeleteReview = (deleted: readonly string[]) => {
+    if (deleted.length > 0) {
+      const completed = new Set(deleted);
+      setMarked(old => new Set([...old].filter(key => !completed.has(key))));
+      if (checked.every(item => completed.has(item.key))) scrollRef.current?.focus({ preventScroll: true });
+    }
+    setDeleteReview(null);
   };
 
   const estimateSize = useCallback((i: number) => {
@@ -344,6 +398,11 @@ export const TerritoryTable = memo(function TerritoryTable({
       e.stopPropagation();
       return;
     }
+    if (key && e.key === " " && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && deletableRows.has(key)) {
+      e.preventDefault();
+      if (!e.repeat) toggleMarked(key);
+      return;
+    }
     runRowKey(e, key === undefined ? undefined : indexByKey.get(key));
   };
 
@@ -425,13 +484,17 @@ export const TerritoryTable = memo(function TerritoryTable({
   const tabKey = selectedKey !== null && indexByKey.has(selectedKey) ? selectedKey : indexByKey.keys().next().value;
   const margin = virtualizer.options.scrollMargin;
   const columns = kind.columns;
+  const columnCount = columns.length + Number(showCheckboxes);
   const titleKey = kind.key === "helm-releases" ? "release" : "name";
   const tableStyle = useMemo(
-    () => ({ "--cols": gridTemplate(columns, titleKey), minWidth: minTableWidth(columns, titleKey) }) as CSSProperties,
-    [columns, titleKey],
+    () => ({
+      "--cols": `${showCheckboxes ? "20px " : ""}${gridTemplate(columns, titleKey)}`,
+      minWidth: minTableWidth(columns, titleKey) + (showCheckboxes ? CHECKBOX_COLUMN_WIDTH : 0),
+    }) as CSSProperties,
+    [columns, titleKey, showCheckboxes],
   );
 
-  return (
+  const table = (
     <div ref={scrollRef} className={s.scroll} tabIndex={-1} onKeyDown={onKeyDown} onContextMenu={onContextMenu}
       onScroll={(e) => {
         onScroll?.(e.currentTarget.scrollTop);
@@ -454,6 +517,12 @@ export const TerritoryTable = memo(function TerritoryTable({
       >
         <div role="rowgroup" className={s.head}>
           <div role="row" aria-rowindex={1} className={`${rv.grid} ${s.cols}`}>
+            {showCheckboxes && <span role="columnheader" className={rv.check}>
+              <input ref={checkAll} type="checkbox" aria-label="Select all visible resources"
+                checked={allChecked} disabled={deletableRows.size > MAX_DELETE_SELECTION}
+                title={deletableRows.size > MAX_DELETE_SELECTION ? `Filter to ${MAX_DELETE_SELECTION} or fewer resources to select all` : undefined}
+                onChange={() => setMarked(allChecked ? new Set() : new Set(deletableRows.keys()))} />
+            </span>}
             {columns.map((c) => <ColumnHeader key={c.key} col={c} filter={columnFilters.find(f => f.key === c.key)} sort={sort} source={pickSource} onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} />)}
           </div>
         </div>
@@ -473,7 +542,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                   className={`${s.item} ${s.inspRow}${last ? ` ${s.last}` : ""}`}
                   style={{ transform: `translateY(${v.start - margin}px)` }}
                 >
-                  <div role="gridcell" aria-colspan={columns.length}>
+                  <div role="gridcell" aria-colspan={columnCount}>
                     <Inspector
                       row={it.row}
                       kindKey={kind.key}
@@ -502,6 +571,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                     kind={kind}
                     onRetry={onRetry}
                     rowIndex={rowIndex}
+                    columnCount={columnCount}
                     metricsNote={metrics ? metrics.why(it.t.cluster.id) : null}
                   />
                 ) : (
@@ -518,6 +588,11 @@ export const TerritoryTable = memo(function TerritoryTable({
                     podCounts={podCounts}
                     metrics={metrics}
                     onActivate={toggle}
+                    bulk={showCheckboxes ? {
+                      checked: key !== null && marked.has(key),
+                      onToggle: key !== null && deletableRows.has(key) && (!atLimit || marked.has(key))
+                        ? () => toggleMarked(key) : undefined,
+                    } : undefined}
                   />
                 )}
               </div>
@@ -529,6 +604,21 @@ export const TerritoryTable = memo(function TerritoryTable({
         <ContextMenu anchor={rowMenu.anchor} label={`Actions for ${menuRow.name}`} items={menuItems}
           onClose={() => setRowMenu(null)} />
       )}
+    </div>
+  );
+
+  return (
+    <div className={s.frame}>
+      {checked.length > 0 && <div className={s.bulkBar} role="group" aria-label="Selected resources">
+        <span role="status">{checked.length} selected{atLimit ? ` (limit of ${MAX_DELETE_SELECTION})` : ""}</span>
+        <button type="button" className={s.bulkDelete} onClick={() => setDeleteReview(checked)}>Delete selected</button>
+        <button type="button" onClick={() => {
+          setMarked(new Set());
+          scrollRef.current?.focus({ preventScroll: true });
+        }}>Clear selection</button>
+      </div>}
+      {table}
+      {deleteReview && <BulkDeleteDialog selected={deleteReview} onClose={closeDeleteReview} />}
     </div>
   );
 });

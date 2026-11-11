@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ResourceRow } from "../../api/types";
+import type { Plan, PlanRequest, ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
 import type { TerritoryTableProps } from "./TerritoryTable";
 import { resourceDescribe, secretDescribe } from "../../test/describe";
@@ -274,6 +274,56 @@ describe("keys per kind", () => {
       </QueryClientProvider>,
     );
   }
+
+  it("reviews exact selected UIDs and reports partial results without retrying successful deletes", async () => {
+    const plans: PlanRequest[] = [];
+    const applies: Array<{ id: string; confirm_text?: string }> = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/actions/plan") {
+        const req = JSON.parse(String(init?.body)) as PlanRequest;
+        plans.push(req);
+        const { name } = req.target;
+        return json({
+          plan_id: name, action: "delete", target: req.target, kind: "Pod",
+          cluster: { id: "c1", name: "big", provider: "gke", environment: "production" },
+          title: `Delete Pod ${name}`, summary: [`Delete Pod n/${name} on big.`, "A replacement pod will start."],
+          warnings: [], blocked: [], diff: null, confirm_text: name, apply_label: "Delete", expires_at: "",
+        } satisfies Plan);
+      }
+      const match = url.match(/^\/api\/actions\/([^/]+)\/apply$/);
+      if (match) {
+        applies.push({ id: match[1], ...JSON.parse(String(init?.body)) });
+        if (match[1] === "pod-1") {
+          return Promise.resolve(new Response(JSON.stringify({ detail: "Pod pod-1 changed since review." }),
+            { status: 409, headers: { "Content-Type": "application/json" } }));
+        }
+        return json({ outcome: "succeeded", message: "Deleted Pod n/pod-0.", job_id: null, audit_id: 1 });
+      }
+      return json(describeBody);
+    }));
+    renderKind(PODS, rows(3));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select pod-0" }));
+    fireEvent.keyDown(podRow("pod-1"), { key: " " });
+    expect(inspector()).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Delete 2 resources" }));
+    const first = await dialog.findByRole("textbox", { name: "Type pod-0 to confirm" });
+    const second = dialog.getByRole("textbox", { name: "Type pod-1 to confirm" });
+    const confirm = dialog.getByRole<HTMLButtonElement>("button", { name: "Delete 2 resources" });
+    expect(plans.map(req => [req.target.name, req.params?.expected_uid])).toEqual([["pod-0", "0"], ["pod-1", "1"]]);
+    expect(applies).toHaveLength(0);
+    fireEvent.change(first, { target: { value: "pod-0" } });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(second, { target: { value: "pod-1" } });
+    fireEvent.click(confirm);
+    expect(await dialog.findByText("1 of 2 deleted.")).toBeTruthy();
+    expect(dialog.getByText("Pod pod-1 changed since review.")).toBeTruthy();
+    expect(applies).toEqual([{ id: "pod-0", confirm_text: "pod-0" }, { id: "pod-1", confirm_text: "pod-1" }]);
+    fireEvent.click(dialog.getByRole("button", { name: "Close" }));
+    expect(screen.getByRole<HTMLInputElement>("checkbox", { name: "Select pod-0" }).checked).toBe(false);
+    expect(screen.getByRole<HTMLInputElement>("checkbox", { name: "Select pod-1" }).checked).toBe(true);
+    expect(screen.getByRole<HTMLInputElement>("checkbox", { name: "Select pod-2" }).checked).toBe(false);
+  });
 
   it("opens a menu for the pointed pod and sends Logs only to that pod", () => {
     const onOpenLogs = vi.fn();

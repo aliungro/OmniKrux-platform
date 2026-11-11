@@ -51,6 +51,27 @@
   background: var(--surf-2);
 }
 
+.row[data-bulk-selected] {
+  background: color-mix(in srgb, var(--focus) 10%, var(--surf-2));
+}
+
+.check {
+  display: grid;
+  place-items: center;
+}
+
+.check input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--focus);
+  cursor: pointer;
+}
+
+.check input:disabled {
+  cursor: default;
+}
+
 .row:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;

@@ -1,7 +1,44 @@
+.frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.bulkBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 16px 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.bulkBar button {
+  padding: 4px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.bulkBar button.bulkDelete {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.bulkBar button:hover {
+  background: var(--surf-2);
+}
+
 .scroll {
   --table-gutter: 16px;
   container-type: inline-size;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   font-size: 13px;
   color: var(--ink);

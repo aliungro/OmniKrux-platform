@@ -281,6 +281,22 @@ async def test_delete_needs_typed_name_for_namespace_and_production(env):
     assert r.json()["confirm_text"] is None
 
 
+async def test_delete_plan_cannot_retarget_a_replaced_selected_pod(env):
+    fake = env.fakes["dev-a"]
+    fake.pods[("demo", "selected")] = pod("selected", uid="new-uid")
+    rejected = await plan(
+        env, "delete", kind_key="pods", name="selected", params={"expected_uid": "old-uid"}
+    )
+    assert rejected.status_code == 409
+    assert "Select it again" in rejected.json()["detail"]
+    assert fake.pods[("demo", "selected")]["metadata"]["uid"] == "new-uid"
+
+    reviewed = await plan(
+        env, "delete", kind_key="pods", name="selected", params={"expected_uid": "new-uid"}
+    )
+    assert reviewed.status_code == 200
+
+
 async def test_delete_uses_uid_precondition(env):
     fake = env.fakes["dev-a"]
 
