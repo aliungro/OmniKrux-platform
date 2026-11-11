@@ -719,6 +719,27 @@ describe("late plans", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it("drops a plan response when its still-visible pane is no longer active", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return new Promise<Response>((resolve) => { answer = resolve; });
+      return json(resourceDescribe());
+    }));
+    const row = deployment();
+    const ui = (paneActive: boolean) => (
+      <ActionsProvider>
+        <Inspector row={row} provider="aks" kindKey="deployments.apps" verbs={VERBS} paneActive={paneActive} />
+      </ActionsProvider>
+    );
+    const view = wrap(ui(true));
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    view.rerender(ui(false));
+    await act(async () => answer(await json(plan())));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    view.rerender(ui(true));
+    expect((screen.getByRole("button", { name: "Restart" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it.each([["Escape"], ["ArrowDown"]])("a plan that comes back after %s left its details never opens", async (away) => {
     let answer!: (r: Response) => void;
     vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {

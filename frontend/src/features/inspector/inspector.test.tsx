@@ -556,6 +556,21 @@ describe("secret values", () => {
     expect(screen.getByRole("button", { name: "Hide all" })).toBeTruthy();
   });
 
+  it("masks a revealed key as soon as its split pane loses focus", async () => {
+    vi.stubGlobal("fetch", bothKeys());
+    const ui = (paneActive: boolean) => <Inspector row={secretRow} provider="kind" kindKey="secrets" paneActive={paneActive} />;
+    const view = wrap(ui(true));
+    await screen.findByTestId("secret-key-password");
+    clickReveal("password");
+    await screen.findByText(VALUE);
+    view.rerender(ui(false));
+    expect(screen.queryByText(VALUE)).toBeNull();
+    expect(screen.getByTestId("secret-key-password").textContent).toContain("••••••");
+    view.rerender(ui(true));
+    expect(screen.queryByText(VALUE)).toBeNull();
+    expect(within(screen.getByTestId("secret-key-password")).getByRole("button", { name: "Reveal" })).toBeTruthy();
+  });
+
   it("hide hides only that key", async () => {
     vi.stubGlobal("fetch", bothKeys());
     wrap(<Inspector row={secretRow} provider="kind" kindKey="secrets" />);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { failure } from "../../api/http";
 import type { ActionName, ResourceRow } from "../../api/types";
 import { ScaleForm, RollbackForm } from "../actions/forms";
@@ -47,6 +47,7 @@ export function useTools({
   onEditing,
   intent,
   onIntentDone,
+  paneActive = true,
 }: {
   row: ResourceRow;
   kindKey: string;
@@ -56,6 +57,7 @@ export function useTools({
   onEditing: () => void;
   intent?: ToolIntent | null;
   onIntentDone?: () => void;
+  paneActive?: boolean;
 }) {
   const start = useStartAction();
   // Port-forwards need no plan, so they don't wait for the actions provider.
@@ -67,13 +69,13 @@ export function useTools({
   const [outcome, setOutcome] = useState<ActionOutcome | null>(null);
   const said = useRef<HTMLParagraphElement>(null);
 
-  // Requests belong to one object while these details show it: leaving (unmount) or another object
-  // makes any plan still on its way stale.
-  const identity = `${row.cluster_id}\n${kindKey}\n${row.namespace ?? ""}\n${row.name}`;
+  // A plan that returns after a pane loses focus must not open a dialog over the active pane.
+  const identity = `${row.cluster_id}\n${kindKey}\n${row.uid}`;
   const generation = useRef(0);
-  useEffect(() => () => {
-    generation.current += 1;
-  }, [identity]);
+  useLayoutEffect(() => {
+    if (!paneActive) setBusy(null);
+    return () => { generation.current += 1; };
+  }, [identity, paneActive]);
   // Another object in the same details starts clean: no form, line or wait of the last one's.
   const [shownIdentity, setShownIdentity] = useState(identity);
   if (shownIdentity !== identity) {
@@ -86,7 +88,7 @@ export function useTools({
 
   /** Plans a change on this object; true when it was applied (and what it did is shown). */
   const request = async (tool: ToolId, action: ActionName, params: Record<string, unknown> = {}): Promise<boolean> => {
-    if (!start) return false;
+    if (!start || !paneActive) return false;
     const mine = generation.current;
     const current = () => generation.current === mine;
     setBusy(tool);
@@ -117,7 +119,7 @@ export function useTools({
   }, [outcome, open]);
 
   const run = (tool: ToolId) => {
-    if (busy !== null || !tools.includes(tool)) return;
+    if (!paneActive || busy !== null || !tools.includes(tool)) return;
     setError(null);
     setOutcome(null);
     switch (tool) {
