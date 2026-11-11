@@ -69,7 +69,10 @@ async function openDialog() {
 describe("port-forward dialog", () => {
   it("start forward from a pod port shows localhost address", async () => {
     const calls = serve((c) => {
-      if (c.url === DESCRIBE_URL) return { body: podDescribe() };
+      if (c.url === DESCRIBE_URL) return { body: describeBody({ containers: [
+        container({ name: "web", ports: ["8080/TCP"] }),
+        container({ name: "helper", ports: ["9090/TCP"] }),
+      ] }) };
       if (c.method === "POST" && c.url === "/api/port-forwards") return { body: FORWARD };
       if (c.url === "/api/port-forwards") return { body: [FORWARD] };
       if (c.url.startsWith("/api/audit")) return { body: { records: [], next_before: null } };
@@ -78,14 +81,67 @@ describe("port-forward dialog", () => {
     // The cluster is named and the path says where the forward goes.
     expect(await within(dialog).findByText("prod-gke / payments / payments-api-1")).toBeTruthy();
     expect(within(dialog).getByText("GKE")).toBeTruthy();
-    // The container ports of the describe are the choices; the second one is picked.
-    const second = await within(dialog).findByRole("radio", { name: /9090/ });
-    fireEvent.click(second);
+    const containerFilter = await within(dialog).findByRole("combobox", { name: "Container" }) as HTMLSelectElement;
+    expect(containerFilter.selectedOptions[0].textContent).toBe("All containers");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /8080/ }));
+    fireEvent.change(containerFilter, { target: { value: "helper" } });
+    expect(within(dialog).queryByRole("radio", { name: /8080/ })).toBeNull();
+    expect((within(dialog).getByRole("radio", { name: /9090.*helper/ }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(within(dialog).getByRole("button", { name: "Start forwarding" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const post = calls.find((c) => c.method === "POST")!;
     expect(post.body).toEqual({ cluster_id: "c1", namespace: "payments", kind: "pod", name: "payments-api-1", port: 9090 });
     expect(await screen.findByText(/localhost:30001/)).toBeTruthy();
+  });
+
+  it("offers a shared TCP port once and identifies all containers that declare it", async () => {
+    serve((c) => c.url === DESCRIBE_URL ? { body: describeBody({ containers: [
+      container({ name: "web", ports: ["8080/UDP", "8080/TCP", "5353/UDP"] }),
+      container({ name: "helper", ports: ["8080/TCP", "8080/TCP", "9090/TCP"] }),
+      container({ name: "udp-only", ports: ["8080/UDP"] }),
+    ] }) } : { body: [] });
+    const dialog = await openDialog();
+    const filter = await within(dialog).findByRole("combobox", { name: "Container" });
+    const shared = within(dialog).getAllByRole("radio", { name: /8080/ });
+    expect(shared).toHaveLength(1);
+    expect(within(dialog).getByRole("radio", { name: /8080\/TCP.*web, helper/ })).toBe(shared[0]);
+    expect(within(dialog).queryByRole("radio", { name: /UDP|5353/ })).toBeNull();
+
+    fireEvent.change(filter, { target: { value: "helper" } });
+    expect(within(dialog).getByRole("radio", { name: /8080.*helper/ })).toBeTruthy();
+    expect(within(dialog).queryByRole("radio", { name: /8080.*web/ })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /9090.*helper/ }));
+    fireEvent.change(filter, { target: { value: "udp-only" } });
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    expect((within(dialog).getByRole("button", { name: "Start forwarding" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(filter, { target: { value: "" } });
+    expect((within(dialog).getByRole("radio", { name: /8080/ }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it.each([
+    { scenario: "there are no declared TCP ports", response: { body: describeBody({ containers: [
+      container({ ports: ["53/UDP"] }),
+    ] }) }, note: /declares no TCP ports/ },
+    { scenario: "describe fails", response: { status: 503, body: { detail: "Pod details are unavailable." } }, note: /Pod details are unavailable/ },
+  ])("keeps valid manual forwarding when $scenario", async ({ response, note }) => {
+    const calls = serve((c) => {
+      if (c.url === DESCRIBE_URL) return response;
+      if (c.method === "POST") return { body: FORWARD };
+      return { body: [] };
+    });
+    const dialog = await openDialog();
+    expect(await within(dialog).findByText(note)).toBeTruthy();
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    const start = within(dialog).getByRole("button", { name: "Start forwarding" }) as HTMLButtonElement;
+    const custom = within(dialog).getByLabelText("Another port");
+    fireEvent.change(custom, { target: { value: "0" } });
+    expect(start.disabled).toBe(true);
+    fireEvent.change(custom, { target: { value: "65536" } });
+    expect(start.disabled).toBe(true);
+    fireEvent.change(custom, { target: { value: "65535" } });
+    expect(start.disabled).toBe(false);
+    fireEvent.click(start);
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({ port: 65535 }));
   });
 
   it("a free port number can be typed", async () => {
@@ -148,6 +204,7 @@ describe("port-forward tool", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Port-forward/ }));
     const dialog = await screen.findByRole("dialog", { name: /Port-forward service web/ });
     expect(await within(dialog).findByRole("radio", { name: /80\/TCP/ })).toBeTruthy();
+    expect(within(dialog).queryByRole("combobox", { name: "Container" })).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Start forwarding" }));
     await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
     expect(calls.find((c) => c.method === "POST")!.body).toEqual({ cluster_id: "c1", namespace: "payments", kind: "service", name: "web", port: 80 });
