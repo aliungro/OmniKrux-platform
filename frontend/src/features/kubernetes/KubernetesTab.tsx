@@ -30,7 +30,7 @@ import {
 import { TerritoryTable, type RowRequest } from "../../features/territories/TerritoryTable";
 import { useNow } from "../../hooks/useNow";
 import { ShellBridge } from "../shell/ShellBridge";
-import { kindView, type ClosedTab, type KubeView } from "../shell/workspace";
+import { HOME, kindView, type ClosedTab, type KubeView } from "../shell/workspace";
 import type { TabNav } from "../shell/browserHistory";
 import type { useDock } from "../dock/useDock";
 import type { PaletteSelection } from "../palette/CommandPalette";
@@ -64,17 +64,17 @@ export interface KubernetesTabProps {
   loadProblem: string | null;
   onDismissLoadProblem(): void;
   onEditPinned(): void;
-  onOpenKind?(key: string, from: KubeView): void;
+  onOpenView?(view: KubeView, split?: boolean): void;
   paneActive?: boolean;
 }
 
-export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned, onOpenKind, paneActive = true }: KubernetesTabProps) {
+export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned, onOpenView, paneActive = true }: KubernetesTabProps) {
   return nav.view.page === "home"
-    ? <KubernetesHome nav={nav} closed={closed} onReopen={onReopen} loadProblem={loadProblem} onDismissLoadProblem={onDismissLoadProblem} onEditPinned={onEditPinned} paneActive={paneActive} />
-    : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned} onOpenKind={onOpenKind} paneActive={paneActive} />;
+    ? <KubernetesHome nav={nav} closed={closed} onReopen={onReopen} loadProblem={loadProblem} onDismissLoadProblem={onDismissLoadProblem} paneActive={paneActive} />
+    : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned} onOpenView={onOpenView} paneActive={paneActive} />;
 }
 
-function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind, paneActive }: Pick<KubernetesTabProps, "nav" | "dock" | "onEditPinned" | "onOpenKind"> & { paneActive: boolean }) {
+function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: Pick<KubernetesTabProps, "nav" | "dock" | "onEditPinned" | "onOpenView"> & { paneActive: boolean }) {
   const pinned = usePinnedKinds();
   const queryClient = useQueryClient();
   const clusters = useClusters();
@@ -256,6 +256,13 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind, paneActive }: P
     },
     [tabNav.navigate, cancelJump, kindKey],
   );
+  const openRowSplit = useCallback((row: ResourceRow) => {
+    onOpenView?.({
+      ...kindView(HOME, kindKey, [row.cluster_id]),
+      selected: { clusterId: row.cluster_id, uid: row.uid },
+      open: true,
+    }, true);
+  }, [onOpenView, kindKey]);
 
   const selectedRow = useMemo(() => {
     const sel = selection.selected;
@@ -322,7 +329,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind, paneActive }: P
           error={kindsError}
           onRetry={onRetryKinds}
           onAllKinds={onAllKinds}
-          onOpenKind={onOpenKind && (key => onOpenKind(key, tabNav.view))}
+          onOpenKind={onOpenView && ((key, split) => onOpenView(kindView(HOME, key, view.clusters), split))}
         />
         <FilterBar paneActive={paneActive} clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
         <NavigationNotice text={nav.notice ?? scopeNoticeText} waiting={nav.waiting} />
@@ -351,7 +358,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind, paneActive }: P
             onWorkloadLogs={onWorkloadLogs}
             request={rowRequest}
             paneActive={paneActive}
-            onEditPinned={onEditPinned}
+            onOpenSplit={onOpenView && openRowSplit}
             menuView={tabNav.view}
           />
         </div>

@@ -27,12 +27,6 @@ export function isMenuKey(e: KeyboardEvent): boolean {
   return e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey);
 }
 
-export function isBlankMenuSurface(target: EventTarget | null): boolean {
-  return target instanceof Element && !target.closest(
-    'a, button, input, textarea, select, label, [contenteditable], [role="tab"], [role="menu"], [role="listbox"], [role="row"], [role="dialog"]',
-  );
-}
-
 export function ContextMenu({ anchor, label, items, onClose }: {
   anchor: MenuAnchor;
   label: string;

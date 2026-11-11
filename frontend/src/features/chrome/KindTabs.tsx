@@ -58,7 +58,7 @@ export function KindTabs({
   onRetry?: () => void;
   /** Opens the palette on every kind (its `:` mode). */
   onAllKinds?: () => void;
-  onOpenKind?: (key: string) => void;
+  onOpenKind?: (key: string, split?: boolean) => void;
   pinned: readonly string[];
   onPin: (key: string) => void;
   onUnpin: (key: string) => void;
@@ -138,7 +138,10 @@ export function KindTabs({
   const items: MenuItem[] = [];
   if (menu) {
     const { key } = menu;
-    if (onOpenKind) items.push({ id: "open", label: "Open in new tab", onSelect: () => onOpenKind(key), restoreFocus: false });
+    if (onOpenKind) items.push(
+      { id: "open", label: "Open in new tab", onSelect: () => onOpenKind(key), restoreFocus: false },
+      { id: "open-split", label: "Open in new split tab", onSelect: () => onOpenKind(key, true), restoreFocus: false },
+    );
     const index = pinned.indexOf(key);
     if (index !== -1) {
       items.push(

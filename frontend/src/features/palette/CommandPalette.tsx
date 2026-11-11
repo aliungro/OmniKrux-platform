@@ -144,6 +144,7 @@ export function CommandPalette({
   const sections = useMemo(() => inGroups(ranked), [ranked]);
   const ordered = useMemo(() => sections.flatMap(([, cmds]) => cmds), [sections]);
   const at = ordered.length === 0 ? -1 : Math.min(active, ordered.length - 1);
+  const suggestion = kindsOnly && split.q.trim() ? ordered[at] : undefined;
   const optionId = (i: number) => `${base}-o${i}`;
 
   // Focus the field on open; give focus back to where it was on close, or, when that has gone,
@@ -185,7 +186,13 @@ export function CommandPalette({
       e.preventDefault();
       run(ordered[at]);
     } else if (e.key === "Tab") {
-      e.preventDefault(); // one field: focus stays in it
+      e.preventDefault();
+      if (suggestion && !e.shiftKey && !e.nativeEvent.isComposing) {
+        const ambiguous = pool.some(c => c.id !== suggestion.id && c.label.toLowerCase() === suggestion.label.toLowerCase());
+        const completed = (ambiguous ? suggestion.hint ?? suggestion.label : suggestion.label).toLowerCase();
+        setQuery(split.kindsOnly ? `:${completed}` : completed);
+        setActive(0);
+      }
     }
   };
 
@@ -278,6 +285,7 @@ export function CommandPalette({
         <div className={s.foot}>
           <span><span className={k.k}>↑</span><span className={k.k}>↓</span> choose</span>
           <span><span className={k.k}>Enter</span> {kindsOnly ? "jump" : "run"}</span>
+          {suggestion && <span><span className={k.k}>Tab</span> complete</span>}
           {mode === "all" && !kindsOnly && <span><span className={k.k}>{capsOf("kinds")[0]}</span> kinds only</span>}
           {capped && <span className={s.more}>{`Showing ${MAX_RESULTS} of ${total}. Type to narrow.`}</span>}
         </div>

@@ -277,8 +277,8 @@ describe("keys per kind", () => {
 
   it("opens a menu for the pointed pod and sends Logs only to that pod", () => {
     const onOpenLogs = vi.fn();
-    const onEditPinned = vi.fn();
-    renderKind(PODS, rows(2), { onOpenLogs, onEditPinned });
+    const onOpenSplit = vi.fn();
+    renderKind(PODS, rows(2), { onOpenLogs, onOpenSplit });
     fireEvent.click(podRow("pod-0"));
     fireEvent.contextMenu(screen.getByText("pod-1"));
 
@@ -286,15 +286,15 @@ describe("keys per kind", () => {
     expect(podRow("pod-0").getAttribute("aria-selected")).toBe("true");
     expect(podRow("pod-1").getAttribute("aria-selected")).toBe("false");
     expect(inspector()?.getAttribute("aria-label")).toBe("Details for pod-0");
-    expect(within(menu).getByRole("menuitem", { name: "Edit pinned kinds…" }).getAttribute("data-divider")).toBe("true");
+    expect(within(menu).queryByRole("menuitem", { name: "Edit pinned kinds…" })).toBeNull();
     expect(onOpenLogs).not.toHaveBeenCalled();
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Logs" }));
     expect(onOpenLogs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ uid: "1" }), false);
     expect(screen.queryByRole("menu")).toBeNull();
 
     fireEvent.contextMenu(podRow("pod-1"));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit pinned kinds…" }));
-    expect(onEditPinned).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open in new split tab" }));
+    expect(onOpenSplit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ uid: "1" }));
   });
 
   it("opens Edit for the pointed pod without submitting a write", async () => {

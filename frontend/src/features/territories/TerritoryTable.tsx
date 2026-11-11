@@ -75,7 +75,7 @@ export interface TerritoryTableProps {
    * into view, and focuses it unless you've moved focus outside the table meanwhile.
    */
   reveal?: number;
-  onEditPinned?: () => void;
+  onOpenSplit?: (row: ResourceRow) => void;
   menuView?: unknown;
   paneActive?: boolean;
 }
@@ -123,7 +123,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   onWorkloadLogs,
   request = null,
   reveal = 0,
-  onEditPinned,
+  onOpenSplit,
   menuView,
   paneActive = true,
 }: TerritoryTableProps) {
@@ -257,8 +257,12 @@ export const TerritoryTable = memo(function TerritoryTable({
         },
       });
     }
-    if (onEditPinned) menuItems.push({
-      id: "pins", label: "Edit pinned kinds…", onSelect: onEditPinned, divider: true, restoreFocus: false,
+    if (onOpenSplit) menuItems.push({
+      id: "open-split", label: "Open in new split tab", divider: menuItems.length > 0, restoreFocus: false,
+      onSelect: () => {
+        const current = rowAt(rowMenu.key);
+        if (current && rowMenu.anchor.trigger.isConnected) onOpenSplit(current);
+      },
     });
   }
   useLayoutEffect(() => {

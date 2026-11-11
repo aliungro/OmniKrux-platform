@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Cluster, KindInfo } from "../../api/types";
-import { ContextMenu, isBlankMenuSurface, isMenuKey, menuAnchor, type MenuAnchor, type MenuItem } from "../chrome/ContextMenu";
+import { ContextMenu, isMenuKey, menuAnchor, type MenuAnchor, type MenuItem } from "../chrome/ContextMenu";
 import { tabLabel } from "./tabLabel";
 import type { AppId, KubeView, Tab } from "./workspace";
 import s from "./WorkspaceTabs.module.css";
@@ -20,17 +20,19 @@ interface Props {
   onNew(): void;
   onEditPinned?(): void;
   onSplit?(id: string): void;
+  onOpenSplit?(view: KubeView): void;
   split?: readonly [string, string];
 }
 
-export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, onClose, onNew, onEditPinned, onSplit, split }: Props) {
+export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, onClose, onNew, onEditPinned, onSplit, onOpenSplit, split }: Props) {
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const [focused, setFocused] = useState(Math.max(0, tabs.findIndex((t) => t.id === active)));
-  const [menu, setMenu] = useState<{ anchor: MenuAnchor; id?: string } | null>(null);
+  const [menu, setMenu] = useState<{ anchor: MenuAnchor; id: string } | null>(null);
   useEffect(() => setFocused(Math.max(0, tabs.findIndex((t) => t.id === active))), [active, tabs]);
 
+  const hasMenu = Boolean(onEditPinned || onSplit || onOpenSplit);
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
-    if (onEditPinned && isMenuKey(e)) {
+    if (hasMenu && isMenuKey(e)) {
       e.preventDefault();
       e.stopPropagation();
       setMenu({ anchor: menuAnchor(e.currentTarget), id: tabs[i].id });
@@ -60,17 +62,16 @@ export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, 
   if (target && target !== active && !split?.includes(target) && onSplit) {
     menuItems.push({ id: "split", label: "Split side by side", onSelect: () => onSplit(target), restoreFocus: false });
   }
+  const view = tabs.find(tab => tab.id === target)?.view;
+  if (view?.page === "kind" && onOpenSplit) {
+    menuItems.push({ id: "open-split", label: "Open in new split tab", onSelect: () => onOpenSplit(view), restoreFocus: false });
+  }
   if (onEditPinned) {
-    menuItems.push({ id: "pins", label: "Edit pinned kinds…", onSelect: onEditPinned, restoreFocus: false });
+    menuItems.push({ id: "pins", label: "Edit pinned kinds…", onSelect: onEditPinned, divider: menuItems.length > 0, restoreFocus: false });
   }
 
   return (
-    <div className={s.strip} role="tablist" aria-label="Kubernetes tabs" data-page-keys
-      onContextMenu={(e) => {
-        if (!onEditPinned || !isBlankMenuSurface(e.target)) return;
-        e.preventDefault();
-        setMenu({ anchor: menuAnchor(refs.current[focused] ?? e.currentTarget, e) });
-      }}>
+    <div className={s.strip} role="tablist" aria-label="Kubernetes tabs" data-page-keys>
       {tabs.map((tab, i) => {
         const view = tab.view;
         const label = tabLabel(view, { kinds, clusters });
@@ -85,7 +86,7 @@ export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, 
             onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
             onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose(tab.id); } }}
             onContextMenu={(e) => {
-              if (!onEditPinned) return;
+              if (!hasMenu) return;
               e.preventDefault();
               e.stopPropagation();
               setMenu({ anchor: menuAnchor(refs.current[i] ?? e.currentTarget, e), id: tab.id });
@@ -99,7 +100,7 @@ export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, 
               type="button"
               role="tab"
               aria-selected={tab.id === active}
-              aria-haspopup={onEditPinned ? "menu" : undefined}
+              aria-haspopup={hasMenu ? "menu" : undefined}
               tabIndex={focused === i ? 0 : -1}
               className={s.tab}
               title={view.page === "home" ? "Home" : `${label.split(" · ")[0]} on ${scopeTitle}`}

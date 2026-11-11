@@ -51,3 +51,24 @@ it("keyboard opens every filterable column from Add filter and Escape restores f
    await user.keyboard("{Escape}"); expect(document.activeElement).toBe(add);
  }
 });
+
+it("clicking elsewhere dismisses both stages of Add filter without applying a draft", async () => {
+ const user = userEvent.setup();
+ render(<Harness kind={PODS} rows={[]}/>);
+ const bar = within(screen.getByRole("group", { name: "Filter rows" }));
+ const add = bar.getByRole("button", { name: "Add filter" });
+ const search = bar.getByRole("textbox", { name: "Filter by name, label or image" });
+ await user.click(add);
+ expect(add.getAttribute("aria-expanded")).toBe("true");
+ await user.click(search);
+ expect(add.getAttribute("aria-expanded")).toBe("false");
+ expect(document.activeElement).toBe(search);
+
+ await user.click(add);
+ await user.click(bar.getByRole("button", { name: "Restarts" }));
+ const dialog = screen.getByRole("dialog", { name: "Filter by Restarts" });
+ await user.type(within(dialog).getByLabelText("Min"), "3");
+ await user.click(search);
+ expect(screen.queryByRole("dialog", { name: "Filter by Restarts" })).toBeNull();
+ expect(bar.queryByRole("button", { name: /Remove filter/ })).toBeNull();
+});

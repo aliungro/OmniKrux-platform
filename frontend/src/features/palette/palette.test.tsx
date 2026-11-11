@@ -7,7 +7,7 @@ import { FakeWebSocket } from "../logs/fakeWebSocket";
 import { Shell as Console } from "../../features/shell/Shell";
 import { seedPodsWorkspace } from "../../test/seedWorkspace";
 import { describeBody } from "../../test/describe";
-import { KINDS, PODS } from "../../test/kinds";
+import { KINDS, PODS, SECRETS } from "../../test/kinds";
 import { CommandPalette } from "./CommandPalette";
 
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
@@ -145,6 +145,21 @@ describe("command palette", () => {
     await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Deployments"));
     // The row that had focus went with the pods; focus lands on the kind you jumped to.
     expect(document.activeElement).toBe(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }));
+  });
+
+  it("Tab completes the kind in the field and Enter opens it", async () => {
+    kindsAnswer = () => json({ ...SERVED, kinds: [...SERVED.kinds, SECRETS] });
+    await renderConsole();
+    fireEvent.keyDown(document.body, { key: ":" });
+    fireEvent.change(input(), { target: { value: "sec" } });
+    fireEvent.keyDown(input(), { key: "Tab" });
+    expect((input() as HTMLInputElement).value).toBe("secrets");
+    expect(document.activeElement).toBe(input());
+    expect(within(palette()!).getByRole("option", { name: "Secrets", selected: true })).toBeTruthy();
+    expect(screen.getByRole("grid", { name: "Pods by cluster" })).toBeTruthy();
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(palette()).toBeNull();
+    expect(await screen.findByRole("grid", { name: "Secrets by cluster" })).toBeTruthy();
   });
 
   it("says when the kinds are still loading, and when they can't be loaded", async () => {

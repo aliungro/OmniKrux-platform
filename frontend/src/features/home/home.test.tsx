@@ -193,12 +193,6 @@ it("workspace and pinned storage notices dismiss independently across Home and S
   fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
   expect(screen.getByRole("alert").textContent).toContain("Your saved tabs couldn't be read");
 });
-it("Find lets you edit pinned kinds in Settings", async () => {
-  show(); await screen.findByRole("button", { name: /prod-east/ });
-  fireEvent.change(search(), { target: { value: "needle" } });
-  fireEvent.click(screen.getByRole("button", { name: "Edit pinned kinds…" }));
-  expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeTruthy();
-});
 it("home explains missing clusters and retries a failed cluster list", async () => {
   let failed = true;
   vi.stubGlobal("fetch", vi.fn((url: string) => url === "/api/clusters" ? failed ? json({ detail: "database is locked" }, 500) : json([]) : json(url.startsWith("/api/kinds") ? KINDS : [])));

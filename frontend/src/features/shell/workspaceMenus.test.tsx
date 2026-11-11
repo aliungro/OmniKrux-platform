@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { KINDS, SECRETS } from "../../test/kinds";
+import { describeBody } from "../../test/describe";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import { Shell } from "./Shell";
 import { defaultWorkspace, kindView } from "./workspace";
@@ -16,15 +17,17 @@ const cluster = {
 };
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/");
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(
-    JSON.stringify(url.startsWith("/api/kinds") ? { ...KINDS, kinds: [...KINDS.kinds, SECRETS] } : url === "/api/clusters" ? [cluster] : []),
+    JSON.stringify(url.startsWith("/api/kinds") ? { ...KINDS, kinds: [...KINDS.kinds, SECRETS] }
+      : url === "/api/clusters" ? [cluster] : url.endsWith("/describe") ? describeBody() : []),
     { status: 200, headers: { "content-type": "application/json" } },
   ))));
 });
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 function renderShell(splitReady = false, peerKind = "secrets") {
   const workspace = defaultWorkspace();
@@ -109,17 +112,59 @@ it("splits workspace tabs, routes focus and history, and keeps the peer when a t
   expect(tabs.getByRole("tab", { name: "Nodes · East", selected: true })).toBeTruthy();
 });
 
-it("offers Edit pinned kinds on the workspace tab, empty kind strip and blank console", async () => {
+it("offers Edit pinned kinds only on actual tabs", async () => {
   renderShell();
   const kinds = await screen.findByRole("tablist", { name: "Kinds" });
-  const workspaceTab = within(screen.getByRole("tablist", { name: "Kubernetes tabs" })).getByRole("tab");
+  const workspace = screen.getByRole("tablist", { name: "Kubernetes tabs" });
+  const workspaceTab = within(workspace).getByRole("tab");
+  const kindTab = await within(kinds).findByRole("tab", { name: "Secrets" });
   const main = screen.getByRole("main");
-  for (const target of [workspaceTab, kinds, main]) {
+  for (const target of [main, kinds, workspace]) {
+    expect(fireEvent.contextMenu(target)).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+  }
+  for (const target of [workspaceTab, kindTab]) {
     fireEvent.contextMenu(target);
     expect(screen.getByRole("menuitem", { name: /Edit pinned kinds/ })).toBeTruthy();
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   }
-  fireEvent.contextMenu(main);
+  fireEvent.contextMenu(workspaceTab);
   fireEvent.click(screen.getByRole("menuitem", { name: /Edit pinned kinds/ }));
   expect(await screen.findByRole("heading", { name: "Pinned kinds" })).toBeTruthy();
+});
+
+it("opens a kind and then a pointed pod in new split tabs while keeping their source panes", async () => {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}),
+  } as DOMRect);
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+  renderShell();
+  const pods = await waitFor(() => {
+    const socket = FakeWebSocket.instances.find(w => w.params.get("kind") === "pods");
+    expect(socket).toBeDefined();
+    return socket!;
+  });
+  act(() => {
+    pods.emit({ type: "cluster_status", cluster_id: cluster.id, state: "ready", message: null });
+    pods.emit({ type: "snapshot", cluster_id: cluster.id, part: 0, last: true, rows: [
+      { uid: "first", cluster_id: cluster.id, kind: "Pod", name: "first-pod", namespace: "demo", labels: {}, columns: {}, created_at: null },
+      { uid: "second", cluster_id: cluster.id, kind: "Pod", name: "second-pod", namespace: "demo", labels: {}, columns: {}, created_at: null },
+    ] });
+  });
+  fireEvent.contextMenu(await screen.findByRole("tab", { name: "Secrets" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open in new split tab" }));
+  const sourcePane = await screen.findByRole("region", { name: "Pods · East" });
+  expect(screen.getByRole("region", { name: "Secrets · East" }).dataset.activePane).toBe("true");
+  fireEvent.click(await within(sourcePane).findByText("first-pod"));
+  fireEvent.contextMenu(within(sourcePane).getByText("second-pod"));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open in new split tab" }));
+  const newPane = screen.getAllByRole("region", { name: "Pods · East" }).find(pane => pane !== sourcePane)!;
+  expect(newPane.dataset.activePane).toBe("true");
+  expect(within(newPane).getByRole("region", { name: "Details for second-pod" })).toBeTruthy();
+  expect(within(sourcePane).getByRole("region", { name: "Details for first-pod" })).toBeTruthy();
+  const tabs = within(screen.getByRole("tablist", { name: "Kubernetes tabs" }));
+  expect(tabs.getByRole("tab", { name: "Secrets · East", selected: false })).toBeTruthy();
 });

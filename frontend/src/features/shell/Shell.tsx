@@ -4,7 +4,6 @@ import { failure } from "../../api/http";
 import { useKinds } from "../../api/useKinds";
 import { ActionsProvider } from "../actions/ActionDialog";
 import { AuditView } from "../audit/AuditView";
-import { ContextMenu, isBlankMenuSurface, isMenuKey, menuAnchor, type MenuAnchor } from "../chrome/ContextMenu";
 import { focusTableRow } from "../chrome/pageKeys";
 import { AllShortcuts, ShortcutBar } from "../chrome/ShortcutBar";
 import { allGroups, isEditable, pageKey, pressed } from "../chrome/shortcuts";
@@ -23,7 +22,7 @@ import { Rail } from "./Rail";
 import { ShellBridge, type PaletteTarget } from "./ShellBridge";
 import { useWorkspace } from "./storage";
 import { tabLabel } from "./tabLabel";
-import { HOME, kindView, type AppId, type KubeView, type Tab } from "./workspace";
+import { kindView, type AppId, type KubeView, type Tab } from "./workspace";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 import s from "./Shell.module.css";
 
@@ -80,7 +79,6 @@ export function Shell() {
   const [target, setTarget] = useState<{ id: string; value: PaletteTarget } | null>(null);
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [help, setHelp] = useState(false);
-  const [blankMenu, setBlankMenu] = useState<MenuAnchor | null>(null);
   const [forwardsAsk, setForwardsAsk] = useState(0);
   const forwards = usePortForwards().query.data?.length ?? 0;
   const main = useRef<HTMLElement>(null);
@@ -104,7 +102,6 @@ export function Shell() {
   }, []);
   const switchApp = useCallback((app: AppId) => {
     setSettingsSection(undefined);
-    setBlankMenu(null);
     dispatch({ type: "switchApp", app });
     focusView();
   }, [dispatch, focusView]);
@@ -120,10 +117,10 @@ export function Shell() {
     if (id === activeId) focusView();
   };
   const editPinned = useCallback(() => { switchApp("settings"); setSettingsSection("pinned-kinds"); }, [switchApp]);
-  const openKind = (key: string, from: KubeView) => {
-    dispatch({ type: "newTab", view: kindView(HOME, key, from.page === "kind" ? from.clusters : null) });
+  const openView = useCallback((view: KubeView, split?: boolean) => {
+    dispatch({ type: "newTab", view, split });
     focusView();
-  };
+  }, [dispatch, focusView]);
   const splitTab = (id: string) => { dispatch({ type: "splitTab", id }); focusView(); };
   const closeSplit = () => { dispatch({ type: "closeSplit" }); focusView(); };
   const onKind = (key: string) => {
@@ -180,21 +177,10 @@ export function Shell() {
           <TopBar appName={APPS.find((a) => a.id === ws.app)?.title} clusters={activeScope}
             nav={kube ? nav : undefined} forwards={<ForwardsMenu openRequest={forwardsAsk} />} onPalette={() => setPalette("all")} />
           <WorkspaceTabs app={ws.app} tabs={tabs} active={activeId} clusters={clusters} kinds={kinds}
-            onActivate={activateTab} onClose={closeTab} onNew={newTab} onEditPinned={editPinned} onSplit={splitTab} split={ws.split} />
+            onActivate={activateTab} onClose={closeTab} onNew={newTab} onEditPinned={editPinned} onSplit={splitTab}
+            onOpenSplit={view => openView(view, true)} split={ws.split} />
           {ws.app !== "settings" && <StorageSaveNotices workspaceProblem={saveProblem} className={s.saveProblem} />}
-          <main
-            ref={main} className={s.main} tabIndex={-1} data-page-keys
-            onContextMenu={(e) => {
-              if (!kube || e.defaultPrevented || !isBlankMenuSurface(e.target)) return;
-              e.preventDefault();
-              setBlankMenu(menuAnchor(e.currentTarget, e));
-            }}
-            onKeyDown={(e) => {
-              if (!kube || !isMenuKey(e) || !isBlankMenuSurface(e.target) || e.defaultPrevented) return;
-              e.preventDefault();
-              setBlankMenu(menuAnchor(e.target as HTMLElement));
-            }}
-          >
+          <main ref={main} className={s.main} tabIndex={-1} data-page-keys>
             {kube ? (
               <>
                 {ws.split && <div className={s.splitTools}><button type="button" onClick={closeSplit}>Close split</button></div>}
@@ -204,16 +190,13 @@ export function Shell() {
                       active={tab.id === activeId} split={ws.split !== undefined} onFocusPane={focusPane}
                       reportScope={reportScope} reportTarget={reportTarget}
                       dock={dock} closed={closed} onReopen={(index) => dispatch({ type: "reopenClosed", index })}
-                      loadProblem={loadProblem} onDismissLoadProblem={dismissLoadProblem} onEditPinned={editPinned} onOpenKind={openKind} />
+                      loadProblem={loadProblem} onDismissLoadProblem={dismissLoadProblem} onEditPinned={editPinned} onOpenView={openView} />
                   ))}
                 </div>
               </>
             ) : ws.app === "audit" ? (
               <AuditView filters={ws.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />
             ) : <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection} />}
-            {blankMenu && kube && <ContextMenu anchor={blankMenu} label="Kubernetes tab"
-              items={[{ id: "pins", label: "Edit pinned kinds…", onSelect: editPinned, restoreFocus: false }]}
-              onClose={() => setBlankMenu(null)} />}
           </main>
           <Dock dock={dock} />
           {kind && <ShortcutBar kind={kind} onOpen={() => setHelp(true)} />}

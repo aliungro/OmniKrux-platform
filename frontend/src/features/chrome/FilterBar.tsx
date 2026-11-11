@@ -203,11 +203,23 @@ export function FilterBar({
   paneActive?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [openColumn, setOpenColumn] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [menu, setMenu] = useState<"add" | { column: string } | null>(null);
+  const adding = menu === "add";
+  const openColumn = typeof menu === "object" ? menu?.column : undefined;
+  const filterMenu = useRef<HTMLDivElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
   const menuTrigger = useRef<HTMLElement | null>(null);
-  const closeColumn = () => { setOpenColumn(null); menuTrigger.current?.focus(); };
+  const closeColumn = () => { setMenu(null); menuTrigger.current?.focus(); };
   const updateColumn = (key: string, f: ColumnFilter | null) => onChange({ ...value, columns: [...value.columns.filter(x => x.key !== key), ...(f ? [f] : [])] });
+
+  useEffect(() => {
+    if (menu === null) return;
+    const outside = (e: PointerEvent) => {
+      if (e.target instanceof Node && !filterMenu.current?.contains(e.target)) setMenu(null);
+    };
+    document.addEventListener("pointerdown", outside, true);
+    return () => document.removeEventListener("pointerdown", outside, true);
+  }, [menu]);
 
   useEffect(() => {
     if (!paneActive) return;
@@ -249,9 +261,47 @@ export function FilterBar({
       {namespaces !== null && (
         <NamespacePicker value={value.namespace} namespaces={namespaces} onPick={(namespace) => onChange({ ...value, namespace })} />
       )}
-      {value.columns.map(f => { const col = columns.find(c => c.key === f.key); if (!col) return null; const label = chipLabel(f,col); return <div className={s.pick} key={f.key}><span className={`${s.fchip} ${s.on}`}><button type="button" className={s.chipButton} onClick={e => { menuTrigger.current = e.currentTarget; setOpenColumn(openColumn === f.key ? null : f.key); }}>{label}</button><button type="button" className={s.chipButton} aria-label={`Remove filter ${label}`} onClick={() => updateColumn(f.key,null)}>×</button></span>{openColumn === f.key && <ColumnFilterMenu col={col} filter={f} source={pickSource} onApply={next => updateColumn(f.key,next)} onClose={closeColumn} />}</div>; })}
+      {value.columns.map(f => {
+        const col = columns.find(c => c.key === f.key);
+        if (!col) return null;
+        const label = chipLabel(f, col);
+        const editing = openColumn === f.key;
+        return <div className={s.pick} key={f.key} ref={editing ? filterMenu : undefined}>
+          <span className={`${s.fchip} ${s.on}`}>
+            <button type="button" className={s.chipButton} aria-expanded={editing} onClick={e => {
+              menuTrigger.current = e.currentTarget;
+              setMenu(editing ? null : { column: f.key });
+            }}>{label}</button>
+            <button type="button" className={s.chipButton} aria-label={`Remove filter ${label}`} onClick={() => {
+              if (editing) setMenu(null);
+              updateColumn(f.key, null);
+            }}>×</button>
+          </span>
+          {editing && <ColumnFilterMenu col={col} filter={f} source={pickSource} onApply={next => updateColumn(f.key, next)} onClose={closeColumn} />}
+        </div>;
+      })}
       {value.columns.length >= 2 && <button type="button" className={s.fchip} onClick={() => onChange({...value, columns: []})}>Clear all</button>}
-      {columns.some(c => filterUiFor(c)) && <div className={s.pick}><button type="button" className={s.fchip} aria-expanded={adding} onClick={() => setAdding(!adding)}>Add filter</button>{adding && <div className={s.menu}>{columns.filter(c => filterUiFor(c)).map(c => <button type="button" className={s.addOption} key={c.key} onClick={e => { menuTrigger.current = e.currentTarget.parentElement?.previousElementSibling as HTMLElement | null; setAdding(false); setOpenColumn(c.key); }}>{c.label}</button>)}</div>}{openColumn && !value.columns.some(f => f.key === openColumn) && (() => { const col = columns.find(c => c.key === openColumn); return col && <ColumnFilterMenu col={col} source={pickSource} onApply={f => updateColumn(col.key,f)} onClose={closeColumn} />; })()}</div>}
+      {columns.some(c => filterUiFor(c)) && <div className={s.pick}
+        ref={adding || (openColumn && !value.columns.some(f => f.key === openColumn)) ? filterMenu : undefined}
+        onKeyDown={e => {
+          if (!adding || e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu(null);
+          addButton.current?.focus();
+        }}>
+        <button ref={addButton} type="button" className={s.fchip} aria-expanded={adding} onClick={() => setMenu(adding ? null : "add")}>Add filter</button>
+        {adding && <div className={s.menu}>{columns.filter(c => filterUiFor(c)).map(c => (
+          <button type="button" className={s.addOption} key={c.key} onClick={() => {
+            menuTrigger.current = addButton.current;
+            setMenu({ column: c.key });
+          }}>{c.label}</button>
+        ))}</div>}
+        {openColumn && !value.columns.some(f => f.key === openColumn) && (() => {
+          const col = columns.find(c => c.key === openColumn);
+          return col && <ColumnFilterMenu col={col} source={pickSource} onApply={f => updateColumn(col.key, f)} onClose={closeColumn} />;
+        })()}
+      </div>}
       <label className={s.search}>
         <span className={k.k} aria-hidden="true">{capsOf("filter")[0]}</span>
         <input
