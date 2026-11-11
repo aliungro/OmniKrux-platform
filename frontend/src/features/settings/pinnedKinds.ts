@@ -65,6 +65,18 @@ const move = (key: string, by: -1 | 1) => {
   [pinned[at], pinned[to]] = [pinned[to], pinned[at]];
   update(pinned);
 };
+const reorder = (key: string, target: string, placement: "before" | "after"): void => {
+  const { pinned } = getSnapshot();
+  const from = pinned.indexOf(key);
+  if (from < 0 || key === target) return;
+  const next = pinned.filter(pin => pin !== key);
+  const targetIndex = next.indexOf(target);
+  if (targetIndex < 0) return;
+  const to = targetIndex + (placement === "after" ? 1 : 0);
+  if (to === from) return;
+  next.splice(to, 0, key);
+  update(next);
+};
 const reset = () => update([...DEFAULT_PINNED]);
 const dismissLoadProblem = () => {
   snapshot = { ...getSnapshot(), loadProblem: null };
@@ -73,7 +85,7 @@ const dismissLoadProblem = () => {
 
 export function usePinnedKinds() {
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return { ...state, pin, unpin, move, reset, dismissLoadProblem };
+  return { ...state, pin, unpin, move, reorder, reset, dismissLoadProblem };
 }
 
 /** Clears the browser-backed snapshot between test cases or a simulated page reload. */

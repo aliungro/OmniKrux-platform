@@ -45,6 +45,34 @@ it("the shared store bounds moves, ignores invalid pins, and restores defaults",
   act(() => result.current.reset());
   expect(result.current.pinned).toEqual(DEFAULT_PINNED);
 });
+it("inserts a pin before or after another pin and saves each reorder once", () => {
+  savePinned(localStorage, ["pods", "deployments.apps", "services", "secrets"]);
+  const save = vi.spyOn(Storage.prototype, "setItem");
+  const { result } = renderHook(usePinnedKinds);
+  act(() => result.current.reorder("secrets", "pods", "before"));
+  expect(result.current.pinned).toEqual(["secrets", "pods", "deployments.apps", "services"]);
+  expect(save).toHaveBeenCalledExactlyOnceWith(PINNED_KEY, JSON.stringify({ version: 1, kinds: result.current.pinned }));
+  save.mockClear();
+  act(() => result.current.reorder("secrets", "services", "after"));
+  expect(result.current.pinned).toEqual(["pods", "deployments.apps", "services", "secrets"]);
+  expect(save).toHaveBeenCalledExactlyOnceWith(PINNED_KEY, JSON.stringify({ version: 1, kinds: result.current.pinned }));
+});
+
+it("ignores unknown keys, removed pins and unchanged placements", () => {
+  const { result } = renderHook(usePinnedKinds);
+  act(() => result.current.unpin("services"));
+  const save = vi.spyOn(Storage.prototype, "setItem");
+  const before = result.current.pinned;
+  act(() => {
+    result.current.reorder("missing", "pods", "before");
+    result.current.reorder("pods", "services", "after");
+    result.current.reorder("services", "pods", "before");
+    result.current.reorder("pods", "pods", "before");
+    result.current.reorder("pods", "deployments.apps", "before");
+  });
+  expect(result.current.pinned).toBe(before);
+  expect(save).not.toHaveBeenCalled();
+});
 it("a blocked localStorage getter keeps pins in memory and reports the attempted save", () => {
   vi.spyOn(window,"localStorage","get").mockImplementation(() => {throw new DOMException("blocked","SecurityError");});
   const {result} = renderHook(usePinnedKinds);

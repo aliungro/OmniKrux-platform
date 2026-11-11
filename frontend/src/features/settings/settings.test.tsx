@@ -3,9 +3,25 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { SettingsView } from "./SettingsView";
 import { KINDS } from "../../test/kinds";
+import { PINNED_KEY, resetPinnedKinds, savePinned } from "./pinnedKinds";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const rows = () => within(screen.getByRole("list",{name:"Pinned kinds"})).getAllByRole("listitem");
+const rowOrder = () => rows().map(row => row.querySelector("strong")!.textContent);
+function pointAt(target: Element, type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel", clientY = 0) {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientY });
+  Object.defineProperty(event, "pointerId", { value: 1 });
+  return fireEvent(target, event);
+}
+function hitTest() {
+  const before = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+  const hit = vi.fn();
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: hit });
+  return { hit, restore: () => {
+    if (before) Object.defineProperty(document, "elementFromPoint", before);
+    else Reflect.deleteProperty(document, "elementFromPoint");
+  } };
+}
 
 it("settings adds, removes and reorders pinned kinds", () => {
   render(<SettingsView kinds={KINDS.kinds}/>);
@@ -13,13 +29,77 @@ it("settings adds, removes and reorders pinned kinds", () => {
   expect(rows()[0].textContent).toContain("Deployments");
   fireEvent.click(screen.getByRole("button",{name:"Move Services up"}));
   expect(rows()[3].textContent).toContain("Services");
+  expect(screen.getByRole("status").textContent).toBe("Services moved to position 4 of 10.");
   fireEvent.click(screen.getByRole("button",{name:"Move Services down"}));
   expect(rows()[4].textContent).toContain("Services");
+  expect(screen.getByRole("status").textContent).toBe("Services moved to position 5 of 10.");
   const add = screen.getByRole("combobox",{name:"Add a kind"});
   fireEvent.change(add,{target:{value:"cert"}});
   fireEvent.keyDown(add,{key:"ArrowDown"}); fireEvent.keyDown(add,{key:"Enter"});
   expect(rows().at(-1)!.textContent).toContain("Certificates");
   expect(screen.queryByRole("option",{name:"Certificates"})).toBeNull();
+});
+it("drops a dragged pin on either half of another row, persists it, and announces its position", () => {
+  savePinned(localStorage, ["pods", "deployments.apps", "services", "secrets"]);
+  const save = vi.spyOn(Storage.prototype, "setItem");
+  const view = render(<SettingsView kinds={KINDS.kinds} />);
+  const handle = screen.getByTitle("Drag Secrets to reorder");
+  const pods = rows()[0], services = rows()[2];
+  for (const target of [pods, services]) {
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ top: 100, height: 40 } as DOMRect);
+  }
+
+  const { hit, restore } = hitTest();
+  hit.mockReturnValue(pods);
+  pointAt(handle, "pointerdown");
+  pointAt(handle, "pointermove", 110);
+  expect(pods.getAttribute("data-drop-placement")).toBe("before");
+  expect(save).not.toHaveBeenCalled();
+  pointAt(handle, "pointerup", 110);
+  expect(rowOrder()).toEqual(["Secrets", "Pods", "Deployments", "Services"]);
+  expect(pods.getAttribute("data-drop-placement")).toBeNull();
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("status").textContent).toBe("Secrets moved to position 1 of 4.");
+
+  hit.mockReturnValue(services);
+  pointAt(handle, "pointerdown");
+  pointAt(handle, "pointermove", 135);
+  expect(services.getAttribute("data-drop-placement")).toBe("after");
+  pointAt(handle, "pointerup", 135);
+  restore();
+  expect(rowOrder()).toEqual(["Pods", "Deployments", "Services", "Secrets"]);
+  expect(save).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole("status").textContent).toBe("Secrets moved to position 4 of 4.");
+  expect(JSON.parse(localStorage.getItem(PINNED_KEY)!).kinds).toEqual(["pods", "deployments.apps", "services", "secrets"]);
+
+  view.unmount();
+  resetPinnedKinds();
+  render(<SettingsView kinds={KINDS.kinds} />);
+  expect(rowOrder()).toEqual(["Pods", "Deployments", "Services", "Secrets"]);
+});
+
+it("clears cancelled drags and ignores drags that did not start on a handle", () => {
+  const save = vi.spyOn(Storage.prototype, "setItem");
+  render(<SettingsView kinds={KINDS.kinds} />);
+  const initial = rowOrder();
+  const pods = rows()[0], secrets = rows()[7];
+  const handle = screen.getByTitle("Drag Secrets to reorder");
+  const { hit, restore } = hitTest();
+  hit.mockReturnValue(pods);
+  pointAt(secrets, "pointerdown");
+  pointAt(handle, "pointermove");
+  expect(pods.getAttribute("data-drop-placement")).toBeNull();
+  pointAt(handle, "pointerup");
+
+  pointAt(handle, "pointerdown");
+  pointAt(handle, "pointermove");
+  expect(pods.getAttribute("data-drop-placement")).not.toBeNull();
+  pointAt(handle, "pointercancel");
+  expect(pods.getAttribute("data-drop-placement")).toBeNull();
+  pointAt(handle, "pointerup");
+  restore();
+  expect(rowOrder()).toEqual(initial);
+  expect(save).not.toHaveBeenCalled();
 });
 it("reset to default restores the row", () => {
   render(<SettingsView kinds={KINDS.kinds}/>);
