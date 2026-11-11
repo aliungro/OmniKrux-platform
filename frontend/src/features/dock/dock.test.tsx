@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import type { Cluster, ResourceRow } from "../../api/types";
+import { container, describeBody } from "../../test/describe";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import type { Session } from "./dockState";
 
@@ -86,6 +87,18 @@ async function openShell(s: Session) {
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(before + 1));
 }
 const shown = () => screen.getAllByRole("tabpanel").filter((p) => !p.hidden);
+
+const demoPod: ResourceRow = {
+  uid: "demo-pod", cluster_id: "c1", kind: "Pod", namespace: "demo", name: "two-containers", created_at: null,
+  labels: {}, columns: { ready: "1/2", resource_version: "1" },
+};
+const web = container({ name: "web", state: "Running", state_class: "ok", ready: true });
+const helper = container({ name: "helper", state: "Waiting: CrashLoopBackOff" });
+const twoContainers = describeBody({
+  containers: [web, helper],
+  init_containers: [container({ name: "prepare", state: "Terminated: Completed" })],
+  ephemeral_containers: [container({ name: "debugger", state: "Running" })],
+});
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
@@ -398,7 +411,110 @@ describe("Dock", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("an open that resolves late never takes focus from a newer one", async () => {
+  describe("pod shell container choice", () => {
+    const choose = () => screen.findByRole("combobox", { name: "Container" }) as Promise<HTMLSelectElement>;
+
+    it("lists regular containers and starts one shell only after confirming the chosen one", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+
+      const select = await choose();
+      const dialog = screen.getByRole("dialog", { name: "Open shell" });
+      expect(dialog.textContent).toContain("aks-prod-weu / demo / two-containers");
+      expect(select.value).toBe("web");
+      expect(document.activeElement).toBe(select);
+      expect(within(select).getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "web · Running", "helper · Waiting: CrashLoopBackOff",
+      ]);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      fireEvent.change(select, { target: { value: "helper" } });
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Open shell" }));
+
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      expect(FakeWebSocket.last.params.get("pod")).toBe("two-containers");
+      expect(FakeWebSocket.last.params.get("container")).toBe("helper");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("preselects the annotated regular container and Escape cancels the choice", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json({
+        ...twoContainers, annotations: { "kubectl.kubernetes.io/default-container": "helper" },
+      })));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      expect((await choose()).value).toBe("helper");
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    });
+
+    it("opens a single regular container directly despite init and ephemeral containers", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json({ ...twoContainers, containers: [web] })));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      expect(FakeWebSocket.last.params.get("container")).toBe("web");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("discards a pending describe after cancelling the lookup", async () => {
+      let resolve!: (response: Response) => void;
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((done) => { resolve = done; })));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+      await act(async () => resolve(await json(twoContainers)));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(dock.state.sessions).toEqual([]);
+    });
+
+    it("discards a slow single-container response after a newer shell open", async () => {
+      let resolve!: (response: Response) => void;
+      vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("two-containers")
+        ? new Promise<Response>((done) => { resolve = done; })
+        : json(describeBody({ containers: [helper] }))));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      act(() => dock.openPod({ ...demoPod, name: "newer" }, "shell"));
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      await act(async () => resolve(await json(describeBody({ containers: [web] }))));
+      expect(dock.state.sessions.map((session) => session.pod)).toEqual(["newer"]);
+      expect(FakeWebSocket.last.params.get("pod")).toBe("newer");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("offers a retry when describe fails for a pod known to have multiple containers", async () => {
+      vi.stubGlobal("fetch", vi.fn()
+        .mockImplementationOnce(() => json({ detail: "Pod details are unavailable." }, 503))
+        .mockImplementationOnce(() => json(twoContainers)));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      const dialog = screen.getByRole("dialog");
+      expect((await within(dialog).findByRole("alert")).textContent).toContain("Pod details are unavailable.");
+      expect(within(dialog).queryByRole("button", { name: /default/i })).toBeNull();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+      expect((await choose()).value).toBe("web");
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    });
+
+    it("explains a failed describe before allowing the server default when the count is unknown", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json({ detail: "Pod details are unavailable." }, 503)));
+      renderDock();
+      act(() => dock.openPod({ ...demoPod, columns: {} }, "shell"));
+      const dialog = screen.getByRole("dialog");
+      expect((await within(dialog).findByRole("alert")).textContent).toContain("Pod details are unavailable.");
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Open default shell" }));
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      expect(FakeWebSocket.last.params.has("container")).toBe(false);
+    });
+  });
+
+  it("a log open that resolves late never takes focus from a newer one", async () => {
     const rowOf = (cluster_id: string, name: string): ResourceRow => ({
       uid: name, cluster_id, kind: "Pod", namespace: "payments", name, created_at: null, labels: {},
       columns: { status: "Running", status_class: "ok", resource_version: "1" },
@@ -420,14 +536,14 @@ describe("Dock", () => {
       return json(describe("api-b"));
     }));
     renderDock();
-    act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
-    act(() => dock.openPod(rowOf("c2", "api-b"), "shell"));
+    act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
+    act(() => dock.openPod(rowOf("c2", "api-b"), "logs"));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     expect(FakeWebSocket.last.params.get("pod")).toBe("api-b");
 
     await act(async () => slowAnswer());
     await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
-    // A's tab is there, but B (the newer request, where you're typing) keeps the focus.
+    // A's tab is there, but B (the newer request) keeps the focus.
     const [tabB, tabA] = screen.getAllByRole("tab");
     expect(tabA.textContent).toContain("api-a");
     expect(tabB.getAttribute("aria-selected")).toBe("true");
@@ -468,7 +584,7 @@ describe("Dock", () => {
       renderDock();
       await openShell(shell("x"));
       await openShell(shell("y", { cluster: eks, namespace: "cache", pod: "redis-0", container: "redis" }));
-      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
       fireEvent.click(screen.getAllByRole("tab")[0]); // back to x, and typing there
       expect(selected().textContent).toContain("payments-api-xk2pq");
 
@@ -484,7 +600,7 @@ describe("Dock", () => {
       await openShell(shell("x"));
       await openShell(shell("y", { pod: "redis-0" }));
       await user.click(screen.getAllByRole("tab")[1]);
-      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
       await user.click(screen.getAllByRole("button", { name: /^Close shell/ })[0]);
       await act(async () => slowAnswer());
       await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
@@ -496,7 +612,7 @@ describe("Dock", () => {
       renderDock();
       await openShell(shell("x"));
       await openShell(shell("y", { pod: "redis-0" }));
-      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
       fireEvent.click(screen.getAllByRole("button", { name: /^Close shell/ })[1]);
       await act(async () => slowAnswer());
       await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
@@ -505,7 +621,7 @@ describe("Dock", () => {
 
     it("a node shell you confirmed keeps the focus", async () => {
       renderDock();
-      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
       fireEvent.click(screen.getByRole("button", { name: "node shell" }));
       fireEvent.click(screen.getByRole("button", { name: "Start node shell" }));
       await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
@@ -520,7 +636,7 @@ describe("Dock", () => {
       renderDock();
       await openShell(shell("x"));
       await openShell(shell("y", { cluster: eks, namespace: "cache", pod: "redis-0", container: "redis" }));
-      act(() => dock.openPod(rowOf("c1", "api-a"), "shell")); // slow describe, from the table
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs")); // slow describe, from the table
       // Back into Y's terminal, which is already the selected tab: keys go there again.
       fireEvent.focusIn(shown()[0]);
       expect(selected().textContent).toContain("redis-0");

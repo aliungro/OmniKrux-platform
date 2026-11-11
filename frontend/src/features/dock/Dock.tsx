@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { memo, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { pressed } from "../chrome/shortcuts";
 import { LogPane } from "../logs/LogPane";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -14,11 +14,16 @@ import {
 } from "./dockState";
 import { LazyShellPane } from "./lazyShell";
 import { SessionTabs, panelId, tabId } from "./SessionTabs";
+import { ShellContainerDialog } from "./ShellContainerDialog";
 import type { DockApi } from "./useDock";
 import s from "./Dock.module.css";
 
 export const EMPTY_DOCK = "Open logs (l) or a shell (s) from a pod";
 const STEP = 24; // pixels per arrow key on the grip
+const STACK_AT = 760; // same breakpoint as Dock.module.css
+const PANE_MIN = 170; // header, wrapped controls, and room for log lines
+const NARROW_SPLIT_PANE_MIN = 218;
+const STRIP_MIN = 44; // grip and one tab row
 
 /** What a shell is attached to, when that isn't the pod's own container. */
 function shellNote(x: Session): string | undefined {
@@ -32,9 +37,8 @@ function shellNote(x: Session): string | undefined {
   return `This shell runs in debug container ${x.container}.`;
 }
 
-function Grip({ height, viewport, onResize }: { height: number; viewport: number; onResize: (h: number) => void }) {
+function Grip({ height, minimum, max, onResize }: { height: number; minimum: number; max: number; onResize: (h: number) => void }) {
   const drag = useRef<{ y: number; h: number } | null>(null);
-  const max = Math.max(MIN_HEIGHT, Math.floor(viewport * MAX_SHARE));
 
   const onDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -49,7 +53,7 @@ function Grip({ height, viewport, onResize }: { height: number; viewport: number
     drag.current = null;
   };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const by: Record<string, number> = { ArrowUp: height + STEP, ArrowDown: height - STEP, Home: MIN_HEIGHT, End: max };
+    const by: Record<string, number> = { ArrowUp: height + STEP, ArrowDown: height - STEP, Home: minimum, End: max };
     if (!(e.key in by)) return;
     e.preventDefault();
     onResize(by[e.key]);
@@ -60,7 +64,7 @@ function Grip({ height, viewport, onResize }: { height: number; viewport: number
       role="separator"
       aria-orientation="horizontal"
       aria-label="Resize the dock"
-      aria-valuemin={MIN_HEIGHT}
+      aria-valuemin={minimum}
       aria-valuemax={max}
       aria-valuenow={height}
       tabIndex={0}
@@ -80,9 +84,9 @@ function Grip({ height, viewport, onResize }: { height: number; viewport: number
  * object changes only with the dock's own state, so watch updates to the table don't re-render it.
  */
 export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
-  const { state, dispatch, ask } = dock;
+  const { state, dispatch, ask, shellChoice } = dock;
   const base = useId();
-  const [viewport, setViewport] = useState(() => window.innerHeight);
+  const [viewport, setViewport] = useState(() => ({ height: window.innerHeight, width: window.innerWidth }));
   const [autofocusSuppressedTab, setAutofocusSuppressedTab] = useState<string | null>(null);
 
   // Ctrl \ switches between one pane and side by side, even from inside a terminal.
@@ -99,12 +103,10 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
 
   // The dock is drawn within 70% of the window as it is now; the chosen height comes back when it grows.
   useEffect(() => {
-    const onResize = () => setViewport(window.innerHeight);
+    const onResize = () => setViewport({ height: window.innerHeight, width: window.innerWidth });
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const height = clampHeight(state.height, viewport);
-
   // Remember the height once it settles (not on every pixel of a drag).
   const settled = useRef(state.height);
   useEffect(() => {
@@ -116,19 +118,26 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
     return () => window.clearTimeout(t);
   }, [state.height]);
 
-  const dialog = ask && <ConfirmDialog ask={ask} onConfirm={dock.confirm} onCancel={dock.cancel} />;
+  const dialog = ask
+    ? <ConfirmDialog ask={ask} onConfirm={dock.confirm} onCancel={dock.cancel} />
+    : shellChoice && <ShellContainerDialog choice={shellChoice} onCancel={dock.cancel} />;
 
   if (state.sessions.length === 0) {
     return (
       <section className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-page-keys="off">
-        <p className={s.hint}>{EMPTY_DOCK}</p>
         {dialog}
+        <p className={s.hint}>{EMPTY_DOCK}</p>
       </section>
     );
   }
 
   const visible = visibleSessions(state);
   const split = visible.length === 2;
+  const max = Math.max(MIN_HEIGHT, Math.floor(viewport.height * MAX_SHARE));
+  const paneRows = split && viewport.width <= STACK_AT ? 2 : 1;
+  const paneMin = split && paneRows === 1 && viewport.width <= 1000 ? NARROW_SPLIT_PANE_MIN : PANE_MIN;
+  const minimum = Math.min(max, STRIP_MIN + paneMin * paneRows);
+  const height = Math.max(minimum, clampHeight(state.height, viewport.height));
   // Ctrl F belongs to the focused log pane, or the sole visible logs beside a shell.
   const activeLogs = visible.find((x) => x.kind === "logs" && x.id === state.focused)?.id
     ?? visible.find((x) => x.kind === "logs")?.id ?? null;
@@ -136,7 +145,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
   return (
     <section
       className={s.dock}
-      style={{ height }}
+      style={{ height, "--dock-pane-min": `${minimum - STRIP_MIN}px` } as CSSProperties}
       aria-label="Logs and shells"
       data-page-keys="off"
       onFocusCapture={(e) => {
@@ -146,7 +155,9 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
         if (tab) setAutofocusSuppressedTab(tab.id);
       }}
     >
-      <Grip height={height} viewport={viewport} onResize={(h) => dispatch({ type: "resize", height: h, viewport })} />
+      {dialog}
+      <Grip height={height} minimum={minimum} max={max}
+        onResize={(h) => dispatch({ type: "resize", height: Math.max(minimum, h), viewport: viewport.height })} />
       <SessionTabs
         base={base}
         sessions={state.sessions}
@@ -185,7 +196,6 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
           </div>
         ))}
       </div>
-      {dialog}
     </section>
   );
 });
