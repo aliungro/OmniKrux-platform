@@ -56,11 +56,11 @@ const NO_CLUSTERS: Cluster[] = [];
 export const TEXT_COALESCE_MS = 1000;
 
 /** The whole console page; expects a QueryClientProvider above it. */
-export interface KubernetesTabProps { nav:TabNav<KubeView>; dock:ReturnType<typeof useDock>; closed:readonly ClosedTab<KubeView>[]; onReopen:(index:number)=>void; loadProblem:string|null; onDismissLoadProblem:()=>void; onEditPinned:()=>void }
-export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned }: KubernetesTabProps) {
- return nav.view.page === "home" ? <KubernetesHome nav={nav} closed={closed} onReopen={onReopen} loadProblem={loadProblem} onDismissLoadProblem={onDismissLoadProblem} onEditPinned={onEditPinned}/> : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned}/>;
+export interface KubernetesTabProps { nav:TabNav<KubeView>; dock:ReturnType<typeof useDock>; closed:readonly ClosedTab<KubeView>[]; onReopen:(index:number)=>void; loadProblem:string|null; onDismissLoadProblem:()=>void; onEditPinned:()=>void; onOpenKind?:(key:string, from:KubeView)=>void }
+export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned, onOpenKind }: KubernetesTabProps) {
+ return nav.view.page === "home" ? <KubernetesHome nav={nav} closed={closed} onReopen={onReopen} loadProblem={loadProblem} onDismissLoadProblem={onDismissLoadProblem} onEditPinned={onEditPinned}/> : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned} onOpenKind={onOpenKind}/>;
 }
-function KindView({nav: tabNav,dock,onEditPinned}: {nav:TabNav<KubeView>;dock:ReturnType<typeof useDock>;onEditPinned:()=>void}) {
+function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind }: Pick<KubernetesTabProps, "nav" | "dock" | "onEditPinned" | "onOpenKind">) {
   const pinned = usePinnedKinds();
   const queryClient = useQueryClient();
   const clusters = useClusters();
@@ -299,6 +299,7 @@ function KindView({nav: tabNav,dock,onEditPinned}: {nav:TabNav<KubeView>;dock:Re
           error={kindsError}
           onRetry={onRetryKinds}
           onAllKinds={onAllKinds}
+          onOpenKind={onOpenKind && (key => onOpenKind(key, tabNav.view))}
         />
         <FilterBar clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
         <NavigationNotice text={nav.notice ?? scopeNoticeText} waiting={nav.waiting} />

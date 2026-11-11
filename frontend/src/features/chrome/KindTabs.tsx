@@ -1,6 +1,7 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import type { KindInfo } from "../../api/types";
 import { kindTitle } from "../territories/model";
+import { ContextMenu, isMenuKey, menuAnchor, type MenuAnchor, type MenuItem } from "./ContextMenu";
 import { routesKindKeys } from "./pageKeys";
 import { capsOf, pageKey, pressed } from "./shortcuts";
 import k from "./key.module.css";
@@ -40,6 +41,7 @@ export function KindTabs({
   error = null,
   onRetry,
   onAllKinds,
+  onOpenKind,
   pinned, onPin, onUnpin, onMove, onEditPinned,
 }: {
   /** Every kind some cluster serves; undefined until GET /api/kinds has answered. */
@@ -56,6 +58,7 @@ export function KindTabs({
   onRetry?: () => void;
   /** Opens the palette on every kind (its `:` mode). */
   onAllKinds?: () => void;
+  onOpenKind?: (key: string) => void;
   pinned: readonly string[];
   onPin: (key: string) => void;
   onUnpin: (key: string) => void;
@@ -66,8 +69,7 @@ export function KindTabs({
   const [moving, setMoving] = useState<string | null>(null);
   const shown = moving ?? active;
   const tabs = tabsFor(kinds, active, moving, pinned);
-  const [menu, setMenu] = useState<{ key: string; left: number; top: number } | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<{ key: string; anchor: MenuAnchor } | null>(null);
   const tabList = useRef<HTMLDivElement>(null);
   const refs = useRef(new Map<string, HTMLButtonElement>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,33 +93,9 @@ export function KindTabs({
     setMoving(null);
   }, [active, navigationView, paneActive]);
 
-  const closeMenu = (restore = true) => {
-    if (restore && menu) refs.current.get(menu.key)?.focus();
-    setMenu(null);
-  };
-  const openMenu = (key: string) => {
-    if (!pinned.includes(key)) return;
+  const openMenu = (key: string, anchor: MenuAnchor) => {
     stop(); setMoving(null); run.current = false;
-    const rect = refs.current.get(key)?.getBoundingClientRect();
-    setMenu({ key, left: Math.max(8, Math.min(rect?.left ?? 8, window.innerWidth - 228)), top: Math.min(rect?.bottom ?? 8, window.innerHeight - 180) });
-  };
-  useEffect(() => {
-    if (!menu) return;
-    menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
-    const outside = (e: PointerEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenu(null); };
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
-  }, [menu]);
-  const menuKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    const items = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
-    const at = items.indexOf(document.activeElement as HTMLButtonElement);
-    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
-      e.preventDefault();
-      const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : (at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
-      items[next]?.focus();
-    } else if (e.key === "Escape") { e.preventDefault(); closeMenu(); }
-    else if (e.key === "Tab") closeMenu(false);
+    setMenu({ key, anchor });
   };
 
   // The console, resource rows and the kind strip share one arrow sequence and settle timer.
@@ -156,6 +134,25 @@ export function KindTabs({
     onSelect(key);
   };
 
+  const menuTitle = menu && (tabs.find((tab) => tab.key === menu.key)?.title ?? menu.key);
+  const items: MenuItem[] = [];
+  if (menu) {
+    const { key } = menu;
+    if (onOpenKind) items.push({ id: "open", label: "Open in new tab", onSelect: () => onOpenKind(key), restoreFocus: false });
+    const index = pinned.indexOf(key);
+    if (index !== -1) {
+      items.push(
+        { id: "left", label: "Move left", disabled: index === 0, onSelect: () => onMove(key, -1) },
+        { id: "right", label: "Move right", disabled: index === pinned.length - 1, onSelect: () => onMove(key, 1) },
+        { id: "unpin", label: `Unpin ${menuTitle}`, restoreFocus: false, onSelect: () => {
+          onUnpin(key);
+          refs.current.get(active)?.focus();
+        } },
+      );
+    }
+    items.push({ id: "pins", label: "Edit pinned kinds…", onSelect: onEditPinned, divider: items.length > 0, restoreFocus: false });
+  }
+
   return (
     <nav className={s.kinds} aria-label="Resource kinds" data-page-keys>
       <div ref={tabList} role="tablist" aria-label="Kinds" className={s.list} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { run.current = false; stop(); setMoving(null); } }}>
@@ -174,10 +171,10 @@ export function KindTabs({
               tabIndex={on ? 0 : -1}
               className={`${s.tab}${on ? ` ${s.on}` : ""}`}
               title={pinned.includes(t.key) ? undefined : t.key}
-              aria-haspopup={pinned.includes(t.key) ? "menu" : undefined}
-              aria-expanded={pinned.includes(t.key) ? menu?.key === t.key : undefined}
-              onContextMenu={e => { if (pinned.includes(t.key)) { e.preventDefault(); openMenu(t.key); } }}
-              onKeyDown={e => { if (e.key === "ContextMenu" || e.shiftKey && e.key === "F10") { e.preventDefault(); e.stopPropagation(); openMenu(t.key); } }}
+              aria-haspopup="menu"
+              aria-expanded={menu?.key === t.key}
+              onContextMenu={e => { e.preventDefault(); e.stopPropagation(); openMenu(t.key, menuAnchor(e.currentTarget, e)); }}
+              onKeyDown={e => { if (isMenuKey(e)) { e.preventDefault(); e.stopPropagation(); openMenu(t.key, menuAnchor(e.currentTarget)); } }}
               onClick={() => choose(t.key)}
             >
               {t.title}
@@ -189,14 +186,7 @@ export function KindTabs({
           );
         })}
       </div>
-      {menu && <div ref={menuRef} role="menu" aria-label={`${tabs.find(t => t.key === menu.key)?.title ?? menu.key} tab`}
-        className={s.menu} style={{left:menu.left,top:menu.top}} onKeyDown={menuKey}
-        onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setMenu(null); }}>
-        <button role="menuitem" type="button" disabled={pinned.indexOf(menu.key) === 0} onClick={() => { onMove(menu.key,-1); closeMenu(); }}>Move left</button>
-        <button role="menuitem" type="button" disabled={pinned.indexOf(menu.key) === pinned.length - 1} onClick={() => { onMove(menu.key,1); closeMenu(); }}>Move right</button>
-        <button role="menuitem" type="button" onClick={() => { onUnpin(menu.key); closeMenu(false); refs.current.get(active)?.focus(); }}>Unpin {tabs.find(t => t.key === menu.key)?.title ?? menu.key}</button>
-        <button role="menuitem" type="button" onClick={() => { closeMenu(false); onEditPinned(); }}>Edit pinned kinds…</button>
-      </div>}
+      {menu && <ContextMenu anchor={menu.anchor} label={`${menuTitle} tab`} items={items} onClose={() => setMenu(null)} />}
       {kinds !== undefined && onAllKinds && (
         <button type="button" className={s.more} aria-haspopup="dialog" aria-keyshortcuts=":" onClick={onAllKinds}>
           All {kinds.length} kinds

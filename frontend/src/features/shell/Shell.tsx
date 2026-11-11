@@ -6,6 +6,7 @@ import { useKinds } from "../../api/useKinds";
 import { ActionsProvider } from "../actions/ActionDialog";
 import { AuditView } from "../audit/AuditView";
 import { AllShortcuts, ShortcutBar } from "../chrome/ShortcutBar";
+import { ContextMenu, isBlankMenuSurface, menuAnchor, type MenuAnchor } from "../chrome/ContextMenu";
 import { allGroups, isEditable, pageKey, pressed } from "../chrome/shortcuts";
 import { TopBar, type ScopeCluster } from "../chrome/TopBar";
 import { Dock } from "../dock/Dock";
@@ -22,7 +23,7 @@ import { Rail } from "./Rail";
 import { ShellBridge, type PaletteTarget } from "./ShellBridge";
 import { useWorkspace } from "./storage";
 import { WorkspaceTabs } from "./WorkspaceTabs";
-import { kindView, type AppId } from "./workspace";
+import { HOME, kindView, type AppId, type KubeView } from "./workspace";
 import s from "./Shell.module.css";
 export function Shell() {
  const {ws,dispatch,loadProblem,saveProblem,dismissLoadProblem}=useWorkspace();
@@ -37,6 +38,7 @@ export function Shell() {
  const [target,setPaletteTarget]=useState<PaletteTarget|null>(null);
  const [palette,setPalette]=useState<PaletteMode|null>(null);
  const [help,setHelp]=useState(false);
+ const [blankMenu, setBlankMenu] = useState<MenuAnchor | null>(null);
  const [forwardsAsk,setForwardsAsk]=useState(0);
  const forwards=usePortForwards().query.data?.length ?? 0;
  const main=useRef<HTMLElement>(null);
@@ -45,9 +47,18 @@ export function Shell() {
  const activate=useCallback((id:string)=>{dispatch({type:"activateTab",id});focusView();},[dispatch,focusView]);
  const newTab=useCallback(()=>{dispatch({type:"newTab"});dispatch({type:"switchApp",app:"kubernetes"});focusView();},[dispatch,focusView]);
  const closeTab=useCallback((id=ws.kubernetes.active)=>{dispatch({type:"closeTab",id});focusView();},[dispatch,focusView,ws.kubernetes.active]);
+ const editPinned = useCallback(() => { switchApp("settings"); setSettingsSection("pinned-kinds"); }, [switchApp]);
+ const openKind = useCallback((key: string, from: KubeView) => {
+   dispatch({ type: "newTab", view: kindView(HOME, key, from.page === "kind" ? from.clusters : null) });
+   focusView();
+ }, [dispatch, focusView]);
  usePaletteKeys(setPalette);
  useEffect(()=>{ const onKey=(e:KeyboardEvent)=>{if(!pageKey(e))return; const app=appForKey(e); if(app){e.preventDefault();switchApp(app);return;} if(pressed("help",e)){e.preventDefault();setHelp(true);return;} if(ws.app!=="kubernetes")return; const action = pressed("newTab",e)?newTab : pressed("closeTab",e)?()=>closeTab() : pressed("nextTab",e)?()=>{dispatch({type:"nextTab"});focusView();} : pressed("previousTab",e)?()=>{dispatch({type:"previousTab"});focusView();} : pressed("back",e)?nav.back : pressed("forward",e)?nav.forward : null; if(action){e.preventDefault();action();} }; document.addEventListener("keydown",onKey);return ()=>document.removeEventListener("keydown",onKey);},[ws.app,dispatch,switchApp,newTab,closeTab,nav.back,nav.forward,focusView]);
  const onKind=useCallback((key:string)=>{if(target) target.onKind(key);else {dispatch({type:"switchApp",app:"kubernetes"});nav.navigate(v=>kindView(v,key),"push");focusView();}},[target,dispatch,nav.navigate,focusView]);
  const active=ws.kubernetes.tabs.find(t=>t.id===ws.kubernetes.active)!;
- return <ActionsProvider><ShellBridge.Provider value={{setScope,setPaletteTarget}}><div className={s.shell}><Rail app={ws.app} onSelect={switchApp}/><div className={s.content}><TopBar appName={APPS.find(a=>a.id===ws.app)?.title} clusters={ws.app==="kubernetes" ? scope ?? [] : []} nav={ws.app==="kubernetes" ? nav : undefined} forwards={<ForwardsMenu openRequest={forwardsAsk}/>} onPalette={()=>setPalette("all")}/><WorkspaceTabs app={ws.app} tabs={ws.kubernetes.tabs} active={active.id} clusters={clusters} kinds={kinds} onActivate={activate} onClose={closeTab} onNew={newTab}/>{ws.app!=="settings" && <StorageSaveNotices workspaceProblem={saveProblem} className={s.saveProblem}/>}<main ref={main} className={s.main} tabIndex={-1} data-page-keys>{ws.app==="kubernetes" ? <KubernetesTab key={active.id} nav={nav} dock={dock} closed={ws.kubernetes.closed} onReopen={index=>dispatch({type:"reopenClosed",index})} loadProblem={loadProblem} onDismissLoadProblem={dismissLoadProblem} onEditPinned={()=>{switchApp("settings");setSettingsSection("pinned-kinds");}}/> : ws.app==="audit" ? <AuditView filters={ws.audit.filters} onFilters={filters=>dispatch({type:"auditFilters",filters})}/> : <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection}/>}</main><Dock dock={dock}/>{ws.app==="kubernetes" && nav.view.page==="kind" && <ShortcutBar kind={nav.view.kind} onOpen={()=>setHelp(true)}/>}</div></div>{help && <AllShortcuts groups={allGroups(nav.view.page==="kind" && ws.app==="kubernetes" ? nav.view.kind : undefined)} onClose={()=>setHelp(false)}/>} {palette && <CommandPalette mode={palette} kinds={kinds} kindsError={kindsError} selection={target?.selection ?? null} onKind={onKind} onRowAction={target?.onRowAction ?? (()=>{})} onAudit={()=>switchApp("audit")} onSettings={()=>switchApp("settings")} onNewTab={newTab} onCloseTab={ws.app === "kubernetes" ? ()=>closeTab() : undefined} onForwards={forwards ? ()=>setForwardsAsk(n=>n+1) : undefined} onClose={()=>setPalette(null)} onFocusLost={()=>{ if(ws.app === "kubernetes" && nav.view.page === "home") { document.querySelector<HTMLInputElement>('[aria-label="Search Kubernetes"]')?.focus(); return; } if(ws.app === "kubernetes" && nav.view.page === "kind") { if(focusTableRow()) return; const tab=document.querySelector<HTMLElement>('[aria-label="Kinds"] [role="tab"][aria-selected="true"]'); if(tab) {tab.focus();return;} } main.current?.focus({preventScroll:true}); }}/>}</ShellBridge.Provider></ActionsProvider>;
+ return <ActionsProvider><ShellBridge.Provider value={{setScope,setPaletteTarget}}><div className={s.shell}><Rail app={ws.app} onSelect={switchApp}/><div className={s.content}><TopBar appName={APPS.find(a=>a.id===ws.app)?.title} clusters={ws.app==="kubernetes" ? scope ?? [] : []} nav={ws.app==="kubernetes" ? nav : undefined} forwards={<ForwardsMenu openRequest={forwardsAsk}/>} onPalette={()=>setPalette("all")}/><WorkspaceTabs app={ws.app} tabs={ws.kubernetes.tabs} active={active.id} clusters={clusters} kinds={kinds} onActivate={activate} onClose={closeTab} onNew={newTab} onEditPinned={editPinned}/>{ws.app!=="settings" && <StorageSaveNotices workspaceProblem={saveProblem} className={s.saveProblem}/>}<main ref={main} className={s.main} tabIndex={-1} data-page-keys onContextMenu={e => {
+   if (ws.app !== "kubernetes" || e.defaultPrevented || !isBlankMenuSurface(e.target)) return;
+   e.preventDefault();
+   setBlankMenu(menuAnchor(e.currentTarget, e));
+ }}>{ws.app==="kubernetes" ? <KubernetesTab key={active.id} nav={nav} dock={dock} closed={ws.kubernetes.closed} onReopen={index=>dispatch({type:"reopenClosed",index})} loadProblem={loadProblem} onDismissLoadProblem={dismissLoadProblem} onEditPinned={editPinned} onOpenKind={openKind}/> : ws.app==="audit" ? <AuditView filters={ws.audit.filters} onFilters={filters=>dispatch({type:"auditFilters",filters})}/> : <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection}/>}{blankMenu && ws.app === "kubernetes" && <ContextMenu anchor={blankMenu} label="Kubernetes tab" items={[{ id: "pins", label: "Edit pinned kinds…", onSelect: editPinned, restoreFocus: false }]} onClose={() => setBlankMenu(null)} />}</main><Dock dock={dock}/>{ws.app==="kubernetes" && nav.view.page==="kind" && <ShortcutBar kind={nav.view.kind} onOpen={()=>setHelp(true)}/>}</div></div>{help && <AllShortcuts groups={allGroups(nav.view.page==="kind" && ws.app==="kubernetes" ? nav.view.kind : undefined)} onClose={()=>setHelp(false)}/>} {palette && <CommandPalette mode={palette} kinds={kinds} kindsError={kindsError} selection={target?.selection ?? null} onKind={onKind} onRowAction={target?.onRowAction ?? (()=>{})} onAudit={()=>switchApp("audit")} onSettings={()=>switchApp("settings")} onNewTab={newTab} onCloseTab={ws.app === "kubernetes" ? ()=>closeTab() : undefined} onForwards={forwards ? ()=>setForwardsAsk(n=>n+1) : undefined} onClose={()=>setPalette(null)} onFocusLost={()=>{ if(ws.app === "kubernetes" && nav.view.page === "home") { document.querySelector<HTMLInputElement>('[aria-label="Search Kubernetes"]')?.focus(); return; } if(ws.app === "kubernetes" && nav.view.page === "kind") { if(focusTableRow()) return; const tab=document.querySelector<HTMLElement>('[aria-label="Kinds"] [role="tab"][aria-selected="true"]'); if(tab) {tab.focus();return;} } main.current?.focus({preventScroll:true}); }}/>}</ShellBridge.Provider></ActionsProvider>;
 }
