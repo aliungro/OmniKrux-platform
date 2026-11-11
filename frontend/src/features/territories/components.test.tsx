@@ -147,7 +147,8 @@ describe("container status bullets", () => {
       "web: running and ready · 0 restarts", "sidecar: waiting · 0 restarts", "worker: running, not ready · 0 restarts",
     ]);
     expect(Array.from(group.children).map((el) => el.getAttribute("data-shape"))).toEqual(["dot", "dot", "dot"]);
-    expect(group.previousElementSibling?.textContent).toBe("CrashLoopBackOff");
+    expect(group.nextElementSibling?.textContent).toBe("CrashLoopBackOff");
+    expect(group.closest('[role="gridcell"]')?.querySelectorAll("[data-shape]")).toHaveLength(3);
   });
 
   it("failing is a rose diamond", () => {

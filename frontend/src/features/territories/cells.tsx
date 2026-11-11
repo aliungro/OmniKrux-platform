@@ -101,12 +101,13 @@ export function Cell({
   switch (col.type) {
     case "status": {
       const label = col.key === "status" ? textColumn(row, "status") : typeof v === "string" ? v : null;
-      const containers = row.kind === "Pod" && col.key === "status" && isContainerStates(row.columns.containers)
+      const podStatus = row.kind === "Pod" && col.key === "status";
+      const containers = podStatus && isContainerStates(row.columns.containers)
         ? row.columns.containers : null;
       return (
         <span role="gridcell" className={`${s.cell} ${s.status}`}>
-          <Status label={label ?? "Unknown"} cls={statusClass(row)} />
           {containers && <ContainerBullets containers={containers} />}
+          <Status label={label ?? "Unknown"} cls={statusClass(row)} showShape={!podStatus} />
         </span>
       );
     }

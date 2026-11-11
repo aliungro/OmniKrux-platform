@@ -93,7 +93,7 @@
   align-items: center;
   gap: 7px;
 }
-.status > :first-child {
+.status > :last-child {
   flex-shrink: 1;
 }
 
