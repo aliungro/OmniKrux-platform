@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { FakeWebSocket } from "./features/logs/fakeWebSocket";
 import { Shell } from "./features/shell/Shell";
@@ -52,6 +52,8 @@ it.each([ ["Same-kind link", "pods"], ["Cross-kind link", "deployments.apps"] ])
   expect(screen.getByRole("button", { name: "Clusters" }).textContent).toContain("2 clusters");
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   expect(screen.getByRole("grid", { name: "Pods by cluster" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Clusters" }).textContent).toContain("c1");
+  const filters = within(screen.getByRole("group", { name: "Filter rows" }));
+  expect(filters.getByText("c1")).toBeTruthy();
+  expect(filters.getByRole("button", { name: "Show all clusters" })).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Details for target" })).toBeNull();
 });

@@ -3,7 +3,7 @@ import { chipLabel, filterUiFor, type ColumnFilter } from "../territories/column
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { ColumnFilterMenu } from "../territories/ColumnFilterMenu";
 import type { Territory } from "../territories/model";
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { ChipDef, FilterCounts, Filters } from "../territories/model";
 import { capsOf, pageKey, pressed } from "./shortcuts";
 import k from "./key.module.css";
@@ -124,17 +124,49 @@ function NamespacePicker({
   );
 }
 
-function ClusterPicker({ clusters, scope, onScope }: { clusters: Cluster[]; scope: string[] | null; onScope: (scope: string[] | null) => void }) {
+interface ClusterScopeProps {
+  clusters: Cluster[];
+  scope: string[] | null;
+  onScope: (scope: string[] | null) => void;
+}
+
+function ClusterScope({ clusters, scope, onScope }: ClusterScopeProps) {
+  const picker = useRef<HTMLButtonElement>(null);
+  const focusPicker = useRef(false);
+  useLayoutEffect(() => {
+    if (scope !== null || !focusPicker.current) return;
+    focusPicker.current = false;
+    picker.current?.focus();
+  }, [scope]);
+
+  const singleId = scope?.length === 1 ? scope[0] : clusters.length === 1 ? clusters[0].id : undefined;
+  if (singleId !== undefined) {
+    const cluster = clusters.find(c => c.id === singleId);
+    return <>
+      <span className={s.scope}>
+        {cluster && <ProviderBadge provider={knownProvider(cluster.provider)} />}
+        {cluster?.name ?? singleId}
+      </span>
+      {clusters.length > 1 && <button
+        type="button"
+        className={s.fchip}
+        onClick={() => { focusPicker.current = true; onScope(null); }}
+      >Show all clusters</button>}
+    </>;
+  }
+  return clusters.length > 1 ? <ClusterPicker clusters={clusters} scope={scope} onScope={onScope} button={picker} /> : null;
+}
+
+function ClusterPicker({ clusters, scope, onScope, button }: ClusterScopeProps & { button: RefObject<HTMLButtonElement | null> }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
-  const label = scope === null ? "All clusters" : scope.length === 1 ? clusters.find(c => c.id === scope[0])?.name ?? scope[0] : `${scope.length} clusters`;
+  const label = scope === null ? "All clusters" : `${scope.length} clusters`;
   return <div className={s.pick} ref={box} onKeyDown={e => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
     <button ref={button} type="button" aria-label="Clusters" aria-expanded={open} className={`${s.fchip}${scope !== null ? ` ${s.on}` : ""}`} onClick={() => setOpen(!open)}>{label}<i className={s.caret} aria-hidden="true" /></button>
     {open && <div className={s.menu} role="group" aria-label="Cluster scope">
@@ -203,7 +235,7 @@ export function FilterBar({
 
   return (
     <div className={s.filters} role="group" aria-label="Filter rows" data-page-keys>
-      {clusters && onScope && <ClusterPicker clusters={clusters} scope={scope} onScope={onScope} />}
+      {clusters && onScope && <ClusterScope clusters={clusters} scope={scope} onScope={onScope} />}
       {chips.length > 0 && chip("all", "All")}
       {/* No number until a cluster has reported one: never a made-up 0. */}
       {chips.map((c) => chip(c.status, counts[c.status] === undefined ? c.label : `${c.label} ${counts[c.status]}`, c.icon))}

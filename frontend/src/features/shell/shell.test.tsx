@@ -11,10 +11,13 @@ import { FakeWebSocket } from "../logs/fakeWebSocket";
 vi.mock("@xterm/xterm", () => ({Terminal:class {}}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon:class {}}));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
+const east: Cluster = {id:"c1",name:"East",provider:"aks",context_name:"x",server:"https://east",original_server:null,region:null,environment:"development",state:"ready",message:null};
+function stubClusters(clusters: Cluster[]) {
+ vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?KINDS:url==="/api/clusters"?clusters:url.startsWith("/api/audit")?{records:[],next_before:null}:[]),{status:200,headers:{"content-type":"application/json"}}))));
+}
 beforeEach(()=>{
  vi.stubGlobal("WebSocket",FakeWebSocket);
- const cluster:Cluster={id:"c1",name:"East",provider:"aks",context_name:"x",server:"https://east",original_server:null,region:null,environment:"development",state:"ready",message:null};
- vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?KINDS:url==="/api/clusters"?[cluster]:url.startsWith("/api/audit")?{records:[],next_before:null}:[]),{status:200,headers:{"content-type":"application/json"}}))));
+ stubClusters([east]);
 });
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 function renderShell(){return render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><Shell/></QueryClientProvider>);}
@@ -73,6 +76,25 @@ it("Alt+Left prevents the browser default and steps back once",async()=>{
  expect(event.defaultPrevented).toBe(true);
  expect(screen.getByRole("heading",{name:"Where do you want to look?"})).toBeTruthy();
  expect((screen.getByRole("button",{name:"Forward"}) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it("widens Home’s cluster scope in the same tab and restores it on Back", async () => {
+  stubClusters([east, { ...east, id: "c2", name: "West", provider: "gke" }]);
+  renderShell();
+  fireEvent.click(await screen.findByRole("button", { name: /East/ }));
+  const filters = await screen.findByRole("group", { name: "Filter rows" });
+  const input = within(filters).getByRole<HTMLInputElement>("textbox", { name: /Filter by name/ });
+  fireEvent.change(input, { target: { value: "api" } });
+  expect(within(filters).queryByRole("button", { name: "Clusters" })).toBeNull();
+  fireEvent.click(within(filters).getByRole("button", { name: "Show all clusters" }));
+  expect(document.activeElement).toBe(within(filters).getByRole("button", { name: "Clusters" }));
+  expect(input.value).toBe("api");
+  expect(within(screen.getByRole("tablist", { name: "Kubernetes tabs" })).getAllByRole("tab")).toHaveLength(1);
+  expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { name: /Pods/, selected: true })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(within(filters).getByRole("button", { name: "Show all clusters" })).toBeTruthy();
+  expect(within(filters).queryByRole("button", { name: "Clusters" })).toBeNull();
+  expect(input.value).toBe("api");
 });
 
 it("labels scoped tabs and renders the provider-colour stripes",()=>{

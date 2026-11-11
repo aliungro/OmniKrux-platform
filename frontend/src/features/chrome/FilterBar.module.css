@@ -29,6 +29,14 @@
   border-color: var(--ink-3);
 }
 
+.scope {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+}
+
 .on {
   background: var(--surf-2);
   color: var(--ink);

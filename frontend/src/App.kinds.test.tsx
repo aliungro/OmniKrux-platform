@@ -108,7 +108,9 @@ it("scoping a tab shows only the selected cluster and its stripe", async () => {
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
   fireEvent.click(await screen.findByRole("button", { name: "Clusters" }));
   fireEvent.click(screen.getByRole("checkbox", { name: /second/ }));
-  expect(screen.getByRole("button", { name: "Clusters" }).textContent).toContain("kind-omnikrux-dev");
+  const filters = within(screen.getByRole("group", { name: "Filter rows" }));
+  expect(filters.getByText("kind-omnikrux-dev")).toBeTruthy();
+  expect(filters.getByRole("button", { name: "Show all clusters" })).toBeTruthy();
   expect(screen.getAllByTestId("scope-token")).toHaveLength(1);
   expect(screen.getByRole("tab", { name: "Pods · kind-omnikrux-dev" })).toBeTruthy();
   expect(screen.queryByText("second", { selector: '[role="rowheader"] b' })).toBeNull();
@@ -148,7 +150,9 @@ it("a removed scoped cluster falls back to all clusters with a note", async () =
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
   expect(await screen.findByText("The cluster this tab looked at is gone from Omnikrux, so it shows every cluster.")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Clusters" }).textContent).toContain("All clusters");
+  const filters = within(screen.getByRole("group", { name: "Filter rows" }));
+  expect(filters.getByText("kind-omnikrux-dev")).toBeTruthy();
+  expect(filters.queryByRole("button", { name: "Show all clusters" })).toBeNull();
 });
 
 it("a tab restores its filter after switching away and back", async () => {
@@ -229,7 +233,9 @@ it("a removed-scope notice disappears when Back restores a different scope", asy
   const notice = "The cluster this tab looked at is gone from Omnikrux, so it shows every cluster.";
   expect(await screen.findByText(notice)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  expect(screen.getByRole("button", { name: "Clusters" }).textContent).toContain("kind-omnikrux-dev");
+  const filters = within(screen.getByRole("group", { name: "Filter rows" }));
+  expect(filters.getByText("kind-omnikrux-dev")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Pods · kind-omnikrux-dev" })).toBeTruthy();
   expect(screen.queryByText(notice)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Forward" }));
   expect(screen.getByText(notice)).toBeTruthy();

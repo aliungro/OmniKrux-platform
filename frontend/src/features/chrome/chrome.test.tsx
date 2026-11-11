@@ -1,6 +1,7 @@
 // frontend/src/features/chrome/chrome.test.tsx
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { act, cleanup, render, screen, fireEvent, within } from "@testing-library/react";
+import type { Cluster } from "../../api/types";
 import { ShortcutBar } from "./ShortcutBar";
 import { FilterBar } from "./FilterBar";
 import { TopBar } from "./TopBar";
@@ -73,6 +74,46 @@ describe("page key ownership", () => {
 });
 
 describe("FilterBar", () => {
+  it("shows a picker only when choosing between multiple clusters", () => {
+    const east: Cluster = {
+      id: "c1", name: "East", provider: "aks", context_name: "east", server: "https://east",
+      original_server: null, region: null, environment: "development", state: "ready", message: null,
+    };
+    const west: Cluster = { ...east, id: "c2", name: "West", provider: "gke" };
+    const north: Cluster = { ...east, id: "c3", name: "North" };
+    const onScope = vi.fn();
+    const props = {
+      value: { columns: [], sort: null, status: "all" as const, text: "", namespace: null },
+      onChange: vi.fn(), chips: [], counts: {}, namespaces: null, onScope,
+    };
+    const { rerender } = render(<FilterBar {...props} clusters={[east, west]} scope={["c1"]} />);
+    expect(screen.getByText("East")).toBeTruthy();
+    expect(screen.getByText("AKS")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clusters" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show all clusters" }));
+    expect(onScope).toHaveBeenCalledExactlyOnceWith(null);
+
+    rerender(<FilterBar {...props} clusters={[east, west]} scope={null} />);
+    const picker = screen.getByRole("button", { name: "Clusters" });
+    expect(picker.textContent).toBe("All clusters");
+    expect(document.activeElement).toBe(picker);
+    expect(screen.queryByRole("button", { name: "Show all clusters" })).toBeNull();
+
+    rerender(<FilterBar {...props} clusters={[east]} scope={null} />);
+    expect(screen.getByText("East")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clusters" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show all clusters" })).toBeNull();
+
+    rerender(<FilterBar {...props} clusters={[east]} scope={["c1"]} />);
+    expect(screen.getByText("East")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clusters" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show all clusters" })).toBeNull();
+
+    rerender(<FilterBar {...props} clusters={[east, west, north]} scope={["c1", "c2"]} />);
+    expect(screen.getByRole("button", { name: "Clusters" }).textContent).toBe("2 clusters");
+    expect(screen.queryByRole("button", { name: "Show all clusters" })).toBeNull();
+  });
+
   it("slash focuses the filter, escape clears it", () => {
     const onChange = vi.fn();
     render(<FilterBar value={{ columns: [] as [], sort: null, status: "all", text: "abc", namespace: null }} onChange={onChange} chips={POD_CHIPS} namespaces={[]} counts={{ failing: 2, pending: 1, restartedToday: 4 }} />);
