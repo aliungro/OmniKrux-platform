@@ -142,6 +142,41 @@ describe("Dock", () => {
     expect(screen.getByText("Open logs (l) or a shell (s) from a pod")).toBeTruthy();
   });
 
+  it("middle-click closes only the targeted background session", () => {
+    renderDock();
+    open({ ...shell("a", { pod: "orders-worker" }), kind: "logs" });
+    open({ ...shell("b", { pod: "redis-0" }), kind: "logs" });
+    const [tabA, tabB] = screen.getAllByRole("tab");
+    const [socketA, socketB] = FakeWebSocket.instances;
+
+    fireEvent.click(tabA);
+    expect(tabA.getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(tabB);
+    expect(tabB.getAttribute("aria-selected")).toBe("true");
+    const [pane] = shown();
+
+    fireEvent.contextMenu(tabA, { button: 2 });
+    fireEvent(tabA, new MouseEvent("auxclick", { bubbles: true, button: 2 }));
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    fireEvent(within(tabA).getByText("orders-worker"), new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+
+    expect(screen.getAllByRole("tab")).toEqual([tabB]);
+    expect(shown()).toEqual([pane]);
+    expect(tabB.getAttribute("aria-selected")).toBe("true");
+    expect(socketA.closedByClient).toBe(true);
+    expect(socketB.closedByClient).toBe(false);
+    expect(FakeWebSocket.instances).toEqual([socketA, socketB]);
+  });
+
+  it("suppresses middle-button auto-scroll on the session wrapper only", () => {
+    renderDock();
+    open({ ...shell("a"), kind: "logs" });
+    const tab = screen.getByRole("tab");
+    expect(fireEvent.mouseDown(tab, { button: 1 })).toBe(false);
+    expect(fireEvent.mouseDown(tab, { button: 0 })).toBe(true);
+    expect(fireEvent.mouseDown(screen.getByRole("tablist"), { button: 1 })).toBe(true);
+  });
+
   it("Ctrl \\ toggles the layout", async () => {
     renderDock();
     await openShell(shell("a"));

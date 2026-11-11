@@ -48,7 +48,8 @@
 
 .panes {
   flex: 1;
-  min-height: 0;
+  /* At minimum dock height, reserve pane space and let the tab strip scroll. */
+  min-height: 76px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
 }

@@ -48,9 +48,9 @@ export function SessionTabs({
 }) {
   const refs = useRef(new Map<string, HTMLButtonElement>());
 
-  // A newly opened or chosen tab is never left hidden past the end of a full strip.
+  // Reveal the full session, including its close button, when it is opened or selected.
   useEffect(() => {
-    if (focused) refs.current.get(focused)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (focused) refs.current.get(focused)?.parentElement?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [focused]);
 
   // Left/right move between tabs, Home/End jump to the ends, as a tablist should.
@@ -78,7 +78,13 @@ export function SessionTabs({
           const tag = tagOf(x);
           const where = identity(x);
           return (
-            <div key={x.id} className={`${s.sess} ${pc[provider]}${on ? ` ${s.on}` : ""}`} data-provider={provider}>
+            <div
+              key={x.id}
+              className={`${s.sess} ${pc[provider]}${on ? ` ${s.on}` : ""}`}
+              data-provider={provider}
+              onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+              onAuxClick={(e) => { if (e.button === 1) onClose(x.id); }}
+            >
               <button
                 ref={(el) => {
                   if (el) refs.current.set(x.id, el);
@@ -87,6 +93,7 @@ export function SessionTabs({
                 type="button"
                 role="tab"
                 id={tabId(base, x.id)}
+                aria-label={`${KIND_LABEL[x.kind]}${tag ? ` ${tag}` : ""}: ${where}`}
                 aria-selected={on}
                 aria-controls={panelId(base, x.id)}
                 tabIndex={on ? 0 : -1}
