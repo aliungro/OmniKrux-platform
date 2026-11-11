@@ -75,6 +75,13 @@ metadata:
   name: two-container-ports
   namespace: demo
 spec:
+  # Keep this bare pod off the worker used by the drain tests.
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
   containers:
     - name: web-with-a-deliberately-long-container-name-for-metrics
       image: nginx:1.27
