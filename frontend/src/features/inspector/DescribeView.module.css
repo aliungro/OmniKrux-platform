@@ -15,6 +15,12 @@
   border-right: 0;
 }
 
+@container (max-width: 920px) {
+  .desc { grid-template-columns: minmax(0, 1fr); }
+  .col { border-right: 0; }
+  .col + .col { border-top: 1px solid var(--rule); }
+}
+
 .h {
   margin: 0 0 10px;
   font-size: 13px;
