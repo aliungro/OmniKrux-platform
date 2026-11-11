@@ -2,8 +2,8 @@ import type { ResourceRow } from "../../api/types";
 import { shortcutsFor, type ShortcutId } from "../chrome/shortcuts";
 import { textColumn } from "../territories/model";
 
-/** The change tools the details offer; each but rollback has a key in the shortcuts registry. */
-export type ToolId = Extract<ShortcutId, "edit" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "nodeShell" | "portForward" | "delete"> | "rollback";
+/** The change tools the details offer. Rollback and eviction have no shortcut. */
+export type ToolId = Extract<ShortcutId, "edit" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "nodeShell" | "portForward" | "delete"> | "rollback" | "evict";
 
 const SCALABLE = new Set(["deployments.apps", "statefulsets.apps", "replicasets.apps"]);
 const RESTARTABLE = new Set(["deployments.apps", "statefulsets.apps", "daemonsets.apps"]);
@@ -21,6 +21,7 @@ export const TOOL_LABEL: Record<ToolId, string> = {
   nodeShell: "Node shell",
   portForward: "Port-forward",
   delete: "Delete",
+  evict: "Evict",
 };
 
 /**
@@ -53,13 +54,14 @@ export function toolsFor(kindKey: string, verbs: readonly string[], row?: Resour
   }
   // Port-forwards read the cluster only (no plan, no diff); each start is audited.
   if (kindKey === "pods" || kindKey === "services") tools.push("portForward");
+  if (kindKey === "pods") tools.push("evict");
   if (verbs.includes("delete")) tools.push("delete");
   return tools;
 }
 
-/** The tools with a key, as registry ids (rollback has none). */
+/** The tools with a key, as registry ids. */
 export function keyedTools(tools: readonly ToolId[]): ShortcutId[] {
-  return tools.filter((t): t is Exclude<ToolId, "rollback"> => t !== "rollback");
+  return tools.filter((t): t is Extract<ToolId, ShortcutId> => t !== "rollback" && t !== "evict");
 }
 
 /** Everything a row offers besides its change tools: its details, and the dock's logs and shells. */

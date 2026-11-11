@@ -28,6 +28,7 @@ Action = Literal[
     "restart",
     "rollback",
     "delete",
+    "evict",
     "cordon",
     "uncordon",
     "drain",

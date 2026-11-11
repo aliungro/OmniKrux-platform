@@ -93,7 +93,7 @@ describe("buildCommands", () => {
     const pods = { ...PODS, verbs: VERBS };
     const p = buildCommands(ctx({ selected: { row: pod, kind: pods, clusterName: "kind-dev", actions: rowActions("pods", VERBS, pod, ALL) } }));
     expect(p.filter((x) => x.group === "Actions").map((x) => x.label)).toEqual([
-      "Details of api-1", "YAML of api-1", "Logs of api-1", "Previous logs of api-1", "Shell in api-1", "Edit api-1…", "Port-forward api-1…", "Delete api-1…",
+      "Details of api-1", "YAML of api-1", "Logs of api-1", "Previous logs of api-1", "Shell in api-1", "Edit api-1…", "Port-forward api-1…", "Evict api-1…", "Delete api-1…",
     ]);
     // A Secret's row: its keys (Ruling R38), never a reveal straight from the palette.
     const secret = row({ kind: "Secret", name: "db" });

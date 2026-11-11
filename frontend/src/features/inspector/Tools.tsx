@@ -167,12 +167,12 @@ export function useTools({
   };
 
   const buttons: ReactNode = tools.map((tool) => {
-    const caps = tool === "rollback" ? [] : capsOf(tool);
+    const caps = tool === "rollback" || tool === "evict" ? [] : capsOf(tool);
     return (
       <button
         key={tool}
         type="button"
-        className={`${s.btn}${tool === "delete" ? ` ${s.danger}` : ""}`}
+        className={`${s.btn}${tool === "delete" || tool === "evict" ? ` ${s.danger}` : ""}`}
         disabled={busy !== null}
         aria-pressed={open === tool ? true : undefined}
         onClick={() => run(tool)}

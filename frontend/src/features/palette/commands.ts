@@ -89,6 +89,7 @@ const ACTION_LABEL: Record<RowAction, (name: string) => string> = {
   nodeShell: (n) => `Shell on node ${n}…`,
   portForward: (n) => `Port-forward ${n}…`,
   delete: (n) => `Delete ${n}…`,
+  evict: (n) => `Evict ${n}…`,
 };
 
 export function buildCommands(ctx: CommandContext): Command[] {
@@ -102,7 +103,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
         label: ACTION_LABEL[action](title),
         group: "Actions",
         keywords: [action, title, sel.row.name, sel.kind.label, sel.row.kind],
-        keys: action === "rollback" ? undefined : capsOf(action),
+        keys: action === "rollback" || action === "evict" ? undefined : capsOf(action),
         run: () => ctx.onRowAction(action),
       });
     }

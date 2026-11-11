@@ -28,6 +28,7 @@ from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.actions.delete import controller_of
+from omnikrux.actions.evict import request_eviction
 from omnikrux.actions.jobs import Job, JobFailed
 from omnikrux.actions.pipeline import (
     ActionError,
@@ -394,15 +395,8 @@ async def _evict(api: ApiClient, pod: dict, node: str) -> tuple[str, str | None]
     its name; ("blocked", why) when a PodDisruptionBudget refuses for now; ("retry", None) when
     the API server's own write conflicted (a 409 that isn't the uid precondition)."""
     ns, name = pod["namespace"], pod["name"]
-    body = {
-        "apiVersion": "policy/v1",
-        "kind": "Eviction",
-        "metadata": {"name": name, "namespace": ns},
-        "deleteOptions": {"preconditions": {"uid": pod["uid"]}},
-    }
-    path = f"/api/v1/namespaces/{ns}/pods/{name}/eviction"
     try:
-        await call_json(api, "POST", path, timeout=REQUEST_TIMEOUT, body=body)
+        await request_eviction(api, ns, name, pod["uid"])
     except ApiException as exc:
         why = status_message((exc.body or "").encode())
         if exc.status == 429:

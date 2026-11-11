@@ -15,7 +15,7 @@ export const PRODUCTION = "This is a production cluster.";
 export const typeToConfirm = (name: string) => `Type ${name} to confirm`;
 
 /** Applies that take something away get the danger colour on their button. */
-const DESTRUCTIVE = new Set(["delete", "drain"]);
+const DESTRUCTIVE = new Set(["delete", "drain", "evict"]);
 
 type Failure = { message: string; review: boolean };
 

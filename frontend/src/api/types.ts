@@ -68,6 +68,7 @@ export interface ServedKind {
   sort: "status" | "recent";
   builtin: boolean;
   verbs: string[];
+  verbs_by_cluster?: Record<string, string[]>;
   /** The clusters that serve it. */
   clusters: string[];
 }
@@ -434,7 +435,7 @@ export interface NodeMetrics {
 
 /* Actions — mirrors backend/omnikrux/actions (pipeline.py PlanIn / PlanOut / ApplyOut, jobs.py JobOut, workloads.py Revision). */
 
-export type ActionName = "edit" | "scale" | "restart" | "rollback" | "delete" | "cordon" | "uncordon" | "drain";
+export type ActionName = "edit" | "scale" | "restart" | "rollback" | "delete" | "cordon" | "uncordon" | "drain" | "evict";
 
 /** What a change acts on; a null namespace is a cluster-scoped kind. */
 export interface ActionTarget {
@@ -557,6 +558,7 @@ export type AuditAction =
   | "cordon"
   | "uncordon"
   | "drain"
+  | "evict"
   | "shell"
   | "debug_container"
   | "node_shell"

@@ -7,6 +7,7 @@ export const ACTION_LABELS: readonly (readonly [action: string, label: string])[
   ["rollback", "Rolled back"],
   ["edit", "Edited"],
   ["delete", "Deleted"],
+  ["evict", "Requested an eviction"],
   ["cordon", "Cordoned"],
   ["uncordon", "Uncordoned"],
   ["drain", "Drained"],

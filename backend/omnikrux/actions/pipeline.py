@@ -86,7 +86,7 @@ TYPED_ACTIONS = frozenset({"delete", "drain"})
 _TEST_FAILED = re.compile(r"\btest(?:ing value \S+)? failed")
 
 ActionName = Literal[
-    "edit", "scale", "restart", "rollback", "delete", "cordon", "uncordon", "drain"
+    "edit", "scale", "restart", "rollback", "delete", "cordon", "uncordon", "drain", "evict"
 ]
 
 
