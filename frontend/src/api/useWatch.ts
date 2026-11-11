@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { applyMessages, emptyWatchState, resetForReconnect, type WatchState } from "./watchState";
 import type { WatchMessage } from "./types";
 import { wsUrl } from "./ws";
@@ -46,106 +46,92 @@ export function scheduleFrame(cb: () => void): () => void {
   return cancel;
 }
 
-/** Live rows of one kind from every cluster; `null` watches nothing (an empty state, no socket). */
-/** Shared by every empty watch: `applyMessages` never mutates its input, and one identity keeps memos stable. */
+/** One immutable snapshot per kind, shared while it has subscribers. */
 const EMPTY: WatchState = emptyWatchState();
 
-export function useWatch(kind: string | null, opts: WatchOptions = {}): WatchState {
-  // The state is kept with the kind it belongs to. On a kind change, the render before the effect
-  // below runs (and could be painted) must not show the previous kind's rows as this kind's.
-  const [held, setHeld] = useState<{ kind: string | null; state: WatchState }>(() => ({ kind, state: EMPTY }));
-  const optsRef = useRef(opts);
-  useEffect(() => {
-    optsRef.current = opts;
-  });
-  // Unknown ids already reported during this hook's lifetime; an id leaves when its cluster is removed.
-  const reported = useRef(new Set<string>());
+interface Subscriber {
+  changed(): void;
+  observe(id: string, removed: boolean): void;
+}
 
-  useEffect(() => {
-    let disposed = false;
-    let socket: WebSocket | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let attempt = 0;
-    let queue: WatchMessage[] = [];
-    let cancelFrame: (() => void) | null = null;
+interface SharedWatch {
+  state: WatchState;
+  subscribers: Set<Subscriber>;
+  close(): void;
+}
 
-    const takeQueue = () => {
-      cancelFrame?.();
-      cancelFrame = null;
-      const batch = queue;
-      queue = [];
-      return batch;
-    };
+const watches = new Map<string, SharedWatch>();
 
-    /** Updates this kind's state; whatever another kind left behind counts as empty. */
-    const setState = (f: (s: WatchState) => WatchState) =>
-      setHeld((h) => ({ kind, state: f(h.kind === kind ? h.state : EMPTY) }));
+function startWatch(kind: string): SharedWatch {
+  let disposed = false;
+  let socket: WebSocket | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let attempt = 0;
+  let queue: WatchMessage[] = [];
+  let cancelFrame: (() => void) | null = null;
 
-    const flush = () => {
-      const batch = takeQueue();
-      if (batch.length > 0) setState((s) => applyMessages(s, batch));
-    };
+  const takeQueue = () => {
+    cancelFrame?.();
+    cancelFrame = null;
+    const batch = queue;
+    queue = [];
+    return batch;
+  };
 
-    const notice = (msg: WatchMessage) => {
-      const { onUnknownCluster, onClusterRemoved, knownClusterIds } = optsRef.current;
-      const id = msg.cluster_id;
-      if (msg.type === "cluster_removed") {
-        reported.current.delete(id);
-        onClusterRemoved?.(id);
-      } else if (
-        CLUSTER_MESSAGES.has(msg.type) &&
-        knownClusterIds !== undefined &&
-        !knownClusterIds.has(id) &&
-        !reported.current.has(id)
-      ) {
-        reported.current.add(id);
-        onUnknownCluster?.(id);
+  const publish = (next: WatchState) => {
+    if (next === watch.state) return;
+    watch.state = next;
+    for (const subscriber of watch.subscribers) subscriber.changed();
+  };
+
+  const flush = () => publish(applyMessages(watch.state, takeQueue()));
+
+  const connect = () => {
+    const ws = new WebSocket(watchUrl(kind));
+    socket = ws;
+    ws.onmessage = (ev) => {
+      if (disposed || socket !== ws) return;
+      attempt = 0;
+      let msg: WatchMessage;
+      try {
+        const parsed: unknown = JSON.parse(ev.data as string);
+        if (parsed === null || typeof parsed !== "object") throw new Error("not an object");
+        msg = parsed as WatchMessage;
+      } catch {
+        console.warn("useWatch: ignoring malformed frame");
+        return;
       }
+      const removed = msg.type === "cluster_removed";
+      if (removed || CLUSTER_MESSAGES.has(msg.type)) {
+        for (const subscriber of watch.subscribers) subscriber.observe(msg.cluster_id, removed);
+      }
+      if (disposed) return;
+      queue.push(msg);
+      if (cancelFrame === null) cancelFrame = scheduleFrame(flush);
     };
-
-    const connect = () => {
-      const ws = new WebSocket(watchUrl(watched));
-      socket = ws;
-      ws.onmessage = (ev) => {
-        if (disposed) return;
-        attempt = 0;
-        let msg: WatchMessage;
-        try {
-          const parsed: unknown = JSON.parse(ev.data as string);
-          if (parsed === null || typeof parsed !== "object") throw new Error("not an object");
-          msg = parsed as WatchMessage;
-        } catch {
-          console.warn("useWatch: ignoring malformed frame");
-          return;
-        }
-        notice(msg);
-        queue.push(msg);
-        if (cancelFrame === null) cancelFrame = scheduleFrame(flush);
-      };
-      ws.onclose = (ev) => {
-        if (disposed) return;
-        socket = null;
-        const batch = takeQueue();
-        if (ev.code === 4404) {
-          if (batch.length > 0) setState((s) => applyMessages(s, batch));
-          return;
-        }
-        setState((s) => resetForReconnect(applyMessages(s, batch)));
-        const delay = DELAYS_MS[Math.min(attempt, DELAYS_MS.length - 1)];
-        attempt += 1;
-        timer = setTimeout(() => {
-          timer = null;
-          connect();
-        }, delay);
-      };
+    ws.onclose = (ev) => {
+      if (disposed || socket !== ws) return;
+      socket = null;
+      const next = applyMessages(watch.state, takeQueue());
+      if (ev.code === 4404) {
+        publish(next);
+        return;
+      }
+      publish(resetForReconnect(next));
+      if (disposed) return;
+      const delay = DELAYS_MS[Math.min(attempt, DELAYS_MS.length - 1)];
+      attempt += 1;
+      timer = setTimeout(() => {
+        timer = null;
+        connect();
+      }, delay);
     };
+  };
 
-    setHeld((h) => (h.kind === kind && h.state === EMPTY ? h : { kind, state: EMPTY }));
-    if (kind === null) return;
-    const watched = kind;
-    connect();
-
-    return () => {
+  const watch: SharedWatch = {
+    state: EMPTY,
+    subscribers: new Set(),
+    close() {
       disposed = true;
       takeQueue();
       if (timer !== null) clearTimeout(timer);
@@ -154,8 +140,55 @@ export function useWatch(kind: string | null, opts: WatchOptions = {}): WatchSta
         socket.onclose = null;
         socket.close();
       }
+    },
+  };
+  connect();
+  return watch;
+}
+
+/** Live rows of one kind from every cluster; `null` watches nothing. */
+export function useWatch(kind: string | null, opts: WatchOptions = {}): WatchState {
+  const optsRef = useRef(opts);
+  useEffect(() => {
+    optsRef.current = opts;
+  });
+  const reported = useRef(new Set<string>());
+
+  const subscribe = useCallback((changed: () => void) => {
+    if (kind === null) return () => {};
+    let shared = watches.get(kind);
+    if (!shared) {
+      shared = startWatch(kind);
+      watches.set(kind, shared);
+    }
+    const watch = shared;
+    const subscriber: Subscriber = {
+      changed,
+      observe(id, removed) {
+        const { knownClusterIds, onClusterRemoved, onUnknownCluster } = optsRef.current;
+        if (removed) {
+          reported.current.delete(id);
+          onClusterRemoved?.(id);
+        } else if (knownClusterIds && !knownClusterIds.has(id) && !reported.current.has(id)) {
+          reported.current.add(id);
+          onUnknownCluster?.(id);
+        }
+      },
+    };
+    watch.subscribers.add(subscriber);
+    // A late subscriber can join after a cluster's initial status and snapshot.
+    const { clusters, rows, pending } = watch.state;
+    const ids = new Set([...Object.keys(clusters), ...Object.keys(rows), ...Object.keys(pending)]);
+    for (const id of ids) subscriber.observe(id, false);
+    return () => {
+      watch.subscribers.delete(subscriber);
+      if (watch.subscribers.size === 0) {
+        watches.delete(kind);
+        watch.close();
+      }
     };
   }, [kind]);
 
-  return held.kind === kind ? held.state : EMPTY;
+  const snapshot = useCallback(() => (kind === null ? EMPTY : watches.get(kind)?.state ?? EMPTY), [kind]);
+  return useSyncExternalStore(subscribe, snapshot);
 }
