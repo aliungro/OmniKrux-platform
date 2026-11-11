@@ -266,6 +266,27 @@ describe("KindTabs", () => {
       vi.useRealTimers();
     }
   });
+  it("ignores a consumed arrow and cancels a pending move when the pane is deactivated", () => {
+    vi.useFakeTimers();
+    try {
+      const props = { ...pinProps, kinds: [PODS, DEPLOYMENTS], active: "pods", count: null, onSelect: vi.fn() };
+      const { rerender } = render(<KindTabs {...props} paneActive />);
+      const pods = screen.getByRole("tab", { name: "Pods", selected: true });
+      const consumed = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+      consumed.preventDefault();
+      fireEvent(pods, consumed);
+      expect(screen.getByRole("tab", { selected: true })).toBe(pods);
+      fireEvent.keyDown(document.body, { key: "ArrowRight" });
+      expect(screen.getByRole("tab", { name: "Deployments", selected: true })).toBeTruthy();
+      rerender(<KindTabs {...props} paneActive={false} />);
+      fireEvent.keyDown(document.body, { key: "ArrowRight" });
+      act(() => void vi.advanceTimersByTime(300));
+      expect(screen.getByRole("tab", { selected: true })).toBe(pods);
+      expect(props.onSelect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("says when the kinds can't be loaded, with Retry", () => {
     const onRetry = vi.fn();
     render(<KindTabs {...pinProps} kinds={undefined} active="pods" count={3} onSelect={() => {}} error="Can't reach the console's server. Check that it's running, then retry." onRetry={onRetry} />);

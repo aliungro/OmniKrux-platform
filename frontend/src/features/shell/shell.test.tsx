@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Rail } from "./Rail";
 import { Shell } from "./Shell";
@@ -19,7 +20,7 @@ beforeEach(()=>{
  vi.stubGlobal("WebSocket",FakeWebSocket);
  stubClusters([east]);
 });
-afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();});
 function renderShell(){return render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><Shell/></QueryClientProvider>);}
 it("lists the built apps and marks the current app", () => {
   render(<Rail app="kubernetes" onSelect={() => {}} />);
@@ -97,6 +98,98 @@ it("widens Home’s cluster scope in the same tab and restores it on Back", asyn
   expect(input.value).toBe("api");
 });
 
+it("steps kinds from a new view with no selected row and from a focused resource row", async () => {
+  for (const key of ["clientHeight", "offsetHeight", "clientWidth", "offsetWidth"] as const) {
+    vi.spyOn(HTMLElement.prototype, key, "get").mockReturnValue(600);
+  }
+  renderShell();
+  fireEvent.click(await screen.findByRole("button", { name: /East/ }));
+  await within(await screen.findByRole("tablist", { name: "Kinds" })).findByRole("tab", { name: "Deployments" });
+  fireEvent.keyDown(document.body, { key: "ArrowRight" });
+  await screen.findByRole("grid", { name: "Deployments by cluster" });
+
+  const socket = FakeWebSocket.instances.filter(w => w.params.get("kind") === "deployments.apps" && !w.closedByClient).at(-1)!;
+  act(() => {
+    socket.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    socket.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [{
+      uid: "dep", cluster_id: "c1", kind: "Deployment", namespace: "demo", name: "api",
+      created_at: null, labels: {}, columns: {},
+    }] });
+  });
+  const row = (await screen.findByRole("gridcell", { name: "api" })).closest<HTMLElement>("[data-row-key]")!;
+  row.focus();
+  fireEvent.keyDown(row, { key: "ArrowLeft" });
+  await screen.findByRole("grid", { name: "Pods by cluster" });
+});
+
+it("steps kinds from the console after workspace and app switches", async () => {
+  renderShell();
+  fireEvent.click(await screen.findByRole("button", { name: /East/ }));
+  await within(await screen.findByRole("tablist", { name: "Kinds" })).findByRole("tab", { name: "Deployments" });
+  fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+  const tabs = screen.getByRole("tablist", { name: "Kubernetes tabs" });
+  fireEvent.click(within(tabs).getByRole("tab", { name: /Pods/ }));
+  const console = screen.getByRole("main");
+  await waitFor(() => expect(document.activeElement).toBe(console));
+  fireEvent.keyDown(console, { key: "ArrowRight" });
+  await screen.findByRole("grid", { name: "Deployments by cluster" });
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
+  await waitFor(() => expect(document.activeElement).toBe(console));
+  fireEvent.keyDown(console, { key: "ArrowLeft" });
+  await screen.findByRole("grid", { name: "Pods by cluster" });
+});
+
+it("keeps horizontal keys with the filter, menu, dialog, terminal and workspace tabs", async () => {
+  const ws = defaultWorkspace();
+  ws.kubernetes.tabs[0].view = kindView(HOME, "pods");
+  ws.kubernetes.tabs.push({ id: "other", view: HOME, back: [], forward: [], scrollTop: 0 });
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+  renderShell();
+  const kinds = within(await screen.findByRole("tablist", { name: "Kinds" }));
+  const pods = kinds.getByRole("tab", { name: /Pods/, selected: true });
+  const input = screen.getByRole<HTMLInputElement>("textbox", { name: /Filter by name/ });
+  fireEvent.change(input, { target: { value: "api" } });
+  input.focus();
+  input.setSelectionRange(2, 2);
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(input.selectionStart).toBe(1);
+  expect(kinds.getByRole("tab", { selected: true })).toBe(pods);
+
+  fireEvent.contextMenu(pods);
+  const menu = screen.getByRole("menu");
+  fireEvent.keyDown(within(menu).getAllByRole("menuitem")[0], { key: "ArrowRight" });
+  expect(kinds.getByRole("tab", { selected: true })).toBe(pods);
+  fireEvent.keyDown(menu, { key: "Escape" });
+
+  fireEvent.keyDown(pods, { key: "?" });
+  const dialog = screen.getByRole("dialog", { name: "All shortcuts" });
+  expect(within(dialog).getByText("Move between kinds")).toBeTruthy();
+  fireEvent.keyDown(document.body, { key: "ArrowRight" });
+  expect(kinds.getByRole("tab", { selected: true })).toBe(pods);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+
+  const terminal = document.createElement("div");
+  terminal.className = "xterm";
+  terminal.tabIndex = 0;
+  screen.getByRole("main").append(terminal);
+  try {
+    terminal.focus();
+    fireEvent.keyDown(terminal, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(terminal);
+    expect(kinds.getByRole("tab", { selected: true })).toBe(pods);
+  } finally {
+    terminal.remove();
+  }
+
+  const tabs = within(screen.getByRole("tablist", { name: "Kubernetes tabs" }));
+  const workspace = tabs.getByRole("tab", { name: /Pods/ });
+  workspace.focus();
+  fireEvent.keyDown(workspace, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(tabs.getByRole("tab", { name: "Home" }));
+  expect(kinds.getByRole("tab", { selected: true })).toBe(pods);
+});
+
 it("labels scoped tabs and renders the provider-colour stripes",()=>{
  const clusters:Cluster[]=[{id:"one",name:"East",provider:"aks",context_name:"x",server:"x",original_server:null,region:null,environment:"development",state:"ready",message:null},{id:"two",name:"West",provider:"gke",context_name:"y",server:"y",original_server:null,region:null,environment:"development",state:"ready",message:null}];
  const view=kindView(HOME,"pods",["one","two"]);
@@ -129,7 +222,8 @@ it.each(["Kinds","Kubernetes tabs"])("Alt history from %s moves exactly one entr
  tab.view=filtered; tab.back=[HOME,pods]; localStorage.setItem("omnikrux.workspace",JSON.stringify(ws));
  renderShell(); await screen.findByRole("tablist",{name:"Kinds"});
  const target=within(screen.getByRole("tablist",{name:strip})).getByRole("tab",{selected:true}); target.focus();
- fireEvent.keyDown(target,{key:"ArrowLeft",code:"ArrowLeft",altKey:true});
+ if (strip === "Kinds") fireEvent.keyDown(target, { key: "ArrowRight" });
+ fireEvent.keyDown(document.activeElement!,{key:"ArrowLeft",code:"ArrowLeft",altKey:true});
  expect((screen.getByPlaceholderText(/filter/i) as HTMLInputElement).value).toBe("");
  fireEvent.keyDown(document.activeElement!,{key:"ArrowRight",code:"ArrowRight",altKey:true});
  expect((screen.getByPlaceholderText(/filter/i) as HTMLInputElement).value).toBe("needle");

@@ -10,6 +10,7 @@ import { APPS } from "../shell/apps";
 export type ShortcutId =
   | "apps" | "newTab" | "closeTab" | "nextTab" | "previousTab" | "back" | "forward"
   | "move"
+  | "moveKind"
   | "details"
   | "close"
   | "yaml"
@@ -74,6 +75,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id:"previousTab",scope:"shell",keys:["Alt PgUp"],label:"Previous tab",match:["PageUp"],alt:true },
   { id:"back",scope:"shell",keys:["Alt ←"],label:"Back in this tab",match:["ArrowLeft"],alt:true },
   { id:"forward",scope:"shell",keys:["Alt →"],label:"Forward in this tab",match:["ArrowRight"],alt:true },
+  { id:"moveKind",scope:"shell",keys:["←","→"],label:"Move between kinds",match:["ArrowLeft","ArrowRight"] },
   // Rows: moving and the details, on every kind.
   { id: "move", scope: "row", keys: ["↑", "↓"], match: ["ArrowUp", "ArrowDown"], label: "Move between rows", bar: "move" },
   { id: "details", scope: "row", keys: ["Enter"], match: ["Enter", "d"], label: "Open or close the details (d too)", bar: "details" },

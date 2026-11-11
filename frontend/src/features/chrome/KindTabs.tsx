@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { KindInfo } from "../../api/types";
 import { kindTitle } from "../territories/model";
-import { capsOf } from "./shortcuts";
+import { routesKindKeys } from "./pageKeys";
+import { capsOf, pageKey, pressed } from "./shortcuts";
 import k from "./key.module.css";
 import s from "./KindTabs.module.css";
 
@@ -33,6 +34,7 @@ export function KindTabs({
   kinds,
   active,
   navigationView,
+  paneActive = true,
   count,
   onSelect,
   error = null,
@@ -44,6 +46,7 @@ export function KindTabs({
   kinds: KindInfo[] | undefined;
   active: string;
   navigationView?: unknown;
+  paneActive?: boolean;
   /** The active kind's rows across ready clusters; null until one has reported (never a made-up 0). */
   count: number | null;
   /** `replace`: the move shouldn't add a history entry (arrowing across tabs). */
@@ -65,6 +68,7 @@ export function KindTabs({
   const tabs = tabsFor(kinds, active, moving, pinned);
   const [menu, setMenu] = useState<{ key: string; left: number; top: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const tabList = useRef<HTMLDivElement>(null);
   const refs = useRef(new Map<string, HTMLButtonElement>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stop = () => {
@@ -76,16 +80,16 @@ export function KindTabs({
   const previousActive = useRef(active);
   const previousView = useRef(navigationView);
   useEffect(() => stop, []);
-  useEffect(() => {
-    if (previousActive.current === active && previousView.current === navigationView) return;
+  useLayoutEffect(() => {
+    if (paneActive && previousActive.current === active && previousView.current === navigationView) return;
     previousActive.current = active;
     previousView.current = navigationView;
-    if (expected.current === active) { expected.current = null; return; }
+    if (paneActive && expected.current === active) { expected.current = null; return; }
     expected.current = null;
     run.current = false;
     stop();
     setMoving(null);
-  }, [active, navigationView]);
+  }, [active, navigationView, paneActive]);
 
   const closeMenu = (restore = true) => {
     if (restore && menu) refs.current.get(menu.key)?.focus();
@@ -116,11 +120,13 @@ export function KindTabs({
     else if (e.key === "Tab") closeMenu(false);
   };
 
-  // Left and right move between tabs, as a tablist should; the kind follows once the keys rest.
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+  // The console, resource rows and the kind strip share one arrow sequence and settle timer.
+  const onKey = useEffectEvent((e: globalThis.KeyboardEvent) => {
+    if (!paneActive || e.shiftKey || !pressed("moveKind", e) || !pageKey(e)) return;
+    const inStrip = e.target instanceof Node && tabList.current?.contains(e.target);
+    if (!inStrip && !routesKindKeys(e.target)) return;
     const at = tabs.findIndex((t) => t.key === shown);
-    if (at < 0) return;
+    if (at < 0 || tabs.length < 2) return;
     e.preventDefault();
     const next = tabs[(at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length].key;
     setMoving(next);
@@ -135,7 +141,12 @@ export function KindTabs({
         run.current = true;
       }
     }, ARROW_SETTLE_MS);
-  };
+  });
+  useEffect(() => {
+    const onDocumentKey = (e: globalThis.KeyboardEvent) => onKey(e);
+    document.addEventListener("keydown", onDocumentKey);
+    return () => document.removeEventListener("keydown", onDocumentKey);
+  }, []);
 
   const choose = (key: string) => {
     stop();
@@ -147,7 +158,7 @@ export function KindTabs({
 
   return (
     <nav className={s.kinds} aria-label="Resource kinds" data-page-keys>
-      <div role="tablist" aria-label="Kinds" className={s.list} onKeyDown={onKey} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { run.current = false; stop(); setMoving(null); } }}>
+      <div ref={tabList} role="tablist" aria-label="Kinds" className={s.list} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { run.current = false; stop(); setMoving(null); } }}>
         {tabs.map((t) => {
           const on = t.key === shown;
           return (

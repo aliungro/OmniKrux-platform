@@ -302,7 +302,7 @@ function KindView({nav: tabNav,dock,onEditPinned}: {nav:TabNav<KubeView>;dock:Re
         />
         <FilterBar clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
         <NavigationNotice text={nav.notice ?? scopeNoticeText} waiting={nav.waiting} />
-        <div className={s.main}>
+        <div className={s.main} data-kind-row-keys>
           <TerritoryTable
             initialScrollTop={initialScrollTop}
             onScroll={tabNav.setScroll}
