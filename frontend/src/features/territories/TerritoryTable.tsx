@@ -11,15 +11,17 @@ import {
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
+  type MouseEvent,
   type SetStateAction,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/types";
-import { rowActions, type RowAction } from "../actions/tools";
+import { rowActions, TOOL_LABEL, type RowAction, type ToolId } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
 import { pageKey, pressed, rowShortcut } from "../chrome/shortcuts";
 import { routesPageKeys } from "../chrome/pageKeys";
+import { ContextMenu, isMenuKey, menuAnchor, type MenuAnchor, type MenuItem } from "../chrome/ContextMenu";
 import { Inspector, type WorkloadLogs } from "../inspector/Inspector";
 import type { ToolIntent } from "../inspector/Tools";
 import { flatten, kindTitle, rowKey, type RowRef, type Selection, type Territory } from "./model";
@@ -73,6 +75,9 @@ export interface TerritoryTableProps {
    * into view, and focuses it unless you've moved focus outside the table meanwhile.
    */
   reveal?: number;
+  onEditPinned?: () => void;
+  menuView?: unknown;
+  paneActive?: boolean;
 }
 
 /** An action on a row, by its `rowKey`; `seq` tells two asks apart. */
@@ -88,6 +93,15 @@ function sameRef(a: RowRef | null, b: RowRef): boolean {
 
 /** A cluster in one of these states hides its rows until it's live again; they're not gone. */
 const NOT_LIVE: ReadonlySet<ClusterState> = new Set(["syncing", "error", "unknown"]);
+
+const ROW_MENU_LABELS: Partial<Record<RowAction, string>> = {
+  details: "Details", yaml: "YAML", logs: "Logs", previousLogs: "Previous logs",
+  workloadLogs: "Logs", shell: "Shell", reveal: "Show secret keys",
+};
+
+function verbsFor(kind: KindInfo, row: ResourceRow): readonly string[] {
+  return kind.verbs_by_cluster?.[row.cluster_id] ?? kind.verbs;
+}
 
 /**
  * Memoized: Console passes stable props, so a change elsewhere on the page (the dock, a dialog)
@@ -109,6 +123,9 @@ export const TerritoryTable = memo(function TerritoryTable({
   onWorkloadLogs,
   request = null,
   reveal = 0,
+  onEditPinned,
+  menuView,
+  paneActive = true,
 }: TerritoryTableProps) {
   const { selected, open } = selection;
   const items = useMemo(() => flatten(territories, open ? selected : null), [territories, open, selected]);
@@ -134,6 +151,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   const revealed = useRef(reveal);
   /** A key pressed on a row that its details carry out: a change tool, the YAML tab, a workload's logs. */
   const [intent, setIntent] = useState<(ToolIntent & { key: string }) | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ key: string; anchor: MenuAnchor; view: unknown; kind: string } | null>(null);
   const intentDone = useCallback(() => setIntent(null), []);
   const can = {
     change: useStartAction() !== null,
@@ -183,7 +201,7 @@ export const TerritoryTable = memo(function TerritoryTable({
    * Runs what a row's key means (or the palette asked for): the details, the dock's logs and
    * shells, or, through the details, the YAML tab and the change tools, each reviewed first.
    */
-  const act = (row: ResourceRow, action: RowAction, from: "key" | "palette") => {
+  const act = (row: ResourceRow, action: RowAction, from: "key" | "menu" | "palette") => {
     const ref = { clusterId: row.cluster_id, uid: row.uid };
     switch (action) {
       case "details":
@@ -209,6 +227,57 @@ export const TerritoryTable = memo(function TerritoryTable({
   const actRef = useRef(act);
   actRef.current = act;
 
+  const rowAt = (key: string) => {
+    const index = indexByKey.get(key);
+    const item = index === undefined ? undefined : items[index];
+    return item?.type === "row" ? item.row : null;
+  };
+  const openRowMenu = (trigger: HTMLElement, point?: { clientX: number; clientY: number }) => {
+    const key = trigger.dataset.rowKey;
+    if (!key || !indexByKey.has(key)) return false;
+    setRowMenu({ key, anchor: menuAnchor(trigger, point), view: menuView, kind: kind.key });
+    return true;
+  };
+  const restoreRowFocus = (trigger?: HTMLElement) => {
+    const fallback = scrollRef.current?.querySelector<HTMLElement>('[data-row-key][tabindex="0"]');
+    (trigger?.isConnected ? trigger : fallback ?? scrollRef.current)?.focus({ preventScroll: true });
+  };
+  const menuRow = rowMenu ? rowAt(rowMenu.key) : null;
+  const menuMatchesView = rowMenu?.view === menuView && rowMenu?.kind === kind.key;
+  const menuItems: MenuItem[] = [];
+  if (rowMenu && menuRow && menuMatchesView && paneActive) {
+    for (const action of rowActions(kind.key, verbsFor(kind, menuRow), menuRow, can)) {
+      menuItems.push({
+        id: action,
+        label: ROW_MENU_LABELS[action] ?? TOOL_LABEL[action as ToolId],
+        danger: action === "delete" || action === "drain" || action === "evict",
+        onSelect: () => {
+          const current = rowAt(rowMenu.key);
+          if (current && rowMenu.anchor.trigger.isConnected) act(current, action, "menu");
+        },
+      });
+    }
+    if (onEditPinned) menuItems.push({
+      id: "pins", label: "Edit pinned kinds…", onSelect: onEditPinned, divider: true, restoreFocus: false,
+    });
+  }
+  useLayoutEffect(() => {
+    if (!rowMenu) return;
+    if (paneActive && menuRow && menuMatchesView && rowMenu.anchor.trigger.isConnected) return;
+    setRowMenu(null);
+    if (paneActive) restoreRowFocus(rowMenu.anchor.trigger);
+  });
+
+  const onContextMenu = (e: MouseEvent<HTMLDivElement>) => {
+    if (!(e.target instanceof Element)) return;
+    if (e.target.closest('a, button, input, textarea, select, [contenteditable]')) return;
+    const trigger = e.target.closest<HTMLElement>("[data-row-key]");
+    if (trigger && e.currentTarget.contains(trigger) && openRowMenu(trigger, e)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
   // The palette's ask, once, on the row as it is now (never one that has gone meanwhile).
   const asked = useRef(request?.seq ?? 0);
   useEffect(() => {
@@ -232,7 +301,7 @@ export const TerritoryTable = memo(function TerritoryTable({
     if (it.type !== "row") return;
     // The key means what this kind gives it (`s`: a pod's shell, a deployment's scale, a node's
     // shell), among what this row offers (a node has the one of cordon and uncordon that applies).
-    const id = rowShortcut(e, kind.key, rowActions(kind.key, kind.verbs, it.row, can));
+    const id = rowShortcut(e, kind.key, rowActions(kind.key, verbsFor(kind, it.row), it.row, can));
     if (id === undefined) return;
     e.preventDefault();
     if (fromPage) {
@@ -264,12 +333,18 @@ export const TerritoryTable = memo(function TerritoryTable({
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     // Everything except Escape acts on a focused row, never on keys inside the details.
-    const key = (e.target as HTMLElement).dataset?.rowKey;
+    const target = e.target as HTMLElement;
+    const key = target.dataset?.rowKey;
+    if (key && isMenuKey(e) && openRowMenu(target)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     runRowKey(e, key === undefined ? undefined : indexByKey.get(key));
   };
 
   const onPageKey = (e: globalThis.KeyboardEvent) => {
-    if (!pageKey(e) || !routesPageKeys(e.target)) return;
+    if (!paneActive || !pageKey(e) || !routesPageKeys(e.target)) return;
     // Keep native activation and navigation on chrome controls (including nested button icons).
     if (["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
       && e.target instanceof Element
@@ -353,7 +428,19 @@ export const TerritoryTable = memo(function TerritoryTable({
   );
 
   return (
-    <div ref={scrollRef} className={s.scroll} onKeyDown={onKeyDown} onScroll={e => onScroll?.(e.currentTarget.scrollTop)}>
+    <div ref={scrollRef} className={s.scroll} tabIndex={-1} onKeyDown={onKeyDown} onContextMenu={onContextMenu}
+      onScroll={(e) => {
+        onScroll?.(e.currentTarget.scrollTop);
+        if (!rowMenu) return;
+        const trigger = rowMenu.anchor.trigger;
+        const viewport = e.currentTarget.getBoundingClientRect();
+        const bounds = trigger.getBoundingClientRect();
+        if (!trigger.isConnected || bounds.bottom <= viewport.top + HEADER_HEIGHT || bounds.top >= viewport.bottom
+          || bounds.right <= viewport.left || bounds.left >= viewport.right) {
+          setRowMenu(null);
+          restoreRowFocus();
+        }
+      }}>
       <div
         role="grid"
         aria-label={`${kindTitle(kind)} by cluster`}
@@ -386,10 +473,11 @@ export const TerritoryTable = memo(function TerritoryTable({
                     <Inspector
                       row={it.row}
                       kindKey={kind.key}
-                      verbs={kind.verbs}
+                      verbs={verbsFor(kind, it.row)}
                       intent={intent?.key === rowKey(it.row.cluster_id, it.row.uid) ? intent : null}
                       onIntentDone={intentDone}
                       provider={it.provider}
+                      paneActive={paneActive}
                       onOpenLogs={onOpenLogs}
                       onOpenShell={onOpenShell}
                       onNodeShell={onNodeShell}
@@ -433,6 +521,10 @@ export const TerritoryTable = memo(function TerritoryTable({
           })}
         </div>
       </div>
+      {rowMenu && menuRow && menuItems.length > 0 && (
+        <ContextMenu anchor={rowMenu.anchor} label={`Actions for ${menuRow.name}`} items={menuItems}
+          onClose={() => setRowMenu(null)} />
+      )}
     </div>
   );
 });

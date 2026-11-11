@@ -1,6 +1,6 @@
 // frontend/src/features/territories/selection.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
@@ -9,6 +9,12 @@ import { resourceDescribe, secretDescribe } from "../../test/describe";
 import { DEPLOYMENTS, NODES, PODS, SERVICES } from "../../test/kinds";
 import { Table } from "../../test/table";
 import { ActionsProvider } from "../actions/ActionDialog";
+
+vi.mock("../actions/lazyCodeMirror", () => ({
+  loadCodeMirror: async () => ({
+    editor: () => ({ focus: () => {}, destroy: () => {} }),
+  }),
+}));
 
 const describeBody = {
   pod: {
@@ -268,6 +274,117 @@ describe("keys per kind", () => {
       </QueryClientProvider>,
     );
   }
+
+  it("opens a menu for the pointed pod and sends Logs only to that pod", () => {
+    const onOpenLogs = vi.fn();
+    const onEditPinned = vi.fn();
+    renderKind(PODS, rows(2), { onOpenLogs, onEditPinned });
+    fireEvent.click(podRow("pod-0"));
+    fireEvent.contextMenu(screen.getByText("pod-1"));
+
+    const menu = screen.getByRole("menu", { name: "Actions for pod-1" });
+    expect(podRow("pod-0").getAttribute("aria-selected")).toBe("true");
+    expect(podRow("pod-1").getAttribute("aria-selected")).toBe("false");
+    expect(inspector()?.getAttribute("aria-label")).toBe("Details for pod-0");
+    expect(within(menu).getByRole("menuitem", { name: "Edit pinned kinds…" }).getAttribute("data-divider")).toBe("true");
+    expect(onOpenLogs).not.toHaveBeenCalled();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Logs" }));
+    expect(onOpenLogs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ uid: "1" }), false);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.contextMenu(podRow("pod-1"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit pinned kinds…" }));
+    expect(onEditPinned).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens Edit for the pointed pod without submitting a write", async () => {
+    const fetch = vi.fn((url: string, _init?: RequestInit) => json(url.includes("/yaml") ? { yaml: "kind: Pod" } : describeBody));
+    vi.stubGlobal("fetch", fetch);
+    renderKind(PODS, rows(2));
+    fireEvent.click(podRow("pod-0"));
+    fireEvent.contextMenu(podRow("pod-1"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+    const details = await screen.findByRole("region", { name: "Details for pod-1" });
+    expect(await within(details).findByRole("button", { name: "Review changes" })).toBeTruthy();
+    expect(fetch.mock.calls.map(([url]) => url).filter((url) => url.includes("/yaml"))).toEqual([
+      expect.stringContaining("/pods/n/pod-1/yaml"),
+    ]);
+    expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  });
+
+  it.each([
+    [SERVICES, "service", ["Details", "YAML", "Edit", "Port-forward", "Delete"]],
+    [DEPLOYMENTS, "web", ["Details", "YAML", "Logs", "Edit", "Scale", "Restart", "Roll back", "Delete"]],
+    [{ ...SERVICES, key: "helm-releases", kind: "HelmRelease" }, "helm", ["Details", "YAML"]],
+  ] as const)("offers the actions supported by $kind", (kind, name, labels) => {
+    renderKind(kind, asKind(kind.kind, name), { onWorkloadLogs: vi.fn(), onOpenShell: vi.fn() });
+    fireEvent.contextMenu(podRow(`${name}-1`));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(labels);
+    expect(inspector()).toBeNull();
+  });
+
+  it("uses the pointed cluster's verbs when another cluster offers writes", () => {
+    const second = rows(1).map((r) => ({ ...r, cluster_id: "c2", name: "other-pod" }));
+    const a = territory(rows(1));
+    const b = { ...territory(second), cluster: { ...a.cluster, id: "c2" } };
+    renderKind(PODS, [], {
+      kind: { ...PODS, verbs: VERBS, verbs_by_cluster: { c1: VERBS, c2: ["get", "list", "watch"] } },
+      territories: [a, b],
+    });
+    fireEvent.contextMenu(podRow("pod-0"));
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeTruthy();
+    fireEvent.contextMenu(podRow("other-pod"));
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(screen.getByRole("menu", { name: "Actions for other-pod" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("gives Shift+F10 and Escape to the focused row's menu", () => {
+    renderKind(PODS, rows(2));
+    fireEvent.click(podRow("pod-0"));
+    const trigger = podRow("pod-1");
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "F10", shiftKey: true });
+    const firstItem = screen.getByRole("menuitem", { name: "Details" });
+    expect(document.activeElement).toBe(firstItem);
+    fireEvent.keyDown(firstItem, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(inspector()?.getAttribute("aria-label")).toBe("Details for pod-0");
+  });
+
+  it.each(["removed", "replaced", "scrolled", "view changed", "pane inactive"] as const)("closes the menu with surviving focus when its row is %s", (change) => {
+    const client = new QueryClient();
+    const onOpenLogs = vi.fn();
+    const originalRows = rows(3);
+    const originalView = {};
+    const ui = (rs: ResourceRow[], menuView = originalView, paneActive = true) => (
+      <QueryClientProvider client={client}>
+        <Table territories={[territory(rs)]} kind={PODS} onRetry={() => {}} onOpenLogs={onOpenLogs} menuView={menuView} paneActive={paneActive} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(originalRows));
+    const trigger = podRow("pod-1");
+    fireEvent.contextMenu(trigger);
+    const logs = screen.getByRole("menuitem", { name: "Logs" });
+    if (change === "scrolled") {
+      vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({ ...trigger.getBoundingClientRect(), bottom: 20 });
+      fireEvent.scroll(screen.getByRole("grid").parentElement!);
+    } else if (change === "view changed") {
+      rerender(ui(originalRows, {}));
+    } else if (change === "pane inactive") {
+      rerender(ui(originalRows, originalView, false));
+    } else {
+      rerender(ui(change === "replaced"
+        ? originalRows.map((row) => row.uid === "1" ? { ...row, uid: "replacement" } : row)
+        : originalRows.filter((row) => row.uid !== "1")));
+    }
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(logs);
+    expect(onOpenLogs).not.toHaveBeenCalled();
+    expect(inspector()).toBeNull();
+    if (change !== "pane inactive") expect(document.activeElement).toBe(change === "view changed" ? trigger : podRow("pod-0"));
+  });
 
   it("same key acts per kind", async () => {
     const onOpenShell = vi.fn();

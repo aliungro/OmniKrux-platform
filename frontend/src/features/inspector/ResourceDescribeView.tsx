@@ -112,6 +112,7 @@ export function ResourceDescribeView({
   onLink,
   focusKeys = null,
   onKeysFocused,
+  paneActive = true,
 }: {
   data: ResourceDescribe;
   clusterId: string;
@@ -119,6 +120,7 @@ export function ResourceDescribeView({
   /** Asked to focus a Secret's first key (its row's `x`). */
   focusKeys?: KeysAsk | null;
   onKeysFocused?: () => void;
+  paneActive?: boolean;
 }) {
   const now = new Date();
   const labels = Object.entries(data.labels);
@@ -172,12 +174,12 @@ export function ResourceDescribeView({
               </h6>
               {/* Keyed on the version: a changed Secret drops whatever value was on screen. */}
               <SecretValues
-                key={`${clusterId}\u0000${data.namespace ?? ""}\u0000${data.name}\u0000${data.resource_version}`}
+                key={`${clusterId}\u0000${data.namespace ?? ""}\u0000${data.name}\u0000${data.resource_version}\u0000${paneActive}`}
                 clusterId={clusterId}
                 namespace={data.namespace ?? ""}
                 name={data.name}
                 keys={keys}
-                canReveal={data.kind_key === "secrets" && data.namespace !== null}
+                canReveal={paneActive && data.kind_key === "secrets" && data.namespace !== null}
                 focusFirst={focusKeys}
                 onFocused={onKeysFocused}
               />

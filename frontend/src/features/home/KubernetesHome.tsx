@@ -42,7 +42,7 @@ export interface KubernetesHomeProps {
   onEditPinned: () => void;
 }
 
-export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned }: KubernetesHomeProps) {
+export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned, paneActive = true }: KubernetesHomeProps & { paneActive?: boolean }) {
   const clusters = useClusters();
   const kinds = useKinds();
   const pinned = usePinnedKinds();
@@ -67,6 +67,7 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
     if (searching && results.length) document.getElementById(`${listId}-${selected}`)?.scrollIntoView?.({ block: "nearest" });
   }, [searching, results, listId, selected]);
   useEffect(() => {
+    if (!paneActive) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "/" || event.altKey || event.ctrlKey || event.metaKey || !pageKey(event)) return;
       event.preventDefault();
@@ -74,7 +75,7 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  }, [paneActive]);
   const open = (result: HomeResult) => {
     nav.navigate(from => {
       if (result.group === "Clusters") return kindView(from, "pods", [result.cluster.id]);

@@ -78,6 +78,7 @@ async def test_union_lists_clusters_serving_each_kind():
     pods = kinds["pods"]
     assert pods.builtin is True and pods.kind == "Pod" and pods.short_names == ["po"]
     assert "watch" in pods.verbs and pods.verbs == sorted(pods.verbs)
+    assert pods.verbs_by_cluster == {"one": pods.verbs, "two": pods.verbs}
     assert pods.columns[0].key == "name"
     widget = kinds[WIDGETS]
     assert widget.builtin is False
@@ -238,6 +239,7 @@ async def test_kinds_route_lists_union_and_cluster_errors(tmp_path):
                     "sort",
                     "builtin",
                     "verbs",
+                    "verbs_by_cluster",
                     "clusters",
                 }
                 assert kinds["pods"]["columns"][0] == {

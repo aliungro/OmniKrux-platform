@@ -56,11 +56,25 @@ const NO_CLUSTERS: Cluster[] = [];
 export const TEXT_COALESCE_MS = 1000;
 
 /** The whole console page; expects a QueryClientProvider above it. */
-export interface KubernetesTabProps { nav:TabNav<KubeView>; dock:ReturnType<typeof useDock>; closed:readonly ClosedTab<KubeView>[]; onReopen:(index:number)=>void; loadProblem:string|null; onDismissLoadProblem:()=>void; onEditPinned:()=>void; onOpenKind?:(key:string, from:KubeView)=>void }
-export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned, onOpenKind }: KubernetesTabProps) {
- return nav.view.page === "home" ? <KubernetesHome nav={nav} closed={closed} onReopen={onReopen} loadProblem={loadProblem} onDismissLoadProblem={onDismissLoadProblem} onEditPinned={onEditPinned}/> : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned} onOpenKind={onOpenKind}/>;
+export interface KubernetesTabProps {
+  nav: TabNav<KubeView>;
+  dock: ReturnType<typeof useDock>;
+  closed: readonly ClosedTab<KubeView>[];
+  onReopen(index: number): void;
+  loadProblem: string | null;
+  onDismissLoadProblem(): void;
+  onEditPinned(): void;
+  onOpenKind?(key: string, from: KubeView): void;
+  paneActive?: boolean;
 }
-function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind }: Pick<KubernetesTabProps, "nav" | "dock" | "onEditPinned" | "onOpenKind">) {
+
+export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned, onOpenKind, paneActive = true }: KubernetesTabProps) {
+  return nav.view.page === "home"
+    ? <KubernetesHome nav={nav} closed={closed} onReopen={onReopen} loadProblem={loadProblem} onDismissLoadProblem={onDismissLoadProblem} onEditPinned={onEditPinned} paneActive={paneActive} />
+    : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned} onOpenKind={onOpenKind} paneActive={paneActive} />;
+}
+
+function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind, paneActive }: Pick<KubernetesTabProps, "nav" | "dock" | "onEditPinned" | "onOpenKind"> & { paneActive: boolean }) {
   const pinned = usePinnedKinds();
   const queryClient = useQueryClient();
   const clusters = useClusters();
@@ -266,8 +280,16 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind }: Pick<Kubernet
     },
     [selectedRow, cancelJump],
   );
-  useEffect(() => { bridge.setScope(all); return () => bridge.setScope(null); }, [all, bridge.setScope]);
-  useEffect(() => { bridge.setPaletteTarget({selection:paletteSelection,onKind:onSelectKind,onRowAction}); return () => bridge.setPaletteTarget(null); }, [bridge.setPaletteTarget,paletteSelection,onSelectKind,onRowAction]);
+  useEffect(() => {
+    if (!paneActive) return;
+    bridge.setScope(all);
+    return () => bridge.setScope(null);
+  }, [all, bridge.setScope, paneActive]);
+  useEffect(() => {
+    if (!paneActive) return;
+    bridge.setPaletteTarget({ selection: paletteSelection, onKind: onSelectKind, onRowAction });
+    return () => bridge.setPaletteTarget(null);
+  }, [bridge.setPaletteTarget, paletteSelection, onSelectKind, onRowAction, paneActive]);
   const onAllKinds = () => document.dispatchEvent(new KeyboardEvent("keydown",{key:":",bubbles:true}));
 
   let body;
@@ -295,13 +317,14 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind }: Pick<Kubernet
           active={kindKey}
           count={kindCount(all)}
           navigationView={tabNav.view}
+          paneActive={paneActive}
           onSelect={onSelectKind}
           error={kindsError}
           onRetry={onRetryKinds}
           onAllKinds={onAllKinds}
           onOpenKind={onOpenKind && (key => onOpenKind(key, tabNav.view))}
         />
-        <FilterBar clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
+        <FilterBar paneActive={paneActive} clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
         <NavigationNotice text={nav.notice ?? scopeNoticeText} waiting={nav.waiting} />
         <div className={s.main} data-kind-row-keys>
           <TerritoryTable
@@ -327,6 +350,9 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenKind }: Pick<Kubernet
             onOwnerLogs={onOwnerLogs}
             onWorkloadLogs={onWorkloadLogs}
             request={rowRequest}
+            paneActive={paneActive}
+            onEditPinned={onEditPinned}
+            menuView={tabNav.view}
           />
         </div>
       </>

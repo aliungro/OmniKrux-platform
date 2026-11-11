@@ -40,6 +40,7 @@ function Loaded<T>({ q, children }: { q: UseQueryResult<T>; children: (data: T) 
 
 interface Props {
   row: ResourceRow;
+  paneActive?: boolean;
   provider: Provider;
   /** The row's kind key (`pods`, `deployments.apps`, …). */
   kindKey?: string;
@@ -209,7 +210,7 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
   );
 }
 
-function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, onIntentDone, onNodeShell, onWorkloadLogs, onClose, onLink }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
+function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, onIntentDone, onNodeShell, onWorkloadLogs, onClose, onLink, paneActive = true }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
   const [tab, setTab] = useState<Tab>("Describe");
   // Every row carries its resource version (backend `base_row`): a change reloads the details.
   const version = textColumn(row, "resource_version") ?? "";
@@ -264,6 +265,7 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
               onLink={onLink}
               focusKeys={keysAsk}
               onKeysFocused={keysFocused}
+              paneActive={paneActive}
             />
           )}
         </Loaded>

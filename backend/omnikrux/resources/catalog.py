@@ -56,6 +56,7 @@ class ServedKind(BaseModel):
     sort: Literal["status", "recent"]
     builtin: bool
     verbs: list[str]
+    verbs_by_cluster: dict[str, list[str]]
     clusters: list[str]
 
 
@@ -157,6 +158,7 @@ class KindCatalog:
                     kinds[key] = _served(spec, info.id)
                 else:
                     served.clusters.append(info.id)
+                    served.verbs_by_cluster[info.id] = sorted(spec.verbs)
                     served.verbs = sorted(set(served.verbs) | spec.verbs)
         order = {key: n for n, key in enumerate(KINDS)}
         ordered = sorted(
@@ -231,5 +233,6 @@ def _served(spec: KindSpec, cluster_id: str) -> ServedKind:
         sort=spec.sort,
         builtin=spec.key in KINDS,
         verbs=sorted(spec.verbs),
+        verbs_by_cluster={cluster_id: sorted(spec.verbs)},
         clusters=[cluster_id],
     )
