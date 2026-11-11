@@ -13,6 +13,16 @@ describe("workspace storage", () => {
     const ws = defaultWorkspace(); ws.kubernetes.tabs[0] = {...ws.kubernetes.tabs[0], view:kind as typeof ws.kubernetes.tabs[0]["view"]};
     expect(parseWorkspace(serializeWorkspace(ws)).workspace).toEqual(ws);
   });
+  it("saves tab data and restores a split workspace in single-view mode", () => {
+    const ws = defaultWorkspace();
+    const first = ws.kubernetes.active;
+    ws.kubernetes.tabs.push({ ...ws.kubernetes.tabs[0], id: "second", scrollTop: 123 });
+    ws.kubernetes.active = "second";
+    ws.split = [first, "second"];
+    const restored = parseWorkspace(serializeWorkspace(ws)).workspace;
+    expect(restored.split).toBeUndefined();
+    expect(restored.kubernetes).toEqual(ws.kubernetes);
+  });
   it("reports corrupt and future storage", () => {
     expect(parseWorkspace("{").problem).toEqual({text:"they aren't valid JSON",reset:true});
     expect(parseWorkspace('{"version":2}').problem).toEqual({text:"they're from another version of Omnikrux",reset:true});

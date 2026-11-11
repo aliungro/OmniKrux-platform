@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Cluster, KindInfo } from "../../api/types";
-import { ContextMenu, isBlankMenuSurface, isMenuKey, menuAnchor, type MenuAnchor } from "../chrome/ContextMenu";
+import { ContextMenu, isBlankMenuSurface, isMenuKey, menuAnchor, type MenuAnchor, type MenuItem } from "../chrome/ContextMenu";
 import { tabLabel } from "./tabLabel";
 import type { AppId, KubeView, Tab } from "./workspace";
 import s from "./WorkspaceTabs.module.css";
@@ -19,19 +19,21 @@ interface Props {
   onClose(id: string): void;
   onNew(): void;
   onEditPinned?(): void;
+  onSplit?(id: string): void;
+  split?: readonly [string, string];
 }
 
-export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, onClose, onNew, onEditPinned }: Props) {
+export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, onClose, onNew, onEditPinned, onSplit, split }: Props) {
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const [focused, setFocused] = useState(Math.max(0, tabs.findIndex((t) => t.id === active)));
-  const [menu, setMenu] = useState<MenuAnchor | null>(null);
+  const [menu, setMenu] = useState<{ anchor: MenuAnchor; id?: string } | null>(null);
   useEffect(() => setFocused(Math.max(0, tabs.findIndex((t) => t.id === active))), [active, tabs]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
     if (onEditPinned && isMenuKey(e)) {
       e.preventDefault();
       e.stopPropagation();
-      setMenu(menuAnchor(e.currentTarget));
+      setMenu({ anchor: menuAnchor(e.currentTarget), id: tabs[i].id });
       return;
     }
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
@@ -53,12 +55,21 @@ export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, 
     </div>;
   }
 
+  const menuItems: MenuItem[] = [];
+  const target = menu?.id;
+  if (target && target !== active && !split?.includes(target) && onSplit) {
+    menuItems.push({ id: "split", label: "Split side by side", onSelect: () => onSplit(target), restoreFocus: false });
+  }
+  if (onEditPinned) {
+    menuItems.push({ id: "pins", label: "Edit pinned kinds…", onSelect: onEditPinned, restoreFocus: false });
+  }
+
   return (
     <div className={s.strip} role="tablist" aria-label="Kubernetes tabs" data-page-keys
       onContextMenu={(e) => {
         if (!onEditPinned || !isBlankMenuSurface(e.target)) return;
         e.preventDefault();
-        setMenu(menuAnchor(refs.current[focused] ?? e.currentTarget, e));
+        setMenu({ anchor: menuAnchor(refs.current[focused] ?? e.currentTarget, e) });
       }}>
       {tabs.map((tab, i) => {
         const view = tab.view;
@@ -77,7 +88,7 @@ export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, 
               if (!onEditPinned) return;
               e.preventDefault();
               e.stopPropagation();
-              setMenu(menuAnchor(refs.current[i] ?? e.currentTarget, e));
+              setMenu({ anchor: menuAnchor(refs.current[i] ?? e.currentTarget, e), id: tab.id });
             }}>
             <div className={s.stripe}>
               {view.page === "home" ? <span style={{ background: "#C9B8FF" }} />
@@ -107,8 +118,8 @@ export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, 
         );
       })}
       <button type="button" className={s.add} aria-label="New tab" title="New tab (Alt T)" onClick={onNew}>+</button>
-      {menu && onEditPinned && <ContextMenu anchor={menu} label="Workspace tabs"
-        items={[{ id: "pins", label: "Edit pinned kinds…", onSelect: onEditPinned, restoreFocus: false }]}
+      {menu && menuItems.length > 0 && <ContextMenu anchor={menu.anchor} label="Workspace tabs"
+        items={menuItems}
         onClose={() => setMenu(null)} />}
     </div>
   );
