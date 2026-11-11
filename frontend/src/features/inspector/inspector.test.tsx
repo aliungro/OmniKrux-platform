@@ -380,6 +380,52 @@ const deployment = resourceDescribe({
 });
 
 describe("resource inspector", () => {
+  it("shows clear, active, and unknown Node pressure conditions", () => {
+    const { rerender } = render(<ResourceDescribeView clusterId="c1" data={resourceDescribe({
+      kind_key: "nodes", kind: "Node", namespace: null,
+      conditions: [
+        { type: "Ready", status: "True", reason: null, message: null },
+        { type: "MemoryPressure", status: "False", reason: "KubeletHasSufficientMemory", message: "sufficient memory available" },
+        { type: "DiskPressure", status: "True", reason: null, message: null },
+        { type: "PIDPressure", status: "Unknown", reason: null, message: null },
+        { type: "NetworkUnavailable", status: "False", reason: null, message: null },
+      ],
+    })} />);
+
+    function expectCondition(label: string, status: string, tone: string, mark: string, state?: string) {
+      const condition = state
+        ? screen.getByRole("listitem", { name: `${label}: ${state}` })
+        : screen.getByText(label).closest("li")!;
+      expect(condition.getAttribute("data-status")).toBe(status);
+      expect(condition.getAttribute("data-tone")).toBe(tone);
+      expect(within(condition).getByText(mark).getAttribute("aria-hidden")).toBe("true");
+      return condition;
+    }
+
+    const memory = expectCondition("Memory pressure", "False", "ok", "✓", "clear");
+    expectCondition("Ready", "True", "ok", "✓");
+    expect(memory.title).toContain("MemoryPressure: False");
+    expect(memory.title).toContain("KubeletHasSufficientMemory: sufficient memory available");
+    expectCondition("Disk pressure", "True", "bad", "✕", "active");
+    expectCondition("PID pressure", "Unknown", "warn", "?", "unknown");
+    expectCondition("Network unavailable", "False", "ok", "✓", "clear");
+
+    const clearPressure = ["DiskPressure", "PIDPressure"].map((type) => ({
+      type, status: "False", reason: null, message: null,
+    }));
+    rerender(<ResourceDescribeView clusterId="c1" data={resourceDescribe({
+      kind_key: "nodes", kind: "Node", namespace: null,
+      conditions: [{ type: "Ready", status: "False", reason: null, message: null }, ...clearPressure],
+    })} />);
+    expectCondition("Ready", "False", "bad", "✕");
+    expectCondition("Disk pressure", "False", "ok", "✓", "clear");
+    expectCondition("PID pressure", "False", "ok", "✓", "clear");
+
+    rerender(<ResourceDescribeView clusterId="c1" data={resourceDescribe({ conditions: clearPressure })} />);
+    expectCondition("Disk pressure", "False", "bad", "✕");
+    expect(screen.queryByRole("listitem", { name: "Disk pressure: clear" })).toBeNull();
+  });
+
   it("deployment describe renders sections", async () => {
     const fetch = vi.fn((_url: string) => json(deployment));
     vi.stubGlobal("fetch", fetch);

@@ -15,21 +15,38 @@ type OnLink = (link: Link) => void;
 
 /** "PodScheduled" → "Pod scheduled". */
 function conditionLabel(type: string): string {
+  if (type === "PIDPressure") return "PID pressure";
   const words = type.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-const MARK: Record<string, string> = { True: "✓", False: "✕" };
+const NODE_PROBLEMS = new Set(["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"]);
+const MARK = { ok: "✓", bad: "✕", warn: "?" };
 
-function Conditions({ conditions }: { conditions: Condition[] }) {
+function Conditions({ conditions, kindKey }: { conditions: Condition[]; kindKey: string }) {
   return (
     <ul className={d.conds} aria-label="Conditions">
       {conditions.map((c) => {
+        const problem = kindKey === "nodes" && NODE_PROBLEMS.has(c.type);
+        const tone = c.status === "True" ? (problem ? "bad" : "ok")
+          : c.status === "False" ? (problem ? "ok" : "bad")
+          : "warn";
+        const label = conditionLabel(c.type);
+        const state = tone === "ok" ? "clear" : tone === "bad" ? "active" : "unknown";
         const why = [c.reason, c.message].filter(Boolean).join(": ");
+        const rawStatus = `${c.type}: ${c.status}`;
+        const title = problem ? [rawStatus, why].filter(Boolean).join(" · ") : why || rawStatus;
         return (
-          <li key={c.type} className={d.cond} data-status={c.status} title={why || `${c.type}: ${c.status}`}>
-            <span className={d.mark} aria-hidden="true">{MARK[c.status] ?? "?"}</span>
-            <span data-status={c.status}>{conditionLabel(c.type)}</span>
+          <li
+            key={c.type}
+            className={d.cond}
+            data-status={c.status}
+            data-tone={tone}
+            aria-label={problem ? `${label}: ${state}` : undefined}
+            title={title}
+          >
+            <span className={d.mark} aria-hidden="true">{MARK[tone]}</span>
+            <span data-status={c.status}>{label}</span>
           </li>
         );
       })}
@@ -130,7 +147,7 @@ export function ResourceDescribeView({
             <dd>{data.created_at ? <When iso={data.created_at} now={now} /> : UNKNOWN}</dd>
           </div>
         </dl>
-        {data.conditions.length > 0 && <Conditions conditions={data.conditions} />}
+        {data.conditions.length > 0 && <Conditions conditions={data.conditions} kindKey={data.kind_key} />}
         {labels.length > 0 && (
           <ul className={d.tags} aria-label="Labels">
             {labels.map(([k, v]) => <li key={k} className={d.tag} title={`${k}=${v}`}>{`${k}=${v}`}</li>)}
