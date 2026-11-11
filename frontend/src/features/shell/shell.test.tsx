@@ -108,7 +108,11 @@ it("steps kinds from a new view with no selected row and from a focused resource
   fireEvent.keyDown(document.body, { key: "ArrowRight" });
   await screen.findByRole("grid", { name: "Deployments by cluster" });
 
-  const socket = FakeWebSocket.instances.filter(w => w.params.get("kind") === "deployments.apps" && !w.closedByClient).at(-1)!;
+  const socket = await waitFor(() => {
+    const connection = FakeWebSocket.instances.filter(w => w.params.get("kind") === "deployments.apps" && !w.closedByClient).at(-1);
+    if (!connection) throw new Error("Waiting for the Deployments watch");
+    return connection;
+  });
   act(() => {
     socket.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
     socket.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [{

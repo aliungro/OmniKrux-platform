@@ -131,13 +131,17 @@ interface ClusterScopeProps {
 }
 
 function ClusterScope({ clusters, scope, onScope }: ClusterScopeProps) {
-  const picker = useRef<HTMLButtonElement>(null);
-  const focusPicker = useRef(false);
+  const control = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
   useLayoutEffect(() => {
-    if (scope !== null || !focusPicker.current) return;
-    focusPicker.current = false;
-    picker.current?.focus();
+    if (!restoreFocus.current) return;
+    restoreFocus.current = false;
+    control.current?.focus();
   }, [scope]);
+  const changeScope = (next: string[] | null) => {
+    if (scope?.length === 1 || next?.length === 1) restoreFocus.current = true;
+    onScope(next);
+  };
 
   const singleId = scope?.length === 1 ? scope[0] : clusters.length === 1 ? clusters[0].id : undefined;
   if (singleId !== undefined) {
@@ -148,13 +152,14 @@ function ClusterScope({ clusters, scope, onScope }: ClusterScopeProps) {
         {cluster?.name ?? singleId}
       </span>
       {clusters.length > 1 && <button
+        ref={control}
         type="button"
         className={s.fchip}
-        onClick={() => { focusPicker.current = true; onScope(null); }}
+        onClick={() => changeScope(null)}
       >Show all clusters</button>}
     </>;
   }
-  return clusters.length > 1 ? <ClusterPicker clusters={clusters} scope={scope} onScope={onScope} button={picker} /> : null;
+  return clusters.length > 1 ? <ClusterPicker clusters={clusters} scope={scope} onScope={changeScope} button={control} /> : null;
 }
 
 function ClusterPicker({ clusters, scope, onScope, button }: ClusterScopeProps & { button: RefObject<HTMLButtonElement | null> }) {
@@ -181,7 +186,7 @@ export function FilterBar({
   onChange,
   chips,
   counts,
-  namespaces, columns = [], pickSource = [], clusters, scope = null, onScope,
+  namespaces, columns = [], pickSource = [], clusters, scope = null, onScope, paneActive = true,
 }: {
   value: Filters;
   onChange: (f: Filters) => void;
@@ -195,6 +200,7 @@ export function FilterBar({
   clusters?: Cluster[];
   scope?: string[] | null;
   onScope?: (scope: string[] | null) => void;
+  paneActive?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [openColumn, setOpenColumn] = useState<string | null>(null);
@@ -204,6 +210,7 @@ export function FilterBar({
   const updateColumn = (key: string, f: ColumnFilter | null) => onChange({ ...value, columns: [...value.columns.filter(x => x.key !== key), ...(f ? [f] : [])] });
 
   useEffect(() => {
+    if (!paneActive) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!pressed("filter", e) || !pageKey(e)) return;
       e.preventDefault();
@@ -211,7 +218,7 @@ export function FilterBar({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  }, [paneActive]);
 
   const onInputKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Escape") return;

@@ -7,6 +7,7 @@ import { FakeWebSocket } from "./features/logs/fakeWebSocket";
 import { Shell as Console } from "./features/shell/Shell";
 import { seedPodsWorkspace } from "./test/seedWorkspace";
 import { KINDS } from "./test/kinds";
+import { describeBody } from "./test/describe";
 
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class {} }));
@@ -30,7 +31,15 @@ beforeEach(() => {
     { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
-  vi.stubGlobal("fetch", vi.fn((url: string) => json(url.startsWith("/api/kinds") ? KINDS : url === "/api/port-forwards" ? [] : [cluster])));
+  vi.stubGlobal("fetch", vi.fn((url: string) => {
+    if (url.startsWith("/api/kinds")) return json(KINDS);
+    if (url === "/api/port-forwards") return json([]);
+    if (url.endsWith("/pods/demo/crasher-1/describe")) {
+      const details = describeBody();
+      return json({ ...details, pod: { ...details.pod, name: pod.name, namespace: pod.namespace } });
+    }
+    return json([cluster]);
+  }));
 });
 afterEach(() => {
   cleanup();
@@ -110,7 +119,7 @@ it("scoping a tab shows only the selected cluster and its stripe", async () => {
   fireEvent.click(screen.getByRole("checkbox", { name: /second/ }));
   const filters = within(screen.getByRole("group", { name: "Filter rows" }));
   expect(filters.getByText("kind-omnikrux-dev")).toBeTruthy();
-  expect(filters.getByRole("button", { name: "Show all clusters" })).toBeTruthy();
+  expect(document.activeElement).toBe(filters.getByRole("button", { name: "Show all clusters" }));
   expect(screen.getAllByTestId("scope-token")).toHaveLength(1);
   expect(screen.getByRole("tab", { name: "Pods · kind-omnikrux-dev" })).toBeTruthy();
   expect(screen.queryByText("second", { selector: '[role="rowheader"] b' })).toBeNull();
