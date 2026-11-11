@@ -14,6 +14,7 @@ export interface Command {
   group: CommandGroup;
   /** What else it answers to: plural, kind, key and short names for a kind. */
   keywords: string[];
+  aliases?: readonly string[];
   /** Its keycaps, for an action that also has a key on the row. */
   keys?: readonly string[];
   run: () => void;
@@ -51,6 +52,10 @@ export const GROUP_ORDER: readonly CommandGroup[] = ["Actions", "Views", "Kinds"
 export const KIND_GROUPS: ReadonlySet<CommandGroup> = new Set<CommandGroup>(["Kinds", "Flux", "Custom resources"]);
 
 const FLUX = ".toolkit.fluxcd.io";
+
+export function kindSearchAliases(kind: KindInfo): readonly string[] {
+  return kind.key === "poddisruptionbudgets.policy" ? ["PodDistributionBudget"] : [];
+}
 
 function kindGroup(k: KindInfo): CommandGroup {
   if (k.key.endsWith(FLUX)) return "Flux";
@@ -117,6 +122,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       hint: k.key,
       group: kindGroup(k),
       keywords: [k.plural_label, k.plural, k.kind, k.label, k.key, ...k.short_names],
+      aliases: kindSearchAliases(k),
       run: () => ctx.onKind(k.key),
     });
   }
@@ -132,19 +138,20 @@ function subsequence(q: string, text: string): boolean {
   return q.length === 0;
 }
 
-/** 0: a keyword is the query (a short name, a plural); 1: something starts with it; 2: its letters in order. */
-export function matchTier(query: string, keywords: readonly string[]): number | null {
+/** Exact keyword, keyword prefix, alias prefix, then the query's letters in order. */
+export function matchTier(query: string, keywords: readonly string[], aliases?: readonly string[]): number | null {
   const q = query.trim().toLowerCase();
   const words = keywords.map((w) => w.toLowerCase());
   if (words.some((w) => w === q)) return 0;
   const parts = words.flatMap((w) => [w, ...w.split(/[^a-z0-9]+/)]);
   if (parts.some((w) => w.startsWith(q))) return 1;
+  if (aliases?.some((alias) => alias.toLowerCase().startsWith(q))) return 1.5;
   if (words.some((w) => subsequence(q, w))) return 2;
   return null;
 }
 
 /**
- * The commands that match, best first: an exact short name (or name), then a prefix, then the
+ * The commands that match, best first: an exact short name (or name), then a prefix, alias, or the
  * query's letters in order; ties keep their order. At most 50; an empty query keeps them all in order.
  */
 export function rankCommands(query: string, cmds: readonly Command[]): Command[] {
@@ -152,7 +159,7 @@ export function rankCommands(query: string, cmds: readonly Command[]): Command[]
   if (q === "") return cmds.slice(0, MAX_RESULTS);
   const scored: [number, Command][] = [];
   for (const c of cmds) {
-    const t = matchTier(q, [c.label, ...c.keywords]);
+    const t = matchTier(q, [c.label, ...c.keywords], c.aliases);
     if (t !== null) scored.push([t, c]);
   }
   return scored

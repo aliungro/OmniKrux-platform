@@ -6,6 +6,11 @@ import { rowActions } from "../actions/tools";
 import { buildCommands, rankCommands, type CommandContext } from "./commands";
 
 const CONFIGMAPS: KindInfo = { ...SERVICES, key: "configmaps", kind: "ConfigMap", plural: "configmaps", label: "Config map", plural_label: "config maps", short_names: ["cm"] };
+const BUDGET: KindInfo = {
+  ...PODS, key: "poddisruptionbudgets.policy", group: "policy", kind: "PodDisruptionBudget",
+  label: "PodDisruptionBudget", plural: "poddisruptionbudgets", plural_label: "poddisruptionbudgets",
+  short_names: ["pdb"],
+};
 const KUSTOMIZATIONS: KindInfo = {
   ...CERTIFICATES, key: "kustomizations.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", kind: "Kustomization",
   plural: "kustomizations", label: "Kustomization", plural_label: "kustomizations", short_names: ["ks"],
@@ -112,6 +117,26 @@ describe("buildCommands", () => {
 
 describe("rankCommands", () => {
   const cmds = buildCommands(ctx({ onForwards: () => {} }));
+
+  it.each(["poddist", "poddistr", "PodDistributionBudget", "poddisr", "pdb", "PodDisruptionBudget"])(
+    "finds the discovered budget for %s",
+    query => {
+      const context = ctx({ kinds: [...SERVED, BUDGET] });
+      const [budget] = rankCommands(query, buildCommands(context));
+      expect(budget).toMatchObject({ label: "PodDisruptionBudgets", hint: BUDGET.key });
+      budget.run();
+      expect(context.onKind).toHaveBeenCalledWith(BUDGET.key);
+      expect(rankCommands(query, cmds)).not.toContainEqual(expect.objectContaining({ hint: BUDGET.key }));
+    },
+  );
+
+  it("ranks real prefixes ahead of the alias, and the alias ahead of subsequences", () => {
+    const prefix = { ...PODS, key: "prefix.example", short_names: ["poddistrprefix"] };
+    const fuzzy = { ...PODS, key: "fuzzy.example", short_names: ["p-o-d-d-i-s-t-r"] };
+    const budget = { ...BUDGET, short_names: [] };
+    const commands = buildCommands(ctx({ kinds: [fuzzy, budget, prefix] }));
+    expect(rankCommands("poddistr", commands).map(command => command.hint)).toEqual([prefix.key, budget.key, fuzzy.key]);
+  });
 
   it("short names from discovery match (cm, svc, po)", () => {
     expect(rankCommands("cm", cmds)[0].label).toBe("Config maps");

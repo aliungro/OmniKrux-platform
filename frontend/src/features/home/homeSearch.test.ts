@@ -8,6 +8,27 @@ import { searchHome } from "./homeSearch";
 const cluster: Cluster = { id: "c1", name: "prod-east", context_name: "prod", server: "https://east:6443", original_server: null, provider: "aks", region: "east", environment: "production", state: "ready", message: null };
 const row: ResourceRow = { uid: "p1", cluster_id: "c1", name: "web", kind: "Pod", namespace: "demo", created_at: null, columns: {}, labels: {} };
 const territory: Territory = { cluster, state: "ready", message: null, rows: [row], total: 1, failing: 0, pending: 0 };
+const budget: KindInfo = {
+  ...PODS, key: "poddisruptionbudgets.policy", group: "policy", kind: "PodDisruptionBudget",
+  label: "PodDisruptionBudget", plural: "poddisruptionbudgets", plural_label: "poddisruptionbudgets",
+  short_names: ["pdb"],
+};
+
+it.each(["poddist", "poddistr", "PodDistributionBudget", "poddisr", "pdb", "PodDisruptionBudget"])(
+  "finds the discovered budget for %s",
+  query => {
+    const ctx = { clusters: [], pods: [], pinned: [] };
+    expect(searchHome(query, { ...ctx, kinds: [PODS, budget] })).toEqual([{ group: "Kinds", kind: budget }]);
+    expect(searchHome(query, { ...ctx, kinds: [PODS] })).toEqual([]);
+  },
+);
+
+it("ranks a real name ahead of the alias, and the alias ahead of subsequences", () => {
+  const exact = { ...PODS, key: "exact.example", kind: "PodDistributionBudget" };
+  const fuzzy = { ...PODS, key: "fuzzy.example", short_names: ["p-o-d-d-i-s-t-r-i-b-u-t-i-o-n-b-u-d-g-e-t"] };
+  expect(searchHome("PodDistributionBudget", { clusters: [], kinds: [fuzzy, budget, exact], pods: [], pinned: [] }))
+    .toEqual([exact, budget, fuzzy].map(kind => ({ group: "Kinds", kind })));
+});
 
 it("groups are capped at eight and ordered", () => {
   const kinds: KindInfo[] = Array.from({ length: 12 }, (_, i) => ({ ...DEPLOYMENTS, key: `web${i}.apps`, label: `Web${i}`, plural_label: `web${i}` }));
