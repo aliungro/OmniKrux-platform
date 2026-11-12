@@ -4,10 +4,12 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from contextlib import contextmanager
 
 from kubernetes_asyncio.client import ApiClient
 
 from omnikrux.kube.client import ClusterUnavailable
+from omnikrux.kube.connections import cloud_kube_error
 from omnikrux.kube.http import status_message
 from omnikrux.resources.kinds import KindSpec
 from omnikrux.resources.rows import ResourceRow
@@ -40,10 +42,12 @@ class KubeResourceSource(ResourceSource):
         spec: KindSpec,
         *,
         probe_timeout: float = PROBE_TIMEOUT_SECONDS,
+        cloud: bool = False,
     ):
         self._api = api
         self._spec = spec
         self._probe_timeout = probe_timeout
+        self._cloud = cloud
         self._probed = False
         self._closed = False
         # The newest resourceVersion this source has handed to its caller (list or event),
@@ -52,13 +56,16 @@ class KubeResourceSource(ResourceSource):
         self._latest_rv: str | None = None
 
     async def list(self) -> tuple[list[dict], str]:
-        for attempt in range(1, LIST_ATTEMPTS + 1):
-            try:
-                return await self._list_once()
-            except Expired as exc:  # the continue token expired: start over
-                if attempt == LIST_ATTEMPTS:
-                    raise RuntimeError(f"Kubernetes API returned 410: {exc}") from exc
-                logger.debug("list of %s expired mid-paging, restarting", self._spec.plural)
+        with self._cloud_errors("list cluster resources"):
+            for attempt in range(1, LIST_ATTEMPTS + 1):
+                try:
+                    return await self._list_once()
+                except Expired as exc:  # the continue token expired: start over
+                    if attempt == LIST_ATTEMPTS:
+                        if self._cloud:
+                            raise cloud_kube_error("list cluster resources", status=410) from None
+                        raise RuntimeError(f"Kubernetes API returned 410: {exc}") from exc
+                    logger.debug("list of %s expired mid-paging, restarting", self._spec.plural)
         raise AssertionError("unreachable")
 
     async def _list_once(self) -> tuple[list[dict], str]:
@@ -84,32 +91,44 @@ class KubeResourceSource(ResourceSource):
                 return items, rv
 
     async def watch(self, resource_version: str) -> AsyncIterator[WatchEvent]:
-        await self._ensure_probed()
-        start = resource_version
-        if resource_version == self._handed_out_rv and self._latest_rv:
-            start = self._latest_rv  # a bookmark moved past the caller's rv with no events between
-        resp = await self._get(
-            [
-                ("watch", "true"),
-                ("resourceVersion", start),
-                ("timeoutSeconds", WATCH_TIMEOUT_SECONDS),
-                ("allowWatchBookmarks", "true"),
-            ],
-            WATCH_REQUEST_TIMEOUT,
-        )
-        await self._raise_for_status(resp, f"watch {self._spec.plural}")
+        with self._cloud_errors("watch cluster resources"):
+            await self._ensure_probed()
+            start = resource_version
+            if resource_version == self._handed_out_rv and self._latest_rv:
+                start = self._latest_rv  # a bookmark moved past the caller's rv
+            resp = await self._get(
+                [
+                    ("watch", "true"),
+                    ("resourceVersion", start),
+                    ("timeoutSeconds", WATCH_TIMEOUT_SECONDS),
+                    ("allowWatchBookmarks", "true"),
+                ],
+                WATCH_REQUEST_TIMEOUT,
+            )
+            await self._raise_for_status(resp, f"watch {self._spec.plural}")
+            try:
+                buffer = b""
+                async for chunk in resp.content.iter_any():
+                    buffer += chunk
+                    *lines, buffer = buffer.split(b"\n")
+                    for line in lines:
+                        if (event := self._event(line)) is not None:
+                            yield event
+                if (event := self._event(buffer)) is not None:
+                    yield event
+            finally:
+                resp.close()
+
+    @contextmanager
+    def _cloud_errors(self, action: str):
         try:
-            buffer = b""
-            async for chunk in resp.content.iter_any():
-                buffer += chunk
-                *lines, buffer = buffer.split(b"\n")
-                for line in lines:
-                    if (event := self._event(line)) is not None:
-                        yield event
-            if (event := self._event(buffer)) is not None:
-                yield event
-        finally:
-            resp.close()
+            yield
+        except Expired:
+            raise
+        except Exception as exc:
+            if not self._cloud:
+                raise
+            raise cloud_kube_error(action, exc=exc) from None
 
     def to_row(self, obj: dict, cluster_id: str) -> ResourceRow:
         return self._spec.to_row(obj, cluster_id)
@@ -141,6 +160,8 @@ class KubeResourceSource(ResourceSource):
             async with asyncio.timeout(self._probe_timeout):
                 await self._probe()
         except TimeoutError as exc:
+            if self._cloud:
+                raise cloud_kube_error("read the cluster's API list", exc=exc) from None
             raise ClusterUnavailable(
                 f"The cluster API did not respond within {self._probe_timeout:g} s"
             ) from exc
@@ -165,6 +186,11 @@ class KubeResourceSource(ResourceSource):
         status = resp.status
         if 200 <= status < 300:
             return
+        if self._cloud:
+            resp.release()
+            if status == 410:
+                raise Expired()
+            raise cloud_kube_error("read cluster resources", status=status)
         try:
             message = status_message(await resp.read()) or resp.reason or str(status)
         finally:
@@ -189,6 +215,10 @@ class KubeResourceSource(ResourceSource):
         obj = obj if isinstance(obj, dict) else {}
         rv = (obj.get("metadata") or {}).get("resourceVersion")
         if kind == "ERROR":
+            if self._cloud:
+                if obj.get("code") == 410:
+                    raise Expired()
+                raise cloud_kube_error("watch cluster resources", status=obj.get("code"))
             message = obj.get("message") or f"watch failed with code {obj.get('code')}"
             if obj.get("code") == 410:
                 raise Expired(message)
@@ -197,7 +227,8 @@ class KubeResourceSource(ResourceSource):
             self._latest_rv = rv or self._latest_rv
             return None
         if kind not in EVENT_TYPES:
-            logger.debug("ignoring watch event of type %r", kind)
+            if not self._cloud:
+                logger.debug("ignoring watch event of type %r", kind)
             return None
         if rv:
             self._handed_out_rv = self._latest_rv = rv

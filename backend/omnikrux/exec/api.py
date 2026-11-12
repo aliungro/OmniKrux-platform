@@ -264,7 +264,8 @@ async def _session(
     where = f"cluster={cluster} ns={namespace} pod={pod} container={container}"
     log.info("exec opened %s", where)
     try:
-        end = await ExecBridge(channel).run(websocket)
+        cloud = isinstance(channel, KubeExecChannel) and channel.cloud
+        end = await ExecBridge(channel, cloud=cloud).run(websocket)
     except asyncio.CancelledError:  # the console is stopping
         end = CONSOLE_STOPPED
         raise

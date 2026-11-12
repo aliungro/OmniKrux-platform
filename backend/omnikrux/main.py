@@ -12,6 +12,10 @@ from omnikrux.actions.pipeline import PlanStore
 from omnikrux.actions.pipeline import router as actions_router
 from omnikrux.audit.api import router as audit_router
 from omnikrux.audit.store import AuditLog
+from omnikrux.cloud.adapters import make_adapters
+from omnikrux.cloud.http import CloudHttp
+from omnikrux.cloud.store import CloudAccountStore
+from omnikrux.cloud.tokens import CloudServices, TokenBroker
 from omnikrux.clusters.api import router as clusters_router
 from omnikrux.clusters.kubeconfig import (
     ParsedContext,
@@ -22,7 +26,7 @@ from omnikrux.clusters.registry import SOURCE_FILE, ClusterRegistry
 from omnikrux.config import Settings, get_settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.exec.api import router as exec_router
-from omnikrux.kube.connections import ClusterConnections
+from omnikrux.kube.connections import ClusterConnections, cloud_kube_error
 from omnikrux.kube.source import KubeResourceSource
 from omnikrux.logs.api import router as logs_router
 from omnikrux.metrics.api import router as metrics_router
@@ -162,7 +166,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     try:
         forward_ports = settings.forward_ports
         forward_bind = settings.forward_bind
-        _ = settings.endpoints
+        endpoints = settings.endpoints
         if settings.cloud_discovery_seconds < 60:
             raise ValueError(
                 "OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be at least 60, "
@@ -176,15 +180,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = make_engine(settings.db_url)
         await init_db(engine)
         sessionmaker = make_sessionmaker(engine)
-        registry = ClusterRegistry(sessionmaker, SecretBox.from_settings(settings))
+        box = SecretBox.from_settings(settings)
+        registry = ClusterRegistry(sessionmaker, box, endpoints=endpoints)
 
-        connections = ClusterConnections(registry)
-        catalog = KindCatalog(connections, registry)
+        http = CloudHttp()
+        store = CloudAccountStore(sessionmaker, box)
+        adapters = make_adapters(http, endpoints, settings.cloud_dirs)
+        broker = TokenBroker(registry, store, adapters)
+        connections = ClusterConnections(registry, tokens_for=broker.tokens_for)
+        catalog = KindCatalog(connections, registry, is_cloud=registry.is_cloud)
 
         async def source_for(cluster_id: str, kind_key: str) -> KubeResourceSource:
             spec = await catalog.spec(cluster_id, kind_key)  # KindNotServed: the cache says so
-            api = await connections.open_api(cluster_id)
-            return KubeResourceSource(api, spec)  # owns `api` and closes it
+            cloud = await registry.is_cloud(cluster_id)
+            try:
+                api = await connections.open_api(cluster_id)
+            except Exception as exc:
+                if not cloud:
+                    raise
+                raise cloud_kube_error("open the cluster connection", exc=exc) from None
+            return KubeResourceSource(api, spec, cloud=cloud)  # owns `api` and closes it
 
         audit = AuditLog(sessionmaker, registry)
         forwards = PortForwardManager(
@@ -194,6 +209,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def on_forget(cluster_id: str) -> None:
             catalog.forget(cluster_id)
             connections.forget(cluster_id)
+            broker.forget(cluster_id)
             await forwards.stop_cluster(cluster_id)
 
         hub = WatchHub(registry, source_for, on_forget=on_forget)
@@ -201,6 +217,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.registry = registry
+        app.state.cloud = CloudServices(store, adapters, broker, http)
         app.state.connections = connections
         app.state.catalog = catalog
         app.state.hub = hub
@@ -219,6 +236,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await hub.close()
             await metrics.close()
             await catalog.close()
+            await broker.close()
+            await http.close()
             await engine.dispose()
 
     app = FastAPI(title="Omnikrux", lifespan=lifespan)

@@ -2,6 +2,7 @@ import json
 
 import aiohttp
 import pytest
+import yaml
 from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
@@ -144,8 +145,10 @@ async def test_source_for_uses_connections(fake_api, tmp_path):
     app = create_app(Settings(data_dir=tmp_path, kubeconfig="", in_container=False))
     async with app.router.lifespan_context(app):
         assert isinstance(app.state.connections, ClusterConnections)
-        app.state.connections._registry = FakeRegistry({"c1": kubeconfig_for(fake_api)})
-        source = await app.state.hub._source_for("c1", "pods")
+        [cluster] = await app.state.registry.upsert_from_kubeconfig(
+            yaml.safe_dump(kubeconfig_for(fake_api)), rewrite_loopback=False, source="upload"
+        )
+        source = await app.state.hub._source_for(cluster.id, "pods")
         try:
             items, rv = await source.list()
         finally:

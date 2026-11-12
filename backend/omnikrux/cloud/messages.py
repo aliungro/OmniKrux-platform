@@ -9,6 +9,13 @@ AKS_LOCAL_ACCOUNTS = (
     "with short-lived Entra tokens: turn on Entra ID integration, or import its kubeconfig."
 )
 WORKLOAD = "Workload identity arrives with deployed mode."
+ACCOUNT_REMOVED = (
+    "The cloud account this cluster belonged to was removed. "
+    "Remove the cluster too, or connect the account again."
+)
+CLOUD_CLUSTER_ENDPOINT_INVALID = (
+    "The cloud cluster has an invalid API endpoint. Check that it uses HTTPS, then try again."
+)
 NOT_GCP_SERVICE_ACCOUNT_KEY = (
     "That isn't a Google service-account key: paste the JSON file you downloaded "
     "for the service account."

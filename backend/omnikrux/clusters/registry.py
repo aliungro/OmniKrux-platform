@@ -9,10 +9,19 @@ import yaml
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnikrux.cloud.endpoints import CloudEndpoints, InvalidClusterEndpoint
+from omnikrux.cloud.messages import CLOUD_CLUSTER_ENDPOINT_INVALID
 from omnikrux.cloud.models import lock_account
-from omnikrux.cloud.types import KUBE_PROVIDER, CloudClusterRef, DiscoveredCluster, NodePool
+from omnikrux.cloud.types import (
+    KUBE_PROVIDER,
+    CloudClusterRef,
+    CloudProvider,
+    DiscoveredCluster,
+    NodePool,
+)
 from omnikrux.clusters.kubeconfig import ParsedContext, parse_kubeconfig
 from omnikrux.clusters.models import ClusterRecord, Environment, Provider
+from omnikrux.kube.tokens import CloudClusterUnavailable
 from omnikrux.security.secrets import SecretBox
 
 Source = Literal["file", "upload", "cloud"]
@@ -72,9 +81,16 @@ def _info(row: ClusterRecord) -> ClusterInfo:
 
 
 class ClusterRegistry:
-    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], box: SecretBox) -> None:
+    def __init__(
+        self,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        box: SecretBox,
+        *,
+        endpoints: CloudEndpoints | None = None,
+    ) -> None:
         self._sessionmaker = sessionmaker
         self._box = box
+        self._endpoints = endpoints or CloudEndpoints()
 
     async def upsert_from_kubeconfig(
         self, text: str, *, rewrite_loopback: bool, source: Source
@@ -162,6 +178,7 @@ class ClusterRegistry:
         ca_data: str | None,
         environment: Environment,
     ) -> ClusterInfo:
+        self._endpoints.validate_cluster_server(ref.provider, server)
         name = ref.resource_id
         cluster = {"server": server}
         if ca_data is not None:
@@ -207,10 +224,9 @@ class ClusterRegistry:
             row = await self._row(session, cluster_id)
             if row.source != SOURCE_CLOUD:
                 return None
-            provider = next(cloud for cloud, kube in KUBE_PROVIDER.items() if kube == row.provider)
             return CloudClusterRef(
                 account_id=cast(str, row.cloud_account_id),
-                provider=provider,
+                provider=_cloud_provider(row),
                 resource_id=cast(str, row.cloud_resource_id),
                 name=row.name,
                 region=cast(str, row.region),
@@ -238,7 +254,24 @@ class ClusterRegistry:
         async with self._sessionmaker() as session:
             return _info(await self._row(session, cluster_id))
 
+    async def is_cloud(self, cluster_id: str) -> bool:
+        async with self._sessionmaker() as session:
+            row = await session.get(ClusterRecord, cluster_id)
+            return row is not None and row.source == SOURCE_CLOUD
+
     async def get_kubeconfig(self, cluster_id: str) -> dict:
         async with self._sessionmaker() as session:
             row = await self._row(session, cluster_id)
-            return yaml.safe_load(self._box.decrypt(row.kubeconfig_encrypted))
+            config = yaml.safe_load(self._box.decrypt(row.kubeconfig_encrypted))
+            if row.source == SOURCE_CLOUD:
+                try:
+                    self._endpoints.validate_cluster_server(
+                        _cloud_provider(row), config["clusters"][0]["cluster"]["server"]
+                    )
+                except (KeyError, IndexError, TypeError, InvalidClusterEndpoint):
+                    raise CloudClusterUnavailable(CLOUD_CLUSTER_ENDPOINT_INVALID) from None
+            return config
+
+
+def _cloud_provider(row: ClusterRecord) -> CloudProvider:
+    return next(cloud for cloud, kube in KUBE_PROVIDER.items() if kube == row.provider)

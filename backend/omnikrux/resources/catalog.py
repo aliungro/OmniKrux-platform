@@ -4,13 +4,14 @@ import asyncio
 import dataclasses
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
 from omnikrux.clusters.registry import ClusterInfo
-from omnikrux.kube.connections import ClusterConnections, kube_error_message
+from omnikrux.kube.connections import ClusterConnections, cloud_kube_error, kube_error_message
 from omnikrux.kube.discovery import Discovery, discover
 from omnikrux.resources.kinds import HELM_RELEASES, KINDS, KindSpec, generic_spec, kind_key
 
@@ -103,10 +104,12 @@ class KindCatalog:
         registry: ClusterLister,
         *,
         ttl: float = DISCOVERY_TTL_SECONDS,
+        is_cloud: Callable[[str], Awaitable[bool]] | None = None,
     ):
         self._connections = connections
         self._registry = registry
         self._ttl = ttl
+        self._is_cloud = is_cloud
         self._entries: dict[str, ClusterKinds] = {}
         self._inflight: dict[str, asyncio.Task[ClusterKinds]] = {}
 
@@ -185,8 +188,14 @@ class KindCatalog:
     # --- internals ----------------------------------------------------------------------
 
     async def _discover(self, cluster_id: str) -> ClusterKinds:
-        async with self._connections.api(cluster_id) as api:
-            discovery = await discover(api)
+        cloud = self._is_cloud is not None and await self._is_cloud(cluster_id)
+        try:
+            async with self._connections.api(cluster_id) as api:
+                discovery = await discover(api, cloud=cloud)
+        except Exception as exc:
+            if not cloud or (isinstance(exc, KeyError) and exc.args == (cluster_id,)):
+                raise
+            raise cloud_kube_error("read which kinds the cluster serves", exc=exc) from None
         entry = ClusterKinds(
             specs=cluster_specs(discovery),
             failed_groups=discovery.failed_groups,

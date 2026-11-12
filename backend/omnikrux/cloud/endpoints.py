@@ -3,11 +3,24 @@ from dataclasses import dataclass, fields
 
 from yarl import URL
 
+from omnikrux.cloud.messages import CLOUD_CLUSTER_ENDPOINT_INVALID
+from omnikrux.cloud.types import CloudProvider
+
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "host.docker.internal"}
 _OVERRIDE_COPY = (
     "OMNIKRUX_CLOUD_ENDPOINTS may only point at this machine "
     "(127.0.0.1, localhost, [::1] or host.docker.internal): it exists for testing against fake clouds"
 )
+_CLUSTER_API_ENDPOINTS = {
+    "azure": "azure_arm",
+    "aws": "aws_eks",
+    "gcp": "gcp_container",
+    "oci": "oci_containerengine",
+}
+
+
+class InvalidClusterEndpoint(ValueError):
+    """The cluster server URL cannot be stored or used for cloud credentials."""
 
 
 def _http_url(value: str) -> URL:
@@ -62,6 +75,19 @@ class CloudEndpoints:
                 raise ValueError("A region is required for this cloud endpoint.")
             return endpoint.replace("{region}", region)
         return endpoint
+
+    def validate_cluster_server(self, provider: CloudProvider, server: str) -> None:
+        try:
+            url = _http_url(server)
+            if "?" in server:
+                raise ValueError
+            if url.scheme == "http":
+                # The provider fake and its Kubernetes API can run on separate ports.
+                fake = _http_url(self.url(_CLUSTER_API_ENDPOINTS[provider], "test-region"))
+                if url.raw_host not in _LOCAL_HOSTS or url.raw_host != fake.raw_host:
+                    raise ValueError
+        except (TypeError, ValueError):
+            raise InvalidClusterEndpoint(CLOUD_CLUSTER_ENDPOINT_INVALID) from None
 
     @classmethod
     def from_json(cls, text: str) -> "CloudEndpoints":

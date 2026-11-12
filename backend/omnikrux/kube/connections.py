@@ -1,12 +1,14 @@
 """One place that turns a registered cluster into Kubernetes clients, and errors into words."""
 
+import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from typing import Protocol
 
 import aiohttp
+from aiohttp.http_exceptions import HttpProcessingError
 from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.stream import WsApiClient
@@ -19,6 +21,7 @@ from omnikrux.kube.client import (
 )
 from omnikrux.kube.tokens import (
     CachedToken,
+    CloudClusterUnavailable,
     ExecPluginToken,
     ExecResolver,
     NativeToken,
@@ -99,6 +102,31 @@ class ClusterConnections:
             await client.close()
 
 
+async def open_kube_websocket(
+    resources: AsyncExitStack,
+    connecting: AbstractAsyncContextManager[aiohttp.ClientWebSocketResponse],
+    *,
+    action: str,
+    cloud: bool,
+    timeout: float,
+) -> aiohttp.ClientWebSocketResponse:
+    try:
+        async with asyncio.timeout(timeout):
+            return await resources.enter_async_context(connecting)
+    except aiohttp.WSServerHandshakeError as exc:
+        if cloud:
+            raise ApiException(status=exc.status, reason="WebSocket upgrade refused") from None
+        raise ApiException(status=exc.status, reason=exc.message) from exc
+    except TimeoutError:
+        if cloud:
+            raise TimeoutError("The cluster did not answer.") from None
+        raise
+    except (aiohttp.ClientError, HttpProcessingError) as exc:
+        if cloud:
+            raise cloud_kube_error(action, exc=exc) from None
+        raise
+
+
 def _status_message(exc: ApiException) -> str | None:
     try:
         data = json.loads(exc.body or "")
@@ -133,3 +161,34 @@ def kube_error_message(exc: Exception, action: str) -> str:
     elif isinstance(exc, TimeoutError | aiohttp.ServerTimeoutError):
         return f"The cluster didn't answer while trying to {action}."
     return f"Couldn't {action}: {_short_reason(exc)}"
+
+
+def cloud_kube_error(
+    action: str, *, exc: Exception | None = None, status: int | None = None
+) -> CloudClusterUnavailable:
+    """Describe a cloud Kubernetes failure without using transport or response text."""
+    if isinstance(exc, CloudClusterUnavailable):
+        return exc
+    if isinstance(exc, ApiException):
+        status = exc.status
+    if status == 401:
+        message = (
+            f"The cluster rejected the console's credentials while trying to {action}. "
+            "Check the cloud login, then try again."
+        )
+    elif status == 403:
+        message = (
+            f"The cluster refused permission to {action}. "
+            "Check the login's Kubernetes permissions, then try again."
+        )
+    elif type(status) is int and 300 <= status <= 599:
+        message = f"The cluster returned HTTP {status} while trying to {action}. Try again later."
+    elif isinstance(exc, TimeoutError | aiohttp.ServerTimeoutError):
+        message = (
+            f"The cluster didn't answer while trying to {action}. Check the network and retry."
+        )
+    elif isinstance(exc, aiohttp.ClientConnectionError):
+        message = f"Can't reach the cluster while trying to {action}. Check the network and retry."
+    else:
+        message = f"Couldn't {action}. Check the cluster, then try again."
+    return CloudClusterUnavailable(message)

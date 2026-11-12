@@ -173,10 +173,10 @@ async def test_crd_items_that_are_not_a_list_keep_generic_columns(api, monkeypat
 
     real = discovery_mod._get
 
-    async def get(api, path, timeout=30):
+    async def get(api, path, timeout=30, *, cloud=False):
         if path == discovery_mod.CRDS_PATH:
             return {"items": 5}
-        return await real(api, path, timeout)
+        return await real(api, path, timeout, cloud=cloud)
 
     monkeypatch.setattr(discovery_mod, "_get", get)
     discovery = await discover(api)

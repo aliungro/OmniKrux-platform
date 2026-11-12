@@ -20,6 +20,10 @@ class ClusterUnavailable(Exception):
         self.message = message
 
 
+class CloudClusterUnavailable(ClusterUnavailable):
+    """A cloud cluster diagnostic that is safe to publish and log."""
+
+
 @dataclass(frozen=True)
 class BearerToken:
     value: str = field(repr=False)
@@ -28,6 +32,14 @@ class BearerToken:
 
 TokenFetch = Callable[[], Awaitable[BearerToken]]
 TokenSource = Callable[[], Awaitable[BearerToken]]
+
+
+@dataclass(frozen=True)
+class CloudTokenSource:
+    fetch: TokenSource
+
+    async def __call__(self) -> BearerToken:
+        return await self.fetch()
 
 
 def utcnow() -> datetime:
