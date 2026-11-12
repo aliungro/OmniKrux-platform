@@ -2,6 +2,7 @@ import logging
 
 import pytest
 
+from tests.cloud.test_store import cloud_db as cloud_db  # noqa: PLC0414 (shared fixture)
 from tests.clusters.test_kubeconfig import kc
 
 
@@ -141,3 +142,59 @@ async def test_reconcile_logs_the_removed_context_names(registry, caplog):
     [warning] = [r for r in caplog.records if r.name == "omnikrux.clusters.registry"]
     assert warning.levelno == logging.WARNING and "gone" in warning.getMessage()
     assert "kept" not in warning.getMessage()
+
+
+async def test_cloud_cluster_identity_is_resource_id(cloud_db):
+    from dataclasses import replace
+
+    from omnikrux.clusters.models import Provider
+    from tests.cloud.test_store import account, add, found
+
+    store, registry, _ = cloud_db
+    azure, aws = await account(store), await account(store, "aws")
+    a, b = found("azure-resource"), found("aws-resource")
+    first, second = await add(registry, azure, a), await add(registry, aws, b)
+    assert first.name == second.name == "prod"
+    assert first.provider == Provider.AKS and second.provider == Provider.EKS
+    assert first.id != second.id
+    renamed = await add(registry, azure, replace(a, name="renamed"))
+    assert renamed.id == first.id and len(await registry.list()) == 2
+    assert renamed.name == "renamed" and renamed.context_name == a.resource_id
+    assert renamed.cloud_account_id == azure.id and renamed.source == "cloud"
+    ref = await registry.cloud_ref(first.id)
+    assert ref.resource_id == a.resource_id and ref.details == a.details and ref.name == "renamed"
+
+
+async def test_cloud_cluster_kubeconfig_has_no_user_credentials(cloud_db):
+    from tests.cloud.test_store import account, add, found
+
+    store, registry, _ = cloud_db
+    owner = await account(store)
+    cluster = found()
+    info = await add(registry, owner, cluster, ca_data="synthetic-ca")
+    kubeconfig = await registry.get_kubeconfig(info.id)
+    assert kubeconfig["users"][0]["user"] == {}
+    assert kubeconfig["clusters"][0]["cluster"] == {
+        "server": info.server,
+        "certificate-authority-data": "synthetic-ca",
+    }
+    assert (
+        len(kubeconfig["users"]) == len(kubeconfig["clusters"]) == len(kubeconfig["contexts"]) == 1
+    )
+    assert kubeconfig["current-context"] == cluster.resource_id
+
+
+async def test_reconcile_files_keeps_cloud_clusters(cloud_db):
+    from tests.cloud.test_store import account, add, found
+
+    store, registry, _ = cloud_db
+    owner = await account(store)
+    cloud = await add(registry, owner, found())
+    [local] = await registry.upsert_from_kubeconfig(
+        kc([("local", "https://cluster.example.test", None)]), rewrite_loopback=False, source="file"
+    )
+    assert await registry.cloud_ref(local.id) is None
+    assert await registry.reconcile_files(set()) == [local.id]
+    assert await registry.list() == [cloud]
+    with pytest.raises(KeyError):
+        await registry.cloud_ref(local.id)

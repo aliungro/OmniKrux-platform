@@ -3,6 +3,7 @@ from sqlalchemy import create_engine
 
 # Imported to register their tables on Base.metadata.
 from omnikrux.audit import models as audit_models  # noqa: F401
+from omnikrux.cloud import models as cloud_models  # noqa: F401
 from omnikrux.clusters import models  # noqa: F401
 from omnikrux.db import Base
 
