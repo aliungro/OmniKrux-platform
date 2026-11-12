@@ -2,7 +2,9 @@
 
 import json
 import os
+import subprocess
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -16,6 +18,18 @@ def main():
         return
     state = Path(os.environ["FAKE_PLUGIN_STATE"])
     invocation = int(state.read_text()) + 1 if state.exists() else 1
+    if hold := os.environ.get("FAKE_PLUGIN_HOLD"):
+        print("stdout sentinel", flush=True)
+        print("stderr sentinel", file=sys.stderr, flush=True)
+        if hold == "child":
+            subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(3)"],
+                stdin=subprocess.DEVNULL,
+            )
+        state.write_text(str(invocation))
+        if hold == "parent":
+            time.sleep(3)
+        return
     state.write_text(str(invocation))
     ttl = int(os.environ["FAKE_PLUGIN_TTL"])
     status = {"token": f"exec-{invocation}"}

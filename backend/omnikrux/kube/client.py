@@ -11,6 +11,8 @@ from omnikrux.kube.tokens import (
     RunPlugin,
     TokenSource,
     UnsupportedPluginOutput,
+    require_live_token,
+    utcnow,
 )
 
 __all__ = ["ClusterUnavailable", "build_configuration", "make_api_client", "make_ws_api_client"]
@@ -40,7 +42,9 @@ async def build_configuration(
 
     async def refresh(configuration: client.Configuration) -> None:
         assert token is not None
-        configuration.api_key["BearerToken"] = (await token()).value
+        credential = await token()
+        require_live_token(credential, utcnow())
+        configuration.api_key["BearerToken"] = credential.value
 
     configuration = type.__call__(client.Configuration)  # not the process-wide default
     if token is not None:

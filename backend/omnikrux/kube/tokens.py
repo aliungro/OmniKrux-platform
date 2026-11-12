@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 NO_EXPIRY_CACHE_SECONDS = 300
+EXEC_PLUGIN_TIMEOUT_SECONDS = 20
+EXEC_PLUGIN_CLEANUP_SECONDS = 1
 
 
 class ClusterUnavailable(Exception):
@@ -30,6 +32,13 @@ TokenSource = Callable[[], Awaitable[BearerToken]]
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def require_live_token(token: BearerToken, now: datetime) -> None:
+    if token.expires_at is not None and token.expires_at <= now:
+        raise ClusterUnavailable(
+            "The cluster login returned an expired token. Check the login, then try again."
+        )
 
 
 def refresh_due(token: BearerToken, fetched_at: datetime, now: datetime) -> bool:
@@ -75,8 +84,10 @@ class CachedToken:
     async def _refresh(self, generation: int) -> BearerToken:
         try:
             token = await self._fetch()
+            fetched_at = self._clock()
+            require_live_token(token, fetched_at)
             if generation == self._generation:
-                self._cached = token, self._clock()
+                self._cached = token, fetched_at
             return token
         finally:
             self._pending = None
@@ -117,6 +128,15 @@ class UnsupportedPluginOutput(Exception):
         self.key = key
 
 
+async def _stop_plugin(proc: asyncio.subprocess.Process) -> None:
+    # Process has no public pipe-close API. Closing its transport releases the local pipe ends
+    # and stops the login process even if a descendant inherited stdout or stderr.
+    proc._transport.close()
+    with suppress(TimeoutError):
+        async with asyncio.timeout(EXEC_PLUGIN_CLEANUP_SECONDS):
+            await proc.wait()
+
+
 class ExecPluginToken:
     def __init__(self, plan: RunPlugin):
         self._plan = plan
@@ -144,27 +164,39 @@ class ExecPluginToken:
             env["KUBERNETES_EXEC_INFO"] = json.dumps(
                 {"apiVersion": version, "kind": "ExecCredential", "spec": {"interactive": False}}
             )
-            proc = await asyncio.create_subprocess_exec(
-                executable,
-                *args,
-                env=env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
         except (KeyError, TypeError, ValueError):
+            raise ClusterUnavailable(
+                failure + "the login command configuration is invalid"
+            ) from None
+        proc = None
+        try:
+            async with asyncio.timeout(EXEC_PLUGIN_TIMEOUT_SECONDS):
+                proc = await asyncio.create_subprocess_exec(
+                    executable,
+                    *args,
+                    env=env,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _stderr = await proc.communicate()
+        except TimeoutError:
+            if proc is not None:
+                await _stop_plugin(proc)
+            raise ClusterUnavailable(
+                failure
+                + f"the login command did not finish within {EXEC_PLUGIN_TIMEOUT_SECONDS:g} s"
+            ) from None
+        except asyncio.CancelledError:
+            if proc is not None:
+                await _stop_plugin(proc)
+            raise
+        except (TypeError, ValueError):
             raise ClusterUnavailable(
                 failure + "the login command configuration is invalid"
             ) from None
         except (OSError, NotImplementedError):
             raise ClusterUnavailable(failure + "the login command could not be started") from None
-        try:
-            stdout, _stderr = await proc.communicate()
-        except asyncio.CancelledError:
-            with suppress(ProcessLookupError):
-                proc.kill()
-            await proc.communicate()
-            raise
         if proc.returncode != 0:
             raise ClusterUnavailable(
                 failure + f"the login command exited with status {proc.returncode}"

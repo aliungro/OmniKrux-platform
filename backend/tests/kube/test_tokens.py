@@ -11,10 +11,12 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.x509.oid import NameOID
+from kubernetes_asyncio.client import CoreV1Api
 
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.exec.session import KubeExecChannel
+from omnikrux.kube import tokens
 from omnikrux.kube.client import ClusterUnavailable, make_api_client
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.main import create_app
@@ -401,3 +403,109 @@ async def test_log_refresh_failure_has_the_login_message(fake_api):
     with pytest.raises(LogStreamError) as exc:
         await next_item(make(connections, follow=True).lines())
     assert str(exc.value) == message
+
+
+EXPIRED_MESSAGE = "The cluster login returned an expired token. Check the login, then try again."
+
+
+@pytest.mark.parametrize("hold", ["parent", "child"])
+async def test_hanging_plugin_times_out_for_every_waiter(plugin, hold, monkeypatch, caplog):
+    config, state = plugin
+    monkeypatch.setenv("FAKE_PLUGIN_HOLD", hold)
+    monkeypatch.setattr(tokens, "EXEC_PLUGIN_TIMEOUT_SECONDS", 0.5, raising=False)
+    fetch = tokens.ExecPluginToken(tokens.RunPlugin(config["users"][0]["user"]["exec"]))
+    cache = tokens.CachedToken(fetch)
+    waiters = [asyncio.create_task(cache()) for _ in range(3)]
+    await asyncio.sleep(0)  # let all three join the shared refresh
+    waiters[0].cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiters[0]
+    results = await asyncio.wait_for(asyncio.gather(*waiters[1:], return_exceptions=True), 1.5)
+    assert all(isinstance(result, ClusterUnavailable) for result in results)
+    assert all("the login command did not finish within" in str(result) for result in results)
+    assert state.read_text() == "1"
+    assert "stdout sentinel" not in caplog.text
+    assert "stderr sentinel" not in caplog.text
+    monkeypatch.delenv("FAKE_PLUGIN_HOLD")
+    assert (await cache()).value == "exec-2"
+
+
+async def test_cancelled_plugin_does_not_wait_for_inherited_pipes(plugin, monkeypatch):
+    config, state = plugin
+    monkeypatch.setenv("FAKE_PLUGIN_HOLD", "child")
+    fetch = tokens.ExecPluginToken(tokens.RunPlugin(config["users"][0]["user"]["exec"]))
+    task = asyncio.create_task(fetch())
+    try:
+        async with asyncio.timeout(2):
+            while not state.exists():
+                await asyncio.sleep(0.01)
+        task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done
+    finally:
+        (result,) = await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(result, asyncio.CancelledError)
+
+
+async def test_expired_fetch_is_not_published_or_cached():
+    current = EPOCH
+    issued = iter([EPOCH, EPOCH + timedelta(minutes=5)])
+
+    async def fetch():
+        return tokens.BearerToken("fake", next(issued))
+
+    cache = tokens.CachedToken(fetch, clock=lambda: current)
+    with pytest.raises(ClusterUnavailable) as exc:
+        await cache()
+    assert str(exc.value) == EXPIRED_MESSAGE
+    usable = await cache()
+    assert usable.expires_at > current
+    assert await cache() is usable
+
+
+async def test_client_refuses_expired_token_from_external_source(fake_api):
+    current = tokens.BearerToken("valid", None)
+
+    async def token():
+        return current
+
+    async with await make_api_client(kubeconfig_for(fake_api), token=token) as api:
+        await request_version(api)
+        current = tokens.BearerToken("expired", datetime.now(UTC) - timedelta(seconds=1))
+        with pytest.raises(ClusterUnavailable) as exc:
+            await request_version(api)
+        assert str(exc.value) == EXPIRED_MESSAGE
+    assert fake_api.auth == {"Bearer valid"}
+
+
+async def test_reusable_ws_client_asks_for_the_current_token_on_each_upgrade(fake_api):
+    current = "first"
+
+    async def token():
+        return tokens.BearerToken(current, None)
+
+    async def tokens_for(_):
+        return token
+
+    def check(header):
+        return header == f"Bearer {current}"
+
+    connections = ClusterConnections(
+        FakeRegistry({"c1": kubeconfig_for(fake_api)}), tokens_for=tokens_for
+    )
+    fake_api.token_check = check
+    async with connections.ws_api("c1") as ws_api:
+        api = CoreV1Api(ws_api)
+        for current in ("first", "second"):
+            connecting = await api.connect_get_namespaced_pod_exec(
+                "web-1",
+                "demo",
+                container="app",
+                command=["sh"],
+                _preload_content=False,
+                _headers={"sec-websocket-protocol": "v4.channel.k8s.io"},
+            )
+            async with connecting as ws:
+                assert not ws.closed
+    assert len(fake_api.execs) == 2
+    assert fake_api.auth == {"Bearer first", "Bearer second"}
