@@ -7,7 +7,7 @@ import httpx
 import pytest
 from aiohttp import web
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from omnikrux.cloud.adapters import make_adapters
 from omnikrux.cloud.dirs import CloudDirs
@@ -575,3 +575,91 @@ async def test_entered_key_cannot_redirect_default_oauth(service_key, monkeypatc
     with pytest.raises(CloudError):
         await GcpServiceAccountKey(info, endpoints).token()
     assert sent in ([], [endpoints.gcp_oauth])
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"refresh_token": None},
+        {"refresh_token": ""},
+        {"refresh_token": 42},
+        {"access_token": None, "refresh_token": "untrusted-rotation"},
+        {"expires_in": None, "refresh_token": "untrusted-rotation"},
+        {"scope": ["not-a-string"], "refresh_token": "untrusted-rotation"},
+    ],
+)
+async def test_malformed_oauth_success_cannot_poison_adc(cli_folder, gcp_cloud, malformed):
+    received = []
+
+    async def oauth(request):
+        received.append((await request.post())["refresh_token"])
+        reply = {"access_token": "synthetic-access", "expires_in": 3600}
+        if len(received) == 1:
+            reply.update(malformed)
+        return web.json_response(reply)
+
+    async with serve_cloud_handler(oauth) as origin:
+        endpoints = replace(gcp_cloud.endpoints(), gcp_oauth=f"{origin}/token")
+        login = GcpAdcLogin(cli_folder, endpoints)
+        with pytest.raises(CloudError, match="unreadable login reply"):
+            await login.token()
+        assert (await login.token()).value == "synthetic-access"
+
+    assert received == [REFRESH_TOKEN, REFRESH_TOKEN]
+
+
+async def test_valid_oauth_rotation_is_used_in_memory(cli_folder, gcp_cloud):
+    received = []
+    adc_file = cli_folder / "application_default_credentials.json"
+    initial = adc_file.read_bytes()
+
+    async def oauth(request):
+        received.append((await request.post())["refresh_token"])
+        return web.json_response(
+            {
+                "access_token": "synthetic-access",
+                "expires_in": 3600,
+                "refresh_token": "synthetic-rotated-refresh",
+            }
+        )
+
+    async with serve_cloud_handler(oauth) as origin:
+        endpoints = replace(gcp_cloud.endpoints(), gcp_oauth=f"{origin}/token")
+        login = GcpAdcLogin(cli_folder, endpoints)
+        await login.token()
+        await login.token()
+
+    assert received == [REFRESH_TOKEN, "synthetic-rotated-refresh"]
+    assert adc_file.read_bytes() == initial
+
+
+@pytest.mark.parametrize("source", ["adc", "entered"])
+async def test_ec_service_account_key_is_rejected_locally(
+    source, login_dirs, gcp_cloud, adapter, cli_account
+):
+    key = ec.generate_private_key(ec.SECP256R1())
+    info = {
+        "type": "service_account",
+        "client_email": KEY_EMAIL,
+        "private_key": key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode("ascii"),
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    account = cli_account
+    if source == "adc":
+        write_gcloud_login(login_dirs.gcloud, adc=info, project=PROJECT)
+    else:
+        account = replace(
+            cli_account, source="entered", secret={"service_account_key": json.dumps(info)}
+        )
+
+    with pytest.raises(CloudError) as failure:
+        await adapter.verify(account)
+    assert str(failure.value) == (
+        "That isn't a Google service-account key: paste the JSON file you downloaded "
+        "for the service account."
+    )
+    assert gcp_cloud.requests == []

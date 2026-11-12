@@ -4,13 +4,16 @@ import re
 from configparser import ConfigParser
 from configparser import Error as ConfigError
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Literal
 from urllib.parse import quote
 
 import requests
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from google.auth import exceptions as google_errors
 from google.auth.transport.requests import Request
 from google.oauth2 import credentials, service_account
@@ -50,6 +53,7 @@ _BAD_ADC = (
 _BAD_REFRESH = "Google Cloud sent an unreadable login reply. Sign in again, then try again."
 _BAD_CLUSTERS = "Google Cloud sent an unreadable cluster list. Try again in a minute."
 _LOCATION = re.compile(r"[a-z][a-z0-9-]{0,62}")
+_BEARER_TOKEN = re.compile(r"[A-Za-z0-9._~+/-]+=*")
 _USER_FIELDS = ("client_id", "client_secret", "refresh_token")
 _KEY_FIELDS = ("client_email", "private_key")
 _LOAD_ERRORS = (
@@ -65,6 +69,30 @@ _LOAD_ERRORS = (
 class _OAuthResponse:
     status: int
     data: bytes = field(repr=False)
+
+
+def _oauth_success(body: bytes) -> _OAuthResponse:
+    # Validate before google-auth can assign a rotated refresh token to the credential.
+    try:
+        payload = _object(json.loads(body.decode("utf-8")))
+        if "error" in payload or not _BEARER_TOKEN.fullmatch(
+            _required_string(payload.get("access_token"))
+        ):
+            raise ValueError
+        lifetime = payload.get("expires_in")
+        if isinstance(lifetime, str):
+            lifetime = int(lifetime)
+        if type(lifetime) is not int or lifetime <= 0:
+            raise ValueError
+        datetime.now(UTC) + timedelta(seconds=lifetime)
+        for key in ("refresh_token", "id_token"):
+            if key in payload:
+                _required_string(payload[key])
+        if "scope" in payload and not isinstance(payload["scope"], str):
+            raise TypeError
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        raise CloudError(_BAD_REFRESH) from None
+    return _OAuthResponse(200, body)
 
 
 class _OAuthRequest(Request):
@@ -92,7 +120,7 @@ class _OAuthRequest(Request):
         except requests.RequestException:
             raise cloud_error(_CLOUD, _REFRESH) from None
         if response.status_code == 200:
-            return _OAuthResponse(response.status_code, response.content)
+            return _oauth_success(response.content)
 
         reason = None
         if response.status_code in {400, 401}:
@@ -150,12 +178,20 @@ def _optional_string(value: object) -> str | None:
     return None if value is None else _required_string(value)
 
 
-def _key_info(info: dict, endpoint: str) -> dict:
-    data = {name: _required_string(info.get(name)) for name in _KEY_FIELDS}
-    data.update(type="service_account", token_uri=endpoint)
-    if isinstance(info.get("private_key_id"), str):
-        data["private_key_id"] = info["private_key_id"]
-    return data
+def _service_account_credential(info: dict, endpoint: str) -> service_account.Credentials:
+    try:
+        if not isinstance(info, dict) or info.get("type") != "service_account":
+            raise ValueError
+        data = {name: _required_string(info.get(name)) for name in _KEY_FIELDS}
+        key = load_pem_private_key(data["private_key"].encode("utf-8"), password=None)
+        if not isinstance(key, RSAPrivateKey):
+            raise TypeError
+        data.update(type="service_account", token_uri=endpoint)
+        if isinstance(info.get("private_key_id"), str):
+            data["private_key_id"] = info["private_key_id"]
+        return service_account.Credentials.from_service_account_info(data, scopes=[GCP_SCOPE])
+    except (*_LOAD_ERRORS, UnsupportedAlgorithm):
+        raise CloudError(messages.NOT_GCP_SERVICE_ACCOUNT_KEY) from None
 
 
 class GcpAdcLogin(_GcpLogin):
@@ -215,42 +251,31 @@ class GcpAdcLogin(_GcpLogin):
             return self._credential
         info = self._read_info()
         kind = info.get("type")
-        if kind not in ("authorized_user", "service_account"):
-            raise CloudError(messages.WORKLOAD)
-        try:
-            if kind == "service_account":
-                data = _key_info(info, self._endpoint)
-                principal = data["client_email"]
-                credential = service_account.Credentials.from_service_account_info(
-                    data, scopes=[GCP_SCOPE]
-                )
-            else:
+        if kind == "service_account":
+            credential = _service_account_credential(info, self._endpoint)
+            principal = credential.service_account_email
+        elif kind == "authorized_user":
+            try:
                 data = {name: _required_string(info.get(name)) for name in _USER_FIELDS}
                 account = info.get("account")
                 principal = account if isinstance(account, str) and account.strip() else None
                 credential = credentials.Credentials.from_authorized_user_info(
                     data, scopes=[GCP_SCOPE]
-                )
-            self._credential = credential.with_token_uri(self._endpoint)
-            self._principal = principal
-        except _LOAD_ERRORS:
-            raise CloudError(_BAD_ADC) from None
+                ).with_token_uri(self._endpoint)
+            except _LOAD_ERRORS:
+                raise CloudError(_BAD_ADC) from None
+        else:
+            raise CloudError(messages.WORKLOAD)
+        self._principal = principal
+        self._credential = credential
         return self._credential
 
 
 class GcpServiceAccountKey(_GcpLogin):
     def __init__(self, info: dict, endpoints: CloudEndpoints) -> None:
         super().__init__(endpoints, adc=False)
-        try:
-            if not isinstance(info, dict) or info.get("type") != "service_account":
-                raise ValueError
-            data = _key_info(info, self._endpoint)
-            self._credential = service_account.Credentials.from_service_account_info(
-                data, scopes=[GCP_SCOPE]
-            )
-            self.client_email = data["client_email"]
-        except _LOAD_ERRORS:
-            raise CloudError(messages.NOT_GCP_SERVICE_ACCOUNT_KEY) from None
+        self._credential = _service_account_credential(info, self._endpoint)
+        self.client_email = self._credential.service_account_email
 
     def _load(self):
         return self._credential
