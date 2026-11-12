@@ -1,0 +1,205 @@
+"""In-memory credentials for Kubernetes API requests."""
+
+import asyncio
+import json
+import os
+import shutil
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+
+NO_EXPIRY_CACHE_SECONDS = 300
+
+
+class ClusterUnavailable(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+@dataclass(frozen=True)
+class BearerToken:
+    value: str = field(repr=False)
+    expires_at: datetime | None
+
+
+TokenFetch = Callable[[], Awaitable[BearerToken]]
+TokenSource = Callable[[], Awaitable[BearerToken]]
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def refresh_due(token: BearerToken, fetched_at: datetime, now: datetime) -> bool:
+    if token.expires_at is None:
+        return now - fetched_at >= timedelta(seconds=NO_EXPIRY_CACHE_SECONDS)
+    lifetime = token.expires_at - fetched_at
+    return token.expires_at - now <= min(timedelta(seconds=120), lifetime / 4)
+
+
+class CachedToken:
+    """Share one refresh, even when a request waiting on it is cancelled."""
+
+    def __init__(self, fetch: TokenFetch, *, clock: Callable[[], datetime] = utcnow):
+        self._fetch = fetch
+        self._clock = clock
+        self._cached: tuple[BearerToken, datetime] | None = None
+        self._pending: tuple[asyncio.Task[BearerToken], int] | None = None
+        self._generation = 0
+
+    async def __call__(self) -> BearerToken:
+        while True:
+            if self._cached is not None:
+                token, fetched_at = self._cached
+                if not refresh_due(token, fetched_at, self._clock()):
+                    return token
+
+            if self._pending is None:
+                self._cached = None
+                generation = self._generation
+                pending = asyncio.create_task(self._refresh(generation))
+                pending.add_done_callback(self._retrieve_exception)
+                self._pending = pending, generation
+            pending, generation = self._pending
+            try:
+                token = await asyncio.shield(pending)
+            except Exception:
+                if generation == self._generation:
+                    raise
+            else:
+                if generation == self._generation:
+                    return token
+
+    async def _refresh(self, generation: int) -> BearerToken:
+        try:
+            token = await self._fetch()
+            if generation == self._generation:
+                self._cached = token, self._clock()
+            return token
+        finally:
+            self._pending = None
+
+    @staticmethod
+    def _retrieve_exception(task: asyncio.Task[BearerToken]) -> None:
+        # A cancelled request can leave the shared refresh without a waiter.
+        if not task.cancelled():
+            task.exception()
+
+    def invalidate(self) -> None:
+        # An already running fetch may finish, but cannot repopulate the invalidated cache.
+        self._generation += 1
+        self._cached = None
+
+
+@dataclass(frozen=True)
+class RunPlugin:
+    exec_cfg: dict = field(repr=False)
+    env: dict[str, str] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
+class NativeToken:
+    fetch: TokenFetch
+
+
+ExecPlan = RunPlugin | NativeToken
+ExecResolver = Callable[[dict], ExecPlan]
+
+
+class UnsupportedPluginOutput(Exception):
+    """The loader can use the returned certificate and key as TLS client credentials."""
+
+    def __init__(self, certificate: str, key: str):
+        super().__init__("The login command returned a client certificate.")
+        self.certificate = certificate
+        self.key = key
+
+
+class ExecPluginToken:
+    def __init__(self, plan: RunPlugin):
+        self._plan = plan
+
+    async def __call__(self) -> BearerToken:
+        cfg = self._plan.exec_cfg
+        command = cfg.get("command")
+        if not isinstance(command, str) or not command:
+            raise ClusterUnavailable(
+                "This cluster's login command is missing. Check the kubeconfig."
+            )
+        executable = shutil.which(command)
+        if executable is None:
+            raise ClusterUnavailable(
+                f"This cluster signs in with '{command}', which isn't installed in the console."
+            )
+        failure = f"This cluster signs in with '{command}', which failed: "
+        version = cfg.get("apiVersion")
+        args = cfg.get("args") or []
+        if not isinstance(version, str) or not isinstance(args, list):
+            raise ClusterUnavailable(failure + "the login command configuration is invalid")
+        try:
+            env = os.environ | {item["name"]: item["value"] for item in (cfg.get("env") or [])}
+            env.update(self._plan.env)
+            env["KUBERNETES_EXEC_INFO"] = json.dumps(
+                {"apiVersion": version, "kind": "ExecCredential", "spec": {"interactive": False}}
+            )
+            proc = await asyncio.create_subprocess_exec(
+                executable,
+                *args,
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except (KeyError, TypeError, ValueError):
+            raise ClusterUnavailable(
+                failure + "the login command configuration is invalid"
+            ) from None
+        except (OSError, NotImplementedError):
+            raise ClusterUnavailable(failure + "the login command could not be started") from None
+        try:
+            stdout, _stderr = await proc.communicate()
+        except asyncio.CancelledError:
+            with suppress(ProcessLookupError):
+                proc.kill()
+            await proc.communicate()
+            raise
+        if proc.returncode != 0:
+            raise ClusterUnavailable(
+                failure + f"the login command exited with status {proc.returncode}"
+            )
+        try:
+            return _parse_output(stdout, version)
+        except (ValueError, TypeError, OverflowError, RecursionError):
+            pass
+        raise ClusterUnavailable(failure + "the login command returned invalid credentials")
+
+
+def _parse_output(stdout: bytes, version: str) -> BearerToken:
+    result = json.loads(stdout)
+    if (
+        not isinstance(result, dict)
+        or result.get("kind") != "ExecCredential"
+        or result.get("apiVersion") != version
+        or not isinstance(status := result.get("status"), dict)
+    ):
+        raise ValueError("Invalid ExecCredential")
+
+    token = status.get("token")
+    if token is None:
+        certificate, key = status.get("clientCertificateData"), status.get("clientKeyData")
+        if isinstance(certificate, str) and certificate and isinstance(key, str) and key:
+            raise UnsupportedPluginOutput(certificate, key)
+    if not isinstance(token, str) or not token or not token.isascii() or not token.isprintable():
+        raise ValueError("Invalid bearer token")
+    if " " in token:
+        raise ValueError("Invalid bearer token")
+
+    expires_at = None
+    if "expirationTimestamp" in status:
+        expires_at = datetime.fromisoformat(status["expirationTimestamp"])
+        if expires_at.tzinfo is None:
+            raise ValueError("Expiry must include a time zone")
+        expires_at = expires_at.astimezone(UTC)
+    return BearerToken(token, expires_at)

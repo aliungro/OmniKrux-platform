@@ -1,7 +1,8 @@
 """One place that turns a registered cluster into Kubernetes clients, and errors into words."""
 
+import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Protocol
 
@@ -10,7 +11,20 @@ from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
-from omnikrux.kube.client import ClusterUnavailable, make_api_client, make_ws_api_client
+from omnikrux.kube.client import (
+    ClusterUnavailable,
+    kubeconfig_user,
+    make_api_client,
+    make_ws_api_client,
+)
+from omnikrux.kube.tokens import (
+    CachedToken,
+    ExecPluginToken,
+    ExecResolver,
+    NativeToken,
+    RunPlugin,
+    TokenSource,
+)
 
 MAX_REASON = 200
 
@@ -19,16 +33,52 @@ class KubeconfigSource(Protocol):
     async def get_kubeconfig(self, cluster_id: str) -> dict: ...
 
 
+TokensFor = Callable[[str], Awaitable[TokenSource | None]]
+
+
 class ClusterConnections:
     """Builds clients from the registry's kubeconfig. Unknown cluster: KeyError;
     exec plugin missing: ClusterUnavailable."""
 
-    def __init__(self, registry: KubeconfigSource):
+    def __init__(
+        self,
+        registry: KubeconfigSource,
+        *,
+        tokens_for: TokensFor | None = None,
+        exec_resolver: ExecResolver | None = None,
+    ):
         self._registry = registry
+        self._tokens_for = tokens_for
+        self._exec_resolver = exec_resolver if exec_resolver is not None else RunPlugin
+        self._exec_tokens: dict[str, dict[str, CachedToken]] = {}
+
+    async def _client_inputs(self, cluster_id: str) -> tuple[dict, TokenSource | None]:
+        kubeconfig = await self._registry.get_kubeconfig(cluster_id)
+        if (
+            self._tokens_for is not None
+            and (token := await self._tokens_for(cluster_id)) is not None
+        ):
+            return kubeconfig, token
+
+        exec_cfg = kubeconfig_user(kubeconfig).get("exec")
+        if not isinstance(exec_cfg, dict):
+            return kubeconfig, None
+        digest = hashlib.sha256(json.dumps(exec_cfg, sort_keys=True).encode()).hexdigest()
+        sources = self._exec_tokens.setdefault(cluster_id, {})
+        if digest not in sources:
+            plan = self._exec_resolver(exec_cfg)
+            sources[digest] = CachedToken(
+                plan.fetch if isinstance(plan, NativeToken) else ExecPluginToken(plan)
+            )
+        return kubeconfig, sources[digest]
+
+    def forget(self, cluster_id: str) -> None:
+        self._exec_tokens.pop(cluster_id, None)
 
     async def open_api(self, cluster_id: str) -> ApiClient:
         """A fresh client the caller owns and must close."""
-        return await make_api_client(await self._registry.get_kubeconfig(cluster_id))
+        kubeconfig, token = await self._client_inputs(cluster_id)
+        return await make_api_client(kubeconfig, token=token)
 
     @asynccontextmanager
     async def api(self, cluster_id: str) -> AsyncIterator[ApiClient]:
@@ -41,7 +91,8 @@ class ClusterConnections:
     @asynccontextmanager
     async def ws_api(self, cluster_id: str) -> AsyncIterator[WsApiClient]:
         """A WebSocket-capable client (for exec), built from the same configuration."""
-        client = await make_ws_api_client(await self._registry.get_kubeconfig(cluster_id))
+        kubeconfig, token = await self._client_inputs(cluster_id)
+        client = await make_ws_api_client(kubeconfig, token=token)
         try:
             yield client
         finally:

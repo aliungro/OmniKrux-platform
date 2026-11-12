@@ -174,6 +174,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         async def on_forget(cluster_id: str) -> None:
             catalog.forget(cluster_id)
+            connections.forget(cluster_id)
             await forwards.stop_cluster(cluster_id)
 
         hub = WatchHub(registry, source_for, on_forget=on_forget)
