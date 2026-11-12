@@ -6,6 +6,36 @@ def test_auto_import_on_startup_and_no_secrets_in_response(app_with_kubeconfig):
     assert "token" not in client.get("/api/clusters").text
 
 
+def test_list_clusters_hides_cloud_endpoint(app_with_kubeconfig):
+    from omnikrux.cloud.store import CloudAccountStore
+    from omnikrux.security.secrets import SecretBox
+    from tests.cloud.test_store import account, add, found
+    from tests.clusters.test_kubeconfig import kc
+
+    client, _ = app_with_kubeconfig
+    state = client.app.state
+
+    async def seed_cloud_cluster():
+        store = CloudAccountStore(state.sessionmaker, SecretBox.from_settings(state.settings))
+        owner = await account(store)
+        return await add(state.registry, owner, found(), ca_data="synthetic-ca")
+
+    cloud = client.portal.call(seed_cloud_cluster)
+    upload_server = "https://upload.example.test"
+    response = client.post(
+        "/api/clusters/kubeconfig",
+        json={"kubeconfig": kc([("uploaded", upload_server, None)])},
+    )
+    assert response.status_code == 200
+    response = client.get("/api/clusters")
+    by_name = {cluster["name"]: cluster for cluster in response.json()}
+    assert by_name[cloud.name]["server"] is None
+    assert by_name["kind-omnikrux-dev"]["server"] == "https://127.0.0.1:6443"
+    assert by_name["uploaded"]["server"] == upload_server
+    assert cloud.server not in response.text
+    assert "synthetic-ca" not in response.text
+
+
 def test_post_bad_kubeconfig_is_422(app_with_kubeconfig):
     client, _ = app_with_kubeconfig
     r = client.post("/api/clusters/kubeconfig", json={"kubeconfig": "::: nope"})

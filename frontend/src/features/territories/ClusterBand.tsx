@@ -4,7 +4,7 @@ import { PROVIDER_CODE, ProviderBadge, knownProvider } from "./ProviderBadge";
 import s from "./ClusterBand.module.css";
 import pc from "./provider.module.css";
 
-function serverHost(server: string | undefined): string | null {
+function serverHost(server: string | null | undefined): string | null {
   if (!server) return null;
   try {
     return new URL(server).host || server;

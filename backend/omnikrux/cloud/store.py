@@ -8,7 +8,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnikrux.cloud.models import CloudAccountRecord, DiscoveredRecord, DiscoveryState
+from omnikrux.cloud.models import CloudAccountRecord, DiscoveredRecord, DiscoveryState, lock_account
 from omnikrux.cloud.types import (
     KUBE_PROVIDER,
     AccountConfig,
@@ -212,16 +212,7 @@ class CloudAccountStore:
         at = at.astimezone(UTC)
         result = SavedDiscovery([], [], [])
         async with self._sessionmaker.begin() as session:
-            # Serialize discovery with other writes for this account, including account deletion.
-            provider = await session.scalar(
-                update(CloudAccountRecord)
-                .where(CloudAccountRecord.id == id)
-                .values(updated_at=CloudAccountRecord.updated_at)
-                .returning(CloudAccountRecord.provider)
-            )
-            if provider is None:
-                raise KeyError(id)
-
+            provider = await lock_account(session, id)
             rows = await session.execute(
                 select(DiscoveredRecord, ClusterRecord)
                 .outerjoin(

@@ -1,11 +1,10 @@
-from dataclasses import asdict
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from omnikrux.clusters.models import Environment, Provider
-from omnikrux.clusters.registry import SOURCE_UPLOAD, ClusterConflict, ClusterInfo
+from omnikrux.clusters.registry import SOURCE_CLOUD, SOURCE_UPLOAD, ClusterConflict, ClusterInfo
 
 router = APIRouter(prefix="/api/clusters")
 
@@ -14,7 +13,7 @@ class ClusterOut(BaseModel):
     id: str
     name: str
     context_name: str
-    server: str
+    server: str | None
     original_server: str | None  # the kubeconfig's address when `server` was rewritten, else null
     provider: Provider
     region: str | None
@@ -29,7 +28,19 @@ class KubeconfigIn(BaseModel):
 
 def _out(info: ClusterInfo, request: Request) -> ClusterOut:
     state, message = request.app.state.hub.status(info.id)
-    return ClusterOut(**asdict(info), state=state, message=message)
+    cloud = info.source == SOURCE_CLOUD
+    return ClusterOut(
+        id=info.id,
+        name=info.name,
+        context_name=info.context_name,
+        server=None if cloud else info.server,
+        original_server=None if cloud else info.original_server,
+        provider=info.provider,
+        region=info.region,
+        environment=info.environment,
+        state=state,
+        message=message,
+    )
 
 
 @router.get("")

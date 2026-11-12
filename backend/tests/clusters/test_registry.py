@@ -198,3 +198,26 @@ async def test_reconcile_files_keeps_cloud_clusters(cloud_db):
     assert await registry.list() == [cloud]
     with pytest.raises(KeyError):
         await registry.cloud_ref(local.id)
+
+
+async def test_cloud_cluster_upsert_rejects_removed_account(cloud_db):
+    from tests.cloud.test_store import account, add, found
+
+    store, registry, _ = cloud_db
+    owner = await account(store)
+    await store.delete(owner.id)
+    with pytest.raises(KeyError):
+        await add(registry, owner, found())
+    assert await registry.list() == []
+
+
+async def test_cloud_cluster_upsert_rejects_wrong_account_provider(cloud_db):
+    from dataclasses import replace
+
+    from tests.cloud.test_store import account, add, found
+
+    store, registry, _ = cloud_db
+    owner = await account(store)
+    with pytest.raises(KeyError):
+        await add(registry, replace(owner, provider="aws"), found())
+    assert await registry.list() == []

@@ -2,7 +2,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import Boolean, DateTime, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, LargeBinary, String, Text, UniqueConstraint, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from omnikrux.cloud.types import CloudProvider, CredentialSourceKind
@@ -63,3 +64,16 @@ class DiscoveredRecord(Base):
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+async def lock_account(session: AsyncSession, account_id: str) -> CloudProvider:
+    """Serialize writes for a live account with its deletion in the same transaction."""
+    provider = await session.scalar(
+        update(CloudAccountRecord)
+        .where(CloudAccountRecord.id == account_id)
+        .values(updated_at=CloudAccountRecord.updated_at)
+        .returning(CloudAccountRecord.provider)
+    )
+    if provider is None:
+        raise KeyError(account_id)
+    return provider

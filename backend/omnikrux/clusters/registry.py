@@ -9,6 +9,7 @@ import yaml
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnikrux.cloud.models import lock_account
 from omnikrux.cloud.types import KUBE_PROVIDER, CloudClusterRef, DiscoveredCluster, NodePool
 from omnikrux.clusters.kubeconfig import ParsedContext, parse_kubeconfig
 from omnikrux.clusters.models import ClusterRecord, Environment, Provider
@@ -175,6 +176,8 @@ class ClusterRegistry:
         }
         blob = self._box.encrypt(yaml.safe_dump(config).encode())
         async with self._sessionmaker.begin() as session:
+            if await lock_account(session, ref.account_id) != ref.provider:
+                raise KeyError(ref.account_id)
             row = await session.scalar(
                 select(ClusterRecord).where(
                     ClusterRecord.source == SOURCE_CLOUD, ClusterRecord.context_name == name

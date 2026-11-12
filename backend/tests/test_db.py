@@ -228,6 +228,7 @@ async def test_migration_0005_upgrade_and_downgrade(tmp_settings):
         assert (
             await conn.execute(text("SELECT cloud_account_id FROM clusters"))
         ).scalar_one() is None
+        await conn.execute(_row("c", "cloud", "sample-resource", "https://h:2", "2026-01-02"))
     async with engine.begin() as conn:
         await conn.run_sync(_migrate, "downgrade", "0004")
         assert await conn.run_sync(schema) == (old_tables, old_columns)
