@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from pydantic import ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from omnikrux.actions.jobs import JobRunner
@@ -145,10 +146,28 @@ async def _mark_interrupted(audit: AuditLog) -> None:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    settings = settings if settings is not None else get_settings()
+    if settings is None:
+        try:
+            settings = get_settings()
+        except ValidationError as exc:
+            fields = {
+                error["loc"] for error in exc.errors(include_input=False, include_context=False)
+            }
+            if ("cloud_discovery_seconds",) in fields:
+                raise SystemExit(
+                    "Omnikrux can't start: OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be a whole "
+                    "number of at least 60."
+                ) from None
+            raise
     try:
         forward_ports = settings.forward_ports
         forward_bind = settings.forward_bind
+        _ = settings.endpoints
+        if settings.cloud_discovery_seconds < 60:
+            raise ValueError(
+                "OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be at least 60, "
+                f"not {settings.cloud_discovery_seconds}."
+            )
     except ValueError as exc:  # said in plain words, without a traceback
         raise SystemExit(f"Omnikrux can't start: {exc}") from None
 

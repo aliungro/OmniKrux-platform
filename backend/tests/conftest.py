@@ -12,6 +12,7 @@ from omnikrux.main import create_app
 from omnikrux.security.secrets import SecretBox
 from omnikrux.watch.hub import WatchHub
 from tests.clusters.test_kubeconfig import kc
+from tests.fakecloud import fake_cloud  # noqa: F401  (shared fixture)
 from tests.fakekube import fake_api  # noqa: F401  (shared fixture)
 from tests.watch.fakes import FakeSource
 
@@ -94,3 +95,22 @@ def app_with_fake_sources(tmp_path, fake_registry_two_clusters):
     app.router.lifespan_context = lifespan
     with TestClient(app) as client:
         yield client
+
+
+@pytest.fixture(autouse=True)
+def isolate_cloud_logins(tmp_path, monkeypatch):
+    """Keep test apps and credential chains away from developer login files."""
+    for cloud in ("azure", "aws", "gcloud", "oci"):
+        folder = tmp_path / cloud
+        folder.mkdir()
+        monkeypatch.setenv(f"OMNIKRUX_{cloud.upper()}_DIR", str(folder))
+    for variable in (
+        "AWS_PROFILE",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "CLOUDSDK_CONFIG",
+        "OMNIKRUX_CLOUD_ENDPOINTS",
+    ):
+        monkeypatch.delenv(variable, raising=False)
