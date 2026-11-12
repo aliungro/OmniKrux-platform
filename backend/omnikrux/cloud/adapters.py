@@ -64,9 +64,11 @@ def make_adapters(
     from omnikrux.cloud.aws import AwsAdapter
     from omnikrux.cloud.azure import AzureAdapter
     from omnikrux.cloud.gcp import GcpAdapter
+    from omnikrux.cloud.oci import OciAdapter
 
     return {
         "azure": AzureAdapter(http, endpoints, dirs.azure),
         "aws": AwsAdapter(endpoints, dirs.aws),
         "gcp": GcpAdapter(http, endpoints, dirs.gcloud),
+        "oci": OciAdapter(http, endpoints, dirs.oci),
     }

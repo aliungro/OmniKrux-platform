@@ -4,6 +4,7 @@ import json
 from typing import Literal
 
 import aiohttp
+from yarl import URL
 
 from omnikrux.cloud import messages
 from omnikrux.cloud.endpoints import same_origin
@@ -115,7 +116,7 @@ class CloudHttp:
     async def json(
         self,
         method: str,
-        url: str,
+        url: str | URL,
         *,
         cloud: str,
         action: str,
@@ -139,12 +140,12 @@ class CloudHttp:
     async def text(
         self,
         method: str,
-        url: str,
+        url: str | URL,
         *,
         cloud: str,
         action: str,
         headers: dict | None = None,
-        data: dict | None = None,
+        data: dict | bytes | None = None,
         json_body: object = None,
         id_label: str = "id",
     ) -> str:
@@ -160,20 +161,42 @@ class CloudHttp:
             format="text",
         )
 
+    async def array_page(
+        self,
+        method: str,
+        url: str | URL,
+        *,
+        cloud: str,
+        action: str,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[list[dict], str | None]:
+        return await self._request(
+            method,
+            url,
+            cloud=cloud,
+            action=action,
+            headers=headers,
+            data=None,
+            json_body=None,
+            id_label="id",
+            format="array_page",
+        )
+
     async def _request(
         self,
         method: str,
-        url: str,
+        url: str | URL,
         *,
         cloud: str,
         action: str,
         headers: dict | None,
-        data: dict | None,
+        data: dict | bytes | None,
         json_body: object,
         id_label: str,
-        format: Literal["json", "text"],
+        format: Literal["json", "text", "array_page"],
     ):
-        if not same_origin(url, url):
+        url_text = str(url)
+        if not same_origin(url_text, url_text):
             raise CloudError(
                 f"{cloud} has an invalid endpoint while trying to {action}. Check the cloud endpoint."
             )
@@ -183,7 +206,12 @@ class CloudHttp:
             )
         try:
             async with self._session.request(
-                method, url, headers=headers, data=data, json=json_body, allow_redirects=False
+                method,
+                url,
+                headers=headers,
+                data=data,
+                json=json_body,
+                allow_redirects=False,
             ) as response:
                 if not 200 <= response.status < 300:
                     raise cloud_error(
@@ -196,6 +224,12 @@ class CloudHttp:
                 if format == "text":
                     return await response.text()
                 payload = json.loads(await response.read())
+                if format == "array_page":
+                    if not isinstance(payload, list) or not all(
+                        isinstance(row, dict) for row in payload
+                    ):
+                        raise TypeError
+                    return payload, response.headers.get("opc-next-page")
                 if not isinstance(payload, dict):
                     raise TypeError
                 return payload

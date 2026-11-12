@@ -13,6 +13,9 @@ NOT_GCP_SERVICE_ACCOUNT_KEY = (
     "That isn't a Google service-account key: paste the JSON file you downloaded "
     "for the service account."
 )
+UNREADABLE_OCI_PRIVATE_KEY = (
+    "That private key can't be read: check it is the PEM file for this API key, and its passphrase."
+)
 
 
 def gke_api_disabled(project: str) -> str:

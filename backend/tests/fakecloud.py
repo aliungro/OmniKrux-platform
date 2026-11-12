@@ -1,6 +1,7 @@
 """Loopback cloud APIs with explicit read-only routes and expiring fake credentials."""
 
 import base64
+import hashlib
 import hmac
 import json
 import re
@@ -11,6 +12,7 @@ from configparser import ConfigParser
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import pytest
@@ -590,6 +592,144 @@ def _gcp_read_only(request: CloudRequest) -> bool:
     )
 
 
+_OCI_REGION = r"(?P<region>[a-z]{2}-[a-z]+-\d+)"
+_OCI_IDENTITY = rf"/oci/identity/{_OCI_REGION}/20160918"
+_OCI_ENGINE = rf"/oci/containerengine/{_OCI_REGION}/20180222"
+_OCI_TENANCY = re.compile(rf"{_OCI_IDENTITY}/tenancies/(?P<id>[^/]+)")
+_OCI_COMPARTMENTS = re.compile(rf"{_OCI_IDENTITY}/compartments")
+_OCI_CLUSTERS = re.compile(rf"{_OCI_ENGINE}/clusters")
+_OCI_POOLS = re.compile(rf"{_OCI_ENGINE}/nodePools")
+_OCI_KUBECONFIG = re.compile(rf"{_OCI_ENGINE}/clusters/(?P<id>[^/]+)/kubeconfig/content")
+_OCI_TOKEN = re.compile(rf"/oci/cluster-request/{_OCI_REGION}/cluster_request/(?P<id>[^/]+)")
+_OCI_READ_ONLY = (
+    ("GET", _OCI_TENANCY),
+    ("GET", _OCI_COMPARTMENTS),
+    ("GET", _OCI_CLUSTERS),
+    ("GET", _OCI_POOLS),
+    ("POST", _OCI_KUBECONFIG),
+)
+_OCI_AUTH = re.compile(
+    r'Signature algorithm="rsa-sha256",headers="([^"]+)",keyId="([^"]+)",'
+    r'signature="([A-Za-z0-9+/=]+)",version="1"'
+)
+
+
+class FakeOci:
+    ca_data = base64.b64encode(b"test-oke-ca").decode()
+
+    def __init__(self):
+        self.keys: dict[str, bytes] = {}
+        self.tenancy = {"id": "ocid1.tenancy.oc1..test", "name": "Test tenancy"}
+        self.compartments: list[dict] = []
+        self.clusters: dict[tuple[str, str], list[dict]] = {}
+        self._servers: dict[str, str] = {}
+        self._pools: dict[str, list[dict]] = {}
+
+    def add_oke(
+        self, region, name, *, server, compartment=None, public=True, pools=None, tags=None
+    ):
+        resource_id = f"ocid1.cluster.oc1.{region}.test{len(self._servers)}"
+        rows = self.clusters.setdefault((region, compartment or self.tenancy["id"]), [])
+        rows.append(
+            {
+                "id": resource_id,
+                "name": name,
+                "endpoints": {"publicEndpoint": server} if public else {},
+                "kubernetesVersion": "v1.32.1",
+                "freeformTags": tags or {},
+            }
+        )
+        self._servers[resource_id] = server
+        self._pools[resource_id] = pools or []
+        return resource_id
+
+    def verifies(self, method, target, headers, body=b""):
+        match = _OCI_AUTH.fullmatch(headers.get("authorization", ""))
+        if match is None:
+            return False
+        fields, key_id, signature = match.groups()
+        signed = ["date", "(request-target)", "host"]
+        if method == "POST":
+            digest = base64.b64encode(hashlib.sha256(body).digest()).decode()
+            if headers.get("x-content-sha256") != digest or headers.get("content-length") != str(
+                len(body)
+            ):
+                return False
+            signed.extend(["content-length", "content-type", "x-content-sha256"])
+        if fields.split(" ") != signed or key_id not in self.keys:
+            return False
+        try:
+            key = serialization.load_pem_public_key(self.keys[key_id])
+            if not isinstance(key, rsa.RSAPublicKey):
+                return False
+            values = {name: headers[name] for name in signed if name != "(request-target)"}
+            values["(request-target)"] = f"{method.lower()} {target}"
+            signing_string = "\n".join(f"{name}: {values[name]}" for name in signed)
+            key.verify(
+                base64.b64decode(signature, validate=True),
+                signing_string.encode(),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+            return True
+        except (InvalidSignature, KeyError, ValueError, TypeError):
+            return False
+
+    def kube_token_ok(self, authorization, url):
+        if not authorization or not authorization.startswith("Bearer "):
+            return False
+        try:
+            token = authorization.removeprefix("Bearer ")
+            raw = base64.b64decode(token, altchars=b"-_", validate=True)
+            if base64.urlsafe_b64encode(raw).decode() != token:
+                return False
+            token_url = raw.decode()
+            parsed = urlsplit(token_url)
+            route = _OCI_TOKEN.fullmatch(parsed.path)
+            if not same_origin(token_url, url) or route is None or route["id"] not in self._servers:
+                return False
+            params = parse_qsl(parsed.query, strict_parsing=True)
+            if [name for name, _ in params] != ["authorization", "date"]:
+                return False
+            headers = dict(params)
+            headers["host"] = parsed.netloc
+            age = (datetime.now(UTC) - parsedate_to_datetime(headers["date"])).total_seconds()
+            return 0 <= age < 240 and self.verifies("GET", parsed.path, headers)
+        except (ValueError, TypeError, OverflowError):
+            return False
+
+    def _page(self, request, rows):
+        cursor = request.query.get("page")
+        offset = 0
+        if cursor is not None:
+            match = re.fullmatch(r"local\+/=&(\d+)", cursor)
+            if not match:
+                return web.json_response({"code": "InvalidParameter"}, status=400)
+            offset = int(match[1])
+        headers = {}
+        if offset + 2 < len(rows):
+            headers["opc-next-page"] = f"local+/=&{offset + 2}"
+        return web.json_response(rows[offset : offset + 2], headers=headers)
+
+    def response(self, route, match, request):
+        if route is _OCI_TENANCY and match["id"] == self.tenancy["id"]:
+            return web.json_response(self.tenancy)
+        if route is _OCI_COMPARTMENTS:
+            return self._page(request, self.compartments)
+        if route is _OCI_CLUSTERS:
+            key = (match["region"], request.query.get("compartmentId"))
+            return self._page(request, self.clusters.get(key, []))
+        if route is _OCI_POOLS:
+            return self._page(request, self._pools.get(request.query.get("clusterId"), []))
+        if route is _OCI_KUBECONFIG and match["id"] in self._servers:
+            cluster = {
+                "server": self._servers[match["id"]],
+                "certificate-authority-data": self.ca_data,
+            }
+            return web.Response(text=yaml.safe_dump({"clusters": [{"cluster": cluster}]}))
+        return web.json_response({"code": "NotAuthorizedOrNotFound"}, status=404)
+
+
 class FakeCloud:
     def __init__(self):
         self.url = ""
@@ -604,6 +744,7 @@ class FakeCloud:
         self.azure = FakeAzure()
         self.aws = FakeAws()
         self.gcp = FakeGcp()
+        self.oci = FakeOci()
 
     def endpoints(self) -> CloudEndpoints:
         return CloudEndpoints(
@@ -614,6 +755,9 @@ class FakeCloud:
             aws_sso=self.url,
             gcp_oauth=f"{self.url}{_GCP_TOKEN_PATH}",
             gcp_container=self.url,
+            oci_identity=f"{self.url}/oci/identity/{{region}}",
+            oci_containerengine=f"{self.url}/oci/containerengine/{{region}}",
+            oci_cluster_request=f"{self.url}/oci/cluster-request/{{region}}",
         )
 
     def read_only_violations(self) -> list[str]:
@@ -624,7 +768,7 @@ class FakeCloud:
             and not _gcp_read_only(request)
             and not any(
                 request.method == method and route.fullmatch(request.path)
-                for method, route in _READ_ONLY
+                for method, route in (*_READ_ONLY, *_OCI_READ_ONLY)
             )
         ]
 
@@ -635,6 +779,8 @@ class FakeCloud:
             return lambda authorization: self.aws.kube_token_ok(authorization, self.url)
         if provider == "gcp":
             return self.gcp.kube_token_ok
+        if provider == "oci":
+            return lambda authorization: self.oci.kube_token_ok(authorization, self.url)
         return lambda _authorization: False
 
     async def handle(self, request: web.Request) -> web.Response:
@@ -654,9 +800,19 @@ class FakeCloud:
                 body,
             )
         )
+        oci_route = None
+        for method, route in _OCI_READ_ONLY:
+            if request.method == method and (match := route.fullmatch(request.path)):
+                if not self.oci.verifies(method, request.raw_path, request.headers, payload):
+                    return web.json_response({"code": "NotAuthenticated"}, status=401)
+                oci_route = route, match
+                break
         for pattern, (status, message) in self.fail.items():
             if re.search(pattern, request.path):
                 return _arm_error(status, "FakeFailure", message)
+        if oci_route is not None:
+            route, match = oci_route
+            return self.oci.response(route, match, request)
         response = await self.aws.handle(request, body, payload)
         if response is not None:
             return response
@@ -768,3 +924,22 @@ def write_gcloud_login(dir, *, adc, project):
         config.read_dict({"core": {"project": project}})
         with (configurations / "config_default").open("w", encoding="utf-8") as file:
             config.write(file)
+
+
+def write_oci_cli_login(dir, *, profiles, key_pem, key_path_as_written):
+    dir.mkdir(parents=True, exist_ok=True)
+    config = ConfigParser(interpolation=None)
+    config.read_dict(
+        {
+            profile: {**settings, "key_file": key_path_as_written}
+            for profile, settings in profiles.items()
+        }
+    )
+    with (dir / "config").open("w", encoding="utf-8") as file:
+        config.write(file)
+    parts = key_path_as_written.replace("\\", "/").split("/")
+    indexes = [index for index, part in enumerate(parts) if part.lower() == ".oci"]
+    mounted = parts[indexes[-1] + 1 :] if indexes else [parts[-1]]
+    path = dir.joinpath(*mounted)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(key_pem)
