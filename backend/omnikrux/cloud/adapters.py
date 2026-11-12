@@ -63,8 +63,10 @@ def make_adapters(
 ) -> dict[CloudProvider, ProviderAdapter]:
     from omnikrux.cloud.aws import AwsAdapter
     from omnikrux.cloud.azure import AzureAdapter
+    from omnikrux.cloud.gcp import GcpAdapter
 
     return {
         "azure": AzureAdapter(http, endpoints, dirs.azure),
         "aws": AwsAdapter(endpoints, dirs.aws),
+        "gcp": GcpAdapter(http, endpoints, dirs.gcloud),
     }

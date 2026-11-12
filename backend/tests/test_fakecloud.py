@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 import httpx
 
 from tests.cloud.test_azure import (
@@ -50,3 +52,25 @@ async def test_fakecloud_aws_rejects_unsigned_and_unlisted_sts_calls(fake_cloud)
     assert "<Code>SignatureDoesNotMatch</Code>" in unsigned.text
     assert unlisted.status_code == 403
     assert fake_cloud.read_only_violations() == ["POST /"]
+
+
+GCP_PROJECT = "fake-gke-project"
+GCP_LIST_PATH = f"/v1/projects/{GCP_PROJECT}/locations/-/clusters"
+
+
+async def test_fakecloud_gcp_rejects_unknown_refresh_and_access_token(fake_cloud):
+    fake_cloud.gcp.projects[GCP_PROJECT] = []
+    token_path = urlsplit(fake_cloud.endpoints().gcp_oauth).path
+    async with httpx.AsyncClient(base_url=fake_cloud.url, trust_env=False) as client:
+        rejected_grant = await client.post(
+            token_path,
+            data={"grant_type": "refresh_token", "refresh_token": "unregistered-refresh"},
+        )
+        rejected_read = await client.get(
+            GCP_LIST_PATH, headers={"Authorization": "Bearer unissued"}
+        )
+
+    assert rejected_grant.status_code in (400, 401)
+    assert rejected_grant.json()["error"] == "invalid_grant"
+    assert rejected_read.status_code == 401
+    assert fake_cloud.read_only_violations() == []

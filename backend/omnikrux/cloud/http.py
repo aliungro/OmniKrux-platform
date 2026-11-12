@@ -17,6 +17,7 @@ _PROVIDER_REASONS = {
     "AuthorizationFailed": "the login doesn't have permission",
     "SubscriptionNotFound": "the subscription wasn't found",
     "ResourceNotFound": "the resource wasn't found",
+    "SERVICE_DISABLED": "the API isn't enabled",
 }
 _STATUS_REASONS = {
     401: "the login wasn't accepted",
@@ -75,7 +76,7 @@ def cloud_error(
     return CloudError(message, status=status, code=code)
 
 
-async def _provider_code(response: aiohttp.ClientResponse) -> str | None:
+async def _provider_code(response: aiohttp.ClientResponse, cloud: str) -> str | None:
     if not 400 <= response.status < 500:
         return None
     try:
@@ -89,8 +90,21 @@ async def _provider_code(response: aiohttp.ClientResponse) -> str | None:
     except (ValueError, RecursionError):
         return None
     error = payload.get("error") if isinstance(payload, dict) else None
+    if cloud == "Google Cloud" and response.status == 403 and isinstance(error, dict):
+        details = error.get("details")
+        if isinstance(details, list) and any(
+            isinstance(detail, dict)
+            and detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo"
+            and detail.get("reason") == "SERVICE_DISABLED"
+            for detail in details
+        ):
+            return "SERVICE_DISABLED"
     code = error.get("code") if isinstance(error, dict) else error
-    return code if isinstance(code, str) and code in _PROVIDER_REASONS else None
+    return (
+        code
+        if isinstance(code, str) and code in _PROVIDER_REASONS and code != "SERVICE_DISABLED"
+        else None
+    )
 
 
 class CloudHttp:
@@ -176,7 +190,7 @@ class CloudHttp:
                         cloud,
                         action,
                         status=response.status,
-                        reason=await _provider_code(response),
+                        reason=await _provider_code(response, cloud),
                         id_label=id_label,
                     )
                 if format == "text":

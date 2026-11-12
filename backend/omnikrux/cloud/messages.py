@@ -9,6 +9,17 @@ AKS_LOCAL_ACCOUNTS = (
     "with short-lived Entra tokens: turn on Entra ID integration, or import its kubeconfig."
 )
 WORKLOAD = "Workload identity arrives with deployed mode."
+NOT_GCP_SERVICE_ACCOUNT_KEY = (
+    "That isn't a Google service-account key: paste the JSON file you downloaded "
+    "for the service account."
+)
+
+
+def gke_api_disabled(project: str) -> str:
+    return (
+        f"The Kubernetes Engine API isn't enabled in {project}, so there are no GKE clusters "
+        "to list. Enable it in the Google Cloud console if you expected some."
+    )
 
 
 def missing_login(cli: str, path: Path, login: str) -> str:

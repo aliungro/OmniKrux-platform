@@ -19,11 +19,15 @@ from aiohttp import web
 from botocore.auth import SigV4Auth, SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from multidict import CIMultiDict
 
 from omnikrux.cloud.azure import AKS_SERVER_APP_ID, ARM_SCOPE, AZURE_CLI_CLIENT_ID
 from omnikrux.cloud.endpoints import CloudEndpoints, same_origin
-from omnikrux.cloud.types import CloudProvider
+from omnikrux.cloud.gcp import GCP_SCOPE
+from omnikrux.cloud.types import GCP_PROJECT, CloudProvider
 
 _GUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 _AZURE_TOKEN = re.compile(rf"/(?P<tenant>{_GUID})/oauth2/v2\.0/token", re.IGNORECASE)
@@ -442,6 +446,150 @@ def _aws_read_only(request):
     )
 
 
+_GCP_TOKEN_PATH = "/google/oauth/token"
+_GCP_CLUSTERS = re.compile(
+    rf"/v1/projects/(?P<project>{GCP_PROJECT.pattern[1:-1]})/locations/-/clusters"
+)
+_GCP_JWT_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+
+
+def _decode_jwt_part(encoded: str) -> bytes:
+    return base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+
+
+class FakeGcp:
+    def __init__(self):
+        self.refresh_tokens: dict[str, str] = {}
+        self.service_accounts: dict[str, str] = {}
+        self.projects: dict[str, list[dict]] = {}
+        self.missing_zones: dict[str, list[str]] = {}
+        self.disabled_projects: set[str] = set()
+        self._expires: dict[str, float] = {}
+
+    def add_gke(
+        self,
+        project,
+        name,
+        *,
+        server,
+        location="europe-west1",
+        private=False,
+        pools=None,
+        labels=None,
+    ):
+        cluster = {
+            "name": name,
+            "location": location,
+            "endpoint": server,
+            "currentMasterVersion": "1.31.0",
+            "currentNodeCount": 1,
+            "nodePools": (
+                pools
+                if pools is not None
+                else [
+                    {
+                        "name": "default",
+                        "config": {"machineType": "e2-standard-2"},
+                        "version": "1.31.0",
+                    }
+                ]
+            ),
+            "resourceLabels": dict(labels or {}),
+            "privateClusterConfig": {"enablePrivateEndpoint": private},
+            "masterAuth": {"clusterCaCertificate": "ZmFrZS1jYQ=="},
+        }
+        self.projects.setdefault(project, []).append(cluster)
+        return cluster
+
+    def _valid_assertion(self, assertion: str) -> bool:
+        try:
+            header, payload, signature = assertion.split(".")
+            algorithm = json.loads(_decode_jwt_part(header))["alg"]
+            claims = json.loads(_decode_jwt_part(payload))
+            public_key = serialization.load_pem_public_key(
+                self.service_accounts[claims["iss"]].encode()
+            )
+            if (
+                algorithm != "RS256"
+                or not isinstance(public_key, rsa.RSAPublicKey)
+                or claims["aud"] != CloudEndpoints.gcp_oauth
+                or claims["scope"] != GCP_SCOPE
+                or not claims["iat"] <= time.time() < claims["exp"]
+            ):
+                return False
+            public_key.verify(
+                _decode_jwt_part(signature),
+                f"{header}.{payload}".encode("ascii"),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+        except (AttributeError, KeyError, ValueError, TypeError, InvalidSignature, RecursionError):
+            return False
+        return True
+
+    def token_response(self, form: dict, lifetime: int) -> web.Response:
+        grant = form.get("grant_type")
+        if grant == "refresh_token":
+            valid = form.get("refresh_token") in self.refresh_tokens
+        elif grant == _GCP_JWT_GRANT:
+            valid = self._valid_assertion(form.get("assertion", ""))
+        else:
+            return web.json_response({"error": "unsupported_grant_type"}, status=400)
+        if not valid:
+            return web.json_response({"error": "invalid_grant"}, status=400)
+        token = f"gcp-{len(self._expires) + 1}"
+        self._expires[token] = time.monotonic() + lifetime
+        return web.json_response({"access_token": token, "expires_in": lifetime})
+
+    def kube_token_ok(self, authorization: str | None) -> bool:
+        return bool(
+            authorization
+            and authorization.startswith("Bearer ")
+            and self._expires.get(authorization.removeprefix("Bearer "), 0) > time.monotonic()
+        )
+
+    def list_response(self, project: str, request: web.Request) -> web.Response:
+        if not self.kube_token_ok(request.headers.get("Authorization")):
+            return web.json_response(
+                {"error": {"code": 401, "status": "UNAUTHENTICATED"}}, status=401
+            )
+        if project in self.disabled_projects:
+            return web.json_response(
+                {
+                    "error": {
+                        "code": 403,
+                        "status": "PERMISSION_DENIED",
+                        "details": [
+                            {
+                                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                                "reason": "SERVICE_DISABLED",
+                                "domain": "googleapis.com",
+                                "metadata": {"service": "container.googleapis.com"},
+                            },
+                        ],
+                    },
+                },
+                status=403,
+            )
+        result = {}
+        if project in self.projects:
+            result["clusters"] = self.projects[project]
+        if project in self.missing_zones:
+            result["missingZones"] = self.missing_zones[project]
+        return web.json_response(result)
+
+
+def _gcp_read_only(request: CloudRequest) -> bool:
+    if request.method == "GET":
+        return _GCP_CLUSTERS.fullmatch(request.path) is not None
+    return (
+        request.method == "POST"
+        and request.path == _GCP_TOKEN_PATH
+        and isinstance(request.body, dict)
+        and request.body.get("grant_type") in ("refresh_token", _GCP_JWT_GRANT)
+    )
+
+
 class FakeCloud:
     def __init__(self):
         self.url = ""
@@ -455,6 +603,7 @@ class FakeCloud:
         self.fail: dict[str, tuple[int, str]] = {}
         self.azure = FakeAzure()
         self.aws = FakeAws()
+        self.gcp = FakeGcp()
 
     def endpoints(self) -> CloudEndpoints:
         return CloudEndpoints(
@@ -463,6 +612,8 @@ class FakeCloud:
             aws_sts=self.url,
             aws_eks=self.url,
             aws_sso=self.url,
+            gcp_oauth=f"{self.url}{_GCP_TOKEN_PATH}",
+            gcp_container=self.url,
         )
 
     def read_only_violations(self) -> list[str]:
@@ -470,6 +621,7 @@ class FakeCloud:
             f"{request.method} {request.path}"
             for request in self.requests
             if not _aws_read_only(request)
+            and not _gcp_read_only(request)
             and not any(
                 request.method == method and route.fullmatch(request.path)
                 for method, route in _READ_ONLY
@@ -481,6 +633,8 @@ class FakeCloud:
             return self.azure.kube_token_ok
         if provider == "aws":
             return lambda authorization: self.aws.kube_token_ok(authorization, self.url)
+        if provider == "gcp":
+            return self.gcp.kube_token_ok
         return lambda _authorization: False
 
     async def handle(self, request: web.Request) -> web.Response:
@@ -506,6 +660,12 @@ class FakeCloud:
         response = await self.aws.handle(request, body, payload)
         if response is not None:
             return response
+        if request.method == "POST" and request.path == _GCP_TOKEN_PATH:
+            return self.gcp.token_response(
+                body if isinstance(body, dict) else {}, self.token_lifetime["gcp"]
+            )
+        if request.method == "GET" and (gke := _GCP_CLUSTERS.fullmatch(request.path)):
+            return self.gcp.list_response(gke["project"], request)
         for method, route in _READ_ONLY:
             match = route.fullmatch(request.path)
             if request.method == method and match is not None:
@@ -594,3 +754,17 @@ def write_aws_cli_login(dir, *, profiles, credentials, sso_cache=None):
         cache.mkdir(parents=True, exist_ok=True)
         for name, token in sso_cache.items():
             (cache / f"{name}.json").write_text(json.dumps(token), encoding="utf-8")
+
+
+def write_gcloud_login(dir, *, adc, project):
+    dir.mkdir(parents=True, exist_ok=True)
+    configurations = dir / "configurations"
+    configurations.mkdir(exist_ok=True)
+    if adc is not None:
+        (dir / "application_default_credentials.json").write_text(json.dumps(adc), encoding="utf-8")
+    if project is not None:
+        (dir / "active_config").write_text("default\n", encoding="utf-8")
+        config = ConfigParser(interpolation=None)
+        config.read_dict({"core": {"project": project}})
+        with (configurations / "config_default").open("w", encoding="utf-8") as file:
+            config.write(file)
