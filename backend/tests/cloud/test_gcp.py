@@ -583,6 +583,7 @@ async def test_entered_key_cannot_redirect_default_oauth(service_key, monkeypatc
         {"refresh_token": None},
         {"refresh_token": ""},
         {"refresh_token": 42},
+        {"refresh_token": "\ud800"},
         {"access_token": None, "refresh_token": "untrusted-rotation"},
         {"expires_in": None, "refresh_token": "untrusted-rotation"},
         {"scope": ["not-a-string"], "refresh_token": "untrusted-rotation"},

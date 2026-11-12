@@ -85,9 +85,11 @@ def _oauth_success(body: bytes) -> _OAuthResponse:
         if type(lifetime) is not int or lifetime <= 0:
             raise ValueError
         datetime.now(UTC) + timedelta(seconds=lifetime)
-        for key in ("refresh_token", "id_token"):
-            if key in payload:
-                _required_string(payload[key])
+        if "refresh_token" in payload:
+            # The SDK encodes the rotated token into the next form using UTF-8.
+            _required_string(payload["refresh_token"]).encode("utf-8")
+        if "id_token" in payload:
+            _required_string(payload["id_token"])
         if "scope" in payload and not isinstance(payload["scope"], str):
             raise TypeError
     except (ValueError, TypeError, OverflowError, RecursionError):
