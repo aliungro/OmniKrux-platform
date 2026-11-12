@@ -1,20 +1,28 @@
 """Loopback cloud APIs with explicit read-only routes and expiring fake credentials."""
 
 import base64
+import hmac
 import json
 import re
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from configparser import ConfigParser
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import pytest
 import yaml
 from aiohttp import web
+from botocore.auth import SigV4Auth, SigV4QueryAuth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 from multidict import CIMultiDict
 
 from omnikrux.cloud.azure import AKS_SERVER_APP_ID, ARM_SCOPE, AZURE_CLI_CLIENT_ID
-from omnikrux.cloud.endpoints import CloudEndpoints
+from omnikrux.cloud.endpoints import CloudEndpoints, same_origin
 from omnikrux.cloud.types import CloudProvider
 
 _GUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
@@ -196,6 +204,244 @@ def _arm_error(status: int, code: str, message: str) -> web.Response:
     return web.json_response({"error": {"code": code, "message": message}}, status=status)
 
 
+_AWS_STS = re.compile(r"/")
+_AWS_EKS = re.compile(r"/clusters(?:/(?P<cluster>[^/]+)(?:/node-groups(?:/(?P<group>[^/]+))?)?)?")
+_AWS_SSO = re.compile(r"/federation/credentials")
+_STS_ACTIONS = {"GetCallerIdentity", "AssumeRole"}
+_CREDENTIAL_SCOPE = re.compile(r"([^/]+)/(\d{8})/([^/]+)/(sts|eks)/aws4_request")
+_STS_NAMESPACE = "https://sts.amazonaws.com/doc/2011-06-15/"
+
+
+def _sts_xml(name, fields, status=200):
+    root = ET.Element(name, xmlns=_STS_NAMESPACE)
+
+    def fill(parent, mapping):
+        for key, value in mapping.items():
+            child = ET.SubElement(parent, key)
+            if isinstance(value, dict):
+                fill(child, value)
+            else:
+                child.text = value
+
+    fill(root, fields)
+    return web.Response(body=ET.tostring(root), content_type="text/xml", status=status)
+
+
+def _aws_error(service, status, code, message):
+    if service == "sts":
+        return _sts_xml("ErrorResponse", {"Error": {"Code": code, "Message": message}}, status)
+    return web.json_response(
+        {"message": message}, headers={"x-amzn-errortype": code}, status=status
+    )
+
+
+class FakeAws:
+    def __init__(self):
+        self.keys: dict[str, str] = {}
+        self.account = "123456789012"
+        self.arn = f"arn:aws:iam::{self.account}:user/omnikrux-test"
+        self.clusters: dict[str, list[dict]] = {}
+        self.region_fail: dict[str, tuple[int, str, str]] = {}
+        self.sso_tokens: dict[str, dict] = {}
+        self._sessions: dict[str, str] = {}
+
+    def add_eks(self, region, name, *, server, public=True, nodegroups=(), tags=None):
+        self.clusters.setdefault(region, []).append(
+            {
+                "arn": f"arn:aws:eks:{region}:{self.account}:cluster/{name}",
+                "name": name,
+                "version": "1.31",
+                "endpoint": server,
+                "certificateAuthority": {"data": "dGVzdC1jYQ=="},
+                "resourcesVpcConfig": {"endpointPublicAccess": public},
+                "nodegroups": list(nodegroups),
+                "tags": tags or {},
+            }
+        )
+
+    def _signing_credentials(self, scope, service, timestamp, token):
+        match = _CREDENTIAL_SCOPE.fullmatch(scope or "")
+        if match is None or match[4] != service or timestamp[:8] != match[2]:
+            return None
+        access_key, region = match[1], match[3]
+        secret = self.keys.get(access_key)
+        if secret is None or (access_key in self._sessions and self._sessions[access_key] != token):
+            return None
+        return Credentials(access_key, secret, token), region
+
+    @staticmethod
+    def _signature(signer, request, timestamp):
+        request.context["timestamp"] = timestamp
+        canonical = signer.canonical_request(request)
+        return signer.signature(signer.string_to_sign(request, canonical), request)
+
+    def _request_region(self, request, service, payload):
+        authorization = request.headers.get("Authorization", "")
+        scheme, _, fields = authorization.partition(" ")
+        if scheme != "AWS4-HMAC-SHA256":
+            return None
+        parts = dict(part.strip().split("=", 1) for part in fields.split(",") if "=" in part)
+        timestamp = request.headers.get("X-Amz-Date", "")
+        signed = parts.get("SignedHeaders", "").split(";")
+        if "host" not in signed or any(key not in request.headers for key in signed):
+            return None
+        token = request.headers.get("X-Amz-Security-Token")
+        auth = self._signing_credentials(parts.get("Credential"), service, timestamp, token)
+        if auth is None or (token is not None and "x-amz-security-token" not in signed):
+            return None
+        creds, region = auth
+        signer = SigV4Auth(creds, service, region)
+        rebuilt = AWSRequest(
+            method=request.method,
+            url=f"{request.scheme}://{request.host}{request.raw_path}",
+            headers={key: request.headers[key] for key in signed},
+            data=payload,
+        )
+        signature = self._signature(signer, rebuilt, timestamp)
+        return region if hmac.compare_digest(signature, parts.get("Signature", "")) else None
+
+    def kube_token_ok(self, authorization, sts_url):
+        if not isinstance(authorization, str) or not authorization.startswith("Bearer k8s-aws-v1."):
+            return False
+        encoded = authorization.removeprefix("Bearer k8s-aws-v1.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", encoded):
+            return False
+        try:
+            url = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("ascii")
+            split = urlsplit(url)
+            expected = urlsplit(sts_url)
+            if not same_origin(url, sts_url) or split.path != f"{expected.path.rstrip('/')}/":
+                return False
+            pairs = parse_qsl(split.query, strict_parsing=True, keep_blank_values=True)
+            query = dict(pairs)
+            if len(query) != len(pairs):
+                return False
+            if (
+                query.get("Action") != "GetCallerIdentity"
+                or query.get("Version") != "2011-06-15"
+                or query.get("X-Amz-SignedHeaders") != "host;x-k8s-aws-id"
+                or query.get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256"
+                or query.get("X-Amz-Expires") != "60"
+            ):
+                return False
+            timestamp = query["X-Amz-Date"]
+            signed_at = datetime.strptime(timestamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+            if not 0 <= (datetime.now(UTC) - signed_at).total_seconds() < 900:
+                return False
+            auth = self._signing_credentials(
+                query["X-Amz-Credential"], "sts", timestamp, query.get("X-Amz-Security-Token")
+            )
+            if auth is None:
+                return False
+            creds, region = auth
+            supplied = query.pop("X-Amz-Signature")
+            unsigned = split._replace(query=urlencode(query, quote_via=quote)).geturl()
+            signer = SigV4QueryAuth(creds, "sts", region)
+            for cluster in self.clusters.get(region, ()):
+                request = AWSRequest(
+                    method="GET", url=unsigned, headers={"x-k8s-aws-id": cluster["name"]}
+                )
+                if hmac.compare_digest(supplied, self._signature(signer, request, timestamp)):
+                    return True
+        except (KeyError, ValueError, TypeError):
+            pass
+        return False
+
+    def _sts_response(self, body):
+        action = body.get("Action")
+        if action == "GetCallerIdentity":
+            result = {"Account": self.account, "Arn": self.arn, "UserId": "OMNIKRUX"}
+        elif action == "AssumeRole":
+            role = body.get("RoleArn")
+            session = body.get("RoleSessionName")
+            if not role or not session:
+                return _aws_error("sts", 400, "ValidationError", "Role and session are required.")
+            access_key = f"ASIA{len(self._sessions):016d}"
+            secret = f"fake-assumed-role-secret-{access_key}"
+            token = f"fake-assumed-role-token-{access_key}"
+            self.keys[access_key] = secret
+            self._sessions[access_key] = token
+            result = {
+                "Credentials": {
+                    "AccessKeyId": access_key,
+                    "SecretAccessKey": secret,
+                    "SessionToken": token,
+                    "Expiration": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                }
+            }
+        else:
+            return _aws_error("sts", 400, "InvalidAction", "This operation is not served.")
+        return _sts_xml(f"{action}Response", {f"{action}Result": result})
+
+    @staticmethod
+    def _page(request, key, values):
+        try:
+            start = int(request.query.get("nextToken", "0"))
+            if start < 0:
+                raise ValueError
+        except ValueError:
+            return _aws_error("eks", 400, "InvalidParameterException", "Invalid page token.")
+        result = {key: values[start : start + 2]}
+        if start + 2 < len(values):
+            result["nextToken"] = str(start + 2)
+        return web.json_response(result)
+
+    def _eks_response(self, request, region, route):
+        if region in self.region_fail:
+            return _aws_error("eks", *self.region_fail[region])
+        clusters = self.clusters.get(region, [])
+        name = route["cluster"]
+        if name is None:
+            return self._page(request, "clusters", [c["name"] for c in clusters])
+        cluster = next((c for c in clusters if c["name"] == name), None)
+        if cluster is None:
+            return _aws_error("eks", 404, "ResourceNotFoundException", "Cluster is missing.")
+        if "/node-groups" not in request.path:
+            return web.json_response(
+                {"cluster": {k: v for k, v in cluster.items() if k != "nodegroups"}}
+            )
+        group = route["group"]
+        if group is None:
+            return self._page(
+                request, "nodegroups", [n["nodegroupName"] for n in cluster["nodegroups"]]
+            )
+        node = next((n for n in cluster["nodegroups"] if n["nodegroupName"] == group), None)
+        if node is None:
+            return _aws_error("eks", 404, "ResourceNotFoundException", "Node group is missing.")
+        return web.json_response({"nodegroup": node})
+
+    async def handle(self, request, body, payload):
+        if request.method == "GET" and _AWS_SSO.fullmatch(request.path):
+            credentials = self.sso_tokens.get(request.headers.get("x-amz-sso_bearer_token"))
+            if credentials is None:
+                return _aws_error("sso", 401, "UnauthorizedException", "Token not accepted.")
+            self.keys[credentials["accessKeyId"]] = credentials["secretAccessKey"]
+            self._sessions[credentials["accessKeyId"]] = credentials["sessionToken"]
+            return web.json_response({"roleCredentials": credentials})
+        if request.method == "POST" and _AWS_STS.fullmatch(request.path):
+            if self._request_region(request, "sts", payload) is None:
+                return _aws_error("sts", 403, "SignatureDoesNotMatch", "Invalid request signature.")
+            return self._sts_response(body if isinstance(body, dict) else {})
+        route = _AWS_EKS.fullmatch(request.path)
+        if request.method == "GET" and route is not None:
+            region = self._request_region(request, "eks", payload)
+            if region is None:
+                return _aws_error("eks", 403, "SignatureDoesNotMatch", "Invalid request signature.")
+            return self._eks_response(request, region, route)
+        return None
+
+
+def _aws_read_only(request):
+    if request.method == "GET":
+        return _AWS_EKS.fullmatch(request.path) or _AWS_SSO.fullmatch(request.path)
+    return (
+        request.method == "POST"
+        and _AWS_STS.fullmatch(request.path)
+        and isinstance(request.body, dict)
+        and request.body.get("Action") in _STS_ACTIONS
+    )
+
+
 class FakeCloud:
     def __init__(self):
         self.url = ""
@@ -208,15 +454,23 @@ class FakeCloud:
         }
         self.fail: dict[str, tuple[int, str]] = {}
         self.azure = FakeAzure()
+        self.aws = FakeAws()
 
     def endpoints(self) -> CloudEndpoints:
-        return CloudEndpoints(azure_login=self.url, azure_arm=self.url)
+        return CloudEndpoints(
+            azure_login=self.url,
+            azure_arm=self.url,
+            aws_sts=self.url,
+            aws_eks=self.url,
+            aws_sso=self.url,
+        )
 
     def read_only_violations(self) -> list[str]:
         return [
             f"{request.method} {request.path}"
             for request in self.requests
-            if not any(
+            if not _aws_read_only(request)
+            and not any(
                 request.method == method and route.fullmatch(request.path)
                 for method, route in _READ_ONLY
             )
@@ -225,13 +479,16 @@ class FakeCloud:
     def kube_token_ok(self, provider: CloudProvider) -> Callable[[str | None], bool]:
         if provider == "azure":
             return self.azure.kube_token_ok
+        if provider == "aws":
+            return lambda authorization: self.aws.kube_token_ok(authorization, self.url)
         return lambda _authorization: False
 
     async def handle(self, request: web.Request) -> web.Response:
         body: object = None
-        if request.can_read_body:
+        payload = await request.read()
+        if payload:
             if request.content_type == "application/x-www-form-urlencoded":
-                body = dict(await request.post())
+                body = dict(parse_qsl(await request.text(), keep_blank_values=True))
             else:
                 body = await request.text()
         self.requests.append(
@@ -246,6 +503,9 @@ class FakeCloud:
         for pattern, (status, message) in self.fail.items():
             if re.search(pattern, request.path):
                 return _arm_error(status, "FakeFailure", message)
+        response = await self.aws.handle(request, body, payload)
+        if response is not None:
+            return response
         for method, route in _READ_ONLY:
             match = route.fullmatch(request.path)
             if request.method == method and match is not None:
@@ -311,3 +571,26 @@ def write_azure_cli_login(dir, *, subscriptions, refresh_token, user):
     (dir / "msal_token_cache.json").write_text(
         json.dumps({"Account": accounts, "RefreshToken": tokens}), encoding="utf-8"
     )
+
+
+def write_aws_cli_login(dir, *, profiles, credentials, sso_cache=None):
+    dir.mkdir(parents=True, exist_ok=True)
+    config = ConfigParser(interpolation=None)
+    config.read_dict(
+        {
+            name
+            if name == "default" or name.startswith("sso-session ")
+            else f"profile {name}": values
+            for name, values in profiles.items()
+        }
+    )
+    shared = ConfigParser(interpolation=None)
+    shared.read_dict(credentials)
+    for name, settings in (("config", config), ("credentials", shared)):
+        with (dir / name).open("w", encoding="utf-8") as file:
+            settings.write(file)
+    if sso_cache is not None:
+        cache = dir / "sso" / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        for name, token in sso_cache.items():
+            (cache / f"{name}.json").write_text(json.dumps(token), encoding="utf-8")

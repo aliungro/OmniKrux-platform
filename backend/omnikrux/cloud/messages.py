@@ -18,6 +18,14 @@ def missing_login(cli: str, path: Path, login: str) -> str:
     )
 
 
+def aws_missing_login(path: Path) -> str:
+    return (
+        f"No AWS CLI login found at {path}. Sign in with `aws configure` or `aws sso login` "
+        "on this machine and mount the folder into the container (see the README), or enter "
+        "credentials instead."
+    )
+
+
 def unreadable_login(path: Path) -> str:
     return (
         f"Found {path}, but the console can't read it (permission denied). "

@@ -40,3 +40,13 @@ async def test_fakecloud_flags_unlisted_calls(fake_cloud):
         f"DELETE /subscriptions/{SUBSCRIPTION}",
         f"POST /subscriptions/{SUBSCRIPTION}/unknown",
     ]
+
+
+async def test_fakecloud_aws_rejects_unsigned_and_unlisted_sts_calls(fake_cloud):
+    async with httpx.AsyncClient(base_url=fake_cloud.url, trust_env=False) as client:
+        unsigned = await client.post("/", data={"Action": "GetCallerIdentity"})
+        unlisted = await client.post("/", data={"Action": "GetSessionToken"})
+    assert unsigned.status_code == 403
+    assert "<Code>SignatureDoesNotMatch</Code>" in unsigned.text
+    assert unlisted.status_code == 403
+    assert fake_cloud.read_only_violations() == ["POST /"]

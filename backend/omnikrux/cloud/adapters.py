@@ -61,6 +61,10 @@ class ProviderAdapter(Protocol):
 def make_adapters(
     http: CloudHttp, endpoints: CloudEndpoints, dirs: CloudDirs
 ) -> dict[CloudProvider, ProviderAdapter]:
+    from omnikrux.cloud.aws import AwsAdapter
     from omnikrux.cloud.azure import AzureAdapter
 
-    return {"azure": AzureAdapter(http, endpoints, dirs.azure)}
+    return {
+        "azure": AzureAdapter(http, endpoints, dirs.azure),
+        "aws": AwsAdapter(endpoints, dirs.aws),
+    }
