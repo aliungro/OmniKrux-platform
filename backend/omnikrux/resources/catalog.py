@@ -11,6 +11,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel
 
 from omnikrux.clusters.registry import ClusterInfo
+from omnikrux.kube.client import CloudApiClient
 from omnikrux.kube.connections import ClusterConnections, cloud_kube_error, kube_error_message
 from omnikrux.kube.discovery import Discovery, discover
 from omnikrux.resources.kinds import HELM_RELEASES, KINDS, KindSpec, generic_spec, kind_key
@@ -191,6 +192,7 @@ class KindCatalog:
         cloud = self._is_cloud is not None and await self._is_cloud(cluster_id)
         try:
             async with self._connections.api(cluster_id) as api:
+                cloud = cloud or isinstance(api, CloudApiClient)
                 discovery = await discover(api, cloud=cloud)
         except Exception as exc:
             if not cloud or (isinstance(exc, KeyError) and exc.args == (cluster_id,)):

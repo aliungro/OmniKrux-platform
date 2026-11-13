@@ -1,16 +1,26 @@
+import asyncio
 import json
+import logging
+from dataclasses import asdict
 
 import aiohttp
+import httpx
 import pytest
 import yaml
+from aiohttp import web
 from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
+from omnikrux.cloud.azure import AKS_SERVER_APP_ID, AzureCliLogin
+from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
+from omnikrux.exec.session import KubeExecChannel
 from omnikrux.kube.client import ClusterUnavailable
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.main import create_app
-from tests.fakekube import kubeconfig_for
+from tests.fakecloud import write_aws_cli_login, write_azure_cli_login
+from tests.fakekube import kubeconfig_for, status_body
+from tests.watch.test_ws import RecordingWebSocket, watch
 
 
 class FakeRegistry:
@@ -154,3 +164,318 @@ async def test_source_for_uses_connections(fake_api, tmp_path):
         finally:
             await source.aclose()
     assert rv == "42" and items[0]["metadata"]["name"] == "web-1"
+
+
+@pytest.fixture
+def fake_bridge_lookup(monkeypatch):
+    def local_bridge(dirs, endpoints, http):
+        from omnikrux.cloud.exec_bridge import ExecBridge
+
+        return ExecBridge(dirs, endpoints, http, which=binaries.get)
+
+    binaries = {}
+    monkeypatch.setattr("omnikrux.main.ExecBridge", local_bridge, raising=False)
+    monkeypatch.setattr("omnikrux.kube.tokens.shutil.which", binaries.get)
+
+    async def no_subprocess(*args, **kwargs):
+        pytest.fail("Unexpected exec plugin subprocess")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", no_subprocess)
+    return binaries
+
+
+async def test_imported_eks_kubeconfig_watches_through_bridge(
+    fake_api, fake_cloud, tmp_path, fake_bridge_lookup
+):
+    aws_dir = tmp_path / "aws"
+    region = "eu-west-1"
+    access_key = "AKIDBRIDGEUPLOAD"
+    secret_key = "synthetic-bridge-upload-secret"
+    write_aws_cli_login(
+        aws_dir,
+        profiles={"default": {"region": region}},
+        credentials={
+            "default": {"aws_access_key_id": access_key, "aws_secret_access_key": secret_key}
+        },
+    )
+    fake_cloud.aws.keys[access_key] = secret_key
+    fake_cloud.aws.add_eks(region, "prod", server=fake_api.url)
+    accepts_token = fake_cloud.kube_token_ok("aws")
+    watch_started = asyncio.Event()
+
+    def check_token(header):
+        if not accepts_token(header):
+            return False
+        _, path, query = fake_api.requests[-1]
+        if path == "/api/v1/pods" and query.get("watch", "").lower() == "true":
+            watch_started.set()
+        return True
+
+    fake_api.token_check = check_token
+    config = kubeconfig_for(fake_api)
+    exec_config = {
+        "apiVersion": "client.authentication.k8s.io/v1beta1",
+        "command": "aws",
+        "args": ["eks", "get-token", "--cluster-name", "prod", "--region", region],
+    }
+    config["users"][0]["user"] = {"exec": exec_config}
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            kubeconfig="",
+            in_container=False,
+            aws_dir=aws_dir,
+            cloud_endpoints=json.dumps(asdict(fake_cloud.endpoints())),
+        )
+    )
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/api/clusters/kubeconfig", json={"kubeconfig": yaml.safe_dump(config)}
+            )
+        assert response.status_code == 200
+        (cluster,) = response.json()
+        ws = RecordingWebSocket(app)
+        handler = asyncio.create_task(watch(ws, "pods"))
+        try:
+            async with asyncio.timeout(5):
+                while True:
+                    frame = await ws.sent.get()
+                    if frame["type"] == "cluster_status":
+                        assert frame["cluster_id"] == cluster["id"]
+                        assert frame["state"] != "error", frame
+                        if frame["state"] == "ready":
+                            break
+                await watch_started.wait()
+            channel = await KubeExecChannel.open(
+                app.state.connections, cluster["id"], "demo", "web-1", "app", ["sh"]
+            )
+            await channel.close()
+        finally:
+            ws.gone.set()
+            await asyncio.wait_for(handler, 5)
+        stored = await app.state.registry.get_kubeconfig(cluster["id"])
+        assert stored["users"][0]["user"] == {"exec": exec_config}
+
+    assert fake_cloud.requests == []
+
+
+@pytest.fixture
+def imported_azure(fake_api, fake_cloud, tmp_path, fake_bridge_lookup):
+    tenant = "a1656f69-93d5-4e1b-9583-d3722c77dafe"
+    subscription = "050d52ed-0bc8-46c3-95e1-a7aef67ff331"
+    refresh = "synthetic-import-refresh"
+    user = "import-test@example.test"
+    settings = Settings(
+        data_dir=tmp_path,
+        kubeconfig="",
+        in_container=False,
+        cloud_endpoints=json.dumps(asdict(fake_cloud.endpoints())),
+    )
+    write_azure_cli_login(
+        settings.cloud_dirs.azure,
+        subscriptions=[{"id": subscription, "name": "Test", "tenantId": tenant, "isDefault": True}],
+        refresh_token=refresh,
+        user=user,
+    )
+    fake_cloud.azure.refresh_tokens[refresh] = tenant, user
+    config = kubeconfig_for(fake_api)
+    config["users"][0]["user"] = {
+        "exec": {
+            "apiVersion": "client.authentication.k8s.io/v1beta1",
+            "command": "kubelogin",
+            "args": ["get-token", "--login", "azurecli", "--server-id", AKS_SERVER_APP_ID],
+        }
+    }
+    return create_app(settings), config
+
+
+async def test_imported_azure_shutdown_drains_forgotten_refresh(imported_azure, monkeypatch):
+    app, config = imported_azure
+    started, release, exiting, completed = (asyncio.Event() for _ in range(4))
+    observed = []
+    original_token = AzureCliLogin.token
+
+    async def delayed_token(login, *args):
+        started.set()
+        await release.wait()
+        try:
+            return await original_token(login, *args)
+        finally:
+            observed.append("refresh finished")
+            completed.set()
+
+    monkeypatch.setattr(AzureCliLogin, "token", delayed_token)
+
+    async def run_app():
+        async with app.router.lifespan_context(app):
+            http = app.state.cloud.http
+            original_close = http.close
+
+            async def record_close():
+                observed.append("HTTP closed")
+                await original_close()
+
+            monkeypatch.setattr(http, "close", record_close)
+            [cluster] = await app.state.registry.upsert_from_kubeconfig(
+                yaml.safe_dump(config), rewrite_loopback=False, source=SOURCE_UPLOAD
+            )
+            connections = app.state.connections
+            waiter = asyncio.create_task(connections.open_api(cluster.id))
+            await asyncio.wait_for(started.wait(), 5)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            connections.forget(cluster.id)
+            exiting.set()
+
+    task = asyncio.create_task(run_app())
+    try:
+        await asyncio.wait_for(exiting.wait(), 5)
+        await asyncio.sleep(0.1)
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 5)
+        await asyncio.wait_for(completed.wait(), 5)
+        await type(app.state.cloud.http).close(app.state.cloud.http)
+
+    assert observed == ["refresh finished", "HTTP closed"]
+
+
+@pytest.mark.parametrize("scenario", ["describe", "watch", "kinds"])
+async def test_imported_azure_diagnostics_hide_echoed_bearer(
+    imported_azure, fake_cloud, fake_api, monkeypatch, caplog, scenario
+):
+    app, config = imported_azure
+    fake_api.token_check = fake_cloud.kube_token_ok("azure")
+    route = fake_api._route
+    exposed = []
+
+    async def echo(request):
+        if scenario == "describe" and request.path == "/api/v1/namespaces/demo/pods/web-1":
+            token = request.headers["Authorization"].removeprefix("Bearer ")
+            exposed.append(token)
+            return web.json_response(status_body(403, "Forbidden", token), status=403)
+        if scenario == "watch" and request.query.get("watch") == "true":
+            token = request.headers["Authorization"].removeprefix("Bearer ")
+            exposed.append(token)
+            event = {"type": "ERROR", "object": status_body(403, "Forbidden", token)}
+            return web.Response(text=json.dumps(event) + "\n", content_type="application/json")
+        if scenario == "kinds" and request.path == "/apis":
+            token = request.headers["Authorization"].removeprefix("Bearer ")
+            exposed.append(token)
+            response = await route(request)
+            body = json.loads(response.body)
+            group = f"{token}.invalid@example.test"
+            body["groups"].append(
+                {
+                    "name": group,
+                    "preferredVersion": {"version": "v1", "groupVersion": f"{group}/v1"},
+                }
+            )
+            return web.json_response(body)
+        return await route(request)
+
+    monkeypatch.setattr(fake_api, "_route", echo)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client,
+    ):
+        response = await client.post(
+            "/api/clusters/kubeconfig", json={"kubeconfig": yaml.safe_dump(config)}
+        )
+        assert response.status_code == 200
+        [cluster] = response.json()
+        with caplog.at_level(logging.DEBUG):
+            if scenario == "describe":
+                response = await client.get(
+                    f"/api/clusters/{cluster['id']}/pods/demo/web-1/describe"
+                )
+                assert response.status_code == 502
+                published = response.text
+            elif scenario == "kinds":
+                response = await client.get("/api/kinds")
+                assert response.status_code == 200
+                assert response.json()["clusters"][cluster["id"]]["state"] == "ok"
+                published = response.text + json.dumps(fake_api.requests)
+            else:
+                ws = RecordingWebSocket(app)
+                handler = asyncio.create_task(watch(ws, "pods"))
+                try:
+                    async with asyncio.timeout(5):
+                        while True:
+                            frame = await ws.sent.get()
+                            if frame.get("state") == "error":
+                                break
+                finally:
+                    ws.gone.set()
+                    await asyncio.wait_for(handler, 5)
+                published = json.dumps(frame)
+
+    assert exposed, "the request did not reach the injected failure"
+    for token in exposed:
+        assert token not in published
+        assert token not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("plugin", "protected"), [(None, False), ("custom-plugin", False), ("aws", True)]
+)
+async def test_imported_describe_preserves_unrelated_diagnostics(
+    plugin, protected, fake_api, fake_bridge_lookup, tmp_path, monkeypatch
+):
+    config = kubeconfig_for(fake_api)
+    if plugin:
+        fake_bridge_lookup[plugin] = plugin
+        version = "client.authentication.k8s.io/v1beta1"
+        config["users"][0]["user"] = {"exec": {"command": plugin, "apiVersion": version}}
+
+        class Plugin:
+            returncode = 0
+
+            async def communicate(self):
+                return json.dumps(
+                    {
+                        "kind": "ExecCredential",
+                        "apiVersion": version,
+                        "status": {"token": "synthetic-plugin"},
+                    }
+                ).encode(), b""
+
+        async def launch(executable, *args, **kwargs):
+            assert executable == plugin
+            return Plugin()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+
+    reason = "Synthetic pod rejection detail."
+    fake_api.token_check = lambda header: (
+        header
+        == (
+            "Bearer synthetic-plugin" if plugin else f"Bearer {config['users'][0]['user']['token']}"
+        )
+    )
+
+    async def refuse(_request):
+        return web.json_response(status_body(403, "Forbidden", reason), status=403)
+
+    monkeypatch.setattr(fake_api, "_route", refuse)
+    app = create_app(Settings(data_dir=tmp_path, kubeconfig="", in_container=False))
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client,
+    ):
+        [cluster] = await app.state.registry.upsert_from_kubeconfig(
+            yaml.safe_dump(config), rewrite_loopback=False, source=SOURCE_UPLOAD
+        )
+        response = await client.get(f"/api/clusters/{cluster.id}/pods/demo/web-1/describe")
+
+    assert response.status_code == 502
+    assert (reason in response.text) is not protected

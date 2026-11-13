@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from urllib.parse import urlencode
@@ -550,3 +551,41 @@ async def test_azure_pagination_rejects_malformed_link_safely(
         "Azure returned an invalid link to the next page of clusters. Try again in a minute."
     )
     assert len(received) == 1
+
+
+async def test_malformed_oauth_rotation_preserves_last_usable_cli_token(
+    cli_folder, azure_cloud, http, caplog
+):
+    paths = [cli_folder / "azureProfile.json", cli_folder / "msal_token_cache.json"]
+    initial = [path.read_bytes() for path in paths]
+    received = []
+    prior_rotation = "synthetic-valid-memory-refresh"
+
+    async def oauth(request):
+        received.append((await request.post())["refresh_token"])
+        reply = {"access_token": f"synthetic-access-{len(received)}", "expires_in": 3600}
+        if len(received) == 1:
+            reply["refresh_token"] = prior_rotation
+        elif len(received) == 2:
+            # json_response emits the lone surrogate as an escaped JSON code unit.
+            reply["refresh_token"] = "synthetic-poison-\ud800"
+        return web.json_response(reply)
+
+    async with serve_cloud_handler(oauth) as url:
+        endpoints = replace(azure_cloud.endpoints(), azure_login=url)
+        login = AzureCliLogin(cli_folder, http, endpoints)
+        with caplog.at_level(logging.DEBUG):
+            assert (await login.token(TENANT, ARM_SCOPE)).value == "synthetic-access-1"
+            failure = None
+            try:
+                await login.token(TENANT, ARM_SCOPE)
+            except CloudError as exc:
+                failure = str(exc)
+            # Attempt the next exchange even if the malformed reply incorrectly succeeded.
+            assert (await login.token(TENANT, ARM_SCOPE)).value == "synthetic-access-3"
+
+    assert failure == "Azure sent an unreadable token. Check the login, then try again."
+    assert received == [REFRESH_TOKEN, prior_rotation, prior_rotation]
+    assert [path.read_bytes() for path in paths] == initial
+    for secret in (REFRESH_TOKEN, prior_rotation, "synthetic-poison-", "synthetic-access-2"):
+        assert secret not in caplog.text

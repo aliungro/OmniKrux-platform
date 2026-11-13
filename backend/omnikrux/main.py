@@ -13,6 +13,7 @@ from omnikrux.actions.pipeline import router as actions_router
 from omnikrux.audit.api import router as audit_router
 from omnikrux.audit.store import AuditLog
 from omnikrux.cloud.adapters import make_adapters
+from omnikrux.cloud.exec_bridge import ExecBridge
 from omnikrux.cloud.http import CloudHttp
 from omnikrux.cloud.store import CloudAccountStore
 from omnikrux.cloud.tokens import CloudServices, TokenBroker
@@ -26,6 +27,7 @@ from omnikrux.clusters.registry import SOURCE_FILE, ClusterRegistry
 from omnikrux.config import Settings, get_settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.exec.api import router as exec_router
+from omnikrux.kube.client import CloudApiClient
 from omnikrux.kube.connections import ClusterConnections, cloud_kube_error
 from omnikrux.kube.source import KubeResourceSource
 from omnikrux.logs.api import router as logs_router
@@ -185,9 +187,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         http = CloudHttp()
         store = CloudAccountStore(sessionmaker, box)
-        adapters = make_adapters(http, endpoints, settings.cloud_dirs)
+        dirs = settings.cloud_dirs
+        adapters = make_adapters(http, endpoints, dirs)
         broker = TokenBroker(registry, store, adapters)
-        connections = ClusterConnections(registry, tokens_for=broker.tokens_for)
+        bridge = ExecBridge(dirs, endpoints, http)
+        connections = ClusterConnections(
+            registry, tokens_for=broker.tokens_for, exec_resolver=bridge.resolve
+        )
         catalog = KindCatalog(connections, registry, is_cloud=registry.is_cloud)
 
         async def source_for(cluster_id: str, kind_key: str) -> KubeResourceSource:
@@ -199,7 +205,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if not cloud:
                     raise
                 raise cloud_kube_error("open the cluster connection", exc=exc) from None
-            return KubeResourceSource(api, spec, cloud=cloud)  # owns `api` and closes it
+            return KubeResourceSource(api, spec, cloud=cloud or isinstance(api, CloudApiClient))
 
         audit = AuditLog(sessionmaker, registry)
         forwards = PortForwardManager(
@@ -237,6 +243,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await metrics.close()
             await catalog.close()
             await broker.close()
+            await bridge.close()
             await http.close()
             await engine.dispose()
 

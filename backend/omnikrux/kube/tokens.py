@@ -120,11 +120,13 @@ class CachedToken:
 class RunPlugin:
     exec_cfg: dict = field(repr=False)
     env: dict[str, str] = field(default_factory=dict, repr=False)
+    cloud: bool = False
 
 
 @dataclass(frozen=True)
 class NativeToken:
     fetch: TokenFetch
+    cloud: bool = False
 
 
 ExecPlan = RunPlugin | NativeToken

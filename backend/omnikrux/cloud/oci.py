@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from pathlib import Path, PureWindowsPath
+from typing import Literal
 from urllib.parse import quote, urlencode, urlsplit
 
 import yaml
@@ -205,12 +206,15 @@ class OciProfileLogin:
             raise CloudError(guidance) from None
         raise CloudError(guidance)
 
-    def signer(self) -> OciSigner:
+    def signer(self, *, auth: Literal["api_key", "security_token"] | None = None) -> OciSigner:
         settings = self._settings()
+        token_file = None if auth == "api_key" else settings.get("security_token_file")
+        if auth == "security_token" and not token_file:
+            raise CloudError(messages.expired_login(_CLI, _LOGIN))
         key = _private_key(
             self._credential_file(settings.get("key_file", "")), settings.get("pass_phrase")
         )
-        if token_file := settings.get("security_token_file"):
+        if token_file:
             try:
                 token = self._credential_file(token_file).decode("ascii").strip()
                 if not token or not all(char.isalnum() or char in "-_.=" for char in token):

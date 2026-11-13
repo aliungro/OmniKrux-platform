@@ -137,9 +137,12 @@ def already_connected(account_kind: str, name: str) -> str:
     return f"This {account_kind} is already connected as {name}."
 
 
-def unsupported_exec(command: str, subcommand: str, supported: str, account_kind: str) -> str:
+def unsupported_exec(
+    command: str, subcommand: str | None, supported: str, account_kind: str
+) -> str:
+    invocation = f"{command} {subcommand}" if subcommand else command
     return (
-        f"This cluster signs in with '{command} {subcommand}', which the console can't run: "
+        f"This cluster signs in with '{invocation}', which the console can't run: "
         f"it only runs '{supported}'. Connect the {account_kind} under Settings instead."
     )
 

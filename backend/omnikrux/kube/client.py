@@ -100,7 +100,7 @@ class _CloudErrorResponse:
     close = release
 
 
-class _CloudApiClient(client.ApiClient):
+class CloudApiClient(client.ApiClient):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         _disable_redirects(self.rest_client.pool_manager)
@@ -188,7 +188,7 @@ async def build_configuration(
 async def make_api_client(
     kubeconfig: dict, *, token: TokenSource | None = None
 ) -> client.ApiClient:
-    api_type = _CloudApiClient if isinstance(token, CloudTokenSource) else client.ApiClient
+    api_type = CloudApiClient if isinstance(token, CloudTokenSource) else client.ApiClient
     return api_type(configuration=await build_configuration(kubeconfig, token=token))
 
 

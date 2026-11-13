@@ -39,6 +39,11 @@ _MSAL_ENVIRONMENT = "login.microsoftonline.com"
 _MAX_REFRESH_ATTEMPTS = 4
 _BAD_LOGIN = "Omnikrux couldn't read the Azure CLI login. Run `az login`, then try again."
 _BAD_CLUSTER = "Azure sent unreadable cluster details. Check the subscription, then try again."
+_BAD_TOKEN = "Azure sent an unreadable token. Check the login, then try again."
+
+
+class AzureCliUnavailable(CloudError):
+    """The mounted Azure CLI login cannot be used for a grant."""
 
 
 @dataclass(frozen=True)
@@ -79,11 +84,11 @@ def _read_login(path: Path) -> dict:
     try:
         return _as_dict(json.loads(path.read_text(encoding="utf-8-sig")))
     except (FileNotFoundError, NotADirectoryError):
-        raise CloudError(messages.missing_login(_CLI, path.parent, _LOGIN)) from None
+        raise AzureCliUnavailable(messages.missing_login(_CLI, path.parent, _LOGIN)) from None
     except OSError:
-        raise CloudError(messages.unreadable_login(path.parent)) from None
+        raise AzureCliUnavailable(messages.unreadable_login(path.parent)) from None
     except (ValueError, TypeError, RecursionError):
-        raise CloudError(_BAD_LOGIN) from None
+        raise AzureCliUnavailable(_BAD_LOGIN) from None
 
 
 async def _exchange(http: CloudHttp, endpoints: CloudEndpoints, tenant_id: str, form: dict) -> dict:
@@ -105,9 +110,7 @@ def _bearer(payload: dict) -> BearerToken:
             raise ValueError
         return BearerToken(token, utcnow() + timedelta(seconds=lifetime))
     except (KeyError, TypeError, ValueError, OverflowError):
-        raise CloudError(
-            "Azure sent an unreadable token. Check the login, then try again."
-        ) from None
+        raise CloudError(_BAD_TOKEN) from None
 
 
 class AzureCliLogin:
@@ -143,18 +146,18 @@ class AzureCliLogin:
                 for row in rows
             ]
         except (KeyError, TypeError, ValueError, CloudError):
-            raise CloudError(_BAD_LOGIN) from None
+            raise AzureCliUnavailable(_BAD_LOGIN) from None
 
     def require_cache(self) -> None:
         cache = folder_state(self.dir, (_CACHE,))
         if cache.state == "found":
             return
         if cache.state == "unreadable":
-            raise CloudError(messages.unreadable_login(self.dir))
+            raise AzureCliUnavailable(messages.unreadable_login(self.dir))
         encrypted = folder_state(self.dir, (_WINDOWS_CACHE,))
         if encrypted.state != "missing":
-            raise CloudError(messages.windows_azure_cache())
-        raise CloudError(messages.expired_login(_CLI, _LOGIN))
+            raise AzureCliUnavailable(messages.windows_azure_cache())
+        raise AzureCliUnavailable(messages.expired_login(_CLI, _LOGIN))
 
     def _user(self, tenant_id: str) -> str:
         if self._subscription is not None:
@@ -163,7 +166,7 @@ class AzureCliLogin:
             row for row in self.subscriptions() if row.tenant_id.casefold() == tenant_id.casefold()
         ]
         if not subscriptions:
-            raise CloudError(messages.expired_login(_CLI, _LOGIN))
+            raise AzureCliUnavailable(messages.expired_login(_CLI, _LOGIN))
         return next((row.user for row in subscriptions if row.is_default), subscriptions[0].user)
 
     def _refresh_tokens(self, tenant_id: str, user: str) -> list[str]:
@@ -198,7 +201,7 @@ class AzureCliLogin:
             matching.sort(key=_refresh_modified, reverse=True)
             return [_required_string(item.get("secret")) for item in matching]
         except (AttributeError, TypeError, ValueError):
-            raise CloudError(_BAD_LOGIN) from None
+            raise AzureCliUnavailable(_BAD_LOGIN) from None
 
     def _refresh_candidates(self, key: tuple[str, str]) -> Iterator[str]:
         if rotated := self._rotated.get(key):
@@ -238,9 +241,13 @@ class AzureCliLogin:
                 token = _bearer(payload)
                 rotated = payload.get("refresh_token")
                 if isinstance(rotated, str) and rotated:
+                    try:
+                        rotated.encode("utf-8")
+                    except UnicodeError:
+                        raise CloudError(_BAD_TOKEN) from None
                     self._rotated[key] = rotated
                 return token
-            raise CloudError(messages.expired_login(_CLI, _LOGIN))
+            raise AzureCliUnavailable(messages.expired_login(_CLI, _LOGIN))
 
 
 class AzureServicePrincipal:

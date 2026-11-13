@@ -22,6 +22,7 @@ from omnikrux.kube.client import (
 from omnikrux.kube.tokens import (
     CachedToken,
     CloudClusterUnavailable,
+    CloudTokenSource,
     ExecPluginToken,
     ExecResolver,
     NativeToken,
@@ -53,7 +54,7 @@ class ClusterConnections:
         self._registry = registry
         self._tokens_for = tokens_for
         self._exec_resolver = exec_resolver if exec_resolver is not None else RunPlugin
-        self._exec_tokens: dict[str, dict[str, CachedToken]] = {}
+        self._exec_tokens: dict[str, dict[str, TokenSource]] = {}
 
     async def _client_inputs(self, cluster_id: str) -> tuple[dict, TokenSource | None]:
         kubeconfig = await self._registry.get_kubeconfig(cluster_id)
@@ -70,9 +71,10 @@ class ClusterConnections:
         sources = self._exec_tokens.setdefault(cluster_id, {})
         if digest not in sources:
             plan = self._exec_resolver(exec_cfg)
-            sources[digest] = CachedToken(
+            cached = CachedToken(
                 plan.fetch if isinstance(plan, NativeToken) else ExecPluginToken(plan)
             )
+            sources[digest] = CloudTokenSource(cached) if plan.cloud else cached
         return kubeconfig, sources[digest]
 
     def forget(self, cluster_id: str) -> None:
