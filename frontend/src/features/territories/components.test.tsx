@@ -100,6 +100,11 @@ describe("cluster band copy", () => {
     render(<ClusterBand t={terr({ cluster: cloud({ node_pools }) })} kind={PODS} onRetry={() => {}} />);
     expect(screen.getByText("1 node pool").title).toBe("system: (1.31.3)");
   });
+  it("shows zero cloud node pools when the node count is unknown", () => {
+    render(<ClusterBand t={terr({ cluster: cloud({ node_pools: [], node_count: null }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("0 node pools")).toBeTruthy();
+    expect(screen.queryByText(/0 nodes/)).toBeNull();
+  });
   it("vanished cluster note shows on the band", () => {
     const note = "Not found in Production AWS any more: it may have been deleted. Remove it from Omnikrux under Settings.";
     const metricsNote = "Metrics server is unavailable";
@@ -128,6 +133,33 @@ describe("cluster band copy", () => {
         expect(getComputedStyle(element).textOverflow).toBe("ellipsis");
       }
       expect(getComputedStyle(screen.getByTestId("band-summary")).flexShrink).toBe("0");
+    } finally {
+      css.remove();
+    }
+  });
+  it.each([
+    { label: "error", state: "error", message: "Can't reach the cluster: the connection timed out" },
+    { label: "retry", state: "syncing", message: "Retrying — The connection to the cluster timed out" },
+    { label: "absent kind", state: "absent", message: "This cluster doesn't serve widgets" },
+    { label: "failed discovery", state: "absent", discoveryFailed: "Can't list widgets on this cluster right now: the connection timed out" },
+  ])("reserves space for the $label explanation in a narrow band", ({ state, message, discoveryFailed }) => {
+    const name = "production-cluster-".repeat(30);
+    const region = "region-".repeat(30);
+    const css = document.createElement("style");
+    css.textContent = componentCss("./ClusterBand.module.css", bandStyles);
+    document.head.append(css);
+    try {
+      const node_pools = [{ name: "system", count: 1, machine_type: "m7i.large", version: "1.31.3" }];
+      const t = terr({ cluster: cloud({ name, region, kubernetes_version: "1.31.3", node_pools, node_count: 1 }), state, message, discoveryFailed });
+      const kind = { ...NODES, key: "widgets.example.dev", plural_label: "widgets", columns: NODES.columns.filter(column => column.key === "name" || column.key === "age") };
+      render(<div style={{ width: minTableWidth(kind.columns) - 32 }}><ClusterBand t={t} kind={kind} onRetry={() => {}} /></div>);
+      const reason = (discoveryFailed ?? message)!;
+      const summary = screen.getByText(reason);
+      expect(summary.title).toBe(reason);
+      const style = getComputedStyle(summary);
+      expect(Number.parseFloat(style.minWidth)).toBeGreaterThan(0);
+      expect(style.textOverflow).toBe("ellipsis");
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     } finally {
       css.remove();
     }

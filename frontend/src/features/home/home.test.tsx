@@ -122,6 +122,19 @@ it("cluster cards show the cloud location and node pool counts", async () => {
   expect(within(card).getByText("Google Cloud · europe-west1")).toBeTruthy();
   expect(within(card).getByText("1 node pool · 1 node")).toBeTruthy();
 });
+it("only the cloud card shows zero pools when node counts are unknown", async () => {
+  clusters = [cluster, {
+    ...cluster, id: "c2", name: "prod-west", source: "cloud", provider: "eks", server: null,
+    cloud: { account_id: "aws-1", account_name: "West account", resource_id: "west" },
+    node_pools: [], node_count: null,
+  }];
+  show();
+  const cloudCard = await screen.findByRole("button", { name: /prod-west/ });
+  const fileCard = screen.getByRole("button", { name: /prod-east/ });
+  expect(within(cloudCard).getByText("0 node pools")).toBeTruthy();
+  expect(within(cloudCard).queryByText(/0 nodes/)).toBeNull();
+  expect(within(fileCard).queryByText(/node pools/)).toBeNull();
+});
 it("scope token tooltips follow the active split pane", async () => {
   const east: Cluster = {
     ...cluster, source: "cloud", server: null,

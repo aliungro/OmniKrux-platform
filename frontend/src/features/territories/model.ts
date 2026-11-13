@@ -502,5 +502,6 @@ export function poolSummary(pools: number, nodes: number | null): string {
 export function clusterPoolSummary(cluster: Cluster): string | null {
   const pools = cluster.node_pools?.length ?? 0;
   const nodes = cluster.node_count ?? null;
-  return pools === 0 && nodes === null ? null : poolSummary(pools, nodes);
+  if (cluster.source !== "cloud" && pools === 0 && nodes === null) return null;
+  return poolSummary(pools, nodes);
 }
