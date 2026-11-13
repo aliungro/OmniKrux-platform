@@ -16,7 +16,93 @@ export interface Cluster {
   environment: Environment;
   state: ClusterState;
   message: string | null;
+  source: "file" | "upload" | "cloud";
+  kubernetes_version: string | null;
+  node_pools: NodePool[];
+  node_count: number | null;
+  cloud: CloudLink | null;
+  cloud_note: string | null;
 }
+
+export interface NodePool {
+  name: string;
+  count: number | null;
+  machine_type: string | null;
+  version: string | null;
+}
+
+export interface CloudLink {
+  account_id: string;
+  account_name: string;
+  resource_id: string;
+}
+
+export type CloudProvider = "azure" | "aws" | "gcp" | "oci";
+export type CloudKubeProvider = Extract<Provider, "aks" | "eks" | "gke" | "oke">;
+
+export interface CloudAccount {
+  id: string;
+  provider: CloudProvider;
+  kube_provider: CloudKubeProvider;
+  name: string;
+  source: "cli" | "entered" | "workload";
+  scope: string;
+  principal: string;
+  regions: string[];
+  profile: string | null;
+  has_secret: boolean;
+  check: {
+    state: "never" | "ok" | "error";
+    checked_at: string | null;
+    message: string | null;
+    problems: string[];
+  };
+  counts: { found: number; added: number; new: number };
+}
+
+export interface CliLogin {
+  provider: CloudProvider;
+  path: string;
+  state: "found" | "missing" | "unreadable";
+  note: string | null;
+  choices: { value: string; label: string }[];
+}
+
+export interface Discovered {
+  id: string;
+  account_id: string;
+  account_name: string;
+  provider: CloudKubeProvider;
+  name: string;
+  region: string | null;
+  kubernetes_version: string | null;
+  node_pools: NodePool[];
+  node_count: number | null;
+  environment: Environment;
+  private: boolean;
+  why_not: string | null;
+  state: "new" | "added" | "dismissed";
+  cluster_id: string | null;
+  first_seen: string;
+  last_seen: string;
+  missing_since: string | null;
+}
+
+export interface SettingsInfo {
+  encryption: { source: "environment" | "file"; path: string | null };
+  discovery_interval_s: number;
+}
+
+export type AccountIn =
+  | { provider: CloudProvider; source: "workload" }
+  | { provider: "azure"; source: "cli"; subscription_id: string }
+  | { provider: "azure"; source: "entered"; subscription_id: string; tenant_id: string; client_id: string; client_secret: string }
+  | { provider: "aws"; source: "cli"; profile: string; regions?: string[] }
+  | { provider: "aws"; source: "entered"; access_key_id: string; secret_access_key: string; regions: string[] }
+  | { provider: "gcp"; source: "cli"; project_id: string }
+  | { provider: "gcp"; source: "entered"; project_id: string; service_account_key: string }
+  | { provider: "oci"; source: "cli"; profile?: string; regions?: string[] }
+  | { provider: "oci"; source: "entered"; tenancy_ocid: string; user_ocid: string; fingerprint: string; private_key: string; passphrase?: string; regions: string[] };
 
 export interface ResourceRow {
   uid: string;
@@ -563,7 +649,11 @@ export type AuditAction =
   | "debug_container"
   | "node_shell"
   | "port_forward"
-  | "secret_reveal";
+  | "secret_reveal"
+  | "cluster_add"
+  | "cluster_remove"
+  | "cloud_account_add"
+  | "cloud_account_remove";
 
 export type AuditOutcome = "started" | "succeeded" | "failed" | "ended" | "unknown";
 

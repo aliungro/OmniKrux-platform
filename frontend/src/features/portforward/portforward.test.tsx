@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/portforward/portforward.test.tsx
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -18,7 +19,7 @@ const json = (body: unknown, status = 200) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 
 const CLUSTER: Cluster = {
-  id: "c1", name: "prod-gke", context_name: "x", server: "https://x", original_server: null,
+  id: "c1", name: "prod-gke", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null,
   provider: "gke", region: null, environment: "production", state: "ready", message: null,
 };
 

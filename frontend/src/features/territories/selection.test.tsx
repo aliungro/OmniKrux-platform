@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/territories/selection.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -50,7 +51,7 @@ const rows = (n: number): ResourceRow[] =>
   }));
 
 const territory = (rs: ResourceRow[], state: Territory["state"] = "ready"): Territory => ({
-  cluster: { id: "c1", name: "big", context_name: "x", server: "https://x", original_server: null, provider: "gke",
+  cluster: { id: "c1", name: "big", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider: "gke",
     region: null, environment: "development", state: "ready", message: null },
   state, message: null, rows: rs, total: rs.length, failing: 0, pending: 0,
 });

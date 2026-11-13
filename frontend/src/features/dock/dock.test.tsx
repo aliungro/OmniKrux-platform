@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -37,7 +38,7 @@ const cluster = (over: Partial<Cluster> = {}): Cluster => ({
   name: "aks-prod-weu",
   context_name: "aks-prod-weu",
   server: "https://x",
-  original_server: null,
+  ...FILE_CLUSTER_METADATA, original_server: null,
   provider: "aks",
   region: null,
   environment: "production",

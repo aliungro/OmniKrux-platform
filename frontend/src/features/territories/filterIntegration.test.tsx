@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { useMemo, useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -9,7 +10,7 @@ import { applyMessage, emptyWatchState } from "../../api/watchState";
 import type { Cluster, KindInfo, ResourceRow } from "../../api/types";
 import { FilterBar } from "../chrome/FilterBar";
 import { filterUiFor } from "./columnFilters";
-const cluster: Cluster = {id:"c",name:"cluster",context_name:"c",server:"",original_server:null,provider:"kind",region:null,environment:"development",state:"ready",message:null};
+const cluster: Cluster = {id:"c",name:"cluster",context_name:"c",server:"",...FILE_CLUSTER_METADATA, original_server:null,provider:"kind",region:null,environment:"development",state:"ready",message:null};
 const row = (name:string, columns:Record<string,unknown>):ResourceRow => ({uid:name,cluster_id:"c",kind:"Pod",namespace:"n",name,created_at:null,columns,labels:{}});
 const now = new Date("2026-11-09T12:00:00Z");
 function Harness({kind,rows}:{kind:KindInfo;rows:ResourceRow[]}) {

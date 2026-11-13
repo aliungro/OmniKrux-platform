@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/navigation/navigation.test.tsx — links that jump to the object they name.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -25,7 +26,7 @@ vi.mock("../../api/useWatch", async () => {
 
 const cluster: Cluster = {
   id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443",
-  original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null,
+  ...FILE_CLUSTER_METADATA, original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null,
 };
 
 const row = (uid: string, kind: string, namespace: string | null, name: string, columns: Record<string, unknown> = {}): ResourceRow =>

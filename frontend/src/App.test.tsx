@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { FILE_CLUSTER_METADATA } from "./test/clusters";
 import userEvent from "@testing-library/user-event";
 import { applyMessage, emptyWatchState, type WatchState } from "./api/watchState";
 import type { WatchOptions } from "./api/useWatch";
@@ -48,12 +49,17 @@ vi.mock("./features/territories/TerritoryTable", async (importOriginal) => {
   };
 });
 
-const cluster = { id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443", original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null };
+const cluster = { ...FILE_CLUSTER_METADATA, id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443", original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null };
 const pod = (uid: string, status: string, cls: string) => ({ uid, cluster_id: "c1", kind: "Pod", namespace: "default", name: uid, created_at: null, labels: {}, columns: { status, status_class: cls, node: "n1", last_restart_at: null } });
 
 /** Answers /api/kinds with the test kinds and everything else with `other`. */
 function routes(other: (url: string) => unknown) {
-  return vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(KINDS) : url === "/api/port-forwards" ? json([]) : json(other(url))));
+  return vi.fn((url: string) => {
+    if (url.startsWith("/api/kinds")) return json(KINDS);
+    if (url === "/api/port-forwards" || url.startsWith("/api/cloud/")) return json([]);
+    if (url === "/api/settings") return json({ encryption: { source: "environment", path: null }, discovery_interval_s: 600 });
+    return json(other(url));
+  });
 }
 const clusterCalls = (fetch: { mock: { calls: unknown[][] } }) => fetch.mock.calls.filter(([url]) => url === "/api/clusters").length;
 

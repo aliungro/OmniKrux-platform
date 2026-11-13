@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { describe, it, expect, vi } from "vitest";
 import { buildTerritories, NO_FILTER, POD_KIND } from "./model";
 import { compileColumnFilters } from "./columnFilters";
@@ -7,7 +8,7 @@ vi.mock("./columnFilters", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./columnFilters")>();
   return { ...actual, compileColumnFilters: vi.fn(actual.compileColumnFilters) };
 });
-const cluster: Cluster = {id:"c",name:"c",context_name:"c",server:"",original_server:null,provider:"kind",region:null,environment:"development",state:"ready",message:null};
+const cluster: Cluster = {id:"c",name:"c",context_name:"c",server:"",...FILE_CLUSTER_METADATA, original_server:null,provider:"kind",region:null,environment:"development",state:"ready",message:null};
 const make = (i:number): ResourceRow => ({uid:String(i),cluster_id:"c",kind:"Pod",namespace:null,name:`pod-${i}`,created_at:"2026-11-09T11:00:30Z",labels:{},columns:{node:i%2 ? "a":"b"}});
 const watch = (rows:ResourceRow[]) => applyMessage(emptyWatchState(),{type:"snapshot",cluster_id:"c",part:0,last:true,rows});
 describe("territory filter cache and performance", () => {

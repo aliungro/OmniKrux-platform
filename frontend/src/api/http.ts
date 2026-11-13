@@ -52,22 +52,23 @@ export async function getJson<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function postEmpty(path: string): Promise<void> {
-  const res = await fetch(path, { method: "POST" });
+export async function postEmpty(path: string, body?: unknown): Promise<void> {
+  const res = await fetch(path, jsonPost(body));
   if (!res.ok) return fail(res);
 }
 
-/**
- * POSTs JSON (or nothing) and reads JSON back; the server's `detail` becomes the error's words.
- * `opts` passes a `signal` (to drop an answer nobody waits for) and a request `cache` mode.
- */
-export async function postJson<T>(path: string, body?: unknown, opts: Pick<RequestInit, "signal" | "cache"> = {}): Promise<T> {
+function jsonPost(body?: unknown, opts: Pick<RequestInit, "signal" | "cache"> = {}): RequestInit {
   const init: RequestInit = { method: "POST", ...opts };
   if (body !== undefined) {
     init.headers = { "content-type": "application/json" };
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(path, init);
+  return init;
+}
+
+/** POSTs JSON (or nothing) and reads JSON back; the server's `detail` becomes the error's words. */
+export async function postJson<T>(path: string, body?: unknown, opts: Pick<RequestInit, "signal" | "cache"> = {}): Promise<T> {
+  const res = await fetch(path, jsonPost(body, opts));
   if (!res.ok) return fail(res);
   return (await res.json()) as T;
 }

@@ -1,4 +1,4 @@
-.viewport { flex: 1; min-height: 0; overflow: auto; }
+.viewport { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
 .page, .page * { box-sizing: border-box; }
 .page { width: min(100%, 860px); margin: 0 auto; padding: 40px 28px 64px; }
 .page h1 { margin: 0 0 32px; font-size: 30px; font-weight: 700; letter-spacing: -.01em; }

@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/actions/actions.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -668,7 +669,7 @@ describe("tool keys on rows", () => {
   afterEach(() => vi.restoreAllMocks());
 
   const territory = {
-    cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", original_server: null, provider: "aks" as const,
+    cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks" as const,
       region: null, environment: "development" as const, state: "ready" as const, message: null },
     state: "ready" as const, message: null, rows: [deployment()], total: 1, failing: 0, pending: 0,
   };
@@ -747,7 +748,7 @@ describe("late plans", () => {
       return json(resourceDescribe());
     }));
     const territory = {
-      cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", original_server: null, provider: "aks" as const,
+      cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks" as const,
         region: null, environment: "development" as const, state: "ready" as const, message: null },
       state: "ready" as const, message: null, rows: [deployment(), deployment({ uid: "d-2", name: "worker" })], total: 2, failing: 0, pending: 0,
     };

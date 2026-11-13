@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -12,9 +13,9 @@ import { FakeWebSocket } from "../logs/fakeWebSocket";
 vi.mock("@xterm/xterm", () => ({Terminal:class {}}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon:class {}}));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-const east: Cluster = {id:"c1",name:"East",provider:"aks",context_name:"x",server:"https://east",original_server:null,region:null,environment:"development",state:"ready",message:null};
+const east: Cluster = {id:"c1",name:"East",provider:"aks",context_name:"x",server:"https://east",...FILE_CLUSTER_METADATA, original_server:null,region:null,environment:"development",state:"ready",message:null};
 function stubClusters(clusters: Cluster[]) {
- vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?KINDS:url==="/api/clusters"?clusters:url.startsWith("/api/audit")?{records:[],next_before:null}:[]),{status:200,headers:{"content-type":"application/json"}}))));
+ vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?KINDS:url==="/api/clusters"?clusters:url.startsWith("/api/audit")?{records:[],next_before:null}:url==="/api/settings"?{encryption:{source:"environment",path:null},discovery_interval_s:600}:[]),{status:200,headers:{"content-type":"application/json"}}))));
 }
 beforeEach(()=>{
  vi.stubGlobal("WebSocket",FakeWebSocket);
@@ -195,7 +196,7 @@ it("keeps horizontal keys with the filter, menu, dialog, terminal and workspace 
 });
 
 it("labels scoped tabs and renders the provider-colour stripes",()=>{
- const clusters:Cluster[]=[{id:"one",name:"East",provider:"aks",context_name:"x",server:"x",original_server:null,region:null,environment:"development",state:"ready",message:null},{id:"two",name:"West",provider:"gke",context_name:"y",server:"y",original_server:null,region:null,environment:"development",state:"ready",message:null}];
+ const clusters:Cluster[]=[{id:"one",name:"East",provider:"aks",context_name:"x",server:"x",...FILE_CLUSTER_METADATA, original_server:null,region:null,environment:"development",state:"ready",message:null},{id:"two",name:"West",provider:"gke",context_name:"y",server:"y",...FILE_CLUSTER_METADATA, original_server:null,region:null,environment:"development",state:"ready",message:null}];
  const view=kindView(HOME,"pods",["one","two"]);
  render(<WorkspaceTabs app="kubernetes" tabs={[{id:"t",view,back:[],forward:[],scrollTop:0}]} active="t" clusters={clusters} kinds={KINDS.kinds} onActivate={()=>{}} onClose={()=>{}} onNew={()=>{}}/>);
  const tab=screen.getByRole("tab",{name:"Pods · 2 clusters"});
@@ -253,4 +254,65 @@ it.each(["Kinds","Kubernetes tabs"])("modified navigation keys do not rove %s",a
  renderShell(); await screen.findByRole("tablist",{name:"Kinds"}); const target=within(screen.getByRole("tablist",{name:strip})).getByRole("tab",{selected:true});target.focus();
  for(const key of ["ArrowLeft","ArrowRight","Home","End"]) {fireEvent.keyDown(target,{key,altKey:true,ctrlKey:true}); expect(document.activeElement).toBe(target);}
  await new Promise(r=>setTimeout(r,300));expect(document.activeElement).toBe(target);
+});
+
+it("existing settings route shows global cloud sections and retains pinned kinds and browser notices", async () => {
+  const ws = defaultWorkspace();
+  stubClusters([east, { ...east, id: 'c2', name: 'West' }]);
+  ws.kubernetes.tabs[0].view = kindView(HOME, 'pods', ['c1']);
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+  localStorage.setItem("omnikrux.pinnedKinds", "invalid-json");
+  history.replaceState(null, "", "/#/settings");
+  renderShell();
+
+  expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeTruthy();
+  expect(location.hash).toBe("#/settings");
+  const pins = screen.getByRole("region", { name: "Pinned kinds" });
+  expect(pins.id).toBe("pinned-kinds");
+  expect(within(pins).getByRole("button", { name: "Remove Pods" })).toBeTruthy();
+  const browser = screen.getByRole("region", { name: "This browser" });
+  expect(browser.id).toBe("this-browser");
+  expect(within(browser).getByRole("alert").textContent).toContain("Your saved pinned kinds couldn't be read");
+  expect(screen.getByRole("heading", { name: "Cloud accounts" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Clusters" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Encryption" })).toBeTruthy();
+  expect(await screen.findByText("West")).toBeTruthy();
+});
+
+it("switching from a scoped split to Settings and back restores both panes and the active tab's history", async () => {
+  const ws = defaultWorkspace();
+  const tab = ws.kubernetes.tabs[0];
+  const pods = kindView(HOME, "pods", ["c1"]);
+  tab.view = kindView(pods, "deployments.apps");
+  tab.back = [pods];
+  ws.kubernetes.tabs.push({ id: "peer", view: HOME, back: [], forward: [], scrollTop: 0 });
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+  renderShell();
+
+  const getTabs = () => within(screen.getByRole("tablist", { name: "Kubernetes tabs" }));
+  const deploymentTab = { name: "Deployments · East", selected: true };
+  await getTabs().findByRole("tab", deploymentTab);
+  fireEvent.contextMenu(getTabs().getByRole("tab", { name: "Home" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Split side by side" }));
+  expect(await screen.findByRole("region", { name: "Home" })).toBeTruthy();
+  expect(await screen.findByRole("region", { name: "Deployments · East" })).toBeTruthy();
+  const activeHash = location.hash;
+
+  const rail = within(screen.getByRole("navigation", { name: "Apps" }));
+  fireEvent.click(rail.getByRole("button", { name: "Settings" }));
+  expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeTruthy();
+  expect(location.hash).toBe("#/settings");
+  expect(screen.queryByRole("region", { name: "Deployments · East" })).toBeNull();
+
+  fireEvent.click(rail.getByRole("button", { name: "Kubernetes" }));
+  expect(location.hash).toBe(activeHash);
+  expect(getTabs().getByRole("tab", deploymentTab)).toBeTruthy();
+  expect(getTabs().getAllByRole("tab")).toHaveLength(2);
+  expect(screen.getByRole("region", { name: "Home" })).toBeTruthy();
+  expect(await screen.findByRole("region", { name: "Deployments · East" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(await screen.findByRole("region", { name: "Pods · East" })).toBeTruthy();
+  expect(getTabs().getByRole("tab", { name: "Pods · East", selected: true })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+  expect(await screen.findByRole("region", { name: "Deployments · East" })).toBeTruthy();
 });

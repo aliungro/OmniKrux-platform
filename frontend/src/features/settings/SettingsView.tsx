@@ -3,6 +3,9 @@ import type { KindInfo } from "../../api/types";
 import { PinnedKindsSection } from "./PinnedKindsSection";
 import { usePinnedKinds } from "./pinnedKinds";
 import { StorageSaveNotices } from "./StorageSaveNotices";
+import { AccountsSection } from "./AccountsSection";
+import { ClustersSection } from "./ClustersSection";
+import { EncryptionSection } from "./EncryptionSection";
 import s from "./SettingsView.module.css";
 
 export function SettingsView({ kinds, saveProblem = null, section }: {
@@ -15,6 +18,9 @@ export function SettingsView({ kinds, saveProblem = null, section }: {
   useEffect(() => { if (section) root.current?.querySelector(`#${section}`)?.scrollIntoView?.({ block: "start" }); }, [section]);
   return <div className={s.viewport} ref={root}><div className={s.page}>
     <h1>Settings</h1>
+    <AccountsSection />
+    <ClustersSection />
+    <EncryptionSection />
     <PinnedKindsSection kinds={kinds}/>
     <section id="this-browser" aria-labelledby="browser-heading" className={s.section}>
       <h2 id="browser-heading">This browser</h2>

@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { expect, it } from "vitest";
 import type { Cluster, KindInfo, ResourceRow } from "../../api/types";
 import { PODS, DEPLOYMENTS } from "../../test/kinds";
@@ -5,7 +6,7 @@ import type { Territory } from "../territories/model";
 import { matchTier } from "../palette/commands";
 import { searchHome } from "./homeSearch";
 
-const cluster: Cluster = { id: "c1", name: "prod-east", context_name: "prod", server: "https://east:6443", original_server: null, provider: "aks", region: "east", environment: "production", state: "ready", message: null };
+const cluster: Cluster = { id: "c1", name: "prod-east", context_name: "prod", server: "https://east:6443", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks", region: "east", environment: "production", state: "ready", message: null };
 const row: ResourceRow = { uid: "p1", cluster_id: "c1", name: "web", kind: "Pod", namespace: "demo", created_at: null, columns: {}, labels: {} };
 const territory: Territory = { cluster, state: "ready", message: null, rows: [row], total: 1, failing: 0, pending: 0 };
 const budget: KindInfo = {

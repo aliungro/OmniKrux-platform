@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/chrome/chrome.test.tsx
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { act, cleanup, render, screen, fireEvent, within } from "@testing-library/react";
@@ -77,7 +78,7 @@ describe("FilterBar", () => {
   it("shows a picker only when choosing between multiple clusters", () => {
     const east: Cluster = {
       id: "c1", name: "East", provider: "aks", context_name: "east", server: "https://east",
-      original_server: null, region: null, environment: "development", state: "ready", message: null,
+      ...FILE_CLUSTER_METADATA, original_server: null, region: null, environment: "development", state: "ready", message: null,
     };
     const west: Cluster = { ...east, id: "c2", name: "West", provider: "gke" };
     const north: Cluster = { ...east, id: "c3", name: "North" };
@@ -163,7 +164,7 @@ describe("FilterBar details", () => {
   });
 });
 
-const cluster = (over = {}) => ({ id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://x", original_server: null, provider: "aks", region: null, environment: "production", state: "ready", message: null, ...over }) as any;
+const cluster = (over = {}) => ({ id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks", region: null, environment: "production", state: "ready", message: null, ...over }) as any;
 
 describe("TopBar", () => {
   it("shows the wordmark and one scope token per cluster with failing counts", () => {

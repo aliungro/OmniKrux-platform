@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -13,7 +14,7 @@ vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
 const cluster = {
   id: "c1", name: "East", provider: "aks", context_name: "east", server: "https://east",
-  original_server: null, region: null, environment: "development", state: "ready", message: null,
+  ...FILE_CLUSTER_METADATA, original_server: null, region: null, environment: "development", state: "ready", message: null,
 };
 
 beforeEach(() => {
@@ -22,7 +23,9 @@ beforeEach(() => {
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(
     JSON.stringify(url.startsWith("/api/kinds") ? { ...KINDS, kinds: [...KINDS.kinds, SECRETS] }
-      : url === "/api/clusters" ? [cluster] : url.endsWith("/describe") ? describeBody() : []),
+      : url === "/api/clusters" ? [cluster]
+      : url === "/api/settings" ? { encryption: { source: "environment", path: null }, discovery_interval_s: 600 }
+      : url.endsWith("/describe") ? describeBody() : []),
     { status: 200, headers: { "content-type": "application/json" } },
   ))));
 });

@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -12,7 +13,7 @@ vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class {} }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
-const cluster: Cluster = { id: "c1", name: "prod-east", context_name: "prod", server: "https://east:6443", original_server: null, provider: "aks", region: "east", environment: "production", state: "ready", message: null };
+const cluster: Cluster = { id: "c1", name: "prod-east", context_name: "prod", server: "https://east:6443", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks", region: "east", environment: "production", state: "ready", message: null };
 const pod: ResourceRow = { uid: "p1", cluster_id: "c1", name: "web-pod", kind: "Pod", namespace: "demo", created_at: null, columns: { status: "Running", status_class: "ok", restarts: 0 }, labels: {} };
 let clusters: Cluster[];
 const json = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } }));
@@ -28,6 +29,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn((url: string) => {
     if (url.startsWith("/api/kinds")) return json(KINDS);
     if (url === "/api/clusters") return json(clusters);
+    if (url === "/api/settings") return json({ encryption: { source: "environment", path: null }, discovery_interval_s: 600 });
     if (url.includes("/describe")) return json(describeBody());
     if (url.startsWith("/api/metrics")) return json({ kind: "pods", clusters: {} });
     return json([]);
