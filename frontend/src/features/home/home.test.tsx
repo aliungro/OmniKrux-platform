@@ -111,6 +111,52 @@ it("cluster cards show live health from the pods watch", async () => {
   act(() => FakeWebSocket.last.emit({ type: "delete", cluster_id: "c1", uid: "bad" }));
   expect(await screen.findByText("1 pods, all healthy")).toBeTruthy();
 });
+it("cluster cards show the cloud location and node pool counts", async () => {
+  clusters = [{
+    ...cluster, source: "cloud", provider: "gke", region: "europe-west1", server: null,
+    cloud: { account_id: "gcp-1", account_name: "Production project", resource_id: "prod-east" },
+    node_pools: [{ name: "system", count: 1, machine_type: "e2-standard-4", version: null }], node_count: 1,
+  }];
+  show();
+  const card = await screen.findByRole("button", { name: /prod-east/ });
+  expect(within(card).getByText("Google Cloud · europe-west1")).toBeTruthy();
+  expect(within(card).getByText("1 node pool · 1 node")).toBeTruthy();
+});
+it("scope token tooltips follow the active split pane", async () => {
+  const east: Cluster = {
+    ...cluster, source: "cloud", server: null,
+    cloud: { account_id: "azure-1", account_name: "East subscription", resource_id: "east" },
+  };
+  const west: Cluster = {
+    ...east, id: "c2", name: "prod-west", provider: "eks",
+    cloud: { account_id: "aws-1", account_name: "West account", resource_id: "west" },
+  };
+  clusters = [east, west];
+  const workspace = defaultWorkspace();
+  const active = workspace.kubernetes.tabs[0];
+  active.view = kindView(HOME, "pods", [east.id]);
+  workspace.kubernetes.tabs.push({ ...active, id: "peer", view: kindView(HOME, "deployments.apps", [west.id]) });
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(workspace));
+  show();
+  const tabs = within(screen.getByRole("tablist", { name: "Kubernetes tabs" }));
+  const peer = await tabs.findByRole("tab", { name: "Deployments · prod-west" });
+  fireEvent.contextMenu(peer);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Split side by side" }));
+  const peerPane = screen.getByRole("region", { name: "Deployments · prod-west" });
+  const peerWatch = FakeWebSocket.instances.find(ws => ws.params.get("kind") === "deployments.apps")!;
+  const message = "West cluster is unavailable";
+  act(() => peerWatch.emit({ type: "cluster_status", cluster_id: west.id, state: "error", message }));
+  expect(await within(peerPane).findByText(message)).toBeTruthy();
+  const activeToken = screen.getByTestId("scope-token");
+  expect(activeToken.textContent).toContain(east.name);
+  expect(activeToken.title).toContain(east.cloud!.account_name);
+  expect(activeToken.title).not.toContain(west.cloud!.account_name);
+  fireEvent.focus(within(peerPane).getByRole("textbox", { name: "Filter by name, label or image" }));
+  const peerToken = screen.getByTestId("scope-token");
+  expect(peerToken.textContent).toContain(west.name);
+  expect(peerToken.title).toContain(west.cloud!.account_name);
+  expect(peerToken.title).toContain(message);
+});
 it("a card never shows counts before its cluster is ready", async () => {
   show(); const card = await screen.findByRole("button", { name: /prod-east/ });
   act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [pod] }));

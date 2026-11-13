@@ -14,6 +14,8 @@ import { readFileSync } from "node:fs";
 import rowStyles from "./ResourceRowView.module.css";
 import statusStyles from "./Status.module.css";
 import bulletStyles from "./ContainerBullets.module.css";
+import bandStyles from "./ClusterBand.module.css";
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 
 // Vitest stubs CSS imports. Apply real rules to their module class names for
 // computed-style integration checks; pixel layout remains a browser check.
@@ -64,8 +66,72 @@ describe("components", () => {
 const cluster = (over = {}) => ({ id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://weu.azmk8s.io:443", original_server: null, provider: "aks", region: null, environment: "production", state: "ready", message: null, ...over }) as any;
 const terr = (over = {}) => ({ cluster: cluster(), state: "ready", message: null, rows: [], total: 0, failing: 0, pending: 0, ...over }) as any;
 const pod = (over = {}) => ({ uid: "u1", cluster_id: "c1", kind: "Pod", namespace: "payments", name: "payments-api-1", created_at: null, columns: { status: "CrashLoopBackOff", status_class: "bad", ready: "0/2", restarts: 14, node: null, last_restart_at: null }, ...over }) as any;
+const cloud = (over = {}) => cluster({
+  ...FILE_CLUSTER_METADATA, name: "eks-prod", source: "cloud", provider: "eks", region: "eu-west-1", server: null,
+  cloud: { account_id: "aws-1", account_name: "Production AWS", resource_id: "eks-prod" }, ...over,
+});
 
 describe("cluster band copy", () => {
+  it.each([
+    ["aks", "Azure"], ["eks", "AWS"], ["gke", "Google Cloud"], ["oke", "Oracle Cloud"],
+  ])("band shows cloud and region for cloud clusters (%s)", (provider, label) => {
+    render(<ClusterBand t={terr({ cluster: cloud({ provider }) })} kind={PODS} onRetry={() => {}} />);
+    const location = `${label} · eu-west-1`;
+    expect(screen.getByText(location).title).toBe(location);
+  });
+  it.each(["1.31.3", "v1.31.3"])("band shows kubernetes version (%s)", (version) => {
+    render(<ClusterBand t={terr({ cluster: cloud({ kubernetes_version: version }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("v1.31.3")).toBeTruthy();
+  });
+  it("band summarizes node pools with a title", () => {
+    const node_pools = [
+      { name: "system", count: 3, machine_type: "m7i.large", version: "1.31.3" },
+      { name: "jobs", count: 0, machine_type: null, version: null },
+      { name: "gpu", count: null, machine_type: "g6.xlarge", version: null },
+      { name: "spare", count: null, machine_type: null, version: null },
+    ];
+    render(<ClusterBand t={terr({ cluster: cloud({ node_pools, node_count: 3 }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("4 node pools · 3 nodes").title).toBe(
+      "system: 3 × m7i.large (1.31.3)\njobs: 0\ngpu: g6.xlarge\nspare",
+    );
+  });
+  it("unknown node count shows pools only", () => {
+    const node_pools = [{ name: "system", count: null, machine_type: null, version: "1.31.3" }];
+    render(<ClusterBand t={terr({ cluster: cloud({ node_pools }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("1 node pool").title).toBe("system: (1.31.3)");
+  });
+  it("vanished cluster note shows on the band", () => {
+    const note = "Not found in Production AWS any more: it may have been deleted. Remove it from Omnikrux under Settings.";
+    const metricsNote = "Metrics server is unavailable";
+    render(<ClusterBand t={terr({ cluster: cloud({ cloud_note: note }) })} kind={PODS} metricsNote={metricsNote} onRetry={() => {}} />);
+    expect(screen.getByText(note).title).toBe(note);
+    expect(screen.getByTestId("band-summary").textContent).toBe("No pods");
+    expect(screen.getByTestId("band-metrics").title).toBe(metricsNote);
+  });
+  it("kubeconfig cluster band unchanged without metadata", () => {
+    render(<ClusterBand t={terr({ cluster: cluster({ ...FILE_CLUSTER_METADATA, region: "east" }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByRole("rowheader").textContent).toBe("AKSaks-prod-weueast · weu.azmk8s.ioProductionNo pods");
+  });
+  it("keeps long name and location in titles and lets them shrink before the summary", () => {
+    const name = "production-cluster-".repeat(30);
+    const region = "region-".repeat(30);
+    const loc = `AWS · ${region}`;
+    const css = document.createElement("style");
+    css.textContent = componentCss("./ClusterBand.module.css", bandStyles);
+    document.head.append(css);
+    try {
+      render(<ClusterBand t={terr({ cluster: cloud({ name, region }) })} kind={PODS} onRetry={() => {}} />);
+      for (const text of [name, loc]) {
+        const element = screen.getByText(text);
+        expect(element.title).toBe(text);
+        expect(getComputedStyle(element).minWidth).toBe("0px");
+        expect(getComputedStyle(element).textOverflow).toBe("ellipsis");
+      }
+      expect(getComputedStyle(screen.getByTestId("band-summary")).flexShrink).toBe("0");
+    } finally {
+      css.remove();
+    }
+  });
   it("shows name, server host, environment and failing count", () => {
     render(<ClusterBand t={terr({ rows: [pod()], total: 48, failing: 1 })} kind={PODS} onRetry={() => {}} />);
     expect(screen.getByText("aks-prod-weu")).toBeTruthy();

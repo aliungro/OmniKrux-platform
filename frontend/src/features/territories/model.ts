@@ -498,3 +498,9 @@ export function poolSummary(pools: number, nodes: number | null): string {
   const poolText = `${pools} node ${pools === 1 ? "pool" : "pools"}`;
   return nodes === null ? poolText : `${poolText} · ${nodes} ${nodes === 1 ? "node" : "nodes"}`;
 }
+
+export function clusterPoolSummary(cluster: Cluster): string | null {
+  const pools = cluster.node_pools?.length ?? 0;
+  const nodes = cluster.node_count ?? null;
+  return pools === 0 && nodes === null ? null : poolSummary(pools, nodes);
+}

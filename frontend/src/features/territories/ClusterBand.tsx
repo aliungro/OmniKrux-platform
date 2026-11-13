@@ -1,5 +1,6 @@
-import type { Cluster, ClusterState, KindInfo } from "../../api/types";
-import { countNoun, hasStatus, type Territory } from "./model";
+import type { Cluster, ClusterState, KindInfo, NodePool } from "../../api/types";
+import { CLOUD_PROVIDERS } from "../settings/cloudProviders";
+import { clusterPoolSummary, countNoun, hasStatus, type Territory } from "./model";
 import { PROVIDER_CODE, ProviderBadge, knownProvider } from "./ProviderBadge";
 import s from "./ClusterBand.module.css";
 import pc from "./provider.module.css";
@@ -15,10 +16,19 @@ function serverHost(server: string | null | undefined): string | null {
 
 /** The shared location on a cluster band, card or search result. */
 export function bandLocation(cluster: Cluster): string {
-  if (cluster.source === "cloud") return [cluster.cloud?.account_name, cluster.region].filter(Boolean).join(" · ");
+  if (cluster.source === "cloud") {
+    const cloud = Object.values(CLOUD_PROVIDERS).find((provider) => provider.kube === cluster.provider);
+    return [cloud?.cloud, cluster.region].filter(Boolean).join(" · ");
+  }
   const host = serverHost(cluster.server);
   const original = cluster.original_server ? serverHost(cluster.original_server) : null;
   return [cluster.region, original && host ? `via ${host}` : host].filter(Boolean).join(" · ");
+}
+
+function poolDetails(pool: NodePool): string {
+  const machines = [pool.count, pool.machine_type].filter((part) => part !== null && part !== "").join(" × ");
+  const details = [machines, pool.version && `(${pool.version})`].filter(Boolean).join(" ");
+  return details ? `${pool.name}: ${details}` : pool.name;
 }
 
 function Summary({ t, kind }: { t: Territory; kind: KindInfo }) {
@@ -80,11 +90,14 @@ export function ClusterBand({
   // Spec §11: say so when the console reaches the cluster at another address than the kubeconfig's.
   const original = cluster.original_server ? serverHost(cluster.original_server) : null;
   const loc = bandLocation(cluster);
+  const version = cluster.kubernetes_version && `v${cluster.kubernetes_version.replace(/^v/, "")}`;
+  const pools = clusterPoolSummary(cluster);
+  const note = cluster.cloud_note;
   return (
     <div role="row" aria-rowindex={rowIndex} className={`${s.band} ${pc[provider]}${t.rows.length === 0 ? ` ${s.alone}` : ""}`} tabIndex={-1}>
       <div role="rowheader" aria-colspan={columnCount} className={s.cell}>
         <ProviderBadge provider={provider} large />
-        <b className={s.name}>{cluster.name}</b>
+        <b className={s.name} title={cluster.name}>{cluster.name}</b>
         {loc && <span className={s.loc} title={loc}>{loc}</span>}
         {original && (
           <span
@@ -95,6 +108,8 @@ export function ClusterBand({
             (kubeconfig: {original})
           </span>
         )}
+        {version && <span className={s.loc} title={version}>{version}</span>}
+        {pools && <span className={s.loc} title={cluster.node_pools?.map(poolDetails).join("\n") || pools}>{pools}</span>}
         {cluster.environment === "production" && <span className={`${s.env} ${s.prod}`}>Production</span>}
         {cluster.environment === "development" && <span className={`${s.env} ${s.dev}`}>Development</span>}
         <Summary t={t} kind={kind} />
@@ -106,6 +121,7 @@ export function ClusterBand({
             Retry
           </button>
         )}
+        {note && <span className={s.cloudNote} title={note}>{note}</span>}
       </div>
       <span className={s.code} aria-hidden="true">{PROVIDER_CODE[provider]}</span>
     </div>

@@ -195,6 +195,16 @@ describe("TopBar", () => {
     expect(token.getAttribute("title")).toBe("Can't reach this cluster: timeout");
     expect(token.getAttribute("data-state")).toBe("error");
   });
+  it("cloud scope token adds the account to the tooltip and preserves the status message", () => {
+    const cloud = { account_id: "a1", account_name: "Production AWS", resource_id: "prod-east" };
+    const active = cluster({ source: "cloud", provider: "eks", server: null, cloud });
+    const message = "Can't reach this cluster: timeout";
+    const { rerender } = render(<TopBar clusters={[{ cluster: active, state: "ready", message: null, failing: 0 }]} />);
+    expect(screen.getByTestId("scope-token").title).toBe(cloud.account_name);
+    rerender(<TopBar clusters={[{ cluster: active, state: "error", message, failing: 0 }]} />);
+    expect(screen.getByTestId("scope-token").title).toContain(cloud.account_name);
+    expect(screen.getByTestId("scope-token").title).toContain(message);
+  });
   it("a retrying token carries the last error, a fresh one says Connecting…", () => {
     const message = "Retrying — Can't reach this cluster: timeout";
     render(<TopBar clusters={[

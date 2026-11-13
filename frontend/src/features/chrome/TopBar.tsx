@@ -8,13 +8,18 @@ import s from "./TopBar.module.css";
 /** What a scope token needs: the cluster plus its live state and failing count. */
 export type ScopeCluster = Pick<Territory, "cluster" | "state" | "message" | "failing" | "discoveryFailed">;
 
-function tokenTitle(c: ScopeCluster): string | undefined {
+function tokenStatus(c: ScopeCluster): string | undefined {
   if (c.state === "error") return c.message ?? "This cluster reported an error without details";
   if (c.state === "syncing" && c.message) return c.message;
   // Absent: the cluster lacks this kind, or (Ruling R36) couldn't read its API group.
   if (c.state === "absent") return c.discoveryFailed ?? c.message ?? undefined;
   if (c.state !== "ready") return "Connecting…";
   return undefined;
+}
+
+function tokenTitle(c: ScopeCluster): string | undefined {
+  const account = c.cluster.source === "cloud" ? c.cluster.cloud?.account_name : undefined;
+  return [account, tokenStatus(c)].filter(Boolean).join("\n") || undefined;
 }
 
 function Logo() {
