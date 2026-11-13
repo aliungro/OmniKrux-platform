@@ -493,3 +493,8 @@ export function formatAgo(at: string | null, now: Date): string {
   const age = formatAge(at, now);
   return age === "—" ? age : `${age} ago`;
 }
+
+export function poolSummary(pools: number, nodes: number | null): string {
+  const poolText = `${pools} node ${pools === 1 ? "pool" : "pools"}`;
+  return nodes === null ? poolText : `${poolText} · ${nodes} ${nodes === 1 ? "node" : "nodes"}`;
+}

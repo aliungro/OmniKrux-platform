@@ -15,6 +15,7 @@ function serverHost(server: string | null | undefined): string | null {
 
 /** The shared location on a cluster band, card or search result. */
 export function bandLocation(cluster: Cluster): string {
+  if (cluster.source === "cloud") return [cluster.cloud?.account_name, cluster.region].filter(Boolean).join(" · ");
   const host = serverHost(cluster.server);
   const original = cluster.original_server ? serverHost(cluster.original_server) : null;
   return [cluster.region, original && host ? `via ${host}` : host].filter(Boolean).join(" · ");

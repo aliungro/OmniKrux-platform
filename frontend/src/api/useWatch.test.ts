@@ -284,7 +284,7 @@ describe("useWatch cluster changes", () => {
     expect(onUnknownCluster).toHaveBeenCalledWith("new");
   });
 
-  it("calls again for an id that was removed and came back, never for known ids or without a known set", () => {
+  it("reports an unknown id once and ignores late frames after removal", () => {
     const onUnknownCluster = vi.fn();
     const { rerender } = renderHook(
       ({ known }) => useWatch("pods", { onUnknownCluster, knownClusterIds: known }),
@@ -299,7 +299,7 @@ describe("useWatch cluster changes", () => {
     act(() => sock.serverMessage({ type: "cluster_status", cluster_id: "x", state: "syncing", message: null }));
     act(() => sock.serverMessage(status));
     frame();
-    expect(onUnknownCluster.mock.calls).toEqual([["x"], ["x"]]);
+    expect(onUnknownCluster.mock.calls).toEqual([["x"]]);
   });
 
   it("reports removed clusters and drops them from state", () => {

@@ -1,6 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { CLUSTERS_QUERY_KEY, useClusters } from "../../api/useClusters";
+import { useClusters } from "../../api/useClusters";
 import { useKinds } from "../../api/useKinds";
 import { useWatch } from "../../api/useWatch";
 import { failure } from "../../api/http";
@@ -14,6 +13,7 @@ import { bandLocation } from "../territories/ClusterBand";
 import { buildTerritories, kindTitle, NO_FILTER } from "../territories/model";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { ClusterCard } from "./ClusterCard";
+import { DiscoveryList } from "./DiscoveryList";
 import { searchHome, type HomeResult } from "./homeSearch";
 import s from "./KubernetesHome.module.css";
 
@@ -45,12 +45,10 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
   const clusters = useClusters();
   const kinds = useKinds();
   const pinned = usePinnedKinds();
-  const client = useQueryClient();
   const knownClusterIds = useMemo(() => clusters.data ? new Set(clusters.data.map(c => c.id)) : undefined, [clusters.data]);
   const watch = useWatch("pods", {
     knownClusterIds,
     onUnknownCluster: () => void clusters.refetch(),
-    onClusterRemoved: () => void client.invalidateQueries({ queryKey: CLUSTERS_QUERY_KEY }),
   });
   const now = useNow(60_000);
   const territories = useMemo(() => buildTerritories(clusters.data ?? [], watch, NO_FILTER, now), [clusters.data, watch, now]);
@@ -58,6 +56,17 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const listId = useId();
+  const discoveryHeading = useRef<HTMLHeadingElement>(null);
+  const discoveryFocused = useRef(false);
+  const discoveryId = useId();
+  const section = nav.view.page === "home" ? nav.view.section : undefined;
+  useEffect(() => {
+    if (section !== "discovered") discoveryFocused.current = false;
+    else if (paneActive && !discoveryFocused.current) {
+      discoveryFocused.current = true;
+      discoveryHeading.current?.focus();
+    }
+  }, [section, paneActive]);
   const results = useMemo(() => searchHome(query, { clusters: clusters.data ?? [], kinds: kinds.data?.kinds ?? [], pods: territories, pinned: pinned.pinned }), [query, clusters.data, kinds.data, territories, pinned.pinned]);
   const selected = Math.min(active, Math.max(0, results.length - 1));
   const searching = query.trim() !== "";
@@ -117,12 +126,16 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
         {results.length === 0 && !catalogIncomplete && <p role="status" className={s.empty}>Nothing matches "{query.trim()}".</p>}
       </div>}
     </div>
-    <section aria-labelledby="home-clusters-heading">
-      <h2 id="home-clusters-heading">Clusters</h2>
+    <section aria-labelledby={`${listId}-clusters`}>
+      <h2 id={`${listId}-clusters`}>Clusters</h2>
       {clusters.data === undefined ? clusters.isError ? <div role="alert" className={s.note}>Can't load clusters: {clusters.error.message} <button type="button" onClick={() => void clusters.refetch()}>Try again</button></div> : <p role="status" className={s.note}>Loading clusters…</p>
         : clusters.data.length === 0 ? <p className={s.note}>No clusters yet. Mount your kubeconfig at /kube/config and restart the console.</p>
         : <div className={s.cards}>{territories.map(territory => <ClusterCard key={territory.cluster.id} territory={territory} onOpen={() => open({ group: "Clusters", cluster: territory.cluster })}/>)}</div>}
     </section>
-    {closed.length > 0 && <section aria-labelledby="home-recent-heading"><h2 id="home-recent-heading">Recently closed</h2><div className={s.recent}>{closed.map((entry, index) => <button type="button" key={entry.tab.id} onClick={() => onReopen(index)}><span>{tabLabel(entry.tab.view, { kinds: kinds.data?.kinds, clusters: clusters.data })}</span><span className={s.when}>{closedTime(entry.closedAt, now)}</span></button>)}</div></section>}
+    <section aria-labelledby={discoveryId}>
+      <h2 id={discoveryId} ref={discoveryHeading} tabIndex={-1}>Discovered clusters</h2>
+      <DiscoveryList />
+    </section>
+    {closed.length > 0 && <section aria-labelledby={`${listId}-recent`}><h2 id={`${listId}-recent`}>Recently closed</h2><div className={s.recent}>{closed.map((entry, index) => <button type="button" key={entry.tab.id} onClick={() => onReopen(index)}><span>{tabLabel(entry.tab.view, { kinds: kinds.data?.kinds, clusters: clusters.data })}</span><span className={s.when}>{closedTime(entry.closedAt, now)}</span></button>)}</div></section>}
   </div></div>;
 }

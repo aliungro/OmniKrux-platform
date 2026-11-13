@@ -2,7 +2,7 @@ import { NO_AUDIT_FILTER, type AuditFilters } from "../audit/useAudit";
 import { NO_FILTER, type Filters, type RowRef } from "../territories/model";
 
 export type AppId = "kubernetes" | "audit" | "settings";
-export type KubeView = { page: "home" } | { page: "kind"; kind: string; clusters: string[] | null; filters: Filters; selected: RowRef | null; open: boolean };
+export type KubeView = { page: "home"; section?: "discovered" } | { page: "kind"; kind: string; clusters: string[] | null; filters: Filters; selected: RowRef | null; open: boolean };
 export function kindView(from: KubeView, kind: string, clusters?: string[] | null): Extract<KubeView, { page: "kind" }> {
   return { page:"kind", kind, clusters: clusters ?? (from.page === "kind" ? from.clusters : null), filters:{...(from.page === "kind" ? from.filters : NO_FILTER),status:"all",columns:[],sort:null},selected:null,open:false };
 }
@@ -26,7 +26,7 @@ const newTab = (id: string, view: KubeView = HOME): Tab<KubeView> => ({ id, view
 export function defaultWorkspace(): Workspace { const tab = newTab(newTabId()); return {version:1,app:"kubernetes",kubernetes:{tabs:[tab],active:tab.id,closed:[]},audit:{filters:{...NO_AUDIT_FILTER}}}; }
 export function sameView(a: KubeView, b: KubeView): boolean {
   if (a.page !== b.page) return false;
-  if (a.page === "home" || b.page === "home") return true;
+  if (a.page === "home" || b.page === "home") return a.page === "home" && b.page === "home" && a.section === b.section;
   const sameArray = (x: string[] | null, y: string[] | null) => x === y || (x !== null && y !== null && x.length === y.length && x.every((v,i)=>v===y[i]));
   return a.kind===b.kind && sameArray(a.clusters,b.clusters) && a.open===b.open && (a.selected === b.selected || (a.selected !== null && b.selected !== null && a.selected.clusterId===b.selected.clusterId && a.selected.uid===b.selected.uid)) && a.filters.status===b.filters.status && a.filters.text===b.filters.text && a.filters.namespace===b.filters.namespace && a.filters.columns.length===b.filters.columns.length && a.filters.columns.every((x,i)=>{ const y=b.filters.columns[i]; if (x.key!==y.key || x.op!==y.op) return false; if (x.op==="contains" && y.op==="contains") return x.text===y.text; if (x.op==="oneOf" && y.op==="oneOf") return sameArray(x.values,y.values); if (x.op==="between" && y.op==="between") return x.min===y.min && x.max===y.max; return "seconds" in x && "seconds" in y && x.seconds===y.seconds; }) && a.filters.sort?.key===b.filters.sort?.key && a.filters.sort?.dir===b.filters.sort?.dir;
 }

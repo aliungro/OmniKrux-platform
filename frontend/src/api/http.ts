@@ -46,8 +46,8 @@ async function fail(res: Response): Promise<never> {
   throw new HttpError(res.status, detail ?? `${res.status} ${res.statusText}`.trim());
 }
 
-export async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await (signal ? fetch(path, { signal }) : fetch(path));
   if (!res.ok) return fail(res);
   return (await res.json()) as T;
 }

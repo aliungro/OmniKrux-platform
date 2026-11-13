@@ -45,6 +45,7 @@ export type DockAction =
    */
   | { type: "open"; session: Session; focus?: boolean }
   | { type: "close"; id: string }
+  | { type: "closeCluster"; clusterId: string }
   | { type: "focus"; id: string }
   /**
    * Puts a new session where an old one was (a node shell started again makes a new pod). If the
@@ -145,6 +146,9 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
         : state.previous;
       return { ...state, sessions, focused, previous };
     }
+    case "closeCluster":
+      return state.sessions.reduce((next, session) => session.cluster.id === action.clusterId
+        ? dockReducer(next, { type: "close", id: session.id }) : next, state);
     case "focus": {
       const s = state.sessions.find((x) => x.id === action.id);
       if (!s) return state;

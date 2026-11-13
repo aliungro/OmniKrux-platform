@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useReducer, useRef, useState, type Dispatch } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { clusterLifecycle } from "../../api/clusterLifecycle";
 import { failure, postJson } from "../../api/http";
 import type { Cluster, ContainerInfo, DebugContainer, NodeShellPod, OwnerRef, PodDescribe, ResourceRow } from "../../api/types";
 import { describeQuery, podPath } from "../inspector/useDescribe";
@@ -95,6 +96,7 @@ export function useDock(clusters: Cluster[]): DockApi {
   const [ask, setAsk] = useState<Ask | null>(null);
   const [shellChoice, setShellChoice] = useState<ShellChoice | null>(null);
   const queryClient = useQueryClient();
+  const lifecycle = clusterLifecycle(queryClient);
   const nextId = useRef(0);
   /**
    * The newest open request, or focus choice of yours. Opens wait for the pod's describe (or the
@@ -104,10 +106,10 @@ export function useDock(clusters: Cluster[]): DockApi {
    * closed while focused), or a slow one would pull your keystrokes to another pod (or cluster).
    */
   const latestOpen = useRef(0);
-  const shellPending = useRef(false);
+  const shellPending = useRef<string | null>(null);
   const nextOpen = useCallback(() => {
     if (shellPending.current) {
-      shellPending.current = false;
+      shellPending.current = null;
       setShellChoice(null);
     }
     return ++latestOpen.current;
@@ -115,9 +117,15 @@ export function useDock(clusters: Cluster[]): DockApi {
   const stateRef = useRef(state);
   stateRef.current = state;
   const dispatch = useCallback((action: DockAction) => {
+    if ((action.type === "open" || action.type === "replace") && lifecycle.isRemoved(action.session.cluster.id)) return;
     if (action.type === "focus" || (action.type === "close" && action.id === stateRef.current.focused)) nextOpen();
     dispatchNow(action);
-  }, [nextOpen]);
+  }, [lifecycle, nextOpen]);
+  useEffect(() => lifecycle.subscribe(id => {
+    if (shellPending.current === id) nextOpen();
+    dispatchNow({ type: "closeCluster", clusterId: id });
+    setAsk(current => current?.cluster.id === id ? null : current);
+  }), [lifecycle, nextOpen]);
   const newId = useCallback(() => `s${++nextId.current}`, []);
   const clustersRef = useRef(clusters);
   clustersRef.current = clusters;
@@ -147,7 +155,7 @@ export function useDock(clusters: Cluster[]): DockApi {
           session: { id: newId(), kind: "shell", cluster, namespace, pod: row.name, container, containers },
         });
       };
-      shellPending.current = true;
+      shellPending.current = cluster.id;
       setShellChoice({ ...context, stage: "loading" });
       void containersOf(row).then(
         (d) => {
@@ -197,7 +205,9 @@ export function useDock(clusters: Cluster[]): DockApi {
         return;
       }
       const request = nextOpen();
+      const started = lifecycle.startChange();
       void containersOf(row).catch(() => null).then((d) => {
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         const session: Session = {
           id: newId(),
           kind,
@@ -211,7 +221,7 @@ export function useDock(clusters: Cluster[]): DockApi {
         dispatch({ type: "open", session, focus: request === latestOpen.current });
       });
     },
-    [containersOf, newId, dispatch, nextOpen, openPodShell],
+    [containersOf, newId, dispatch, lifecycle, nextOpen, openPodShell],
   );
 
   const openOwnerLogs = useCallback(
@@ -220,7 +230,9 @@ export function useDock(clusters: Cluster[]): DockApi {
       if (!cluster || !owner.selector) return;
       const selector = owner.selector;
       const request = nextOpen();
+      const started = lifecycle.startChange();
       void containersOf(row).catch(() => null).then((d) => {
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         dispatch({
           type: "open",
           focus: request === latestOpen.current,
@@ -238,7 +250,7 @@ export function useDock(clusters: Cluster[]): DockApi {
         });
       });
     },
-    [containersOf, newId, dispatch, nextOpen],
+    [containersOf, newId, dispatch, lifecycle, nextOpen],
   );
 
   const openWorkloadLogs = useCallback(
@@ -275,10 +287,13 @@ export function useDock(clusters: Cluster[]): DockApi {
       },
       async () => {
         const request = nextOpen();
+        const started = lifecycle.startChange();
         await prefetchShellPane(); // before the pod exists: a terminal that can't load stops here
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         const out = await postJson<NodeShellPod>(
           `/api/clusters/${encodeURIComponent(cluster.id)}/nodes/${encodeURIComponent(node)}/shell`,
         );
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         const session: Session = {
           id: newId(),
           kind: "shell",
@@ -313,10 +328,13 @@ export function useDock(clusters: Cluster[]): DockApi {
       },
       async () => {
         const request = nextOpen();
+        const started = lifecycle.startChange();
         await prefetchShellPane(); // before the container exists, as it can't be removed
+        if (lifecycle.wasRemovedSince(s.cluster.id, started)) return;
         const out = await postJson<DebugContainer>(`${podPath(s.cluster.id, s.namespace, s.pod)}/debug`, {
           target: s.container,
         });
+        if (lifecycle.wasRemovedSince(s.cluster.id, started)) return;
         dispatch({
           type: "open",
           focus: request === latestOpen.current,
@@ -342,10 +360,12 @@ export function useDock(clusters: Cluster[]): DockApi {
   const confirm = () => {
     const current = ask;
     if (!current || current.busy) return;
-    setAsk({ ...current, busy: true, error: null });
+    if (lifecycle.isRemoved(current.cluster.id)) return;
+    const busy = { ...current, busy: true, error: null };
+    setAsk(busy);
     current.run().then(
-      () => setAsk(null),
-      (err: unknown) => setAsk((a) => (a ? { ...a, busy: false, error: failure(err) } : a)),
+      () => setAsk(a => a === busy ? null : a),
+      (err: unknown) => setAsk(a => a === busy ? { ...a, busy: false, error: failure(err) } : a),
     );
   };
 

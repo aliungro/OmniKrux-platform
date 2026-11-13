@@ -12,7 +12,7 @@ const record = (x: unknown): x is Record<string, unknown> => x !== null && typeo
 const text = (x: unknown): x is string => typeof x === "string" && x.length <= 500;
 function view(x: unknown): KubeView | null {
   if (!record(x)) return null;
-  if (x.page === "home") return HOME;
+  if (x.page === "home") return x.section === "discovered" ? { page: "home", section: "discovered" } : HOME;
   if (x.page !== "kind" || typeof x.kind !== "string" || !isKindKey(x.kind) || !(x.clusters === null || Array.isArray(x.clusters) && x.clusters.every(c=>typeof c === "string")) || !record(x.filters)) return null;
   const f=x.filters;
   if (!FILTER_STATUSES.includes(f.status as FilterStatus) || !text(f.text) || !(f.namespace===null || typeof f.namespace === "string") || !Array.isArray(f.columns) || !(x.selected===null || record(x.selected) && typeof x.selected.clusterId === "string" && typeof x.selected.uid === "string") || typeof x.open !== "boolean") return null;

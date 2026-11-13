@@ -1,6 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CLUSTERS_QUERY_KEY, retryCluster, useClusters } from "../../api/useClusters";
+import { retryCluster, useClusters } from "../../api/useClusters";
+import { useCloudAccounts } from "../../api/useCloud";
 import { refreshKinds, useKinds } from "../../api/useKinds";
 import { useLiveMetrics } from "../../api/useMetrics";
 import { useWatch } from "../../api/useWatch";
@@ -84,6 +85,9 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
 
   const bridge = useContext(ShellBridge);
   const kindKey = tabNav.view.page === "kind" ? tabNav.view.kind : "pods";
+  const accounts = useCloudAccounts(kindKey === "pods");
+  const found = kindKey === "pods" && !accounts.isError && Array.isArray(accounts.data)
+    ? accounts.data.reduce((count, account) => count + (account.counts?.new ?? 0), 0) : 0;
   const kinds = useKinds();
   const served = servedKinds(kinds.data);
   const discovered = discovery(kinds.data);
@@ -97,7 +101,6 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
   const watch = useWatch(kindKey, {
     knownClusterIds,
     onUnknownCluster: () => void refetch(),
-    onClusterRemoved: () => void queryClient.invalidateQueries({ queryKey: CLUSTERS_QUERY_KEY }),
   });
   // The Nodes view's Pods column counts live pods per node.
   const podWatch = useWatch(kindKey === "nodes" ? "pods" : null);
@@ -365,5 +368,12 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
       </>
     );
   }
-  return <NavigationProvider goTo={nav.goTo}>{body}</NavigationProvider>;
+  return <NavigationProvider goTo={nav.goTo}>
+    {found > 0 && <div className={s.discoveryNotice}>
+      <button type="button" className={s.btn} onClick={() => tabNav.navigate({ page: "home", section: "discovered" }, "push")}>
+        {found} new {found === 1 ? "cluster" : "clusters"} found
+      </button>
+    </div>}
+    {body}
+  </NavigationProvider>;
 }

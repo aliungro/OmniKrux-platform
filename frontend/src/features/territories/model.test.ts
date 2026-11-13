@@ -1,7 +1,7 @@
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/territories/model.test.ts
 import { describe, it, expect } from "vitest";
-import { buildTerritories, chipsFor, countFilters, flatten, formatAge, kindCount, matchesFilter, namespacesIn, podsPerNode, kindTitle, rowTitle, titleColumn, withDiscoveryFailures, type Filters } from "./model";
+import { buildTerritories, chipsFor, countFilters, flatten, formatAge, kindCount, matchesFilter, namespacesIn, poolSummary, podsPerNode, kindTitle, rowTitle, titleColumn, withDiscoveryFailures, type Filters } from "./model";
 import type { KindInfo, ResourceRow } from "../../api/types";
 import { applyMessage, emptyWatchState } from "../../api/watchState";
 const now = new Date("2026-11-06T16:00:00");
@@ -11,6 +11,12 @@ const state = () => applyMessage(emptyWatchState(), { type: "snapshot", cluster_
   rows: [r("ok-1", "Running", "ok"), r("crash", "CrashLoopBackOff", "bad", { last_restart_at: "2026-11-06T14:04:14" }), r("wait", "Pending", "warn")] });
 
 describe("territories model", () => {
+  it("formats pool and node counts with singular forms and omits an unknown node count", () => {
+    expect(poolSummary(1, 1)).toBe("1 node pool · 1 node");
+    expect(poolSummary(2, 0)).toBe("2 node pools · 0 nodes");
+    expect(poolSummary(1, null)).toBe("1 node pool");
+  });
+
   it("text filter matches helm release name", () => {
     const helm: ResourceRow = { ...r("revision-secret", "deployed", "ok", { release: "shop-web" }), kind: "HelmRelease" };
     const filter: Filters = { columns: [] as [], sort: null, status: "all", text: "SHOP-WEB", namespace: null };

@@ -178,7 +178,7 @@ describe("Console wiring", () => {
 });
 
 describe("Console follows cluster changes", () => {
-  it("passes the known cluster ids and reloads the list for an unknown or removed cluster", async () => {
+  it("passes the known cluster ids and reloads the list for an unknown cluster", async () => {
     const fetch = routes(() => [cluster]);
     vi.stubGlobal("fetch", fetch);
     renderConsole();
@@ -187,8 +187,6 @@ describe("Console follows cluster changes", () => {
     expect(clusterCalls(fetch)).toBe(1);
     watch.opts?.onUnknownCluster?.("c2");
     await waitFor(() => expect(clusterCalls(fetch)).toBe(2));
-    watch.opts?.onClusterRemoved?.("c1");
-    await waitFor(() => expect(clusterCalls(fetch)).toBe(3));
   });
 });
 
@@ -400,24 +398,6 @@ describe("Console dock wiring", () => {
     fireEvent.keyDown(row, { key: "p" });
     await waitFor(() => expect(sessions()).toHaveLength(2));
     expect(FakeWebSocket.last.params.get("previous")).toBe("true");
-  });
-
-  it("the dock and its sessions stay when the last cluster goes", async () => {
-    let clusters = [cluster];
-    vi.stubGlobal("fetch", routes((url) => (url.endsWith("/describe") ? describeBody : clusters)));
-    renderConsole();
-    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
-    row.focus();
-    fireEvent.keyDown(row, { key: "l" });
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    const ws = FakeWebSocket.last;
-
-    clusters = [];
-    watch.opts?.onClusterRemoved?.("c1");
-    expect(await screen.findByText("No clusters yet. Mount your kubeconfig at /kube/config and restart the console.")).toBeTruthy();
-    expect(within(screen.getByRole("tablist", { name: "Logs and shells" })).getAllByRole("tab")).toHaveLength(1);
-    expect(ws.closedByClient).toBe(false);
-    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
   it("dock dispatch does not re-render the table", async () => {

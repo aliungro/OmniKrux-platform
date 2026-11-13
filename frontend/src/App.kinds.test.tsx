@@ -33,7 +33,7 @@ beforeEach(() => {
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("fetch", vi.fn((url: string) => {
     if (url.startsWith("/api/kinds")) return json(KINDS);
-    if (url === "/api/port-forwards") return json([]);
+    if (url === "/api/port-forwards" || url.startsWith("/api/cloud/")) return json([]);
     if (url.endsWith("/pods/demo/crasher-1/describe")) {
       const details = describeBody();
       return json({ ...details, pod: { ...details.pod, name: pod.name, namespace: pod.namespace } });
@@ -112,7 +112,7 @@ it("typing a filter makes one history entry and back restores it", async () => {
 
 it("scoping a tab shows only the selected cluster and its stripe", async () => {
   const second = { ...cluster, id: "c2", name: "second", provider: "gke" };
-  vi.stubGlobal("fetch", vi.fn((url: string) => json(url.startsWith("/api/kinds") ? KINDS : url === "/api/port-forwards" ? [] : [cluster, second])));
+  vi.stubGlobal("fetch", vi.fn((url: string) => json(url.startsWith("/api/kinds") ? KINDS : url === "/api/port-forwards" || url.startsWith("/api/cloud/") ? [] : [cluster, second])));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
   fireEvent.click(await screen.findByRole("button", { name: "Clusters" }));
@@ -176,7 +176,7 @@ it("a tab restores its filter after switching away and back", async () => {
 
 it("scope token collapse follows the scoped cluster count", async () => {
   const clusters = Array.from({ length: 6 }, (_, i) => ({ ...cluster, id: `c${i}`, name: `cluster-${i}` }));
-  vi.stubGlobal("fetch", vi.fn((url: string) => json(url.startsWith("/api/kinds") ? KINDS : url === "/api/port-forwards" ? [] : clusters)));
+  vi.stubGlobal("fetch", vi.fn((url: string) => json(url.startsWith("/api/kinds") ? KINDS : url === "/api/port-forwards" || url.startsWith("/api/cloud/") ? [] : clusters)));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
   fireEvent.click(await screen.findByRole("button", { name: "Clusters" }));

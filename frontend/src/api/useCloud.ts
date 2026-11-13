@@ -1,4 +1,5 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
+import { clusterLifecycle } from "./clusterLifecycle";
 import { deleteEmpty, getJson, postEmpty, postJson } from "./http";
 import type { AccountIn, CliLogin, CloudAccount, Cluster, Discovered, SettingsInfo } from "./types";
 import { CLUSTERS_QUERY_KEY, evictClusters } from "./useClusters";
@@ -9,8 +10,8 @@ export const CLOUD_DISCOVERED_QUERY_KEY = ["cloud-discovered"] as const;
 const CLOUD_QUERY_KEYS = [ACCOUNTS_QUERY_KEY, LOGINS_QUERY_KEY, CLOUD_DISCOVERED_QUERY_KEY, CLUSTERS_QUERY_KEY];
 const REFRESH_MS = 30_000;
 
-export function useCloudAccounts() {
-  return useQuery({ queryKey: ACCOUNTS_QUERY_KEY, queryFn: () => getJson<CloudAccount[]>("/api/cloud/accounts"), refetchInterval: REFRESH_MS });
+export function useCloudAccounts(enabled = true) {
+  return useQuery({ queryKey: ACCOUNTS_QUERY_KEY, queryFn: () => getJson<CloudAccount[]>("/api/cloud/accounts"), refetchInterval: REFRESH_MS, enabled });
 }
 
 export function useCliLogins() {
@@ -51,7 +52,10 @@ export async function checkAccount(client: QueryClient, id: string): Promise<Clo
 }
 
 export async function addDiscovered(client: QueryClient, ids: string[]) {
+  const lifecycle = clusterLifecycle(client);
+  const started = lifecycle.startChange();
   const result = await postJson<{ added: Cluster[]; failed: { id: string; message: string }[] }>("/api/cloud/discovered/add", { ids });
+  lifecycle.added(result.added.map(cluster => cluster.id), started);
   invalidateCloud(client);
   return result;
 }

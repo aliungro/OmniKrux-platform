@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { clusterLifecycle } from "../../api/clusterLifecycle";
 import { useClusters } from "../../api/useClusters";
 import { failure } from "../../api/http";
 import { useKinds } from "../../api/useKinds";
+import { useWatch } from "../../api/useWatch";
 import { ActionsProvider } from "../actions/ActionDialog";
 import { AuditView } from "../audit/AuditView";
 import { focusTableRow } from "../chrome/pageKeys";
@@ -13,7 +16,7 @@ import { useDock } from "../dock/useDock";
 import { KubernetesTab, type KubernetesTabProps } from "../kubernetes/KubernetesTab";
 import { CommandPalette, usePaletteKeys, type PaletteMode } from "../palette/CommandPalette";
 import { ForwardsMenu } from "../portforward/ForwardsMenu";
-import { usePortForwards } from "../portforward/usePortForwards";
+import { forgetClusterForwards, usePortForwards } from "../portforward/usePortForwards";
 import { SettingsView } from "../settings/SettingsView";
 import { StorageSaveNotices } from "../settings/StorageSaveNotices";
 import { APPS, appForKey } from "./apps";
@@ -64,6 +67,7 @@ function KubePane({ tab, title, history, active, split, onFocusPane, reportScope
 }
 
 export function Shell() {
+  const client = useQueryClient();
   const { ws, dispatch, loadProblem, saveProblem, dismissLoadProblem } = useWorkspace();
   const { tabs, active: activeId, closed } = ws.kubernetes;
   const active = tabs.find((t) => t.id === activeId)!;
@@ -83,6 +87,9 @@ export function Shell() {
   const forwards = usePortForwards().query.data?.length ?? 0;
   const main = useRef<HTMLElement>(null);
   const kube = ws.app === "kubernetes";
+  // Outside Kubernetes there is still a watch when the dock or forwards need removal events.
+  useWatch(!kube && (dock.state.sessions.length > 0 || forwards > 0 || dock.ask || dock.shellChoice) ? "pods" : null);
+  useEffect(() => clusterLifecycle(client).subscribe(id => void forgetClusterForwards(client, id)), [client]);
   const activeScope = kube && scope?.id === activeId ? scope.value : [];
   const activeTarget = kube && target?.id === activeId ? target.value : null;
   const kind = kube && nav.view.page === "kind" ? nav.view.kind : undefined;
@@ -96,9 +103,13 @@ export function Shell() {
   }, []);
 
   const focusView = useCallback(() => {
-    if (!isEditable(document.activeElement)) {
-      requestAnimationFrame(() => main.current?.focus({ preventScroll: true }));
-    }
+    const before = document.activeElement;
+    if (isEditable(before)) return;
+    requestAnimationFrame(() => {
+      const target = document.activeElement;
+      // A pane may claim focus as it mounts. Fall back when the prior target was removed.
+      if (target === before || target === document.body) main.current?.focus({ preventScroll: true });
+    });
   }, []);
   const switchApp = useCallback((app: AppId) => {
     setSettingsSection(undefined);
