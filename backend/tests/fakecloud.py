@@ -30,6 +30,7 @@ from omnikrux.cloud.azure import AKS_SERVER_APP_ID, ARM_SCOPE, AZURE_CLI_CLIENT_
 from omnikrux.cloud.endpoints import CloudEndpoints, same_origin
 from omnikrux.cloud.gcp import GCP_SCOPE
 from omnikrux.cloud.types import GCP_PROJECT, CloudProvider
+from tests.e2e.cloudproxy import LoopbackThread
 
 _GUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 _AZURE_TOKEN = re.compile(rf"/(?P<tenant>{_GUID})/oauth2/v2\.0/token", re.IGNORECASE)
@@ -855,6 +856,19 @@ async def serve_fake_cloud():
 async def fake_cloud():
     async with serve_fake_cloud() as cloud:
         yield cloud
+
+
+class FakeCloudThread:
+    def __init__(self):
+        self._server = LoopbackThread(serve_fake_cloud)
+        self.cloud = self._server.value
+
+    def stop(self) -> None:
+        self._server.stop()
+
+
+def run_fake_cloud_in_thread() -> FakeCloudThread:
+    return FakeCloudThread()
 
 
 def write_azure_cli_login(dir, *, subscriptions, refresh_token, user):
