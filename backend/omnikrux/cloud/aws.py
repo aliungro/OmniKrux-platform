@@ -38,11 +38,13 @@ from botocore.tokens import TokenProviderChain
 
 from omnikrux.cloud import messages
 from omnikrux.cloud.adapters import (
+    DISCOVERY_TIMEOUT_SECONDS,
     AccountIdentity,
     Choice,
     CliLoginInfo,
     ClusterAccess,
     DiscoveryResult,
+    PartialDiscoveryAdapter,
 )
 from omnikrux.cloud.dirs import folder_state
 from omnikrux.cloud.endpoints import CloudEndpoints, same_origin
@@ -403,7 +405,7 @@ def eks_token(
     return BearerToken(f"k8s-aws-v1.{encoded}", now + timedelta(seconds=EKS_TOKEN_SECONDS))
 
 
-class AwsAdapter:
+class AwsAdapter(PartialDiscoveryAdapter):
     provider = "aws"
 
     def __init__(self, endpoints: CloudEndpoints, directory: Path):
@@ -480,7 +482,7 @@ class AwsAdapter:
     async def discover(self, account: AccountConfig) -> DiscoveryResult:
         result = DiscoveryResult([], [])
         try:
-            async with asyncio.timeout(60):
+            async with asyncio.timeout(DISCOVERY_TIMEOUT_SECONDS):
                 login, regions = await self._credentials(account)
                 keys = await login.keys()
                 slots = asyncio.Semaphore(4)
@@ -594,6 +596,13 @@ class AwsAdapter:
     async def access(self, account: AccountConfig, found: DiscoveredCluster) -> ClusterAccess:
         login, _ = await self._credentials(account)
         cluster = await self._describe(found.name, found.region, await login.keys())
+        if cluster.get("arn") != found.resource_id:
+            raise CloudError(
+                "The AWS login returned a different EKS cluster. Check the account and try again."
+            )
+        vpc = cluster.get("resourcesVpcConfig")
+        if not isinstance(vpc, dict) or vpc.get("endpointPublicAccess") is not True:
+            raise CloudError(messages.PRIVATE)
         return ClusterAccess(
             cluster["endpoint"], cluster.get("certificateAuthority", {}).get("data")
         )

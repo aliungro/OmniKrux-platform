@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -10,6 +11,14 @@ from omnikrux.cloud.types import CloudProvider, CredentialSourceKind
 from omnikrux.db import Base
 
 DiscoveryState = Literal["new", "added", "dismissed"]
+
+
+@dataclass(frozen=True)
+class DiscoverySnapshot:
+    id: str
+    last_seen: datetime
+    state: DiscoveryState
+    cluster_id: str | None
 
 
 def _now() -> datetime:

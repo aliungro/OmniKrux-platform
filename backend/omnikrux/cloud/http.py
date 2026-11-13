@@ -112,6 +112,7 @@ class CloudHttp:
     def __init__(self, *, timeout: float = CLOUD_TIMEOUT_SECONDS) -> None:
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: aiohttp.ClientSession | None = None
+        self._closed = False
 
     async def json(
         self,
@@ -195,6 +196,10 @@ class CloudHttp:
         id_label: str,
         format: Literal["json", "text", "array_page"],
     ):
+        if self._closed:
+            raise CloudError(
+                "The cloud connection is shutting down. Try again when Omnikrux is running."
+            )
         url_text = str(url)
         if not same_origin(url_text, url_text):
             raise CloudError(
@@ -245,6 +250,7 @@ class CloudHttp:
             ) from None
 
     async def close(self) -> None:
-        if self._session is not None:
-            await self._session.close()
-            self._session = None
+        self._closed = True
+        session, self._session = self._session, None
+        if session is not None:
+            await session.close()

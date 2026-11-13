@@ -48,7 +48,7 @@ class DiscoveredCluster:
 
     @property
     def addable(self) -> bool:
-        return self.why_not is None
+        return not self.private and self.why_not is None
 
 
 @dataclass(frozen=True)

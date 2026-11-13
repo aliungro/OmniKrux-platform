@@ -7,6 +7,12 @@ from omnikrux.cloud.http import CloudHttp
 from omnikrux.cloud.types import AccountConfig, CloudClusterRef, CloudProvider, DiscoveredCluster
 from omnikrux.kube.tokens import TokenFetch
 
+DISCOVERY_TIMEOUT_SECONDS = 60
+
+
+class PartialDiscoveryAdapter:
+    """The adapter owns the check deadline so it can return completed regions on timeout."""
+
 
 @dataclass(frozen=True)
 class AccountIdentity:

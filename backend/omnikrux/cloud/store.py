@@ -182,7 +182,13 @@ class CloudAccountStore:
 
     async def delete(self, id: str) -> list[str]:
         async with self._sessionmaker.begin() as session:
-            await session.execute(delete(CloudAccountRecord).where(CloudAccountRecord.id == id))
+            removed = await session.scalar(
+                delete(CloudAccountRecord)
+                .where(CloudAccountRecord.id == id)
+                .returning(CloudAccountRecord.id)
+            )
+            if removed is None:
+                raise KeyError(id)
             await session.execute(delete(DiscoveredRecord).where(DiscoveredRecord.account_id == id))
             cluster_ids = await session.scalars(
                 delete(ClusterRecord)
@@ -195,11 +201,19 @@ class CloudAccountStore:
         self, id: str, *, ok: bool, message: str | None, problems: list[str], at: datetime
     ) -> None:
         async with self._sessionmaker.begin() as session:
-            row = await self._row(session, id)
-            row.checked_at = at.astimezone(UTC)
-            row.check_ok = ok
-            row.check_message = message
-            row.problems = json.dumps(problems)
+            updated = await session.scalar(
+                update(CloudAccountRecord)
+                .where(CloudAccountRecord.id == id)
+                .values(
+                    checked_at=at.astimezone(UTC),
+                    check_ok=ok,
+                    check_message=message,
+                    problems=json.dumps(problems),
+                )
+                .returning(CloudAccountRecord.id)
+            )
+            if updated is None:
+                raise KeyError(id)
 
     async def save_discovery(
         self,
@@ -297,6 +311,14 @@ class CloudAccountStore:
                 update(DiscoveredRecord)
                 .where(DiscoveredRecord.id.in_(ids))
                 .values(state=state, cluster_id=cluster_id)
+            )
+
+    async def dismiss(self, ids: list[str]) -> None:
+        async with self._sessionmaker.begin() as session:
+            await session.execute(
+                update(DiscoveredRecord)
+                .where(DiscoveredRecord.id.in_(ids), DiscoveredRecord.state == "new")
+                .values(state="dismissed")
             )
 
     async def discovered_for_cluster(self, cluster_id: str) -> Discovered | None:

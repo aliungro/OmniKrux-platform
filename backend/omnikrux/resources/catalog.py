@@ -35,6 +35,7 @@ class ClusterKinds:
     specs: dict[str, KindSpec]
     failed_groups: dict[str, str]
     fetched_at: float  # time.monotonic()
+    version: str | None = None
 
 
 class ColumnOut(BaseModel):
@@ -145,6 +146,10 @@ class KindCatalog:
             raise KindNotServed(key)
         return spec
 
+    def cached_version(self, cluster_id: str) -> str | None:
+        entry = self._entries.get(cluster_id)
+        return entry.version if entry is not None else None
+
     async def union(self, *, refresh: bool = False) -> KindsOut:
         """Every kind any cluster serves, with the clusters serving it; all clusters at once.
 
@@ -202,6 +207,7 @@ class KindCatalog:
             specs=cluster_specs(discovery),
             failed_groups=discovery.failed_groups,
             fetched_at=time.monotonic(),
+            version=discovery.version,
         )
         if self._inflight.get(cluster_id) is asyncio.current_task():  # not forgotten meanwhile
             self._entries[cluster_id] = entry

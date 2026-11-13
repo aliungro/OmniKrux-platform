@@ -3,7 +3,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -13,6 +15,8 @@ from omnikrux.actions.pipeline import router as actions_router
 from omnikrux.audit.api import router as audit_router
 from omnikrux.audit.store import AuditLog
 from omnikrux.cloud.adapters import make_adapters
+from omnikrux.cloud.api import router as cloud_router
+from omnikrux.cloud.discovery import CloudDiscovery
 from omnikrux.cloud.exec_bridge import ExecBridge
 from omnikrux.cloud.http import CloudHttp
 from omnikrux.cloud.store import CloudAccountStore
@@ -45,6 +49,34 @@ from omnikrux.web import mount_spa
 from omnikrux.web_security import CrossOriginWriteGuard
 
 log = logging.getLogger(__name__)
+_VALIDATION_MESSAGES = {
+    "missing": "A required field is missing.",
+    "extra_forbidden": "Remove the unrecognized field and try again.",
+    "union_tag_invalid": "Choose a supported option and try again.",
+    "union_tag_not_found": "Choose an option and try again.",
+    "string_pattern_mismatch": "A field has an invalid format. Check the value and try again.",
+    "too_short": "Add the required values and try again.",
+    "too_long": "There are too many values. Remove some and try again.",
+    "json_invalid": "The request body isn't valid JSON. Correct it and try again.",
+}
+
+
+async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    details = []
+    for error in exc.errors():
+        location = error.get("loc", ())
+        source = location[0] if location else None
+        code = error["type"]
+        message = _VALIDATION_MESSAGES.get(code)
+        # Unknown keys can occur in loc and union tags or validator text can occur in msg.
+        details.append(
+            {
+                "loc": [source] if source in ("body", "query", "path", "header", "cookie") else [],
+                "type": code if message is not None else "value_error",
+                "msg": message or "A value is invalid. Check the request and try again.",
+            }
+        )
+    return JSONResponse(status_code=422, content={"detail": details})
 
 
 async def _import_kubeconfig_files(settings: Settings, registry: ClusterRegistry) -> list[str]:
@@ -219,11 +251,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await forwards.stop_cluster(cluster_id)
 
         hub = WatchHub(registry, source_for, on_forget=on_forget)
+        discovery = CloudDiscovery(
+            store, adapters, registry, hub, broker, interval=settings.cloud_discovery_seconds
+        )
         await _mark_interrupted(audit)
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.registry = registry
-        app.state.cloud = CloudServices(store, adapters, broker, http)
+        app.state.cloud = CloudServices(store, adapters, broker, http, discovery)
         app.state.connections = connections
         app.state.catalog = catalog
         app.state.hub = hub
@@ -235,8 +270,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
+            discovery.start()
             yield
         finally:
+            await discovery.close()
             await jobs.close()  # first: a stopped drain still writes its audit record
             await forwards.close()  # likewise: every forward's record is finished
             await hub.close()
@@ -248,6 +285,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await engine.dispose()
 
     app = FastAPI(title="Omnikrux", lifespan=lifespan)
+    app.add_exception_handler(RequestValidationError, _validation_error)
     app.state.settings = settings
     # No login yet, so no session cookie to check either: refuse writes that another site's
     # page sends (it could otherwise start a node shell or delete a cluster).
@@ -257,6 +295,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts, www_redirect=False
     )
     app.include_router(clusters_router)
+    app.include_router(cloud_router)
     app.include_router(watch_router)
     app.include_router(resources_router)
     app.include_router(kinds_router)

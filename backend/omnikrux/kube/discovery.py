@@ -47,6 +47,7 @@ class Discovery:
     failed_groups: dict[str, str]  # group -> why its kinds are missing, in plain words
     # (group, plural) -> the preferred version's additionalPrinterColumns, for CRDs that have any
     printer_columns: dict[tuple[str, str], list[dict]]
+    version: str | None = None
 
 
 class _Refused(Exception):
@@ -114,9 +115,10 @@ async def discover(
             why = f"The {group} API couldn't be read ({type(exc).__name__})"
         return f"{why}; its kinds are hidden until it does."
 
-    results, printer = await asyncio.gather(
+    results, printer, version = await asyncio.gather(
         asyncio.gather(*(group_resources(g, v) for g, v in versions.items())),
         _crd_printer_columns(api, versions, timeout, deadline, cloud=cloud),
+        _server_version(api, timeout, deadline, cloud=cloud),
     )
     resources, failed = list(core), {}
     for group, result in zip(versions, results, strict=True):
@@ -124,7 +126,20 @@ async def discover(
             failed[group] = result
         else:
             resources.extend(result)
-    return Discovery(resources=resources, failed_groups=failed, printer_columns=printer)
+    return Discovery(
+        resources=resources, failed_groups=failed, printer_columns=printer, version=version
+    )
+
+
+async def _server_version(
+    api: ApiClient, timeout: float, deadline: float, *, cloud: bool
+) -> str | None:
+    try:
+        async with asyncio.timeout_at(deadline):
+            version = (await _get(api, "/version", timeout, cloud=cloud)).get("gitVersion")
+    except Exception:  # noqa: BLE001 (the version is optional)
+        return None
+    return version if isinstance(version, str) and version else None
 
 
 async def _get(api: ApiClient, path: str, timeout: float, *, cloud: bool = False) -> dict:

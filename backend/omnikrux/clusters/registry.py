@@ -6,12 +6,12 @@ from datetime import UTC, datetime
 from typing import Literal, cast
 
 import yaml
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnikrux.cloud.endpoints import CloudEndpoints, InvalidClusterEndpoint
 from omnikrux.cloud.messages import CLOUD_CLUSTER_ENDPOINT_INVALID
-from omnikrux.cloud.models import lock_account
+from omnikrux.cloud.models import DiscoveredRecord, DiscoverySnapshot, lock_account
 from omnikrux.cloud.types import (
     KUBE_PROVIDER,
     CloudClusterRef,
@@ -35,6 +35,10 @@ log = logging.getLogger(__name__)
 
 class ClusterConflict(ValueError):
     """An upload names a context that was already uploaded for a different server."""
+
+
+class DiscoveryChanged(Exception):
+    """The discovery row changed while cluster access was being prepared."""
 
 
 @dataclass(frozen=True)
@@ -177,6 +181,7 @@ class ClusterRegistry:
         server: str,
         ca_data: str | None,
         environment: Environment,
+        discovery: DiscoverySnapshot | None = None,
     ) -> ClusterInfo:
         self._endpoints.validate_cluster_server(ref.provider, server)
         name = ref.resource_id
@@ -195,6 +200,21 @@ class ClusterRegistry:
         async with self._sessionmaker.begin() as session:
             if await lock_account(session, ref.account_id) != ref.provider:
                 raise KeyError(ref.account_id)
+            discovered = None
+            if discovery is not None:
+                discovered = await session.get(DiscoveredRecord, discovery.id)
+                if (
+                    discovered is None
+                    or discovered.account_id != ref.account_id
+                    or discovered.resource_id != ref.resource_id
+                    or discovered.missing_since is not None
+                    or discovered.why_not is not None
+                    or discovered.private
+                    or discovery.last_seen != discovered.last_seen.replace(tzinfo=UTC)
+                    or discovery.state != discovered.state
+                    or discovery.cluster_id != discovered.cluster_id
+                ):
+                    raise DiscoveryChanged
             row = await session.scalar(
                 select(ClusterRecord).where(
                     ClusterRecord.source == SOURCE_CLOUD, ClusterRecord.context_name == name
@@ -203,6 +223,8 @@ class ClusterRegistry:
             if row is None:
                 row = ClusterRecord(source=SOURCE_CLOUD, context_name=name)
                 session.add(row)
+            elif row.cloud_account_id != ref.account_id:
+                raise DiscoveryChanged
             row.name = ref.name
             row.server = server
             row.provider = KUBE_PROVIDER[ref.provider].value
@@ -217,6 +239,9 @@ class ClusterRegistry:
             row.node_count = found.node_count
             row.cloud_missing_since = None
             await session.flush()
+            if discovered is not None:
+                discovered.state = "added"
+                discovered.cluster_id = row.id
             return _info(row)
 
     async def cloud_ref(self, cluster_id: str) -> CloudClusterRef | None:
@@ -234,9 +259,19 @@ class ClusterRegistry:
             )
 
     async def delete(self, cluster_id: str) -> None:
-        async with self._sessionmaker() as session:
-            await session.delete(await self._row(session, cluster_id))
-            await session.commit()
+        async with self._sessionmaker.begin() as session:
+            removed = await session.scalar(
+                delete(ClusterRecord)
+                .where(ClusterRecord.id == cluster_id)
+                .returning(ClusterRecord.id)
+            )
+            if removed is None:
+                raise KeyError(cluster_id)
+            await session.execute(
+                update(DiscoveredRecord)
+                .where(DiscoveredRecord.cluster_id == cluster_id)
+                .values(state="dismissed", cluster_id=None)
+            )
 
     async def list(self) -> list[ClusterInfo]:
         async with self._sessionmaker() as session:

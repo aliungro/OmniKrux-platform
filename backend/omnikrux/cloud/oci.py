@@ -20,11 +20,13 @@ from yarl import URL
 
 from omnikrux.cloud import messages
 from omnikrux.cloud.adapters import (
+    DISCOVERY_TIMEOUT_SECONDS,
     AccountIdentity,
     Choice,
     CliLoginInfo,
     ClusterAccess,
     DiscoveryResult,
+    PartialDiscoveryAdapter,
 )
 from omnikrux.cloud.endpoints import CloudEndpoints
 from omnikrux.cloud.http import CloudError, CloudHttp
@@ -259,7 +261,7 @@ def _object(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-class OciAdapter:
+class OciAdapter(PartialDiscoveryAdapter):
     provider = "oci"
 
     def __init__(self, http: CloudHttp, endpoints: CloudEndpoints, dir: Path):
@@ -454,6 +456,16 @@ class OciAdapter:
                 result.problems.append(messages.region_problem(region, error.message))
 
     async def discover(self, account: AccountConfig) -> DiscoveryResult:
+        result = DiscoveryResult([], [])
+        try:
+            async with asyncio.timeout(DISCOVERY_TIMEOUT_SECONDS):
+                await self._discover(account, result)
+        except TimeoutError:
+            if not result.problems:
+                result.problems.append(messages.CHECK_TIMED_OUT)
+        return result
+
+    async def _discover(self, account: AccountConfig, result: DiscoveryResult) -> None:
         if account.source == "workload":
             raise CloudError(messages.WORKLOAD)
         if account.source == "cli":
@@ -465,7 +477,6 @@ class OciAdapter:
             tenancy, signer = api_key.tenancy, api_key.signer()
             regions = self._regions(account)
 
-        result = DiscoveryResult([], [])
         concurrency = asyncio.Semaphore(4)
 
         async def list_region(region: str) -> None:
@@ -480,12 +491,7 @@ class OciAdapter:
                 )
                 raise
 
-        try:
-            async with asyncio.timeout(60):
-                await asyncio.gather(*(list_region(region) for region in regions))
-        except TimeoutError:
-            pass
-        return result
+        await asyncio.gather(*(list_region(region) for region in regions))
 
     async def access(self, account: AccountConfig, found: DiscoveredCluster) -> ClusterAccess:
         if account.source == "workload":

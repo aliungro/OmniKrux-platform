@@ -31,6 +31,22 @@ async def cloud_http():
         await http.close()
 
 
+async def test_cloud_http_cannot_reopen_after_close(cloud_http):
+    requests = []
+
+    async def reply(request):
+        requests.append(request.path)
+        return web.json_response({})
+
+    async with serve_cloud_handler(reply) as url:
+        await cloud_http.json("GET", f"{url}/first", cloud="Azure", action="sign in")
+        await cloud_http.close()
+        await cloud_http.close()
+        with pytest.raises(CloudError, match="shutting down"):
+            await cloud_http.json("GET", f"{url}/late", cloud="Azure", action="sign in")
+    assert requests == ["/first"]
+
+
 @pytest.mark.parametrize(
     ("status", "copy"),
     [

@@ -9,6 +9,25 @@ AKS_LOCAL_ACCOUNTS = (
     "with short-lived Entra tokens: turn on Entra ID integration, or import its kubeconfig."
 )
 WORKLOAD = "Workload identity arrives with deployed mode."
+UNKNOWN_ACCOUNT = "This cloud account is no longer connected. Refresh Cloud accounts and try again."
+UNKNOWN_DISCOVERED = (
+    "This cluster is no longer in the discovery list. Refresh the list and try again."
+)
+DISCOVERED_MISSING = (
+    "The last check didn't find this cluster. Check the account again before adding it."
+)
+DISCOVERY_CHANGED = "The cluster discovery changed. Refresh the list and try adding it again."
+ACCOUNT_SAVE_FAILED = "Couldn't save the cloud account in Omnikrux. Try again."
+ACCOUNT_REMOVE_FAILED = "Couldn't remove the cloud account from Omnikrux. Try again."
+CLUSTER_ADD_FAILED = "Couldn't add the cloud cluster to Omnikrux. Check the cluster and try again."
+CHECK_FAILED = "Couldn't check the cloud account. Check the login, then try again."
+CHECK_TIMED_OUT = "The cloud account check didn't finish within 60 s. Try again in a minute."
+ACCOUNT_KINDS = {
+    "azure": "Azure subscription",
+    "aws": "AWS account",
+    "gcp": "Google Cloud project",
+    "oci": "Oracle Cloud tenancy",
+}
 ACCOUNT_REMOVED = (
     "The cloud account this cluster belonged to was removed. "
     "Remove the cluster too, or connect the account again."

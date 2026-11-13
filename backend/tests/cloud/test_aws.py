@@ -385,6 +385,26 @@ async def test_aws_calls_are_read_only(aws_adapter, fake_cloud):
     assert sum(request.path == f"/clusters/{CLUSTER}" for request in fake_cloud.requests) == 2
 
 
+@pytest.mark.parametrize("change", ["different-account", "became-private"])
+async def test_eks_access_rechecks_identity_and_public_endpoint(aws_adapter, fake_cloud, change):
+    fake_cloud.aws.add_eks(REGION, CLUSTER, server=SERVER)
+    [cluster] = fake_cloud.aws.clusters[REGION]
+    account = entered(REGION)
+    (found,) = (await aws_adapter.discover(account)).clusters
+    if change == "different-account":
+        cluster["arn"] = f"arn:aws:eks:{REGION}:999999999999:cluster/{CLUSTER}"
+        expected = (
+            "The AWS login returned a different EKS cluster. Check the account and try again."
+        )
+    else:
+        cluster["resourcesVpcConfig"]["endpointPublicAccess"] = False
+        expected = "Private API endpoint: the console can't reach it directly."
+    with pytest.raises(CloudError) as exc:
+        await aws_adapter.access(account, found)
+    assert str(exc.value).startswith(expected)
+    assert cluster["arn"] not in str(exc.value) and SERVER not in str(exc.value)
+
+
 async def test_failed_second_page_keeps_seen_clusters_and_does_not_retry(
     aws_adapter, fake_cloud, monkeypatch
 ):

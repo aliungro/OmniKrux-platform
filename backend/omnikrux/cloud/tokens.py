@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 from omnikrux.cloud.adapters import ProviderAdapter
 from omnikrux.cloud.http import CloudError, CloudHttp
@@ -19,6 +20,9 @@ from omnikrux.kube.tokens import (
     ClusterUnavailable,
     TokenSource,
 )
+
+if TYPE_CHECKING:
+    from omnikrux.cloud.discovery import CloudDiscovery
 
 _CLUSTER_FORGOTTEN = "The cloud cluster connection was removed. Reopen the cluster and try again."
 _SHUTTING_DOWN = "The cloud connection is shutting down. Try again when Omnikrux is running."
@@ -149,3 +153,4 @@ class CloudServices:
     adapters: dict[CloudProvider, ProviderAdapter]
     broker: TokenBroker
     http: CloudHttp
+    discovery: CloudDiscovery

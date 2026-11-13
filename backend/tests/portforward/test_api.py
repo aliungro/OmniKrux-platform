@@ -228,7 +228,9 @@ async def test_removed_cluster_stops_its_forwards(env):
     assert r.status_code == 204
     assert (await env.client.get("/api/port-forwards")).json() == []
     assert await refused(out["local_port"])
-    [record] = await env.records()
+    removed, record = await env.records()
+    assert (removed.action, removed.outcome) == ("cluster_remove", "succeeded")
+    assert record.action == "port_forward"
     assert (record.outcome, record.message) == ("ended", "The cluster was removed from Omnikrux.")
 
 
