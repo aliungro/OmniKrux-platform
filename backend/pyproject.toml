@@ -42,7 +42,10 @@ asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_default_fixture_loop_scope = "function"
-markers = ["kind: needs a running kind cluster"]
+markers = [
+    "kind: needs a running kind cluster",
+    "cloud_live: opt-in, read-only checks against the user's own cloud accounts",
+]
 # Temporary: drop once starlette stops triggering the httpx deprecation warning.
 filterwarnings = [
     "ignore:Using `httpx` with:Warning",

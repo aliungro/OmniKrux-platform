@@ -28,6 +28,7 @@ from tests.fakecloud import (
     write_gcloud_login,
 )
 from tests.fakekube import fake_api  # noqa: F401  (shared fixture)
+from tests.live import PROVIDERS, opted_in_provider
 from tests.logs.test_stream import pod
 from tests.watch.fakes import FakeSource
 
@@ -113,9 +114,12 @@ def app_with_fake_sources(tmp_path, fake_registry_two_clusters):
 
 
 @pytest.fixture(autouse=True)
-def isolate_cloud_logins(tmp_path, monkeypatch):
+def isolate_cloud_logins(request, tmp_path, monkeypatch):
     """Keep test apps and credential chains away from developer login files."""
-    for cloud in ("azure", "aws", "gcloud", "oci"):
+    provider = opted_in_provider(request.node)
+    for cloud in PROVIDERS.values():
+        if cloud == PROVIDERS.get(provider):
+            continue
         folder = tmp_path / cloud
         folder.mkdir()
         monkeypatch.setenv(f"OMNIKRUX_{cloud.upper()}_DIR", str(folder))
@@ -125,10 +129,11 @@ def isolate_cloud_logins(tmp_path, monkeypatch):
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",
         "GOOGLE_APPLICATION_CREDENTIALS",
-        "CLOUDSDK_CONFIG",
         "OMNIKRUX_CLOUD_ENDPOINTS",
     ):
         monkeypatch.delenv(variable, raising=False)
+    if provider != "gcp":
+        monkeypatch.delenv("CLOUDSDK_CONFIG", raising=False)
 
 
 AZURE_SUBSCRIPTION = "050d52ed-0bc8-46c3-95e1-a7aef67ff331"
