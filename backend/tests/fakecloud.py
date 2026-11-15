@@ -855,8 +855,11 @@ async def serve_fake_cloud(*, host="127.0.0.1", port=0):
 
 @pytest.fixture
 async def fake_cloud():
+    """A local fake cloud. Every test using it must have stayed read-only (the allowlist)."""
     async with serve_fake_cloud() as cloud:
         yield cloud
+        violations = cloud.read_only_violations()
+        assert violations == [], f"Requests outside the read-only allowlist: {violations}"
 
 
 class FakeCloudThread:

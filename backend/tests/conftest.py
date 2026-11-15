@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from urllib.parse import urlsplit
@@ -30,6 +31,7 @@ from tests.fakecloud import (
 from tests.fakekube import fake_api  # noqa: F401  (shared fixture)
 from tests.live import PROVIDERS, opted_in_provider
 from tests.logs.test_stream import pod
+from tests.netguard import install as install_network_guard
 from tests.watch.fakes import FakeSource
 
 
@@ -114,8 +116,28 @@ def app_with_fake_sources(tmp_path, fake_registry_two_clusters):
 
 
 @pytest.fixture(autouse=True)
+def loopback_only(request, monkeypatch):
+    """Fail any test that reaches a non-loopback host (an opted-in live cloud check aside)."""
+    if opted_in_provider(request.node) is not None:
+        yield
+        return
+    violations: list[str] = []
+    install_network_guard(monkeypatch, violations)
+    yield
+    if violations:
+        pytest.fail(f"The test tried to reach the network outside loopback: {violations}")
+
+
+# The developer's own settings never reach a test; the opt-in live suite keeps its variables.
+KEPT_SETTINGS = ("OMNIKRUX_ALLOWED_HOSTS", "OMNIKRUX_LIVE_")
+
+
+@pytest.fixture(autouse=True)
 def isolate_cloud_logins(request, tmp_path, monkeypatch):
-    """Keep test apps and credential chains away from developer login files."""
+    """Keep test apps and credential chains away from developer login files and settings."""
+    for variable in [name for name in os.environ if name.upper().startswith("OMNIKRUX_")]:
+        if not variable.upper().startswith(KEPT_SETTINGS):
+            monkeypatch.delenv(variable)
     provider = opted_in_provider(request.node)
     for cloud in PROVIDERS.values():
         if cloud == PROVIDERS.get(provider):

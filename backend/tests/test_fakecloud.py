@@ -45,6 +45,7 @@ async def test_fakecloud_flags_unlisted_calls(fake_cloud):
         f"DELETE /subscriptions/{SUBSCRIPTION}",
         f"POST /subscriptions/{SUBSCRIPTION}/unknown",
     ]
+    fake_cloud.requests.clear()  # deliberate violations, checked above (not by the fixture)
 
 
 async def test_fakecloud_aws_rejects_unsigned_and_unlisted_sts_calls(fake_cloud):
@@ -55,6 +56,7 @@ async def test_fakecloud_aws_rejects_unsigned_and_unlisted_sts_calls(fake_cloud)
     assert "<Code>SignatureDoesNotMatch</Code>" in unsigned.text
     assert unlisted.status_code == 403
     assert fake_cloud.read_only_violations() == ["POST /"]
+    fake_cloud.requests.clear()  # a deliberate violation, checked above (not by the fixture)
 
 
 GCP_PROJECT = "fake-gke-project"
