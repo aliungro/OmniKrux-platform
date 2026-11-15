@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { failure, HttpError } from "../../api/http";
 import type { Plan, PlanRequest } from "../../api/types";
 import { DialogShell } from "../dock/ConfirmDialog";
@@ -7,7 +7,7 @@ import cd from "../dock/ConfirmDialog.module.css";
 import { DiffView } from "./DiffView";
 import { DrainOptions, type DrainFlags } from "./forms";
 import { DrainProgress } from "./DrainProgress";
-import { StartActionContext, useActions, type ActionOutcome, type StartAction } from "./useActions";
+import { discardPlans, StartActionContext, useActions, type ActionOutcome, type StartAction } from "./useActions";
 import s from "./ActionDialog.module.css";
 
 /** pipeline.py PRODUCTION and TYPE_TO_CONFIRM, word for word. */
@@ -236,19 +236,34 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState<{ req: PlanRequest; plan: Plan } | null>(null);
   const latest = useRef(0);
   const settle = useRef<((outcome: ActionOutcome | null) => void) | null>(null);
+  // The review on screen. One that is dropped, replaced or closed without an apply is closed on
+  // the server too, so it never holds a place among the open delete reviews.
+  const shown = useRef<string | null>(null);
+  const show = useCallback((next: { req: PlanRequest; plan: Plan } | null) => {
+    if (shown.current !== null && shown.current !== next?.plan.plan_id) discardPlans([shown.current]);
+    shown.current = next?.plan.plan_id ?? null;
+    setOpen(next);
+  }, []);
+  useEffect(() => () => {
+    if (shown.current !== null) discardPlans([shown.current]);
+    shown.current = null;
+  }, []);
 
   const start = useCallback<StartAction>(
     async (req, opts) => {
       const seq = ++latest.current;
       const plan = await actions.plan(req);
-      if (seq !== latest.current || (opts?.isCurrent && !opts.isCurrent())) return null;
+      if (seq !== latest.current || (opts?.isCurrent && !opts.isCurrent())) {
+        discardPlans([plan.plan_id]);
+        return null;
+      }
       settle.current?.(null);
       return new Promise<ActionOutcome | null>((resolve) => {
         settle.current = resolve;
-        setOpen({ req, plan });
+        show({ req, plan });
       });
     },
-    [actions],
+    [actions, show],
   );
 
   const review = useCallback(
@@ -257,17 +272,20 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       const req = params ? { ...open.req, params: { ...open.req.params, ...params } } : open.req;
       const seq = ++latest.current;
       const plan = await actions.plan(req);
-      if (seq === latest.current) setOpen({ req, plan });
+      if (seq === latest.current) show({ req, plan });
+      else discardPlans([plan.plan_id]);
     },
-    [actions, open],
+    [actions, open, show],
   );
 
   const done = useCallback((outcome?: ActionOutcome) => {
     latest.current += 1;
-    setOpen(null);
+    // With an outcome the review was applied (and used up); without one it was cancelled.
+    if (outcome !== undefined) shown.current = null;
+    show(null);
     settle.current?.(outcome ?? null);
     settle.current = null;
-  }, []);
+  }, [show]);
 
   return (
     <StartActionContext.Provider value={start}>

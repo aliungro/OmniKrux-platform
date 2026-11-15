@@ -153,3 +153,32 @@ async def test_cloud_shell_that_cannot_start_says_why(cloud_cluster, fake_api, m
     assert sent
     for token in sent:
         assert token not in json.dumps(ws.sent) and token not in caplog.text
+
+
+async def test_cloud_owner_read_failure_logs_no_status_body(
+    cloud_cluster, cloud_http_client, fake_api, monkeypatch, caplog
+):
+    """Describe tolerates an unreadable owner; its log line names the failure, not the body."""
+    _, cluster, _ = cloud_cluster
+    fake_api.pods[("demo", "web-1")]["metadata"]["ownerReferences"] = [
+        {"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "web-abc", "controller": True}
+    ]
+    sent: list[str] = []
+    _echo_failure(
+        fake_api,
+        monkeypatch,
+        "GET",
+        "/apis/apps/v1/namespaces/demo/replicasets/web-abc",
+        403,
+        'replicasets.apps "web-abc" is forbidden: User "alice@corp.example" cannot get it',
+        sent,
+    )
+    with caplog.at_level(logging.DEBUG):
+        response = await cloud_http_client.get(
+            f"/api/clusters/{cluster.id}/pods/demo/web-1/describe"
+        )
+    assert response.status_code == 200, response.text
+    assert sent
+    assert "Could not read ReplicaSet demo/web-abc (ApiException 403)" in caplog.text
+    assert "alice@corp.example" not in caplog.text
+    assert "is forbidden" not in caplog.text

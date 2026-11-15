@@ -57,11 +57,14 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 PLAN_TTL_SECONDS = 300
-# The browser's bulk selection limit, held by the server too: open delete reviews per actor.
-MAX_OPEN_DELETE_PLANS = 50
+# The browser selects at most MAX_DELETE_SELECTION resources to delete at once.
+MAX_DELETE_SELECTION = 50
+# The server holds at most this many open delete reviews per actor: room for two full selections,
+# so a review left open elsewhere (another tab, a discard that didn't arrive) never blocks one.
+MAX_OPEN_DELETE_PLANS = 2 * MAX_DELETE_SELECTION
 OPEN_DELETES_LIMIT = (
-    f"Omnikrux reviews at most {MAX_OPEN_DELETE_PLANS} deletions at a time. Delete or close "
-    "some of the open reviews, or wait 5 minutes for them to expire, then try again."
+    f"{MAX_OPEN_DELETE_PLANS} delete reviews are already open. Close the delete dialogs open in "
+    "other browser tabs, or wait 5 minutes for unused reviews to expire, then try again."
 )
 CONFLICT_STATUS = 409
 

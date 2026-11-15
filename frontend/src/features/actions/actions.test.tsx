@@ -654,6 +654,50 @@ describe("changes from the details", () => {
     });
   });
 
+  it("a review closed without applying is closed on the server too", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [
+        ok(plan({ plan_id: "first", action: "delete", apply_label: "Delete", confirm_text: "web" })),
+        ok(plan({ plan_id: "second", action: "delete", apply_label: "Delete", confirm_text: "web" })),
+      ],
+      "DELETE /api/actions/first": [ok({})],
+      "DELETE /api/actions/second": [ok({})],
+    });
+    const view = wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Delete", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Cancel", dialog()));
+    await waitFor(() => expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual(["/api/actions/first"]));
+    // A review still open when the page leaves is closed as well.
+    fireEvent.click(button("Delete", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    view.unmount();
+    await waitFor(() => expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual(["/api/actions/first", "/api/actions/second"]));
+  });
+
+  it("an applied review is not closed again", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan())],
+      "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Restarted.", job_id: null, audit_id: 1 })],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Restart", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Restart", dialog()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+  });
+
   it("tool keys work in the details but not in a field", async () => {
     const calls = serve({
       [DESCRIBE]: [ok(resourceDescribe())],

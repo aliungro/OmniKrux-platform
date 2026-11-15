@@ -1,13 +1,13 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { deleteEmpty, failure } from "../../api/http";
+import { failure } from "../../api/http";
 import type { ActionTarget, Plan } from "../../api/types";
 import { DialogShell } from "../dock/ConfirmDialog";
 import cd from "../dock/ConfirmDialog.module.css";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import s from "./ActionDialog.module.css";
 import { typeToConfirm } from "./ActionDialog";
-import { useActions } from "./useActions";
+import { discardPlans as discard, useActions } from "./useActions";
 
 export interface DeleteSelection {
   key: string;
@@ -21,11 +21,6 @@ type Result = { key: string; ok: boolean; message: string };
 
 // Keep concurrent Kubernetes requests bounded when the list spans several clusters.
 const REQUESTS_PER_BATCH = 5;
-
-/** The server holds at most 50 open delete reviews: close the ones this dialog won't apply. */
-function discard(planIds: Iterable<string>): void {
-  for (const planId of planIds) void deleteEmpty(`/api/actions/${encodeURIComponent(planId)}`).catch(() => {});
-}
 
 export function BulkDeleteDialog({ selected, onClose }: {
   selected: readonly DeleteSelection[];

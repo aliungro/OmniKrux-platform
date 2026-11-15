@@ -30,6 +30,7 @@ from omnikrux.exec.debug import (
     DebugError,
     add_debug_container,
     create_node_shell_pod,
+    failure_words,
     finish_even_if_cancelled,
     new_debug_container_name,
     new_node_shell_pod_name,
@@ -114,7 +115,10 @@ async def _owner_selector(api: ApiClient, namespace: str, owner: OwnerRef) -> st
             )
         )
     except Exception as exc:  # noqa: BLE001 (describe never fails over this)
-        log.info("Could not read %s %s/%s (%s)", owner.kind, namespace, owner.name, exc)
+        # Type and status only: an error's Status body never reaches a log line.
+        log.info(
+            "Could not read %s %s/%s (%s)", owner.kind, namespace, owner.name, failure_words(exc)
+        )
         return None
     selector = (body.get("spec") or {}).get("selector") or {}
     labels = selector.get("matchLabels") or {}

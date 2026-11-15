@@ -6,7 +6,11 @@ re-created object of the same name answers with the conflict copy."""
 import base64
 from dataclasses import replace
 
-from omnikrux.actions.pipeline import MAX_OPEN_DELETE_PLANS, OPEN_DELETES_LIMIT
+from omnikrux.actions.pipeline import (
+    MAX_DELETE_SELECTION,
+    MAX_OPEN_DELETE_PLANS,
+    OPEN_DELETES_LIMIT,
+)
 from tests.actions.clusters import apply, deployment, plan, records
 from tests.fakekube import CRDS_KEY
 
@@ -339,6 +343,17 @@ async def test_delete_uses_uid_precondition(env):
         "body": {"propagationPolicy": "Background", "preconditions": {"uid": "u1"}},
     }
     assert ("demo", "web-1") not in fake.pods
+
+
+async def test_a_full_bulk_selection_fits_beside_a_leftover_review(env):
+    """A review left open elsewhere (another tab, a lost discard) never blocks a full selection."""
+    fake = env.fakes["dev-a"]
+    fake.pods[("demo", "selected")] = pod("selected", uid="u-selected")
+    leftover = await plan(env, "delete", kind_key="pods", name="selected")
+    assert leftover.status_code == 200, leftover.text
+    for _ in range(MAX_DELETE_SELECTION):
+        r = await plan(env, "delete", kind_key="pods", name="selected")
+        assert r.status_code == 200, r.text
 
 
 async def test_open_delete_reviews_are_limited_like_the_bulk_selection(env):
