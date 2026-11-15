@@ -136,6 +136,65 @@ async def test_cloud_kubernetes_failures_hide_echoed_bearer(
         assert sensitive not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("details", "expected_code"),
+    [
+        ("echo-bearer", None),
+        ({"causes": [{"reason": "ExitCode", "message": "256"}]}, None),
+        ("malformed details", None),
+        ({"causes": {"reason": "ExitCode", "message": "7"}}, None),
+        ({"causes": ["malformed cause", {"reason": "ExitCode", "message": "255"}]}, 255),
+    ],
+    ids=["numeric-bearer", "out-of-range", "non-object-details", "non-list-causes", "valid-exit"],
+)
+async def test_cloud_exec_status_only_reports_valid_exit_codes(
+    details,
+    expected_code,
+    cloud_cluster,
+    cloud_http_client,
+    fake_cloud,
+    fake_api,
+    monkeypatch,
+    caplog,
+):
+    app, cluster, _ = cloud_cluster
+    bearer = "289364205570899346551"
+    monkeypatch.setattr(
+        fake_cloud.gcp,
+        "token_response",
+        lambda form, lifetime: web.json_response({"access_token": bearer, "expires_in": lifetime}),
+    )
+    fake_api.token_check = lambda header: header == f"Bearer {bearer}"
+    exec_pod = fake_api._exec
+
+    async def send_status(request, key):
+        authorized = request.headers["Authorization"].removeprefix("Bearer ")
+        assert authorized == bearer
+        causes = {"causes": [{"reason": "ExitCode", "message": authorized}]}
+        fake_api.exec_status = status_body(500, "NonZeroExitCode", f"Refused {authorized}") | {
+            "details": causes if details == "echo-bearer" else details,
+        }
+        return await exec_pod(request, key)
+
+    monkeypatch.setattr(fake_api, "_exec", send_status)
+    ws = BrowserSocket(app)
+    with caplog.at_level(logging.DEBUG):
+        await asyncio.wait_for(exec_shell(ws, cluster.id, "demo", "web-1"), 5)
+        audit = await cloud_http_client.get("/api/audit", params={"cluster": cluster.id})
+
+    assert audit.status_code == 200
+    assert bearer not in json.dumps(ws.sent) + audit.text + caplog.text
+    assert ws.closed == (1000, None)
+    [exit_frame] = ws.sent
+    assert (exit_frame["type"], exit_frame["code"]) == ("exit", expected_code)
+    [record] = audit.json()["records"]
+    if expected_code is None:
+        assert record["outcome"] == "failed"
+        assert record["message"] == exit_frame["message"]
+    else:
+        assert (record["outcome"], record["message"]) == ("ended", f"exit {expected_code}")
+
+
 async def test_cloud_token_refreshed_before_expiry_no_error(
     cloud_cluster, cloud_pods_watch, fake_cloud, fake_api
 ):

@@ -32,6 +32,7 @@ from omnikrux.logs.stream import (
     open_log,
     ts_key,
 )
+from omnikrux.stream_sessions import StreamSessions, StreamStopped
 from omnikrux.web_security import is_cross_origin
 
 log = logging.getLogger(__name__)
@@ -363,6 +364,44 @@ async def logs(
     if (pod is None) == (selector is None):
         await _fail(websocket, "Choose a pod or a label selector (one of them, not both).", 1008)
         return
+    sessions: StreamSessions = websocket.app.state.streams
+    session = None
+    try:
+        session = await sessions.register(cluster)
+        await session.run(
+            _stream_logs(
+                websocket,
+                cluster,
+                namespace,
+                pod,
+                selector,
+                container,
+                previous=previous,
+                follow=follow,
+                since_time=since_time,
+                tail_lines=tail_lines,
+            )
+        )
+    except StreamStopped as exc:
+        await exc.close(websocket, {"type": "status", "state": "error"})
+    finally:
+        if session is not None:
+            sessions.release(session)
+
+
+async def _stream_logs(
+    websocket: WebSocket,
+    cluster: str,
+    namespace: str,
+    pod: str | None,
+    selector: str | None,
+    container: str | None,
+    *,
+    previous: bool,
+    follow: bool,
+    since_time: str | None,
+    tail_lines: int,
+) -> None:
     connections = websocket.app.state.connections
     try:
         targets, notice = await _targets(connections, cluster, namespace, pod, selector, container)

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -43,6 +44,7 @@ from omnikrux.resources.api import router as resources_router
 from omnikrux.resources.catalog import KindCatalog
 from omnikrux.resources.kinds_api import router as kinds_router
 from omnikrux.security.secrets import SecretBox
+from omnikrux.stream_sessions import StreamSessions
 from omnikrux.watch.api import router as watch_router
 from omnikrux.watch.hub import WatchHub
 from omnikrux.web import mount_spa
@@ -243,12 +245,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         forwards = PortForwardManager(
             connections, registry, audit, ports=forward_ports, bind=forward_bind
         )
+        streams = StreamSessions(registry)
 
         async def on_forget(cluster_id: str) -> None:
             catalog.forget(cluster_id)
             connections.forget(cluster_id)
             broker.forget(cluster_id)
-            await forwards.stop_cluster(cluster_id)
+            await asyncio.gather(
+                forwards.stop_cluster(cluster_id), streams.stop_cluster(cluster_id)
+            )
 
         hub = WatchHub(registry, source_for, on_forget=on_forget)
         discovery = CloudDiscovery(
@@ -267,6 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.plans = PlanStore()
         jobs = app.state.jobs = JobRunner(audit)
         app.state.forwards = forwards
+        app.state.streams = streams
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
@@ -276,6 +282,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await discovery.close()
             await jobs.close()  # first: a stopped drain still writes its audit record
             await forwards.close()  # likewise: every forward's record is finished
+            await streams.close()
             await hub.close()
             await metrics.close()
             await catalog.close()

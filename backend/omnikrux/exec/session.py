@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 STDIN, STDOUT, STDERR, STATUS, RESIZE = range(5)
 PROTOCOL = "v4.channel.k8s.io"
 CONNECT_SECONDS = 30  # for the exec handshake
+CLOSE_SECONDS = 5
 MAX_TERMINAL_SIDE = 10_000  # columns or rows; anything larger is not a terminal
 # The browser has gone: a send or close finds the socket closed.
 BROWSER_GONE = (WebSocketDisconnect, WebSocketDisconnected)
@@ -122,7 +123,17 @@ class KubeExecChannel:
                 return data[0], data[1:]
 
     async def close(self) -> None:
-        await self._resources.aclose()  # closes the socket, then the client; safe to repeat
+        # aiohttp starts its close-handshake timer after sending the close frame. A peer can
+        # stall that send under backpressure, so bound it as well. The stack still closes the
+        # API client when the socket exit is cancelled.
+        try:
+            async with asyncio.timeout(CLOSE_SECONDS):
+                await self._resources.aclose()
+        except TimeoutError:
+            self._ws._writer.transport.abort()
+        except asyncio.CancelledError:
+            self._ws._writer.transport.abort()
+            raise
 
 
 # Exit codes a shell gives when the command itself couldn't be started.
@@ -149,7 +160,7 @@ def exit_from_status(raw: bytes | None, *, had_output: bool, cloud: bool = False
         return ShellExit(None, "The shell ended without an exit status.", False)
     try:
         status = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         status = None
     if not isinstance(status, dict):
         return ShellExit(None, "The shell ended with a status the console couldn't read.", False)
@@ -158,19 +169,31 @@ def exit_from_status(raw: bytes | None, *, had_output: bool, cloud: bool = False
     message = status.get("message")
     has_message = isinstance(message, str) and bool(message)
     reason = message[:500] if has_message and not cloud else None
-    for cause in (status.get("details") or {}).get("causes") or []:
-        if cause.get("reason") == "ExitCode":
-            try:
-                code = int(cause.get("message"))
-            except (TypeError, ValueError):
+    details = status.get("details")
+    causes = details.get("causes") if isinstance(details, dict) else None
+    for cause in causes if isinstance(causes, list) else ():
+        if not isinstance(cause, dict) or cause.get("reason") != "ExitCode":
+            continue
+        value = cause.get("message")
+        if cloud:
+            # Cloud error details are untrusted. Kubernetes reports POSIX exit codes as strings.
+            if not isinstance(value, str) or re.fullmatch(r"[0-9]{1,3}", value) is None:
                 break
-            if code not in CANNOT_RUN_CODES or had_output:
-                return ShellExit(code, None, False)
-            words = f"The command couldn't run in the container (exit {code}: "
-            words += CANNOT_RUN_CODES[code] + ")"
-            if reason and not _repeats_exit(reason, code):
-                return ShellExit(code, f"{words}: {reason}", True)
-            return ShellExit(code, f"{words}.", True)
+            code = int(value)
+            if code > 255 or str(code) != value:
+                break
+        else:
+            try:
+                code = int(value)
+            except (TypeError, ValueError, OverflowError):
+                break
+        if code not in CANNOT_RUN_CODES or had_output:
+            return ShellExit(code, None, False)
+        words = f"The command couldn't run in the container (exit {code}: "
+        words += CANNOT_RUN_CODES[code] + ")"
+        if reason and not _repeats_exit(reason, code):
+            return ShellExit(code, f"{words}: {reason}", True)
+        return ShellExit(code, f"{words}.", True)
     if reason:  # the runtime couldn't start the command at all (an InternalError)
         return ShellExit(None, f"The command couldn't run: {reason}", True)
     if cloud and has_message:

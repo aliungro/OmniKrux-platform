@@ -14,6 +14,7 @@ from omnikrux.clusters.registry import (
     ClusterInfo,
     Source,
 )
+from omnikrux.exec.debug import finish_even_if_cancelled
 
 router = APIRouter(prefix="/api/clusters")
 
@@ -137,17 +138,22 @@ async def delete_cluster(cluster_id: str, request: Request) -> None:
         )
     except AuditUnavailable as exc:
         raise HTTPException(status_code=503, detail=no_audit_message(exc)) from None
-    try:
-        await state.registry.delete(cluster_id)
-    except KeyError:
-        await audit.finish(record, "failed", "Unknown cluster")
-        raise HTTPException(status_code=404, detail="Unknown cluster") from None
-    except Exception:  # noqa: BLE001 (the removal could not be committed)
-        message = "Couldn't remove this cluster from Omnikrux. Try again."
-        await audit.finish(record, "failed", message)
-        raise HTTPException(status_code=503, detail=message) from None
-    await audit.finish(record, "succeeded")
-    await state.hub.forget(cluster_id)  # also forgets the broker source and notifies open sockets
+
+    async def remove() -> None:
+        async with state.streams.removing(cluster_id=cluster_id):
+            try:
+                await state.registry.delete(cluster_id)
+            except KeyError:
+                await audit.finish(record, "failed", "Unknown cluster")
+                raise HTTPException(status_code=404, detail="Unknown cluster") from None
+            except Exception:  # noqa: BLE001 (the removal could not be committed)
+                message = "Couldn't remove this cluster from Omnikrux. Try again."
+                await audit.finish(record, "failed", message)
+                raise HTTPException(status_code=503, detail=message) from None
+            await audit.finish(record, "succeeded")
+            await state.hub.forget(cluster_id)
+
+    await finish_even_if_cancelled(remove())
 
 
 @router.post("/kubeconfig")

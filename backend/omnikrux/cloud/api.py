@@ -30,6 +30,7 @@ from omnikrux.cloud.types import (
 from omnikrux.clusters.api import ClusterOut, NodePoolOut, cluster_out
 from omnikrux.clusters.models import Environment, Provider
 from omnikrux.clusters.registry import DiscoveryChanged
+from omnikrux.exec.debug import finish_even_if_cancelled
 
 router = APIRouter(prefix="/api")
 log = logging.getLogger(__name__)
@@ -421,19 +422,26 @@ async def remove_account(account_id: str, request: Request) -> None:
         )
     except AuditUnavailable as exc:
         raise HTTPException(status_code=503, detail=no_audit_message(exc)) from None
-    try:
-        removed = await cloud.store.delete(account_id)
-    except KeyError:
-        await audit.finish(record, "failed", messages.UNKNOWN_ACCOUNT)
-        raise HTTPException(status_code=404, detail=messages.UNKNOWN_ACCOUNT) from None
-    except Exception as exc:  # noqa: BLE001 (do not expose database parameters)
-        log.warning("Could not remove the cloud account (%s)", type(exc).__name__)
-        await audit.finish(record, "failed", messages.ACCOUNT_REMOVE_FAILED)
-        raise HTTPException(status_code=503, detail=messages.ACCOUNT_REMOVE_FAILED) from None
-    cloud.broker.forget_account(account_id)
-    await audit.finish(record, "succeeded")
-    for cluster_id in removed:
-        await state.hub.forget(cluster_id)  # also forgets the broker source
+
+    async def remove() -> None:
+        async with state.streams.removing(account_id=account_id):
+            try:
+                removed = await cloud.store.delete(account_id)
+            except KeyError:
+                await audit.finish(record, "failed", messages.UNKNOWN_ACCOUNT)
+                raise HTTPException(status_code=404, detail=messages.UNKNOWN_ACCOUNT) from None
+            except Exception as exc:  # noqa: BLE001 (do not expose database parameters)
+                log.warning("Could not remove the cloud account (%s)", type(exc).__name__)
+                await audit.finish(record, "failed", messages.ACCOUNT_REMOVE_FAILED)
+                raise HTTPException(
+                    status_code=503, detail=messages.ACCOUNT_REMOVE_FAILED
+                ) from None
+            cloud.broker.forget_account(account_id)
+            await audit.finish(record, "succeeded")
+            for cluster_id in removed:
+                await state.hub.forget(cluster_id)
+
+    await finish_even_if_cancelled(remove())
 
 
 @router.post("/cloud/accounts/{account_id}/check")
