@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import base64
+import json
 import ssl
+import subprocess
 import threading
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
-from dataclasses import dataclass
+from contextlib import (
+    AbstractAsyncContextManager,
+    ExitStack,
+    asynccontextmanager,
+    suppress,
+)
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -401,3 +409,85 @@ class CloudKubeProxy:
                 return _status(502, "BadGateway", "Kind API relay failed")
             await downstream.close(code=1011, drain=False)
             return downstream
+
+
+async def _serve_smoke(port: int, kubeconfig: dict, state: Path) -> None:
+    from tests.fakecloud import serve_fake_cloud, write_gcloud_login
+
+    project = "kind-cloud-test"
+    refresh_token = "synthetic-kind-gcp-refresh"
+    principal = "gcp-kind@example.test"
+    async with serve_fake_cloud(port=port) as cloud:
+        with ExitStack() as stack:
+            proxy = CloudKubeProxy(kubeconfig, cloud.kube_token_ok("gcp"))
+            stack.callback(proxy.stop)
+            container_cloud = "http://host.docker.internal"
+            endpoints = {
+                name: url.replace("http://127.0.0.1", container_cloud, 1)
+                for name, url in asdict(cloud.endpoints()).items()
+            }
+            endpoints_json = json.dumps(endpoints, separators=(",", ":"))
+            adc = state / "gcloud"
+            env_file = state / "endpoints.env"
+            cloud.gcp.refresh_tokens[refresh_token] = principal
+            cloud.gcp.add_gke(
+                project,
+                "gke-dev",
+                server=proxy.url.replace("http://127.0.0.1", container_cloud, 1),
+            )
+            write_gcloud_login(
+                adc,
+                project=project,
+                adc={
+                    "type": "authorized_user",
+                    "account": principal,
+                    "client_id": "fake.apps.googleusercontent.com",
+                    "client_secret": "synthetic-kind-gcp-secret",
+                    "refresh_token": refresh_token,
+                    "token_uri": endpoints["gcp_oauth"],
+                },
+            )
+            env_file.write_text(f"OMNIKRUX_CLOUD_ENDPOINTS={endpoints_json}\n", encoding="utf-8")
+            print(f"OMNIKRUX_CLOUD_ENDPOINTS={endpoints_json}", flush=True)
+            print(f"Endpoint file {env_file}\nSynthetic ADC directory {adc}", flush=True)
+            await asyncio.Event().wait()
+
+
+def _main() -> None:
+    import yaml
+
+    from tests.kube.test_source_kind import find_kind
+
+    parser = argparse.ArgumentParser(description="Serve the local GKE smoke fixture")
+    parser.add_argument("--serve", required=True, type=int, metavar="PORT")
+    parser.add_argument(
+        "--state-dir", type=Path, help="new directory for synthetic ADC and endpoints"
+    )
+    args = parser.parse_args()
+    if not 1 <= args.serve <= 65535:
+        parser.error("--serve must be a port between 1 and 65535")
+    kind = find_kind()
+    if kind is None:
+        parser.error("kind is required on PATH or in .tools")
+    result = subprocess.run(
+        [kind, "get", "kubeconfig", "--name", "omnikrux-dev"],
+        capture_output=True,
+        encoding="utf-8",
+        timeout=20,
+        check=False,
+    )
+    if result.returncode:
+        parser.error("could not read the kubeconfig for local kind cluster omnikrux-dev")
+    kubeconfig = yaml.safe_load(result.stdout)
+    with ExitStack() as stack:
+        if args.state_dir is None:
+            state = Path(stack.enter_context(TemporaryDirectory(prefix="omnikrux-gke-smoke-")))
+        else:
+            state = args.state_dir.resolve()
+            state.mkdir()
+        with suppress(KeyboardInterrupt):
+            asyncio.run(_serve_smoke(args.serve, kubeconfig, state))
+
+
+if __name__ == "__main__":
+    _main()

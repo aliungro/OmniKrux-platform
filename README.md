@@ -68,6 +68,51 @@ The container runs as uid 10001, but `~/.kube/config` is normally mode 0600 and 
 
 Clusters imported through the API are treated as coming from your kubeconfig file; if their context isn't in the mounted file they are removed on first start — upload them again.
 
+## Cloud accounts
+
+Connect an account in Settings → Cloud accounts to find its Kubernetes clusters. Omnikrux reads cloud account and cluster metadata and uses short-lived tokens to talk to clusters you add. Cloud discovery only reads from your provider. Use the usual review flow for operations on Kubernetes objects. Omnikrux encrypts entered credentials before storing them and never returns them to the browser.
+
+Use an existing CLI login by mounting its folder read-only, then select the account in Settings. Keep the mount flags for the providers you use. The destination folders are the image defaults.
+
+Linux / macOS (bash)
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 \
+  --add-host=host.docker.internal:host-gateway \
+  -v ~/.kube:/kube:ro -v omnikrux-data:/data \
+  -v ~/.azure:/cloud/azure:ro -v ~/.aws:/cloud/aws:ro \
+  -v ~/.config/gcloud:/cloud/gcloud:ro -v ~/.oci:/cloud/oci:ro \
+  omnikrux:dev
+```
+
+Windows PowerShell
+
+```powershell
+docker run --rm -p 127.0.0.1:8080:8080 `
+  --add-host=host.docker.internal:host-gateway `
+  -v "${env:USERPROFILE}\.kube:/kube:ro" -v omnikrux-data:/data `
+  -v "${env:USERPROFILE}\.aws:/cloud/aws:ro" `
+  -v "${env:APPDATA}\gcloud:/cloud/gcloud:ro" `
+  -v "${env:USERPROFILE}\.oci:/cloud/oci:ro" `
+  omnikrux:dev
+```
+
+Windows encrypts the Azure CLI login cache for your Windows user. For the Linux container on Windows, open Settings → Cloud accounts → Enter credentials and supply an existing Azure service principal's subscription ID, tenant ID, client ID and client secret.
+
+Run `gcloud auth application-default login` on the host to provide Application Default Credentials for Google Cloud. For OCI, keep the API signing key and any session token file inside the mounted OCI folder. On Linux the container runs as UID 10001. When your private files are readable only by your user, start the image with `--user "$(id -u):$(id -g)"` and use a data directory you own to mount at `/data`. Keep credential files private.
+
+The image includes `kubelogin` and `gke-gcloud-auth-plugin` for kubeconfigs that name those executables. On the stock image, the GKE plugin uses Application Default Credentials from the mounted gcloud folder. In a derived image with `gcloud` on `PATH`, the GKE plugin follows the kubeconfig's arguments and can use the CLI login. Omnikrux handles supported token commands from `aws`, `aws-iam-authenticator` and `oci` directly when the corresponding CLI is absent. When those executables are on `PATH` in a derived image, they take precedence.
+
+Omnikrux checks for newly discovered clusters every 600 seconds by default. Set `-e OMNIKRUX_CLOUD_DISCOVERY_SECONDS=900` to check every 15 minutes. Use **Check now** in Settings to check sooner. Review and add clusters under **Discovered clusters** on Kubernetes Home. In Pods, the **New clusters found** notice takes you to that list. Removing a cloud cluster in Settings removes it from Omnikrux and dismisses its discovery entry. Removing a cloud account disconnects its clusters from Omnikrux.
+
+The optional live suite uses existing accounts. Run it only when you want real read-only verification, for example from `backend` with the local GCP project and ADC available.
+
+```bash
+OMNIKRUX_LIVE_CLOUDS=gcp OMNIKRUX_LIVE_GCP_PROJECT=my-project python -m uv run pytest -m cloud_live tests/live -q
+```
+
+Run the command without the live opt-in to verify that the live checks are skipped.
+
 ## Finding your way
 
 The left rail switches between Kubernetes, Audit and Settings. Kubernetes starts on Home, with a search for clusters, kinds and pods and a live card for each cluster. Open a cluster card to browse its pods; Home health reports failing pods in rose and pods needing attention in amber. A connection problem is shown with its cause rather than a healthy result.
@@ -186,6 +231,7 @@ docker run --rm -p 127.0.0.1:8080:8080 -p 127.0.0.1:30000-30019:30000-30019 -e O
 - A node shell's pod is deleted when you close the session, and stops by itself after 1 hour if you never do.
 - The previous logs of a container can take about a minute to appear after it restarts.
 - Changes from a web page on another origin are refused (see Troubleshooting); `curl` sends no origin and is not affected.
+- The measured Plan 5 image is 548 MB, 117 MB larger than the 431 MB Plan 4 image. The increase includes the cloud dependencies and the two Kubernetes credential plugins.
 
 ## Local development cluster
 

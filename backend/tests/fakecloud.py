@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from functools import partial
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import pytest
@@ -837,16 +838,16 @@ class FakeCloud:
 
 
 @asynccontextmanager
-async def serve_fake_cloud():
+async def serve_fake_cloud(*, host="127.0.0.1", port=0):
     cloud = FakeCloud()
     app = web.Application()
     app.router.add_route("*", "/{path:.*}", cloud.handle)
     runner = web.AppRunner(app)
     await runner.setup()
     try:
-        site = web.TCPSite(runner, "127.0.0.1", 0)
+        site = web.TCPSite(runner, host, port)
         await site.start()
-        cloud.url = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        cloud.url = f"http://{host}:{runner.addresses[0][1]}"
         yield cloud
     finally:
         await runner.cleanup()
@@ -859,16 +860,16 @@ async def fake_cloud():
 
 
 class FakeCloudThread:
-    def __init__(self):
-        self._server = LoopbackThread(serve_fake_cloud)
+    def __init__(self, *, host="127.0.0.1"):
+        self._server = LoopbackThread(partial(serve_fake_cloud, host=host))
         self.cloud = self._server.value
 
     def stop(self) -> None:
         self._server.stop()
 
 
-def run_fake_cloud_in_thread() -> FakeCloudThread:
-    return FakeCloudThread()
+def run_fake_cloud_in_thread(*, host="127.0.0.1") -> FakeCloudThread:
+    return FakeCloudThread(host=host)
 
 
 def write_azure_cli_login(dir, *, subscriptions, refresh_token, user):
