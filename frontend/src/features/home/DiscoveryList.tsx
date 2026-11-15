@@ -38,7 +38,7 @@ function DiscoveryRow({ row, checked, disabled, onChange, showLastSeen, now }: {
       <div className={s.metadata}>
         {row.region && <span>{row.region}</span>}
         {row.kubernetes_version && <span>Kubernetes {row.kubernetes_version}</span>}
-        <span>{poolSummary(row.node_pools.length, row.node_count)}</span>
+        <span>{poolSummary(row.node_pools ? row.node_pools.length : null, row.node_count)}</span>
         {row.environment !== "unknown" && <span className={s.environment} data-environment={row.environment}>
           {row.environment === "production" ? "Production" : "Development"}
         </span>}

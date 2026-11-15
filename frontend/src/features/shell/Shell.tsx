@@ -4,7 +4,6 @@ import { clusterLifecycle } from "../../api/clusterLifecycle";
 import { useClusters } from "../../api/useClusters";
 import { failure } from "../../api/http";
 import { useKinds } from "../../api/useKinds";
-import { useWatch } from "../../api/useWatch";
 import { ActionsProvider } from "../actions/ActionDialog";
 import { AuditView } from "../audit/AuditView";
 import { focusTableRow } from "../chrome/pageKeys";
@@ -87,8 +86,9 @@ export function Shell() {
   const forwards = usePortForwards().query.data?.length ?? 0;
   const main = useRef<HTMLElement>(null);
   const kube = ws.app === "kubernetes";
-  // Outside Kubernetes there is still a watch when the dock or forwards need removal events.
-  useWatch(!kube && (dock.state.sessions.length > 0 || forwards > 0 || dock.ask || dock.shellChoice) ? "pods" : null);
+  // Outside Kubernetes no view holds a watch. Dock sessions and forwards still learn of a removed
+  // cluster from clusterLifecycle: the registry poll (useClusters, every 15 s) and removals made
+  // here; the server closes the removed cluster's sockets itself.
   useEffect(() => clusterLifecycle(client).subscribe(id => void forgetClusterForwards(client, id)), [client]);
   const activeScope = kube && scope?.id === activeId ? scope.value : [];
   const activeTarget = kube && target?.id === activeId ? target.value : null;

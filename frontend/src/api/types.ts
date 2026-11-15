@@ -18,7 +18,8 @@ export interface Cluster {
   message: string | null;
   source: "file" | "upload" | "cloud";
   kubernetes_version: string | null;
-  node_pools: NodePool[];
+  /** null: the cloud couldn't list them (unknown, not none). */
+  node_pools: NodePool[] | null;
   node_count: number | null;
   cloud: CloudLink | null;
   cloud_note: string | null;
@@ -76,7 +77,8 @@ export interface Discovered {
   name: string;
   region: string | null;
   kubernetes_version: string | null;
-  node_pools: NodePool[];
+  /** null: the cloud couldn't list them (unknown, not none). */
+  node_pools: NodePool[] | null;
   node_count: number | null;
   environment: Environment;
   private: boolean;

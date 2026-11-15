@@ -637,6 +637,23 @@ describe("changes from the details", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("delete from the details pins the row's uid, like bulk delete", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan({ action: "delete", apply_label: "Delete", confirm_text: "web" }))],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Delete", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(calls.find((c) => c.url === "/api/actions/plan")?.body).toMatchObject({
+      action: "delete", params: { expected_uid: "d-1" },
+    });
+  });
+
   it("tool keys work in the details but not in a field", async () => {
     const calls = serve({
       [DESCRIBE]: [ok(resourceDescribe())],

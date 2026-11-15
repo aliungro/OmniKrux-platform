@@ -25,6 +25,11 @@ export function bandLocation(cluster: Cluster): string {
   return [cluster.region, original && host ? `via ${host}` : host].filter(Boolean).join(" · ");
 }
 
+function poolsTitle(cluster: Territory["cluster"], summary: string): string {
+  if (cluster.node_pools === null) return "The cloud provider didn't list this cluster's node pools.";
+  return cluster.node_pools?.map(poolDetails).join("\n") || summary;
+}
+
 function poolDetails(pool: NodePool): string {
   const machines = [pool.count, pool.machine_type].filter((part) => part !== null && part !== "").join(" × ");
   const details = [machines, pool.version && `(${pool.version})`].filter(Boolean).join(" ");
@@ -109,7 +114,7 @@ export function ClusterBand({
           </span>
         )}
         {version && <span className={s.loc} title={version}>{version}</span>}
-        {pools && <span className={s.loc} title={cluster.node_pools?.map(poolDetails).join("\n") || pools}>{pools}</span>}
+        {pools && <span className={s.loc} title={poolsTitle(cluster, pools)}>{pools}</span>}
         {cluster.environment === "production" && <span className={`${s.env} ${s.prod}`}>Production</span>}
         {cluster.environment === "development" && <span className={`${s.env} ${s.dev}`}>Development</span>}
         <Summary t={t} kind={kind} />

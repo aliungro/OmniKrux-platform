@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure, HttpError } from "../../api/http";
@@ -89,6 +89,61 @@ function AccountFields({ provider, source, login }: { provider: CloudProvider; s
 }
 
 const SECRET_LABEL = { azure: "Client secret", aws: "Secret access key", gcp: "Service account key JSON", oci: "Private key (PEM)" };
+const KEY_FILES = { gcp: ".json,application/json", oci: ".pem,.key" };
+// A service-account JSON or a PEM key is a few KB; anything far larger isn't a key.
+const MAX_KEY_BYTES = 64 * 1024;
+
+type LoadedKey = { name: string; bytes: number };
+
+/**
+ * A private key for Google Cloud or Oracle Cloud: read from a file (never drawn on screen), or
+ * pasted into a field that stays masked until "Show key". The text lives only in the dialog's
+ * state, which the dialog clears on submit, close and failure.
+ */
+function KeyField({ provider, value, loaded, onKey }: {
+  provider: "gcp" | "oci"; value: string; loaded: LoadedKey | null;
+  onKey: (value: string, loaded: LoadedKey | null) => void;
+}) {
+  const id = useId();
+  const [shown, setShown] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  async function choose(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";  // the browser forgets the file; only its text is kept, in state
+    if (!file) return;
+    if (file.size > MAX_KEY_BYTES) {
+      setProblem("That file is too large to be a key. Choose the key file itself.");
+      return;
+    }
+    setProblem(null);
+    const text = await file.text();
+    onKey(text, { name: file.name, bytes: text.length });
+  }
+
+  return <div className={s.field} role="group" aria-labelledby={`${id}-label`}>
+    <span id={`${id}-label`}>{SECRET_LABEL[provider]}</span>
+    {loaded ? <p className={s.keyLoaded}>
+      <span>Key loaded from {loaded.name} ({loaded.bytes} bytes)</span>
+      <button type="button" className={dialog.btn} onClick={() => onKey("", null)}>Remove</button>
+    </p> : <>
+      <label className={s.keyFile}>
+        <input type="file" accept={KEY_FILES[provider]} aria-label="Choose key file" onChange={event => void choose(event)} />
+      </label>
+      {problem && <small className={s.warning}>{problem}</small>}
+      <label className={s.field} htmlFor={`${id}-paste`}>Or paste the key</label>
+      <div className={s.keyPaste}>
+        <textarea id={`${id}-paste`} value={value} required autoComplete="off" spellCheck={false} rows={4}
+          className={`${s.secret}${shown ? "" : ` ${s.masked}`}`} data-masked={shown ? "false" : "true"}
+          onChange={event => onKey(event.currentTarget.value, null)} />
+        <button type="button" className={dialog.btn} aria-pressed={shown} onClick={() => setShown(old => !old)}>
+          {shown ? "Hide key" : "Show key"}
+        </button>
+      </div>
+    </>}
+  </div>;
+}
 
 export function ConnectAccountDialog({ logins, onClose }: { logins: CliLogin[]; onClose: () => void }) {
   const client = useQueryClient();
@@ -99,6 +154,7 @@ export function ConnectAccountDialog({ logins, onClose }: { logins: CliLogin[]; 
   const [pickedSource, setSource] = useState<Source>(() => logins.some(login => login.provider === "azure" && login.state === "found") ? "cli" : "entered");
   const [secret, setSecret] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [loadedKey, setLoadedKey] = useState<LoadedKey | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const login = logins.find(item => item.provider === provider);
@@ -110,6 +166,7 @@ export function ConnectAccountDialog({ logins, onClose }: { logins: CliLogin[]; 
   function clearSecrets() {
     setSecret("");
     setPassphrase("");
+    setLoadedKey(null);
   }
 
   function close() {
@@ -167,12 +224,16 @@ export function ConnectAccountDialog({ logins, onClose }: { logins: CliLogin[]; 
         </fieldset>
         <AccountFields key={`${provider}/${source}`} provider={provider} source={source} login={login} />
         {source === "entered" && <>
-          <label className={s.field}>
-            {SECRET_LABEL[provider]}
-            {provider === "gcp" || provider === "oci"
-              ? <textarea value={secret} onChange={event => { setSource("entered"); setSecret(event.currentTarget.value); }} required autoComplete="off" spellCheck={false} rows={4} className={s.secret} />
-              : <input type="password" value={secret} onChange={event => { setSource("entered"); setSecret(event.currentTarget.value); }} required autoComplete="off" />}
-          </label>
+          {provider === "gcp" || provider === "oci"
+            ? <KeyField key={provider} provider={provider} value={secret} loaded={loadedKey} onKey={(value, loaded) => {
+              setSource("entered");
+              setSecret(value);
+              setLoadedKey(loaded);
+            }} />
+            : <label className={s.field}>
+              {SECRET_LABEL[provider]}
+              <input type="password" value={secret} onChange={event => { setSource("entered"); setSecret(event.currentTarget.value); }} required autoComplete="off" />
+            </label>}
           {provider === "oci" && <label className={s.field}>
             Passphrase (optional)
             <input type="password" value={passphrase} onChange={event => { setSource("entered"); setPassphrase(event.currentTarget.value); }} autoComplete="off" />

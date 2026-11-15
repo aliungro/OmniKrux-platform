@@ -97,3 +97,25 @@ it.each(["audit", "settings"] as const)("numbered history leaves hidden Kubernet
  act(()=>result.current.dispatch({type:"switchApp",app:"kubernetes"}));
  expect(result.current.nav.view).toMatchObject({page:"kind",kind:"nodes"});
 });
+
+it("row moves and filter keystrokes never rewrite an unchanged browser entry", () => {
+ const {result}=renderHook(()=>{const {ws,dispatch}=useWorkspace(null);return useTabNav(ws,dispatch);});
+ act(()=>result.current.navigate(v=>kindView(v,"pods"),"push"));
+ const replace=vi.spyOn(history,"replaceState");
+ act(()=>{
+   for (let i=0;i<500;i++) {
+     result.current.navigate(v=>v.page==="kind" ? {...v,selected:{clusterId:"c",uid:`u-${i}`}} : v,"replace");
+   }
+ });
+ expect(replace).not.toHaveBeenCalled();
+ replace.mockRestore();
+});
+
+it("a browser that throttles history writes keeps in-app history working", () => {
+ const {result}=renderHook(()=>{const {ws,dispatch}=useWorkspace(null);return useTabNav(ws,dispatch);});
+ const push=vi.spyOn(history,"pushState").mockImplementation(()=>{ throw new DOMException("throttled","SecurityError"); });
+ expect(()=>act(()=>result.current.navigate(v=>kindView(v,"pods"),"push"))).not.toThrow();
+ expect(result.current.view.page).toBe("kind");
+ expect(result.current.canBack).toBe(true);
+ push.mockRestore();
+});

@@ -357,7 +357,10 @@ export function buildTerritories(
   // Relative time filters can cross their boundary at any instant.
   const minute = f.columns.some(c => c.op === "within" || c.op === "olderThan")
     ? now.getTime() : Math.floor(now.getTime() / 60_000);
-  const filterKey = [kind.key, kind.sort, f.status, f.namespace ?? "", f.text.trim().toLowerCase(), JSON.stringify(f.columns), JSON.stringify(f.sort)].join("\u0000");
+  // The kind's columns are part of the key: a filter restored before /api/kinds answers can't
+  // apply to the fallback columns, and must apply as soon as the real columns arrive.
+  const columnKeys = kind.columns.map(c => c.key).join(",");
+  const filterKey = [kind.key, kind.sort, columnKeys, f.status, f.namespace ?? "", f.text.trim().toLowerCase(), JSON.stringify(f.columns), JSON.stringify(f.sort)].join("\u0000");
   const predicate = compileFilters(f, kind, now);
   return clusters.map((cluster) => {
     const live: LiveStatus = Object.hasOwn(w.clusters, cluster.id) ? w.clusters[cluster.id] : undefined;
@@ -494,14 +497,17 @@ export function formatAgo(at: string | null, now: Date): string {
   return age === "—" ? age : `${age} ago`;
 }
 
-export function poolSummary(pools: number, nodes: number | null): string {
-  const poolText = `${pools} node ${pools === 1 ? "pool" : "pools"}`;
+/** `pools` is null when the cloud couldn't list them: unknown, never "0 node pools". */
+export function poolSummary(pools: number | null, nodes: number | null): string {
+  const poolText = pools === null ? "node pools unknown" : `${pools} node ${pools === 1 ? "pool" : "pools"}`;
   return nodes === null ? poolText : `${poolText} · ${nodes} ${nodes === 1 ? "node" : "nodes"}`;
 }
 
 export function clusterPoolSummary(cluster: Cluster): string | null {
-  const pools = cluster.node_pools?.length ?? 0;
   const nodes = cluster.node_count ?? null;
-  if (cluster.source !== "cloud" && pools === 0 && nodes === null) return null;
-  return poolSummary(pools, nodes);
+  if (cluster.source !== "cloud") {
+    const pools = cluster.node_pools?.length ?? 0;
+    return pools === 0 && nodes === null ? null : poolSummary(pools, nodes);
+  }
+  return poolSummary(cluster.node_pools ? cluster.node_pools.length : null, nodes);
 }

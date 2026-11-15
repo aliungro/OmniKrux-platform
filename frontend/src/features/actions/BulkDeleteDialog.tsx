@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { failure } from "../../api/http";
+import { deleteEmpty, failure } from "../../api/http";
 import type { ActionTarget, Plan } from "../../api/types";
 import { DialogShell } from "../dock/ConfirmDialog";
 import cd from "../dock/ConfirmDialog.module.css";
@@ -22,6 +22,11 @@ type Result = { key: string; ok: boolean; message: string };
 // Keep concurrent Kubernetes requests bounded when the list spans several clusters.
 const REQUESTS_PER_BATCH = 5;
 
+/** The server holds at most 50 open delete reviews: close the ones this dialog won't apply. */
+function discard(planIds: Iterable<string>): void {
+  for (const planId of planIds) void deleteEmpty(`/api/actions/${encodeURIComponent(planId)}`).catch(() => {});
+}
+
 export function BulkDeleteDialog({ selected, onClose }: {
   selected: readonly DeleteSelection[];
   onClose: (deleted: readonly string[]) => void;
@@ -34,6 +39,15 @@ export function BulkDeleteDialog({ selected, onClose }: {
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [applying, setApplying] = useState(false);
   const [results, setResults] = useState<Result[] | null>(null);
+  // Reviews made and not yet applied; closed on the server when the dialog goes.
+  const open = useRef(new Set<string>());
+  useEffect(() => {
+    const reviews = open.current;
+    return () => {
+      discard(reviews);
+      reviews.clear();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,6 +59,8 @@ export function BulkDeleteDialog({ selected, onClose }: {
             const plan = await actions.plan({
               action: "delete", target: selection.target, params: { expected_uid: selection.uid },
             });
+            if (cancelled) discard([plan.plan_id]);
+            else open.current.add(plan.plan_id);
             return { selection, plan };
           } catch (err) {
             return { selection, error: failure(err, "review deletion") };
@@ -77,6 +93,7 @@ export function BulkDeleteDialog({ selected, onClose }: {
         if ("error" in item) return { key: selection.key, ok: false, message: item.error };
         try {
           const confirm = item.plan.confirm_text === null ? undefined : typed[selection.key];
+          open.current.delete(item.plan.plan_id);  // an apply uses the review up, whatever the outcome
           const out = await actions.apply(item.plan.plan_id, confirm);
           return { key: selection.key, ok: true, message: out.message };
         } catch (err) {

@@ -138,6 +138,12 @@ export function useTools({
         forwardGeneration.current = generation.current;
         setOpen("forward");
         return;
+      case "delete":
+      case "evict":
+        // Pin the row the user chose: a same-name replacement is refused at review (Plan 3 R28).
+        setOpen(null);
+        void request(tool, tool, { expected_uid: row.uid });
+        return;
       default:
         setOpen(null);
         void request(tool, tool);

@@ -326,6 +326,35 @@ describe("keys per kind", () => {
     expect(screen.getByRole<HTMLInputElement>("checkbox", { name: "Select pod-2" }).checked).toBe(false);
   });
 
+  it("cancelling a bulk review closes its open reviews on the server", async () => {
+    const discarded: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/actions/plan") {
+        const req = JSON.parse(String(init?.body)) as PlanRequest;
+        const { name } = req.target;
+        return json({
+          plan_id: `plan-${name}`, action: "delete", target: req.target, kind: "Pod",
+          cluster: { id: "c1", name: "big", provider: "gke", environment: "development" },
+          title: `Delete Pod ${name}`, summary: [], warnings: [], blocked: [], diff: null, confirm_text: null,
+          apply_label: "Delete", expires_at: "",
+        } satisfies Plan);
+      }
+      if (init?.method === "DELETE") {
+        discarded.push(url);
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return json(describeBody);
+    }));
+    renderKind(PODS, rows(2));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select pod-0" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select pod-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Delete 2 resources" }));
+    await dialog.findByText("big / n / Pod pod-1");
+    fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(discarded.sort()).toEqual(["/api/actions/plan-pod-0", "/api/actions/plan-pod-1"]));
+  });
+
   it("opens a menu for the pointed pod and sends Logs only to that pod", () => {
     const onOpenLogs = vi.fn();
     const onOpenSplit = vi.fn();

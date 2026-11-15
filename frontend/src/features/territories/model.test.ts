@@ -1,7 +1,8 @@
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/territories/model.test.ts
 import { describe, it, expect } from "vitest";
-import { buildTerritories, chipsFor, countFilters, flatten, formatAge, kindCount, matchesFilter, namespacesIn, poolSummary, podsPerNode, kindTitle, rowTitle, titleColumn, withDiscoveryFailures, type Filters } from "./model";
+import { DEPLOYMENTS } from "../../test/kinds";
+import { buildTerritories, chipsFor, fallbackKind, countFilters, flatten, formatAge, kindCount, matchesFilter, namespacesIn, poolSummary, podsPerNode, kindTitle, rowTitle, titleColumn, withDiscoveryFailures, type Filters } from "./model";
 import type { KindInfo, ResourceRow } from "../../api/types";
 import { applyMessage, emptyWatchState } from "../../api/watchState";
 const now = new Date("2026-11-06T16:00:00");
@@ -11,10 +12,23 @@ const state = () => applyMessage(emptyWatchState(), { type: "snapshot", cluster_
   rows: [r("ok-1", "Running", "ok"), r("crash", "CrashLoopBackOff", "bad", { last_restart_at: "2026-11-06T14:04:14" }), r("wait", "Pending", "warn")] });
 
 describe("territories model", () => {
+  it("a column filter restored before the kind list loads applies once the kind's columns arrive", () => {
+    const deploy = (uid: string, ready: string): ResourceRow => ({ ...r(uid, "Running", "ok", { ready }), kind: "Deployment" });
+    const rows = applyMessage(emptyWatchState(), { type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [deploy("up", "3/3"), deploy("down", "0/3")] });
+    const f: Filters = { columns: [{ key: "ready", op: "oneOf", values: ["0/3"] }], sort: null, status: "all", text: "", namespace: null };
+    const loading = fallbackKind(DEPLOYMENTS.key);
+    // Before /api/kinds answers, the fallback columns can't apply the filter (the chip warns).
+    expect(buildTerritories([cl], rows, f, now, loading)[0].rows).toHaveLength(2);
+    const [loaded] = buildTerritories([cl], rows, f, now, DEPLOYMENTS);
+    expect(loaded.rows.map(x => x.uid)).toEqual(["down"]);
+  });
+
   it("formats pool and node counts with singular forms and omits an unknown node count", () => {
     expect(poolSummary(1, 1)).toBe("1 node pool · 1 node");
     expect(poolSummary(2, 0)).toBe("2 node pools · 0 nodes");
     expect(poolSummary(1, null)).toBe("1 node pool");
+    expect(poolSummary(null, null)).toBe("node pools unknown");
+    expect(poolSummary(null, 4)).toBe("node pools unknown · 4 nodes");
   });
 
   it("text filter matches helm release name", () => {

@@ -221,6 +221,27 @@ it("background tabs hold no watch", async () => {
   await waitFor(() => expect(FakeWebSocket.instances.filter(w => !w.closedByClient).map(w => w.params.get("kind"))).toEqual(["pods"]));
 });
 
+it("Settings and Audit keep no pods watch for an open port-forward", async () => {
+  const forward = {
+    id: "f1", cluster_id: "c1", cluster_name: "kind-omnikrux-dev", provider: "kind", namespace: "demo",
+    kind: "pod", name: "crasher-1", remote_port: 80, local_port: 30001, address: "127.0.0.1:30001",
+    pod: null, state: "listening", message: null, connections: 0, started_at: "2026-01-01T00:00:00Z",
+  };
+  const fetch = vi.fn((url: string) => {
+    if (url.startsWith("/api/kinds")) return json(KINDS);
+    if (url === "/api/port-forwards") return json([forward]);
+    if (url.startsWith("/api/cloud/") || url.startsWith("/api/audit")) return json([]);
+    return json([cluster]);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
+  await waitFor(() => expect(FakeWebSocket.instances.some(w => w.params.get("kind") === "pods")).toBe(true));
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === "/api/port-forwards")).toBe(true));
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  await waitFor(() => expect(FakeWebSocket.instances.filter(w => !w.closedByClient)).toEqual([]));
+});
+
 it("keeps the removed-scope notice when no clusters remain", async () => {
   const saved = JSON.parse(localStorage.getItem("omnikrux.workspace")!);
   saved.kubernetes.tabs[0].view.clusters = ["missing"];

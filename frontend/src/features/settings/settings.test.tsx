@@ -410,6 +410,58 @@ it("entered secrets clear while checking, after refusal and success, and on clos
   expect(post).toHaveBeenCalledTimes(2);
 });
 
+it("a Google Cloud key file is read without ever being shown, and is gone after a refusal", async () => {
+  const key = JSON.stringify({ type: "service_account", private_key: fixtureSecret("GcpKey") });
+  const replies: Array<(response: Response) => void> = [];
+  const post = vi.fn((_path: string, _init: RequestInit) => new Promise<Response>(resolve => replies.push(resolve)));
+  serve({ write: post });
+  const client = show();
+  const user = userEvent.setup();
+  const form = await openConnect(user);
+  await user.selectOptions(form.getByRole("combobox", { name: /provider/i }), form.getByRole("option", { name: "Google Cloud project" }));
+  fireEvent.change(form.getByLabelText(/Project ID/i), { target: { value: "fixture-project" } });
+  const picker = form.getByLabelText<HTMLInputElement>("Choose key file");
+  expect(picker.type).toBe("file");
+  await user.upload(picker, new File([key], "fixture-key.json", { type: "application/json" }));
+  expect(await form.findByText(`Key loaded from fixture-key.json (${key.length} bytes)`)).toBeTruthy();
+  expect(picker.value).toBe("");
+  expect(document.body.textContent).not.toContain(fixtureSecret("GcpKey"));
+  expect(screen.queryAllByDisplayValue(key)).toHaveLength(0);
+  await user.click(form.getByRole("button", { name: "Connect" }));
+  await act(async () => replies[0](json({ detail: "The key was refused." }, 422)));
+  expect(await form.findByText("The key was refused.")).toBeTruthy();
+  expect(form.queryByText(/Key loaded from/)).toBeNull();
+  expect(readBody(post.mock.calls[0][1])).toEqual({
+    provider: "gcp", source: "entered", project_id: "fixture-project", service_account_key: key,
+  });
+  expect(cacheSnapshot(client)).not.toContain(fixtureSecret("GcpKey"));
+  expect(JSON.stringify(browserStorage())).not.toContain(fixtureSecret("GcpKey"));
+});
+
+it("a pasted Oracle Cloud key is masked until shown and cleared when the dialog closes", async () => {
+  const pem = `-----BEGIN PRIVATE KEY-----
+${fixtureSecret("OciKey")}
+-----END PRIVATE KEY-----`;
+  show();
+  const user = userEvent.setup();
+  const form = await openConnect(user);
+  await user.selectOptions(form.getByRole("combobox", { name: /provider/i }), form.getByRole("option", { name: "Oracle Cloud tenancy" }));
+  const pasted = form.getByLabelText<HTMLTextAreaElement>("Or paste the key");
+  expect(pasted.dataset.masked).toBe("true");
+  fireEvent.change(pasted, { target: { value: pem } });
+  const reveal = form.getByRole("button", { name: "Show key" });
+  expect(reveal.getAttribute("aria-pressed")).toBe("false");
+  await user.click(reveal);
+  expect(pasted.dataset.masked).toBe("false");
+  await user.click(form.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  const reopened = await openConnect(user);
+  await user.selectOptions(reopened.getByRole("combobox", { name: /provider/i }), reopened.getByRole("option", { name: "Oracle Cloud tenancy" }));
+  const again = reopened.getByLabelText<HTMLTextAreaElement>("Or paste the key");
+  expect(again.value).toBe("");
+  expect(again.dataset.masked).toBe("true");
+});
+
 it("connect conflict stays in the dialog in the server's words", async () => {
   const detail = "This AWS account is already connected.";
   serve({ write: () => json({ detail }, 409) });
@@ -460,7 +512,9 @@ it.each(multilineCases)("connect preserves line breaks for $option", async ({ op
   for (const [label, value] of Object.entries(fields)) {
     fireEvent.change(form.getByLabelText(label, { exact: false }), { target: { value } });
   }
-  const input = form.getByRole<HTMLTextAreaElement>("textbox", { name: secretLabel });
+  const key = within(form.getByRole("group", { name: secretLabel }));
+  const input = key.getByRole<HTMLTextAreaElement>("textbox", { name: "Or paste the key" });
+  expect(input.dataset.masked).toBe("true");
   expect(input.autocomplete).toBe("off");
   expect(input.getAttribute("spellcheck")).toBe("false");
   fireEvent.change(input, { target: { value: secret } });
@@ -599,6 +653,12 @@ it("import kubeconfig shows the server's conflict message", async () => {
   await user.click(screen.getByRole("button", { name: /^(Add|Import)(?: clusters| kubeconfig)?$/i }));
   expect(await screen.findByText(detail)).toBeTruthy();
   expect(post).toHaveBeenCalledTimes(1);
+  // The pasted text stays only while the import is open, so it can be corrected.
+  expect((paste as HTMLTextAreaElement).value).toBe(kubeconfig);
+  await user.click(screen.getByText("Add from a kubeconfig"));
+  await user.click(screen.getByText("Add from a kubeconfig"));
+  expect((screen.getByRole("textbox", { name: /paste|kubeconfig/i }) as HTMLTextAreaElement).value).toBe("");
+  expect(screen.queryByText(detail)).toBeNull();
 });
 
 it.each([

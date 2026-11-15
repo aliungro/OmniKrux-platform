@@ -47,7 +47,17 @@ export function ImportKubeconfig() {
     }
   }
 
-  return <details className={s.import}>
+  // A kubeconfig can hold tokens and client keys: it is kept only while the import is open (also
+  // after a failure, to correct it). Closing it clears it; leaving Settings unmounts it.
+  function forget() {
+    readId.current++;
+    setReading(false);
+    setKubeconfig("");
+    setError(null);
+    setAdded(null);
+  }
+
+  return <details className={s.import} onToggle={event => { if (!event.currentTarget.open) forget(); }}>
     <summary>Add from a kubeconfig</summary>
     <form onSubmit={submit} autoComplete="off" className={s.importForm}>
       <label className={s.field} htmlFor={`${id}-file`}>Choose a kubeconfig file</label>

@@ -105,6 +105,11 @@ describe("cluster band copy", () => {
     expect(screen.getByText("0 node pools")).toBeTruthy();
     expect(screen.queryByText(/0 nodes/)).toBeNull();
   });
+  it("node pools the cloud couldn't list read as unknown, never as zero", () => {
+    render(<ClusterBand t={terr({ cluster: cloud({ node_pools: null, node_count: null }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("node pools unknown").title).toBe("The cloud provider didn't list this cluster's node pools.");
+    expect(screen.queryByText(/0 node pools/)).toBeNull();
+  });
   it("vanished cluster note shows on the band", () => {
     const note = "Not found in Production AWS any more: it may have been deleted. Remove it from Omnikrux under Settings.";
     const metricsNote = "Metrics server is unavailable";

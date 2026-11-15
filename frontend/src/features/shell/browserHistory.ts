@@ -17,14 +17,30 @@ export interface TabNav<V> {
   scrollTop: number;
 }
 
+/**
+ * Browsers rate-limit history writes (WebKit throws, Chromium drops them), so a refused write
+ * leaves the in-app history as the only history rather than breaking navigation.
+ */
+function write(kind: "pushState" | "replaceState", entry: number, hash: string): void {
+  try {
+    history[kind]({ omnikrux: entry }, "", hash);
+  } catch {
+    // Throttled: the browser's Back and Forward lag behind until the next write lands.
+  }
+}
+
 export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceAction) => void) {
   const current = useRef(ws);
   current.current = ws;
   const seq = useRef(Number.isFinite(history.state?.omnikrux) ? history.state.omnikrux as number : 0);
 
+  // Only a changed address or entry number is written: a row move or filter keystroke that
+  // keeps the tab needs no browser write at all.
   const replace = useCallback(() => {
     const state = current.current;
-    history.replaceState({ omnikrux: seq.current }, "", hashFor(state.app, state.kubernetes.active));
+    const hash = hashFor(state.app, state.kubernetes.active);
+    if (location.hash === hash && history.state?.omnikrux === seq.current) return;
+    write("replaceState", seq.current, hash);
   }, []);
 
   const applyLink = useCallback(() => {
@@ -80,7 +96,7 @@ export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceActio
     current.current = workspaceReducer(state, action);
     dispatch(action);
     if (state.app !== "kubernetes" || id !== state.kubernetes.active) return;
-    if (mode === "push") history.pushState({ omnikrux: ++seq.current }, "", hashFor("kubernetes", id));
+    if (mode === "push") write("pushState", ++seq.current, hashFor("kubernetes", id));
     else replace();
   }, [dispatch, replace]);
 

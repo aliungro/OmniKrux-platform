@@ -31,7 +31,11 @@ function validationWords(detail: unknown): string | undefined {
     const field = Array.isArray(loc) ? loc.filter((p, i) => !(i === 0 && (p === "body" || p === "query" || p === "path"))).join(".") : "";
     return [field ? `${field}: ${msg}` : msg];
   });
-  return parts.length > 0 ? `The console's server refused the request: ${parts.join("; ")}.` : undefined;
+  if (parts.length === 0) return undefined;
+  // The console's own messages are sentences; pydantic's raw ones aren't.
+  const sentence = (part: string) => /[.!?]$/.test(part);
+  const text = parts.reduce((all, part, i) => (i === 0 ? part : `${all}${sentence(parts[i - 1]) ? " " : "; "}${part}`), "");
+  return `The console's server refused the request: ${text}${sentence(text) ? "" : "."}`;
 }
 
 async function fail(res: Response): Promise<never> {
