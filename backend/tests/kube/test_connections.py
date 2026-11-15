@@ -461,8 +461,10 @@ async def test_imported_describe_preserves_unrelated_diagnostics(
         )
     )
 
-    async def refuse(_request):
-        return web.json_response(status_body(403, "Forbidden", reason), status=403)
+    async def refuse(request):
+        # A cloud plugin's token echoed back is removed; the API server's reason stays.
+        echoed = f" {request.headers['Authorization']}" if protected else ""
+        return web.json_response(status_body(403, "Forbidden", reason + echoed), status=403)
 
     monkeypatch.setattr(fake_api, "_route", refuse)
     app = create_app(Settings(data_dir=tmp_path, kubeconfig="", in_container=False))
@@ -478,4 +480,5 @@ async def test_imported_describe_preserves_unrelated_diagnostics(
         response = await client.get(f"/api/clusters/{cluster.id}/pods/demo/web-1/describe")
 
     assert response.status_code == 502
-    assert (reason in response.text) is not protected
+    assert reason in response.text
+    assert "synthetic-plugin" not in response.text

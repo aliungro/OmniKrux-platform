@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, StringConstraints
 
 from omnikrux.audit.store import AuditEntry, AuditUnavailable, actor_of, no_audit_message
 from omnikrux.cloud import messages
@@ -41,7 +41,8 @@ def _whole(pattern: re.Pattern[str]) -> StringConstraints:
     return StringConstraints(pattern=re.compile(pattern.pattern.removesuffix("$") + r"\Z"))
 
 
-AzureId = Annotated[str, _whole(GUID)]
+# GUIDs compare case-insensitively; one spelling keeps a subscription from connecting twice.
+AzureId = Annotated[str, _whole(GUID), AfterValidator(str.lower)]
 AwsRegion = Annotated[str, _whole(AWS_REGION)]
 ProjectId = Annotated[str, _whole(GCP_PROJECT)]
 Ocid = Annotated[str, _whole(OCI_OCID)]
@@ -222,7 +223,7 @@ class DiscoveredOut(BaseModel):
     name: str
     region: str
     kubernetes_version: str | None
-    node_pools: list[NodePoolOut]
+    node_pools: list[NodePoolOut] | None  # null: the cloud couldn't say (unknown, not none)
     node_count: int | None
     environment: Environment
     private: bool
@@ -297,7 +298,11 @@ def _discovered_out(row: Discovered, account: CloudAccount) -> DiscoveredOut:
         name=found.name,
         region=found.region,
         kubernetes_version=found.kubernetes_version,
-        node_pools=[NodePoolOut.from_pool(pool) for pool in found.node_pools],
+        node_pools=(
+            None
+            if found.node_pools is None
+            else [NodePoolOut.from_pool(pool) for pool in found.node_pools]
+        ),
         node_count=found.node_count,
         environment=row.environment,
         private=found.private,

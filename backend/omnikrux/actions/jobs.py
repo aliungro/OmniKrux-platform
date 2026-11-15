@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 
 JOB_KEEP_SECONDS = 3600
 STOPPED = "The console stopped during the {action}."
+REMOVED = "The cluster was removed from Omnikrux, so the {action} stopped."
 UNEXPECTED = "The {action} stopped: something unexpected went wrong ({error})."
 
 JobState = Literal["running", "succeeded", "failed", "cancelled"]
@@ -68,7 +69,8 @@ class Job:
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
     ended: float | None = None  # the runner's clock when it ended
-    stop: Literal["cancel", "shutdown"] | None = None  # why it is being stopped
+    cluster_id: str | None = None  # the cluster it works on: removing the cluster stops it
+    stop: Literal["cancel", "shutdown", "removed"] | None = None  # why it is being stopped
     ending: bool = False  # its outcome is decided and being written to the audit log
     task: asyncio.Task | None = None
 
@@ -117,6 +119,7 @@ class JobRunner:
         audit_id: int,
         cancelled_message: str,
         message: str = "",
+        cluster_id: str | None = None,
     ) -> str:
         """Run `fn(job)` in the background; it finishes audit record `audit_id`. Returns the
         job's id. `cancelled_message` is what a cancelled job ends with."""
@@ -130,6 +133,7 @@ class JobRunner:
             audit_id=audit_id,
             cancelled_message=cancelled_message,
             message=message,
+            cluster_id=cluster_id,
         )
         self._jobs[job.id] = job
         job.task = asyncio.create_task(self._run(job, fn), name=f"omnikrux-{action}-{job.id}")
@@ -147,6 +151,17 @@ class JobRunner:
             job.stop = "cancel"
             await self._stop([job])
         return job.out()
+
+    async def stop_cluster(self, cluster_id: str) -> None:
+        """The cluster was removed: stop its running jobs and finish their audit records."""
+        running = [
+            j
+            for j in self._jobs.values()
+            if j.cluster_id == cluster_id and j.state == "running" and not j.ending
+        ]
+        for job in running:
+            job.stop = job.stop or "removed"
+        await self._stop(running)
 
     async def close(self) -> None:
         """At shutdown: stop every running job and finish its audit record."""
@@ -185,6 +200,8 @@ class JobRunner:
     def _stopped(self, job: Job) -> tuple[JobState, str]:
         if job.stop == "cancel":
             return "cancelled", job.cancelled_message
+        if job.stop == "removed":
+            return "failed", REMOVED.format(action=job.action)
         return "failed", STOPPED.format(action=job.action)
 
     async def _run(self, job: Job, fn: JobWork) -> None:

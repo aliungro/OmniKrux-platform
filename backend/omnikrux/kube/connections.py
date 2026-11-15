@@ -168,7 +168,8 @@ def kube_error_message(exc: Exception, action: str) -> str:
 def cloud_kube_error(
     action: str, *, exc: Exception | None = None, status: int | None = None
 ) -> CloudClusterUnavailable:
-    """Describe a cloud Kubernetes failure without using transport or response text."""
+    """Describe a cloud Kubernetes failure without using transport or response text (R49: the
+    watch and cluster status surfaces never carry a response body)."""
     if isinstance(exc, CloudClusterUnavailable):
         return exc
     if isinstance(exc, ApiException):
@@ -182,6 +183,11 @@ def cloud_kube_error(
         message = (
             f"The cluster refused permission to {action}. "
             "Check the login's Kubernetes permissions, then try again."
+        )
+    elif type(status) is int and 400 <= status <= 499 and status != 429:
+        message = (
+            f"The cluster refused the request (HTTP {status}) while trying to {action}. "
+            "Check the cluster, then try again."
         )
     elif type(status) is int and 300 <= status <= 599:
         message = f"The cluster returned HTTP {status} while trying to {action}. Try again later."

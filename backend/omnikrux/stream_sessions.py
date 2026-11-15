@@ -16,6 +16,9 @@ from omnikrux.exec.debug import finish_even_if_cancelled
 
 log = logging.getLogger(__name__)
 CLOSE_SECONDS = 5
+# A node shell's pod cleanup runs before its cluster is removed; removal waits at most this long
+# (the pod's own active deadline still ends a pod a stuck cleanup leaves behind).
+CLEANUP_SECONDS = 30
 
 
 class _Stop(NamedTuple):
@@ -127,7 +130,7 @@ class StreamSessions:
             ]
         try:
             # The node-shell finalizer still needs the registered cluster and its credentials.
-            await self._stop_all(cleaning, _REMOVED)
+            await self._stop_all(cleaning, _REMOVED, timeout=CLEANUP_SECONDS)
             yield
         finally:
             self._removing[key] -= 1

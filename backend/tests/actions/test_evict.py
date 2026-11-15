@@ -97,3 +97,20 @@ async def test_evict_does_not_touch_a_same_name_replacement(env):
     assert response.status_code == 409, response.text
     assert fake.pods[KEY]["metadata"]["uid"] == "new-uid"
     assert not any(method == "DELETE" for method, _, _ in fake.requests)
+
+
+async def test_evict_plan_refuses_a_replacement_of_the_chosen_row(env):
+    """The row's uid is pinned when the review is made, like bulk delete's (Plan 3 R28)."""
+    fake = env.fakes["dev-a"]
+    fake.pods[KEY] = pod(KEY[1], uid="new-uid")
+    rejected = await plan(
+        env, "evict", kind_key="pods", name=KEY[1], params={"expected_uid": "old-uid"}
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["detail"] == (
+        "Pod demo/evict-me was replaced. Select it again to evict it."
+    )
+    reviewed = await plan(
+        env, "evict", kind_key="pods", name=KEY[1], params={"expected_uid": "new-uid"}
+    )
+    assert reviewed.status_code == 200, reviewed.text

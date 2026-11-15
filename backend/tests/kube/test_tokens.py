@@ -509,3 +509,105 @@ async def test_reusable_ws_client_asks_for_the_current_token_on_each_upgrade(fak
                 assert not ws.closed
     assert len(fake_api.execs) == 2
     assert fake_api.auth == {"Bearer first", "Bearer second"}
+
+
+async def test_failed_refresh_keeps_serving_the_valid_token_and_retries():
+    current = EPOCH
+    first = tokens.BearerToken("first", EPOCH + timedelta(minutes=10))
+    second = tokens.BearerToken("second", EPOCH + timedelta(minutes=20))
+    results: list = [first, OSError("token endpoint down"), second]
+    calls = 0
+
+    async def fetch():
+        nonlocal calls
+        calls += 1
+        result = results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    cache = tokens.CachedToken(fetch, clock=lambda: current)
+    assert await cache() is first
+    current = EPOCH + timedelta(minutes=9)  # inside the refresh window, still valid
+    assert await cache() is first  # the refresh failed: the valid token is still served
+    assert calls == 2
+    assert await cache() is first  # no new attempt until the retry delay has passed
+    assert calls == 2
+    current += timedelta(seconds=tokens.REFRESH_RETRY_SECONDS)
+    assert await cache() is second
+    assert calls == 3
+
+
+async def test_failed_refresh_raises_once_the_token_has_expired():
+    current = EPOCH
+    first = tokens.BearerToken("first", EPOCH + timedelta(minutes=10))
+
+    async def fetch():
+        if current == EPOCH:
+            return first
+        raise ClusterUnavailable("The login failed.")
+
+    cache = tokens.CachedToken(fetch, clock=lambda: current)
+    await cache()
+    current = EPOCH + timedelta(minutes=10)
+    with pytest.raises(ClusterUnavailable):
+        await cache()
+
+
+async def test_rejected_token_is_dropped_once():
+    issued = iter(["t1", "t2", "t3"])
+
+    async def fetch():
+        return tokens.BearerToken(next(issued), None)
+
+    cache = tokens.CachedToken(fetch)
+    assert (await cache()).value == "t1"
+    cache.reject("t1")
+    assert (await cache()).value == "t2"
+    cache.reject("t1")  # a late 401 for the old token changes nothing
+    assert (await cache()).value == "t2"
+
+
+@pytest.mark.parametrize("cloud", [False, True])
+async def test_cluster_401_forces_a_fresh_token(fake_api, cloud):
+    issued = iter(["stale", "fresh"])
+
+    async def fetch():
+        return tokens.BearerToken(next(issued), None)
+
+    cache = tokens.CachedToken(fetch)
+    source = tokens.CloudTokenSource(cache) if cloud else cache
+    fake_api.token_check = lambda header: header == "Bearer fresh"
+    async with await make_api_client(kubeconfig_for(fake_api), token=source) as api:
+        response = await api.call_api(
+            "/version", "GET", auth_settings=["BearerToken"], _preload_content=False
+        )
+        assert response.status == 401
+        response.release()
+        await request_version(api)
+    assert fake_api.auth == {"Bearer stale", "Bearer fresh"}
+
+
+async def test_plugin_never_inherits_omnikrux_settings(monkeypatch):
+    monkeypatch.setenv("OMNIKRUX_SECRET_KEY", "synthetic-master-key")
+    monkeypatch.setenv("OMNIKRUX_DATABASE_URL", "sqlite:///synthetic.db")
+    monkeypatch.setenv("PATH_FOR_PLUGIN_TEST", "kept")
+    monkeypatch.setattr(tokens.shutil, "which", lambda command: command)
+    seen = {}
+
+    class Plugin:
+        returncode = 0
+
+        async def communicate(self):
+            body = {"kind": "ExecCredential", "apiVersion": "v1", "status": {"token": "t"}}
+            return json.dumps(body).encode(), b""
+
+    async def launch(executable, *args, env, **kwargs):
+        seen.update(env)
+        return Plugin()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    config = {"command": "plugin", "apiVersion": "v1", "env": [{"name": "OWN", "value": "1"}]}
+    await tokens.ExecPluginToken(tokens.RunPlugin(config))()
+    assert not [name for name in seen if name.upper().startswith("OMNIKRUX_")]
+    assert seen["PATH_FOR_PLUGIN_TEST"] == "kept" and seen["OWN"] == "1"

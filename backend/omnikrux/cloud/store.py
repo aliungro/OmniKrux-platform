@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, select, update
@@ -15,8 +15,9 @@ from omnikrux.cloud.types import (
     CloudProvider,
     CredentialSourceKind,
     DiscoveredCluster,
-    NodePool,
     environment_from_tags,
+    pools_from_json,
+    pools_json,
 )
 from omnikrux.clusters.models import ClusterRecord, Environment
 from omnikrux.security.secrets import SecretBox
@@ -90,7 +91,7 @@ def _discovered(row: DiscoveredRecord) -> Discovered:
             name=row.name,
             region=row.region,
             kubernetes_version=row.kubernetes_version,
-            node_pools=tuple(NodePool(**pool) for pool in json.loads(row.node_pools)),
+            node_pools=pools_from_json(row.node_pools),
             node_count=row.node_count,
             tags=json.loads(row.tags),
             private=row.private,
@@ -253,7 +254,7 @@ class CloudAccountStore:
                 row.name = found.name
                 row.region = found.region
                 row.kubernetes_version = found.kubernetes_version
-                row.node_pools = json.dumps([asdict(pool) for pool in found.node_pools])
+                row.node_pools = pools_json(found.node_pools)
                 row.node_count = found.node_count
                 row.tags = json.dumps(found.tags)
                 row.environment = environment_from_tags(

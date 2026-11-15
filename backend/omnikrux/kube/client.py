@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiohttp.http_exceptions import HttpProcessingError
@@ -11,6 +12,7 @@ from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.client.rest import RESTResponse
 from kubernetes_asyncio.stream import WsApiClient
 
+from omnikrux.kube.safe_status import MAX_STATUS_BYTES, safe_status_body
 from omnikrux.kube.tokens import (
     CachedToken,
     CloudClusterUnavailable,
@@ -20,6 +22,7 @@ from omnikrux.kube.tokens import (
     RunPlugin,
     TokenSource,
     UnsupportedPluginOutput,
+    reject_token,
     require_live_token,
     utcnow,
 )
@@ -86,13 +89,15 @@ class _CloudResponse:
 
 @dataclass(frozen=True)
 class _CloudErrorResponse:
-    """The raw callers retain the HTTP status and can release the already closed response."""
+    """The raw callers retain the HTTP status and the reduced Status body (safe_status), and can
+    release the already closed response."""
 
     status: int
+    body: bytes = b""
     reason: str = "The cluster refused the request."
 
     async def read(self) -> bytes:
-        return b""
+        return self.body
 
     def release(self) -> None:
         pass
@@ -110,12 +115,15 @@ class CloudApiClient(client.ApiClient):
         with _cloud_transport_errors():
             response = await super().request(method, url, _preload_content=False, **kwargs)
             if not 200 <= response.status < 300:
-                failure = _CloudErrorResponse(response.status)
-                response.release()
+                try:
+                    body = await self._safe_body(response)
+                finally:
+                    response.release()
+                failure = _CloudErrorResponse(response.status, body)
                 if not _preload_content:
                     return failure
                 error = ApiException(status=failure.status, reason=failure.reason)
-                error.body = b""  # ApiClient decodes exception bodies before handing them back.
+                error.body = body  # ApiClient decodes exception bodies before handing them back.
                 raise error
             if not _preload_content:
                 return _CloudResponse(response)
@@ -123,6 +131,16 @@ class CloudApiClient(client.ApiClient):
                 return RESTResponse(response, await response.read())
             finally:
                 response.release()
+
+    async def _safe_body(self, response: aiohttp.ClientResponse) -> bytes:
+        """The error's Status without the token this client sent or the cluster's address."""
+        raw = b""
+        while len(raw) < MAX_STATUS_BYTES and (chunk := await response.content.read(16384)):
+            raw += chunk
+        configuration = self.configuration
+        secrets = [v for v in configuration.api_key.values() if isinstance(v, str)]
+        hosts = [urlsplit(configuration.host or "").hostname, configuration.tls_server_name]
+        return safe_status_body(raw, secrets=secrets, hosts=[h for h in hosts if h])
 
 
 class CloudWsApiClient(WsApiClient):
@@ -185,17 +203,43 @@ async def build_configuration(
     return configuration
 
 
+def _reject_on_401(api: client.ApiClient, token: TokenSource | None) -> None:
+    """A 401 answer drops the token it was sent with from the token's cache (once), so the next
+    request signs in again instead of reusing a token the cluster no longer accepts."""
+    if token is None:
+        return
+    rest = api.rest_client
+    request = rest.request
+
+    async def checked(method, url, *args, **kwargs):
+        sent = api.configuration.api_key.get("BearerToken")
+        try:
+            response = await request(method, url, *args, **kwargs)
+        except ApiException as exc:
+            if exc.status == 401 and sent:
+                reject_token(token, sent)
+            raise
+        if getattr(response, "status", None) == 401 and sent:
+            reject_token(token, sent)
+        return response
+
+    rest.request = checked
+
+
 async def make_api_client(
     kubeconfig: dict, *, token: TokenSource | None = None
 ) -> client.ApiClient:
     api_type = CloudApiClient if isinstance(token, CloudTokenSource) else client.ApiClient
-    return api_type(configuration=await build_configuration(kubeconfig, token=token))
+    api = api_type(configuration=await build_configuration(kubeconfig, token=token))
+    _reject_on_401(api, token)
+    return api
 
 
 async def make_ws_api_client(kubeconfig: dict, *, token: TokenSource | None = None) -> WsApiClient:
     configuration = await build_configuration(kubeconfig, token=token)
     api_type = CloudWsApiClient if isinstance(token, CloudTokenSource) else WsApiClient
     api = api_type(configuration=configuration, heartbeat=WS_HEARTBEAT_SECONDS)
+    _reject_on_401(api, token)
     if configuration.tls_server_name:
         # kubernetes_asyncio sets the certificate name on plain requests but not on WebSocket
         # ones, so a rewritten loopback server (kind in the container) would fail verification.

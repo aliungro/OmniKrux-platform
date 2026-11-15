@@ -580,7 +580,9 @@ class AwsAdapter(PartialDiscoveryAdapter):
                     name,
                     region,
                     cluster.get("version"),
-                    tuple(pools),
+                    # EKS lists managed node groups only; none doesn't mean the cluster has no
+                    # nodes (self-managed, Fargate), so an empty list is unknown.
+                    tuple(pools) or None,
                     count,
                     cluster.get("tags", {}),
                     private,

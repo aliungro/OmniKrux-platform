@@ -7,7 +7,7 @@ from pathlib import PureWindowsPath
 
 from omnikrux.cloud import messages
 from omnikrux.cloud.aws import AwsProfileLogin, assume_role, eks_token
-from omnikrux.cloud.azure import AzureCliLogin, AzureCliUnavailable
+from omnikrux.cloud.azure import AzureCliLogin, AzureCliMissing, AzureCliUnavailable
 from omnikrux.cloud.dirs import CloudDirs
 from omnikrux.cloud.endpoints import CloudEndpoints
 from omnikrux.cloud.http import CloudError, CloudHttp
@@ -169,7 +169,9 @@ class ExecBridge:
         if name == "oci" and self._which(name) is None:
             return self._oci(exec_cfg)
         if name == "kubelogin":
-            return self._azure(exec_cfg)
+            # A real kubelogin with the Azure CLI beside it runs as-is; the bridge serves the rest.
+            installed = self._which("kubelogin") is not None and self._which("az") is not None
+            return self._azure(exec_cfg, bridge=not installed)
         if name == "gke-gcloud-auth-plugin" and self._which("gcloud") is None:
             return self._gke(exec_cfg)
         return RunPlugin(exec_cfg, cloud=name in _CLOUD_COMMANDS)
@@ -235,10 +237,10 @@ class ExecBridge:
 
         return self._native(fetch)
 
-    def _azure(self, config: dict) -> ExecPlan:
+    def _azure(self, config: dict, *, bridge: bool) -> ExecPlan:
         plugin = RunPlugin(config, env={"AZURE_CONFIG_DIR": str(self._dirs.azure)}, cloud=True)
         args = _args(config, "kubelogin")
-        if not args or args[0] != "get-token":
+        if not bridge or not args or args[0] != "get-token":
             return plugin
         try:
             _, options = _parse(args[1:], _AZURE_OPTIONS, allow_extra=True)
@@ -264,8 +266,10 @@ class ExecBridge:
                         raise ClusterUnavailable(messages.unsupported_kubelogin(mode))
                     selected_tenant = default.tenant_id
                 return await login.token(selected_tenant, f"{server}/.default")
-            except AzureCliUnavailable:
+            except AzureCliMissing:
                 raise ClusterUnavailable(messages.unsupported_kubelogin(mode)) from None
+            except AzureCliUnavailable as exc:  # a login exists: say what is wrong with it
+                raise ClusterUnavailable(exc.message) from None
 
         return self._native(fetch)
 

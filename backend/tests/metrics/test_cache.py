@@ -280,7 +280,11 @@ async def test_node_sizes_cached_per_cluster_for_300_seconds(fake_api, monkeypat
             assert (await cache.get("b", "pods")).nodes["worker"].cpu_m == 2000
             assert fake_api.paths.count("/api/v1/nodes") == 1
             clock[0] += 1
-            assert (await cache.get("a", "pods")).nodes["worker"].cpu_m == 8000
+            # Due again: a refresh starts in the background and the last good sizes answer
+            # until it lands.
+            async with asyncio.timeout(5):
+                while (await cache.get("a", "pods")).nodes["worker"].cpu_m != 8000:
+                    await asyncio.sleep(0.01)
             assert fake_api.paths.count("/api/v1/nodes") == 2
             assert other.paths.count("/api/v1/nodes") == 1
         finally:
@@ -318,7 +322,7 @@ async def test_node_sizes_and_usage_fetched_concurrently(fake_api, monkeypatch, 
 
 
 @pytest.mark.parametrize("failure", ["timeout", "exception", "forbidden"])
-async def test_optional_node_failure_is_bounded_logged_safely_and_retries_next_poll(
+async def test_optional_node_failure_is_bounded_logged_safely_and_retried_after_a_pause(
     fake_api, monkeypatch, caplog, failure
 ):
     clock = [1000.0]
@@ -359,6 +363,10 @@ async def test_optional_node_failure_is_bounded_logged_safely_and_retries_next_p
         assert len(calls) == 1
         failing[0] = False
         fake_api.forbidden_kinds.clear()
+        # The failure is remembered: the next polls don't download the node list again.
+        assert (await cache.get("a", "pods")).nodes == {}
+        assert len(calls) == 1
+        clock[0] += cache_module.NODE_SIZES_RETRY_SECONDS
         recovered = await cache.get("a", "pods")
         assert recovered.state == "ok" and recovered.nodes["worker"].cpu_m == 4000
         assert len(calls) == 2
@@ -374,5 +382,58 @@ async def test_successful_empty_node_list_is_cached(fake_api):
         assert (await cache.get("a", "pods")).nodes == {}
         assert (await cache.get("a", "pods")).nodes == {}
         assert fake_api.paths.count("/api/v1/nodes") == 1
+    finally:
+        await cache.close()
+
+
+async def _slow_nodes(monkeypatch, delay: float, calls: list) -> None:
+    call_json = metrics_client.call_json
+
+    async def slow(api, method, path, **kwargs):
+        if path == "/api/v1/nodes":
+            calls.append(path)
+            await asyncio.sleep(delay)
+        return await call_json(api, method, path, **kwargs)
+
+    monkeypatch.setattr(metrics_client, "call_json", slow)
+
+
+async def test_slow_node_list_never_holds_pod_metrics_back(fake_api, monkeypatch):
+    """A node list slower than the pods' budget allows: usage still answers, and promptly."""
+    calls: list = []
+    await _slow_nodes(monkeypatch, 3, calls)
+    fake_api.pod_metrics[("demo", "web-1")] = pod_metric()
+    cache = cache_for(fake_api, ttl=0, timeout=2)
+    try:
+        started = asyncio.get_running_loop().time()
+        got = await cache.get("a", "pods")
+        assert got.state == "ok" and got.items["demo/web-1"].cpu_m == 250
+        assert got.nodes == {}
+        assert (
+            asyncio.get_running_loop().time() - started < cache_module.NODE_SIZES_GRACE_SECONDS + 1
+        )
+        await cache.get("a", "pods")
+        assert len(calls) == 1  # one node list in flight per cluster, never one per poll
+    finally:
+        await cache.close()
+
+
+async def test_last_good_node_sizes_serve_while_a_refresh_runs(fake_api, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(cache_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    fake_api.objects["nodes"][("", "worker")] = {
+        "metadata": {"name": "worker"},
+        "status": {"allocatable": {"cpu": "4"}},
+    }
+    cache = cache_for(fake_api, ttl=0)
+    try:
+        assert (await cache.get("a", "pods")).nodes["worker"].cpu_m == 4000
+        calls: list = []
+        await _slow_nodes(monkeypatch, 3, calls)
+        clock[0] += cache_module.NODE_SIZES_TTL
+        started = asyncio.get_running_loop().time()
+        assert (await cache.get("a", "pods")).nodes["worker"].cpu_m == 4000
+        assert asyncio.get_running_loop().time() - started < 1
+        assert len(calls) == 1
     finally:
         await cache.close()

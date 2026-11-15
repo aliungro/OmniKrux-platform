@@ -305,7 +305,8 @@ async def test_discover_regions_concurrently_with_paging_and_nodegroups(
     }
     assert by_name["alpha"].region == OTHER_REGION
     assert by_name["alpha"].node_count is None
-    assert by_name["alpha"].node_pools == ()
+    # EKS lists managed node groups only: none listed doesn't prove there are no nodes.
+    assert by_name["alpha"].node_pools is None
 
     # Reaching the second page of each collection is required by the fixture counts.
     requests = fake_cloud.requests

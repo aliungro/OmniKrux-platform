@@ -589,3 +589,10 @@ async def test_malformed_oauth_rotation_preserves_last_usable_cli_token(
     assert [path.read_bytes() for path in paths] == initial
     for secret in (REFRESH_TOKEN, prior_rotation, "synthetic-poison-", "synthetic-access-2"):
         assert secret not in caplog.text
+
+
+async def test_missing_agent_pool_list_is_unknown(adapter, azure_cloud, entered_account):
+    azure_cloud.azure.add_aks(SUBSCRIPTION, "NoPools", server=KUBE_SERVER)
+    azure_cloud.azure.clusters[SUBSCRIPTION][0]["properties"].pop("agentPoolProfiles")
+    (found,) = (await adapter.discover(entered_account)).clusters
+    assert found.node_pools is None and found.node_count is None

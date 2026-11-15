@@ -4,9 +4,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -45,40 +44,13 @@ from omnikrux.resources.catalog import KindCatalog
 from omnikrux.resources.kinds_api import router as kinds_router
 from omnikrux.security.secrets import SecretBox
 from omnikrux.stream_sessions import StreamSessions
+from omnikrux.validation import validation_error
 from omnikrux.watch.api import router as watch_router
 from omnikrux.watch.hub import WatchHub
 from omnikrux.web import mount_spa
 from omnikrux.web_security import CrossOriginWriteGuard
 
 log = logging.getLogger(__name__)
-_VALIDATION_MESSAGES = {
-    "missing": "A required field is missing.",
-    "extra_forbidden": "Remove the unrecognized field and try again.",
-    "union_tag_invalid": "Choose a supported option and try again.",
-    "union_tag_not_found": "Choose an option and try again.",
-    "string_pattern_mismatch": "A field has an invalid format. Check the value and try again.",
-    "too_short": "Add the required values and try again.",
-    "too_long": "There are too many values. Remove some and try again.",
-    "json_invalid": "The request body isn't valid JSON. Correct it and try again.",
-}
-
-
-async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
-    details = []
-    for error in exc.errors():
-        location = error.get("loc", ())
-        source = location[0] if location else None
-        code = error["type"]
-        message = _VALIDATION_MESSAGES.get(code)
-        # Unknown keys can occur in loc and union tags or validator text can occur in msg.
-        details.append(
-            {
-                "loc": [source] if source in ("body", "query", "path", "header", "cookie") else [],
-                "type": code if message is not None else "value_error",
-                "msg": message or "A value is invalid. Check the request and try again.",
-            }
-        )
-    return JSONResponse(status_code=422, content={"detail": details})
 
 
 async def _import_kubeconfig_files(settings: Settings, registry: ClusterRegistry) -> list[str]:
@@ -252,7 +224,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             connections.forget(cluster_id)
             broker.forget(cluster_id)
             await asyncio.gather(
-                forwards.stop_cluster(cluster_id), streams.stop_cluster(cluster_id)
+                forwards.stop_cluster(cluster_id),
+                streams.stop_cluster(cluster_id),
+                app.state.jobs.stop_cluster(cluster_id),
             )
 
         hub = WatchHub(registry, source_for, on_forget=on_forget)
@@ -292,7 +266,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await engine.dispose()
 
     app = FastAPI(title="Omnikrux", lifespan=lifespan)
-    app.add_exception_handler(RequestValidationError, _validation_error)
+    app.add_exception_handler(RequestValidationError, validation_error)
     app.state.settings = settings
     # No login yet, so no session cookie to check either: refuse writes that another site's
     # page sends (it could otherwise start a node shell or delete a cluster).

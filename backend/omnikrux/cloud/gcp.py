@@ -338,7 +338,11 @@ def _discovered(project: str, value: object) -> DiscoveredCluster:
         name=name,
         region=location,
         kubernetes_version=_optional_string(cluster.get("currentMasterVersion")),
-        node_pools=tuple(_node_pool(pool) for pool in _array(cluster.get("nodePools", []))),
+        node_pools=(
+            None  # a missing list is unknown, not empty
+            if cluster.get("nodePools") is None
+            else tuple(_node_pool(pool) for pool in _array(cluster["nodePools"]))
+        ),
         node_count=count,
         tags=labels,
         private=private,

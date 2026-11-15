@@ -385,6 +385,60 @@ def test_real_binary_on_path_wins(dirs, fake_cloud, http, command, installed):
     assert bridge.resolve(config) == RunPlugin(config, cloud=True)
 
 
+@pytest.mark.parametrize("mode", ["azurecli", "devicecode", "interactive"])
+def test_real_kubelogin_runs_when_the_azure_cli_is_installed(dirs, fake_cloud, http, mode):
+    bridge = ExecBridge(
+        dirs,
+        fake_cloud.endpoints(),
+        http,
+        which=lambda name: f"/usr/bin/{name}" if name in {"kubelogin", "az"} else None,
+    )
+    config = exec_config("kubelogin", "get-token", "-l", mode, "--server-id", AZURE_SERVER)
+
+    plan = bridge.resolve(config)
+
+    assert plan == RunPlugin(config, env={"AZURE_CONFIG_DIR": str(dirs.azure)}, cloud=True)
+
+
+@pytest.mark.parametrize("installed", [{"kubelogin"}, {"az"}])
+def test_kubelogin_is_bridged_without_both_binaries(dirs, fake_cloud, http, installed):
+    bridge = ExecBridge(
+        dirs,
+        fake_cloud.endpoints(),
+        http,
+        which=lambda name: f"/usr/bin/{name}" if name in installed else None,
+    )
+    config = exec_config("kubelogin", "get-token", "-l", "azurecli", "--server-id", AZURE_SERVER)
+
+    assert isinstance(bridge.resolve(config), NativeToken)
+
+
+async def test_kubelogin_bridge_keeps_the_azure_cli_cause(bridge, dirs):
+    """A login that exists but can't be used says why, not that the console has no Azure CLI."""
+    write_azure_cli_login(
+        dirs.azure,
+        subscriptions=[
+            {
+                "id": "050d52ed-0bc8-46c3-95e1-a7aef67ff331",
+                "name": "D",
+                "tenantId": AZURE_TENANT,
+                "isDefault": True,
+            }
+        ],
+        refresh_token=AZURE_REFRESH,
+        user=AZURE_USER,
+    )
+    (dirs.azure / "msal_token_cache.json").unlink()
+    config = exec_config("kubelogin", "get-token", "-l", "azurecli", "--server-id", AZURE_SERVER)
+
+    with pytest.raises(ClusterUnavailable) as failure:
+        await native_token(bridge, config)
+
+    assert str(failure.value) == (
+        "Your Azure CLI login has expired. Run `az login` on this machine, then try again."
+    )
+
+
 def test_unsupported_aws_subcommand_plain(bridge):
     with pytest.raises(ClusterUnavailable) as failure:
         bridge.resolve(exec_config("aws", "sts", "get-caller-identity"))

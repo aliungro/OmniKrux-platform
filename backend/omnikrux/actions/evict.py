@@ -40,6 +40,10 @@ class EvictAction:
         uid = (live.get("metadata") or {}).get("uid")
         if not uid:
             raise ActionError(422, "The pod has no UID. Refresh the pod and review it again.")
+        if "expected_uid" in params and params["expected_uid"] != uid:
+            raise ActionError(
+                409, f"{spec.kind} {where(target)} was replaced. Select it again to evict it."
+            )
         summary = [
             f"Evict pod {where(target)} on {cluster.name}.",
             "Kubernetes checks any PodDisruptionBudget before terminating this pod.",

@@ -46,6 +46,10 @@ class AzureCliUnavailable(CloudError):
     """The mounted Azure CLI login cannot be used for a grant."""
 
 
+class AzureCliMissing(AzureCliUnavailable):
+    """There is no Azure CLI login at all (as opposed to one that is expired or unreadable)."""
+
+
 @dataclass(frozen=True)
 class AzureSubscription:
     id: str
@@ -84,7 +88,7 @@ def _read_login(path: Path) -> dict:
     try:
         return _as_dict(json.loads(path.read_text(encoding="utf-8-sig")))
     except (FileNotFoundError, NotADirectoryError):
-        raise AzureCliUnavailable(messages.missing_login(_CLI, path.parent, _LOGIN)) from None
+        raise AzureCliMissing(messages.missing_login(_CLI, path.parent, _LOGIN)) from None
     except OSError:
         raise AzureCliUnavailable(messages.unreadable_login(path.parent)) from None
     except (ValueError, TypeError, RecursionError):
@@ -331,7 +335,9 @@ def _discovered(row: object, subscription: str, tenant_id: str) -> DiscoveredClu
         resource_id = _required_string(item.get("id"))
         resource_group = _resource_parts(resource_id, subscription)[4]
         properties = _as_dict(item.get("properties"))
-        pools = tuple(map(_node_pool, properties.get("agentPoolProfiles") or []))
+        profiles = properties.get("agentPoolProfiles")
+        # Every AKS cluster has a system pool: a missing list is unknown, not empty.
+        pools = None if profiles is None else tuple(map(_node_pool, profiles))
         network = _as_dict(properties.get("apiServerAccessProfile") or {})
         private = network.get("enablePrivateCluster") is True
         aad = properties.get("aadProfile")
@@ -339,7 +345,7 @@ def _discovered(row: object, subscription: str, tenant_id: str) -> DiscoveredClu
         tags = _as_dict(item.get("tags") or {})
         if not all(isinstance(key, str) and isinstance(value, str) for key, value in tags.items()):
             raise ValueError
-        counts = [pool.count for pool in pools]
+        counts = [None] if pools is None else [pool.count for pool in pools]
         return DiscoveredCluster(
             resource_id=resource_id.lower(),
             name=_required_string(item.get("name")),
@@ -438,7 +444,7 @@ class AzureAdapter:
     def _subscription(self, account: AccountConfig) -> str:
         if account.source == "workload":
             raise CloudError(messages.WORKLOAD)
-        return _guid(account.settings.get("subscription_id"), "subscription id")
+        return _guid(account.settings.get("subscription_id"), "subscription id").lower()
 
     def _cached_login(self, account: AccountConfig, subscription_id: str) -> _AccountLogin:
         if account.id not in self._accounts:

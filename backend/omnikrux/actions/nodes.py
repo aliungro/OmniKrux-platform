@@ -380,6 +380,7 @@ class DrainAction:
                 audit_id=ctx.audit_id,
                 cancelled_message=CANCELLED.format(node=node),
                 message=f"Evicting {len(pods)} pods from {node}.",
+                cluster_id=target.cluster_id,
             )
         except RuntimeError:  # the runner closed since the check: the node is cordoned now
             raise ActionError(503, NOT_STARTED.format(node=node)) from None

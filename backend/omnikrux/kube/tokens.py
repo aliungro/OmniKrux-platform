@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 NO_EXPIRY_CACHE_SECONDS = 300
+# After a failed refresh, a still-valid token is served this long before the next attempt.
+REFRESH_RETRY_SECONDS = 10
 EXEC_PLUGIN_TIMEOUT_SECONDS = 20
 EXEC_PLUGIN_CLEANUP_SECONDS = 1
 
@@ -34,12 +36,22 @@ TokenFetch = Callable[[], Awaitable[BearerToken]]
 TokenSource = Callable[[], Awaitable[BearerToken]]
 
 
+def reject_token(source: object, value: str) -> None:
+    """The cluster answered 401 to `value`: a source that caches tokens drops it (once)."""
+    reject = getattr(source, "reject", None)
+    if callable(reject):
+        reject(value)
+
+
 @dataclass(frozen=True)
 class CloudTokenSource:
     fetch: TokenSource
 
     async def __call__(self) -> BearerToken:
         return await self.fetch()
+
+    def reject(self, value: str) -> None:
+        reject_token(self.fetch, value)
 
 
 def utcnow() -> datetime:
@@ -61,24 +73,36 @@ def refresh_due(token: BearerToken, fetched_at: datetime, now: datetime) -> bool
 
 
 class CachedToken:
-    """Share one refresh, even when a request waiting on it is cancelled."""
+    """Share one refresh, even when a request waiting on it is cancelled. A refresh that fails
+    while the cached token is still valid serves that token, and tries again after
+    REFRESH_RETRY_SECONDS; failures are never cached."""
 
     def __init__(self, fetch: TokenFetch, *, clock: Callable[[], datetime] = utcnow):
         self._fetch = fetch
         self._clock = clock
         self._cached: tuple[BearerToken, datetime] | None = None
+        self._retry_at: datetime | None = None
         self._pending: tuple[asyncio.Task[BearerToken], int] | None = None
         self._generation = 0
+
+    def _still_valid(self, now: datetime) -> BearerToken | None:
+        if self._cached is None:
+            return None
+        token = self._cached[0]
+        return token if token.expires_at is None or token.expires_at > now else None
 
     async def __call__(self) -> BearerToken:
         while True:
             if self._cached is not None:
                 token, fetched_at = self._cached
-                if not refresh_due(token, fetched_at, self._clock()):
+                now = self._clock()
+                if not refresh_due(token, fetched_at, now):
+                    return token
+                waiting = self._retry_at is not None and now < self._retry_at
+                if waiting and self._still_valid(now) is token:
                     return token
 
             if self._pending is None:
-                self._cached = None
                 generation = self._generation
                 pending = asyncio.create_task(self._refresh(generation))
                 pending.add_done_callback(self._retrieve_exception)
@@ -88,6 +112,8 @@ class CachedToken:
                 token = await asyncio.shield(pending)
             except Exception:
                 if generation == self._generation:
+                    if (valid := self._still_valid(self._clock())) is not None:
+                        return valid
                     raise
             else:
                 if generation == self._generation:
@@ -100,7 +126,12 @@ class CachedToken:
             require_live_token(token, fetched_at)
             if generation == self._generation:
                 self._cached = token, fetched_at
+                self._retry_at = None
             return token
+        except Exception:
+            if generation == self._generation:
+                self._retry_at = self._clock() + timedelta(seconds=REFRESH_RETRY_SECONDS)
+            raise
         finally:
             self._pending = None
 
@@ -114,6 +145,14 @@ class CachedToken:
         # An already running fetch may finish, but cannot repopulate the invalidated cache.
         self._generation += 1
         self._cached = None
+        self._retry_at = None
+
+    def reject(self, value: str) -> None:
+        """The cluster refused `value` (401): the next request fetches a new token. A late 401
+        for a token already replaced changes nothing."""
+        if self._cached is not None and self._cached[0].value == value:
+            self._cached = None
+            self._retry_at = None
 
 
 @dataclass(frozen=True)
@@ -173,7 +212,9 @@ class ExecPluginToken:
         if not isinstance(version, str) or not isinstance(args, list):
             raise ClusterUnavailable(failure + "the login command configuration is invalid")
         try:
-            env = os.environ | {item["name"]: item["value"] for item in (cfg.get("env") or [])}
+            # The console's own settings (its secret key, database URL) never reach a plugin.
+            env = {k: v for k, v in os.environ.items() if not k.upper().startswith("OMNIKRUX_")}
+            env |= {item["name"]: item["value"] for item in (cfg.get("env") or [])}
             env.update(self._plan.env)
             env["KUBERNETES_EXEC_INFO"] = json.dumps(
                 {"apiVersion": version, "kind": "ExecCredential", "spec": {"interactive": False}}

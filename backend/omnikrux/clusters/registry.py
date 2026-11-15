@@ -1,7 +1,7 @@
 import json
 import logging
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
 
@@ -17,7 +17,9 @@ from omnikrux.cloud.types import (
     CloudClusterRef,
     CloudProvider,
     DiscoveredCluster,
-    NodePool,
+    NodePools,
+    pools_from_json,
+    pools_json,
 )
 from omnikrux.clusters.kubeconfig import ParsedContext, parse_kubeconfig
 from omnikrux.clusters.models import ClusterRecord, Environment, Provider
@@ -53,7 +55,7 @@ class ClusterInfo:
     environment: Environment
     source: str = "file"
     kubernetes_version: str | None = None
-    node_pools: tuple[NodePool, ...] = ()
+    node_pools: NodePools = ()
     node_count: int | None = None
     cloud_account_id: str | None = None
     cloud_resource_id: str | None = None
@@ -72,7 +74,7 @@ def _info(row: ClusterRecord) -> ClusterInfo:
         environment=Environment(row.environment),
         source=row.source,
         kubernetes_version=row.kubernetes_version,
-        node_pools=tuple(NodePool(**pool) for pool in json.loads(row.node_pools or "[]")),
+        node_pools=pools_from_json(row.node_pools),
         node_count=row.node_count,
         cloud_account_id=row.cloud_account_id,
         cloud_resource_id=row.cloud_resource_id,
@@ -235,7 +237,7 @@ class ClusterRegistry:
             row.cloud_resource_id = ref.resource_id
             row.cloud_details = json.dumps(ref.details)
             row.kubernetes_version = found.kubernetes_version
-            row.node_pools = json.dumps([asdict(pool) for pool in found.node_pools])
+            row.node_pools = pools_json(found.node_pools)
             row.node_count = found.node_count
             row.cloud_missing_since = None
             await session.flush()

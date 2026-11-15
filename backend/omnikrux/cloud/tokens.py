@@ -53,6 +53,10 @@ class _ClusterToken:
         self.require_active()
         return token
 
+    def reject(self, value: str) -> None:
+        if self._cache is not None:
+            self._cache.reject(value)
+
     def forget(self, message: str) -> None:
         self._forgotten = message
         # Detach the cache. An in-flight waiter can settle without retrying the retired fetch.

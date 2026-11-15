@@ -316,7 +316,10 @@ async def _relay_shell(
     where = f"cluster={cluster} ns={namespace} pod={pod} container={container}"
     log.info("exec opened %s", where)
     try:
-        cloud = isinstance(channel, KubeExecChannel) and channel.cloud
-        return await ExecBridge(channel, cloud=cloud).run(websocket), None
+        if isinstance(channel, KubeExecChannel) and channel.cloud:
+            bridge = ExecBridge(channel, cloud=True, secrets=channel.secrets, hosts=channel.hosts)
+        else:
+            bridge = ExecBridge(channel)
+        return await bridge.run(websocket), None
     finally:
         log.info("exec closed %s", where)

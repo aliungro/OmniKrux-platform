@@ -664,3 +664,10 @@ async def test_ec_service_account_key_is_rejected_locally(
         "for the service account."
     )
     assert gcp_cloud.requests == []
+
+
+async def test_missing_node_pool_list_is_unknown(adapter, cli_account, cli_folder, gcp_cloud):
+    gcp_cloud.gcp.add_gke(PROJECT, "demo", server=KUBE_SERVER, location=LOCATION)
+    gcp_cloud.gcp.projects[PROJECT][0].pop("nodePools", None)
+    (found,) = (await adapter.discover(cli_account)).clusters
+    assert found.node_pools is None

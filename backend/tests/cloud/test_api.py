@@ -144,6 +144,34 @@ async def test_invalid_account_body_never_echoes_secrets(
         fake.discover.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("body", "locations"),
+    [
+        (ENTERED_AZURE | {"tenant_id": "not-a-guid"}, [["body", "tenant_id"]]),
+        (
+            {
+                "provider": "aws",
+                "source": "entered",
+                "regions": ["eu-west-1", "not a region"],
+                "access_key_id": "AKIDEXAMPLE",
+                "secret_access_key": ACCOUNT_SECRET,
+            },
+            [["body", "regions", 1]],
+        ),
+        (ENTERED_AZURE | {"sentinel-extra-field-name": 1}, [["body"]]),
+        ({"provider": "sentinel-unknown-provider-tag"}, [["body"]]),
+    ],
+    ids=["bad-guid", "list-index", "unknown-field", "unknown-tag"],
+)
+async def test_validation_error_names_the_declared_field(cloud_http, body, locations):
+    """The field's own name and list positions stay; union tags and unknown keys don't."""
+    client, _, _ = cloud_http
+    response = await client.post("/api/cloud/accounts", json=body)
+
+    _assert_safe_validation(response, ACCOUNT_SECRET, "sentinel-")
+    assert [error["loc"] for error in response.json()["detail"]] == locations
+
+
 async def test_validation_error_does_not_copy_arbitrary_validator_text(cloud_http, caplog):
     client, state, _ = cloud_http
     caplog.set_level(logging.DEBUG)
@@ -204,6 +232,21 @@ async def test_duplicate_account_409_plain(cloud_http):
     }
     assert len(await state.cloud.store.list()) == 1
     assert {row["outcome"] for row in await _audit_rows(state)} == {"succeeded", "failed"}
+
+
+async def test_same_subscription_in_other_letter_case_is_a_duplicate(cloud_http):
+    client, state, fakes = cloud_http
+    fakes["azure"].verify.side_effect = lambda config: AccountIdentity(
+        config.settings["subscription_id"], "Test account", "user"
+    )
+    guid = "ABCDEF01-2345-4789-ABCD-EF0123456789"
+    upper = ENTERED_AZURE | {"subscription_id": guid}
+    assert (await client.post("/api/cloud/accounts", json=upper)).status_code == 201
+    lower = {"provider": "azure", "source": "cli", "subscription_id": guid.lower()}
+    response = await client.post("/api/cloud/accounts", json=lower)
+    assert response.status_code == 409, response.text
+    [account] = await state.cloud.store.list()
+    assert account.scope == guid.lower()
 
 
 async def test_connect_refuses_to_write_without_audit(cloud_http, monkeypatch):

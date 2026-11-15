@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from omnikrux.actions import nodes
-from omnikrux.actions.jobs import JobFailed, JobRunner
+from omnikrux.actions.jobs import REMOVED, JobFailed, JobRunner
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.main import create_app
@@ -183,3 +183,66 @@ async def test_jobs_cancelled_on_shutdown_marked_in_audit(tmp_path, monkeypatch)
         [record] = (await again.state.audit.list()).records
     assert (record.action, record.outcome) == ("drain", "failed")
     assert record.message == "The console stopped during the drain."
+
+
+async def test_stop_cluster_ends_only_that_clusters_jobs():
+    audit = FakeAudit()
+    runner = JobRunner(audit)
+    gate = asyncio.Event()
+
+    async def work(job):
+        await gate.wait()
+        return "All done."
+
+    removed = runner.start(
+        "drain", work, actor="local", audit_id=1, cancelled_message="Stopped.", cluster_id="c1"
+    )
+    other = runner.start(
+        "drain", work, actor="local", audit_id=2, cancelled_message="Stopped.", cluster_id="c2"
+    )
+    await asyncio.sleep(0)
+    await runner.stop_cluster("c1")
+    out = runner.get(removed)
+    assert (out.state, out.message) == ("failed", REMOVED.format(action="drain"))
+    assert audit.finished == [(1, "failed", REMOVED.format(action="drain"))]
+    assert runner.get(other).state == "running"
+    gate.set()
+    await settle(runner, other)
+    assert runner.get(other).state == "succeeded"
+
+
+async def test_removing_a_cluster_stops_its_drain(tmp_path, monkeypatch):
+    monkeypatch.setattr(nodes, "RETRY_SECONDS", 0.01)
+    settings = Settings(
+        data_dir=tmp_path, kubeconfig="", in_container=False, rewrite_loopback=False
+    )
+    async with serve_fake_api() as fake:
+        fake.objects["nodes"][("", "worker")] = node()
+        fake.pods.clear()
+        fake.pods[("demo", "guarded-1")] = pod("guarded-1")
+        fake.evictions[("demo", "guarded-1")] = [429]  # the drain never finishes by itself
+        app = create_app(settings)
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(app.router.lifespan_context(app))
+            [info] = await app.state.registry.upsert_from_kubeconfig(
+                kubeconfig_named(fake, "dev-a"), rewrite_loopback=False, source=SOURCE_UPLOAD
+            )
+            client = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+                )
+            )
+            target = {"cluster_id": info.id, "kind_key": "nodes", "name": "worker"}
+            r = await client.post("/api/actions/plan", json={"action": "drain", "target": target})
+            r = await client.post(
+                f"/api/actions/{r.json()['plan_id']}/apply", json={"confirm_text": "worker"}
+            )
+            job_id = r.json()["job_id"]
+            while not fake.eviction_requests:
+                await asyncio.sleep(0.01)
+            assert (await client.delete(f"/api/clusters/{info.id}")).status_code == 204
+            out = app.state.jobs.get(job_id)
+            assert (out.state, out.message) == ("failed", REMOVED.format(action="drain"))
+            tries = len(fake.eviction_requests)
+            await asyncio.sleep(0.05)
+            assert len(fake.eviction_requests) == tries

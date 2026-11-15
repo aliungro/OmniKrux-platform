@@ -1,5 +1,6 @@
+import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 from omnikrux.clusters.kubeconfig import guess_environment
@@ -33,13 +34,28 @@ class NodePool:
     version: str | None
 
 
+# Node pools are None when the provider's list couldn't be read (or can't show every node, as
+# with EKS self-managed and Fargate nodes): unknown, never shown as "0 node pools".
+NodePools = tuple[NodePool, ...] | None
+
+
+def pools_json(pools: NodePools) -> str:
+    return json.dumps(None if pools is None else [asdict(pool) for pool in pools])
+
+
+def pools_from_json(text: str | None) -> NodePools:
+    """Stored pools; a row that never had any (file and upload clusters) reads as empty."""
+    pools = json.loads(text or "[]")
+    return None if pools is None else tuple(NodePool(**pool) for pool in pools)
+
+
 @dataclass(frozen=True)
 class DiscoveredCluster:
     resource_id: str
     name: str
     region: str
     kubernetes_version: str | None
-    node_pools: tuple[NodePool, ...]
+    node_pools: NodePools
     node_count: int | None
     tags: dict[str, str]
     private: bool

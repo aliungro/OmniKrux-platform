@@ -49,7 +49,7 @@ class ClusterOut(BaseModel):
     environment: Environment
     source: Source
     kubernetes_version: str | None
-    node_pools: list[NodePoolOut]
+    node_pools: list[NodePoolOut] | None  # null: the cloud couldn't say (unknown, not none)
     node_count: int | None
     cloud: CloudLinkOut | None
     cloud_note: str | None
@@ -92,7 +92,11 @@ def cluster_out(
             if is_cloud
             else request.app.state.catalog.cached_version(info.id)
         ),
-        node_pools=[NodePoolOut.from_pool(pool) for pool in info.node_pools],
+        node_pools=(
+            None
+            if info.node_pools is None
+            else [NodePoolOut.from_pool(pool) for pool in info.node_pools]
+        ),
         node_count=info.node_count,
         cloud=link,
         cloud_note=note,

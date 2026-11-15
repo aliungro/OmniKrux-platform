@@ -565,3 +565,13 @@ async def test_oci_calls_are_read_only(fake_cloud, oci_setup):
             assert request.method == "POST"
             assert re.search(r"/clusters/[^/]+/kubeconfig/content$", request.path)
     assert fake_cloud.read_only_violations() == []
+
+
+async def test_unreadable_node_pools_are_unknown_not_empty(fake_cloud, oci_setup):
+    adapter, account = oci_setup
+    fake_cloud.oci.add_oke(REGION, "pools-hidden", server=SERVER, pools=[{"name": "p"}])
+    fake_cloud.fail[r"/nodePools$"] = (404, "synthetic-upstream-marker")
+    result = await adapter.discover(account)
+    (found,) = result.clusters
+    assert found.node_pools is None and found.node_count is None
+    assert result.problems and "synthetic-upstream-marker" not in " ".join(result.problems)

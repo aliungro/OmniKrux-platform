@@ -402,7 +402,7 @@ class OciAdapter(PartialDiscoveryAdapter):
             _string(row.get("name")) or resource_id,
             region,
             _string(row.get("kubernetesVersion")),
-            tuple(pools),
+            None if problem else tuple(pools),  # an unread list is unknown, not empty
             sum(counts) if not problem and len(counts) == len(pools) else None,
             tags,
             private,
