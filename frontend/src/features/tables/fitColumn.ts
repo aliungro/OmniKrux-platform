@@ -33,13 +33,17 @@ export function measureColumn(header: HTMLElement): { header: number; cells: num
   // A cell is never narrower than its own box, so read each at its natural width: no stretch
   // and no wrapping. All are set, read in one layout pass, and restored before anything paints.
   const saved = targets.map(cell => [cell.style.width, cell.style.whiteSpace]);
-  for (const cell of targets) {
-    cell.style.width = "max-content";
-    cell.style.whiteSpace = "nowrap";
+  let cells: number[];
+  try {
+    for (const cell of targets) {
+      cell.style.width = "max-content";
+      cell.style.whiteSpace = "nowrap";
+    }
+    cells = targets.map(cell => cell.scrollWidth);
+  } finally {
+    targets.forEach((cell, i) => {
+      [cell.style.width, cell.style.whiteSpace] = saved[i];
+    });
   }
-  const cells = targets.map(cell => cell.scrollWidth);
-  targets.forEach((cell, i) => {
-    [cell.style.width, cell.style.whiteSpace] = saved[i];
-  });
   return { header: headerWidth, cells };
 }

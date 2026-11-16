@@ -10,6 +10,8 @@ import { EventsTable } from "./EventsTable";
 import { Inspector } from "./Inspector";
 import { MetricsView, NodeMetricsView } from "./MetricsView";
 import { ResourceDescribeView } from "./ResourceDescribeView";
+import tableStyles from "./ResizableInspectorTable.module.css";
+import { componentCss } from "../../test/css";
 
 afterEach(() => {
   cleanup();
@@ -588,15 +590,35 @@ describe("inspector table column widths", () => {
   });
 
   it("double-click fits an events column to its content", () => {
-    render(<EventsTable events={events} error={null} />);
+    const two = [{ ...events[0], reason: "Scheduled" }, { ...events[0], reason: "Pulled" }];
+    render(<EventsTable events={two} error={null} />);
     const table = screen.getByRole("table");
     const handle = within(table).getByRole("separator", { name: "Resize Event" });
-    vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(210);
+    // The header measures 80; the two rows' cells 150 and 210, so the widest cell must win.
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) {
+      if (this.tagName !== "TD") return 80;
+      const text = this.closest("tr")?.textContent ?? "";
+      return text.includes("Pulled") ? 210 : 150;
+    });
     fireEvent.doubleClick(handle);
     expect((table.querySelectorAll("col")[1] as HTMLElement).style.width).toBe("210px");
     expect(savedWidths()["inspector:events"]).toEqual({ event: 210 });
     fireEvent.keyDown(handle, { key: "Enter" });
     expect(savedWidths()["inspector:events"]).toBeUndefined();
+  });
+
+  it("inspector headers keep 10px of end padding so the handle clears the label", () => {
+    const css = document.createElement("style");
+    css.textContent = componentCss(import.meta.url, "./ResizableInspectorTable.module.css", tableStyles);
+    document.head.append(css);
+    try {
+      render(<EventsTable events={events} error={null} />);
+      const th = screen.getAllByRole("columnheader")[0];
+      expect(th.closest("table")!.parentElement!.className).toBe(tableStyles.scroll);
+      expect(getComputedStyle(th).paddingRight).toBe("10px");
+    } finally {
+      css.remove();
+    }
   });
 
   it("shares Events widths across instances and leaves the empty state free of a table", () => {

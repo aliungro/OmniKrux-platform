@@ -527,17 +527,24 @@ describe("kinds in the table", () => {
     }
   });
 
+  /** Header parts measure 80; each row's cells measure what the table says for that row's key. */
+  const stubWidths = (byRow: Record<string, number>) =>
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) {
+      const key = this.closest("[data-row-key]")?.getAttribute("data-row-key") ?? "";
+      return byRow[key] ?? 80;
+    });
+
   it("double-click fits a pod column to its content", () => {
     layout();
-    render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} />);
+    render(<Table territories={[terr({ rows: [pod(), pod({ uid: "u2", name: "payments-api-2" })], total: 2 })]} kind={PODS} onRetry={() => {}} />);
     const grid = screen.getByRole("grid");
     const template = grid.style.getPropertyValue("--cols");
     const tracks = / (?![^()]*\))/;
     const handle = within(grid).getByRole("separator", { name: "Resize Namespace" });
     const save = vi.spyOn(Storage.prototype, "setItem");
-    vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(150);
+    stubWidths({ "c1/u1": 150, "c1/u2": 210 });
     fireEvent.doubleClick(handle);
-    expect(grid.style.getPropertyValue("--cols").split(tracks)[1]).toBe("150px");
+    expect(grid.style.getPropertyValue("--cols").split(tracks)[1]).toBe("210px");
     expect(save).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(handle, { key: "Enter" });
     expect(grid.style.getPropertyValue("--cols")).toBe(template);

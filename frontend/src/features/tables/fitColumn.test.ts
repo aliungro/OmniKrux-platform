@@ -25,7 +25,22 @@ describe("fitColumn", () => {
     stub(rows[0].children[1], { scrollWidth: 90 });
     stub(rows[1].children[1], { scrollWidth: 120 });
     stub(rows[2].children[0], { scrollWidth: 999 });
+    (rows[1].children[1] as HTMLElement).style.width = "50%";
     expect(measureColumn(header)).toEqual({ header: 100, cells: [90, 120] });
+    expect((rows[0].children[1] as HTMLElement).style.width).toBe("");
+    expect((rows[0].children[1] as HTMLElement).style.whiteSpace).toBe("");
+    expect((rows[1].children[1] as HTMLElement).style.width).toBe("50%");
+    document.body.innerHTML = "";
+  });
+
+  it("measureColumn restores the cells even when a read throws", () => {
+    document.body.innerHTML = `<table><thead><tr><th id="h"><span data-column-label>A</span></th></tr></thead>
+      <tbody><tr><td style="width: 7px">a</td></tr></tbody></table>`;
+    const cell = document.querySelector("td")!;
+    Object.defineProperty(cell, "scrollWidth", { configurable: true, get() { throw new Error("no layout"); } });
+    expect(() => measureColumn(document.getElementById("h")!)).toThrow("no layout");
+    expect(cell.style.width).toBe("7px");
+    expect(cell.style.whiteSpace).toBe("");
     document.body.innerHTML = "";
   });
 });

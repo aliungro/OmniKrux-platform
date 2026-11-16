@@ -99,15 +99,19 @@ describe("audit view", () => {
   });
 
   it("double-click fits an audit column to its content", async () => {
-    serve(() => ({ records: [record(1)], next_before: null }));
+    serve(() => ({ records: [record(2), record(1)], next_before: null }));
     show();
     await screen.findByRole("row", { name: /web-1/ });
     const grid = screen.getByRole("grid");
     const defaults = grid.style.getPropertyValue("--audit-cols");
-    vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(150);
+    // The header measures 80; the two rows' cells 150 and 210, so the widest cell must win.
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) {
+      const text = this.closest('[role="row"]')?.textContent ?? "";
+      return text.includes("web-2") ? 210 : text.includes("web-1") ? 150 : 80;
+    });
     const handle = within(grid).getByRole("separator", { name: "Resize Action" });
     fireEvent.doubleClick(handle);
-    expect(grid.style.getPropertyValue("--audit-cols").split(/ (?![^()]*\))/)[2]).toBe("150px");
+    expect(grid.style.getPropertyValue("--audit-cols").split(/ (?![^()]*\))/)[2]).toBe("210px");
     fireEvent.keyDown(handle, { key: "Enter" });
     expect(grid.style.getPropertyValue("--audit-cols")).toBe(defaults);
   });
