@@ -91,7 +91,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "delete", scope: "row", keys: ["Ctrl D"], match: ["d", "D"], ctrl: true, label: "Delete" },
   // Rows: what each kind's keys mean.
   { id: "logs", scope: "row", kinds: ["pods"], keys: ["l"], match: ["l"], label: "Logs of the selected pod (they follow the row you select)", bar: "logs (they follow your row)" },
-  { id: "pinLogs", scope: "row", kinds: ["pods"], keys: ["Shift L"], match: ["L"], shift: true, label: "Pin the selected pod's log as its own tab", bar: "pin a log" },
+  { id: "pinLogs", scope: "row", kinds: ["pods"], keys: ["Shift L"], match: ["L", "l"], shift: true, label: "Pin the selected pod's log as its own tab", bar: "pin a log" },
   // Not a row action: Shell moves the keyboard into the logs.
   { id: "enterLogs", scope: "row", keys: ["Alt ↓"], match: ["ArrowDown"], alt: true, label: "Move the keyboard into the logs", bar: "into the logs" },
   { id: "previousLogs", scope: "row", kinds: ["pods"], keys: ["p"], match: ["p"], label: "Previous logs (the run before the last restart)", bar: "previous logs" },
@@ -120,7 +120,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "nextMatch", scope: "logs", keys: ["Enter"], label: "Next match" },
   { id: "previousMatch", scope: "logs", keys: ["Shift", "Enter"], label: "Previous match" },
   { id: "jumpLive", scope: "logs", keys: ["G"], match: ["G"], label: "Jump to live" },
-  { id: "pinFollow", scope: "logs", keys: ["Shift L"], match: ["L"], shift: true, label: "Pin the follow log's pod as its own tab" },
+  { id: "pinFollow", scope: "logs", keys: ["Shift L"], match: ["L", "l"], shift: true, label: "Pin the follow log's pod as its own tab" },
   { id: "backToTable", scope: "logs", keys: ["Esc"], match: ["Escape"], label: "Back to the table, same row (never closes a log)" },
   { id: "leaveLogs", scope: "logs", keys: ["Alt ↑"], match: ["ArrowUp"], alt: true, label: "Back to the table, from a log or a shell" },
   // In the dock.
@@ -209,6 +209,8 @@ export function pressed(id: ShortcutId, e: Pressed): boolean {
   const s = byId(id);
   if (e.altKey !== !!s.alt || !!s.ctrl !== (e.ctrlKey || e.metaKey) || (s.alt && e.shiftKey)) return false;
   if (s.shift && e.shiftKey !== true) return false;
+  // Shift with a lower-case letter (Caps Lock on, or automation) is Shift+letter, never the plain key.
+  if (!s.shift && e.shiftKey && e.key.length === 1 && e.key !== e.key.toUpperCase()) return false;
   return (s.match?.includes(e.key) ?? false) || (e.code !== undefined && (s.code?.includes(e.code) ?? false));
 }
 

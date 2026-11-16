@@ -26,6 +26,19 @@ describe("shortcut registry", () => {
     expect(rowShortcut({ ...base, key: "L" }, "pods", available)).toBeUndefined();
   });
 
+  it("shift+l reported as a lower-case l still pins (caps lock, automation)", () => {
+    const available = ["logs", "pinLogs"];
+    expect(rowShortcut({ ...base, key: "l", shiftKey: true }, "pods", available)).toBe("pinLogs");
+    expect(rowShortcut({ ...base, key: "L", shiftKey: true }, "pods", available)).toBe("pinLogs");
+    expect(rowShortcut({ ...base, key: "l" }, "pods", available)).toBe("logs");
+    expect(pressed("pinFollow", { ...base, key: "l", shiftKey: true })).toBe(true);
+    // A lower-case letter shortcut never fires with Shift held; "?", ":" and "G" are unaffected.
+    expect(pressed("logs", { ...base, key: "l", shiftKey: true })).toBe(false);
+    expect(pressed("help", { ...base, key: "?", shiftKey: true })).toBe(true);
+    expect(pressed("kinds", { ...base, key: ":", shiftKey: true })).toBe(true);
+    expect(pressed("jumpLive", { ...base, key: "G", shiftKey: true })).toBe(true);
+  });
+
   it("alt+down is not a row move", () => {
     const e = { ...base, key: "ArrowDown", altKey: true };
     expect(rowShortcut(e, "pods", ["logs", "pinLogs", "enterLogs"])).toBeUndefined();

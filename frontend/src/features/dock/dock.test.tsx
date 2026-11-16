@@ -1189,6 +1189,18 @@ it("shift+L in the follow log pins its pod", async () => {
   expect(dock.state.sessions).toHaveLength(2);
 });
 
+it("shift+l reported as a lower-case l in the follow log still pins", async () => {
+  vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+  renderDock();
+  act(() => dock.openFollow(demoPod));
+  await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+  const log = screen.getByRole("log");
+  log.focus();
+  expect(fireEvent.keyDown(log, { key: "l", shiftKey: true })).toBe(false);
+  expect(dock.state.sessions).toHaveLength(2);
+  expect(dock.state.sessions[1]).toMatchObject({ pinned: true, pod: "two-containers" });
+});
+
 it("closing the focused follow tab by cluster removal rescues focus", async () => {
   vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
   const { client } = renderDock();
