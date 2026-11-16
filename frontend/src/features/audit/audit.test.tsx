@@ -98,6 +98,20 @@ describe("audit view", () => {
     expect(screen.getByLabelText("Details").textContent).toContain('"replicas": 3');
   });
 
+  it("double-click fits an audit column to its content", async () => {
+    serve(() => ({ records: [record(1)], next_before: null }));
+    show();
+    await screen.findByRole("row", { name: /web-1/ });
+    const grid = screen.getByRole("grid");
+    const defaults = grid.style.getPropertyValue("--audit-cols");
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(150);
+    const handle = within(grid).getByRole("separator", { name: "Resize Action" });
+    fireEvent.doubleClick(handle);
+    expect(grid.style.getPropertyValue("--audit-cols").split(/ (?![^()]*\))/)[2]).toBe("150px");
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(grid.style.getPropertyValue("--audit-cols")).toBe(defaults);
+  });
+
   it("persists the Message width from a drag while keeping filters, details, and the page cursor", async () => {
     const key = "omnikrux.tableColumnWidths";
     localStorage.removeItem(key);

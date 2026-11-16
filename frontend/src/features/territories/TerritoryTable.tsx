@@ -150,6 +150,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [items]);
   const selectedKey = selected ? rowKey(selected.clusterId, selected.uid) : null;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const getGuideRect = useCallback(() => scrollRef.current?.getBoundingClientRect() ?? null, []);
   const restored = useRef(false);
   /** Set when the keyboard moved the selection; the row takes focus once it has rendered. */
   const focusPending = useRef(false);
@@ -625,7 +626,7 @@ export const TerritoryTable = memo(function TerritoryTable({
             </span>}
             {columns.map((c) => <ColumnHeader key={`${kind.key}:${c.key}`} col={c}
               filter={columnFilters.find(f => f.key === c.key)} sort={sort} source={pickSource}
-              onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} resizeView={menuView}
+              onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} resizeView={menuView} getGuideRect={getGuideRect}
               onPreviewWidth={width => previewColumn(c.key, width)}
               onCommitWidth={width => commitWidth(c.key, width)} />)}
           </div>

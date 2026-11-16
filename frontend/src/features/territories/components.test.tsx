@@ -515,12 +515,76 @@ describe("kinds in the table", () => {
       act(() => vi.advanceTimersToNextFrame());
       expect(grid.style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 115px 70px");
       expect(save).toHaveBeenCalledTimes(1);
+      vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(150);
       fireEvent.doubleClick(handle);
-      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(grid.style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 150px 70px");
       expect(save).toHaveBeenCalledTimes(2);
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(save).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("double-click fits a pod column to its content", () => {
+    layout();
+    render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} />);
+    const grid = screen.getByRole("grid");
+    const template = grid.style.getPropertyValue("--cols");
+    const tracks = / (?![^()]*\))/;
+    const handle = within(grid).getByRole("separator", { name: "Resize Namespace" });
+    const save = vi.spyOn(Storage.prototype, "setItem");
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(150);
+    fireEvent.doubleClick(handle);
+    expect(grid.style.getPropertyValue("--cols").split(tracks)[1]).toBe("150px");
+    expect(save).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(grid.style.getPropertyValue("--cols")).toBe(template);
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("dragging shows a guide and a width tooltip, then removes them", () => {
+    layout();
+    render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} />);
+    const handle = within(screen.getByRole("grid")).getByRole("separator", { name: "Resize Namespace" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect")
+      .mockReturnValue({ width: 100, top: 10, bottom: 40, right: 300 } as DOMRect);
+    const pointer = (type: string, clientX: number) =>
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+    const overlay = () => [document.body.querySelector("[data-resize-guide]"), document.body.querySelector("[data-resize-tip]")];
+    vi.useFakeTimers();
+    try {
+      pointer("pointerdown", 100);
+      pointer("pointermove", 108);
+      act(() => vi.advanceTimersToNextFrame());
+      const [guide, tip] = overlay();
+      expect(guide?.getAttribute("aria-hidden")).toBe("true");
+      expect(tip?.textContent).toBe("Namespace · 108 px");
+      expect(tip?.getAttribute("aria-hidden")).toBe("true");
+      expect((guide as HTMLElement).style.transform).toBe("translateX(307px)");
+      pointer("pointerup", 108);
+      expect(overlay()).toEqual([null, null]);
+
+      pointer("pointerdown", 100);
+      pointer("pointermove", 120);
+      act(() => vi.advanceTimersToNextFrame());
+      expect(overlay()[0]).not.toBeNull();
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(overlay()).toEqual([null, null]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the filter icon stays clickable beside the divider", () => {
+    layout();
+    const onCommit = vi.spyOn(Storage.prototype, "setItem");
+    render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} />);
+    const filter = screen.getByRole("button", { name: "Filter by Status" });
+    fireEvent.click(filter);
+    expect(filter.getAttribute("aria-expanded")).toBe("true");
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
   it("narrows a responsive column wider than the cap from its real width without a jump", () => {

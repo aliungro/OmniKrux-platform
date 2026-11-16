@@ -10,3 +10,8 @@
   box-sizing: border-box;
   overflow-wrap: anywhere;
 }
+
+/* An inline span reports no scrollWidth, which fit-to-content reads. */
+.label {
+  display: inline-block;
+}

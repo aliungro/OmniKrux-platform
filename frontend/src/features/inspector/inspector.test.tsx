@@ -587,6 +587,18 @@ describe("inspector table column widths", () => {
     for (const handle of handles) fireEvent.keyDown(handle, { key: "Enter" });
   });
 
+  it("double-click fits an events column to its content", () => {
+    render(<EventsTable events={events} error={null} />);
+    const table = screen.getByRole("table");
+    const handle = within(table).getByRole("separator", { name: "Resize Event" });
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(210);
+    fireEvent.doubleClick(handle);
+    expect((table.querySelectorAll("col")[1] as HTMLElement).style.width).toBe("210px");
+    expect(savedWidths()["inspector:events"]).toEqual({ event: 210 });
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(savedWidths()["inspector:events"]).toBeUndefined();
+  });
+
   it("shares Events widths across instances and leaves the empty state free of a table", () => {
     const { rerender } = render(<><EventsTable events={events} error={null} /><EventsTable events={events} error={null} /></>);
     const [first, second] = screen.getAllByRole("table");

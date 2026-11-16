@@ -142,7 +142,8 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  padding-inline-end: 6px;
+  /* The resize handle is 10px wide, centred on the column boundary. */
+  padding-inline-end: 10px;
 }
 
 .heading {
@@ -153,7 +154,7 @@
 
 @media (pointer: coarse) {
   .column {
-    padding-inline-end: 13px;
+    padding-inline-end: 16px;
   }
 }
 
