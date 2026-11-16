@@ -191,14 +191,17 @@ export function PinnedKindsSection({ kinds }: { kinds: readonly KindInfo[] | und
   };
   const openMenu = (key: string, anchor: MenuAnchor) => setMenu({ key, anchor });
   const rowKey = (e: KeyboardEvent<HTMLLIElement>, key: string, index: number) => {
-    if (e.target !== e.currentTarget) return;
     const by = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
-    if (by && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-      // Always the row's, even at the ends: Alt+Down must not fall through to the logs.
+    if (by && e.altKey) {
+      // Alt+arrows anywhere in the row (its "⋯" too) are the row's, even at the ends and with
+      // other modifiers: Alt+Down must never fall through to the logs. Only plain Alt moves it.
       e.preventDefault();
       e.stopPropagation();
-      moveBy(key, index, by, e.currentTarget);
-    } else if (by && plain(e)) {
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.target instanceof HTMLElement) moveBy(key, index, by, e.target);
+      return;
+    }
+    if (e.target !== e.currentTarget) return;
+    if (by && plain(e)) {
       e.preventDefault();
       const next = pinned[index + by];
       if (next !== undefined) rowEls.current.get(next)?.focus();

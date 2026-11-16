@@ -156,8 +156,10 @@ it("clears cancelled drags and ignores drags that did not start on a handle", ()
   const initial = rowOrder();
   const secrets = rows()[3];
   const handle = screen.getByTitle("Drag Secrets to reorder");
-  const release = vi.fn();
-  Object.assign(handle, { setPointerCapture: vi.fn(), hasPointerCapture: () => true, releasePointerCapture: release });
+  const capture = vi.fn();
+  // A real release fires lostpointercapture at once; the drag it ends must not be cleared twice.
+  const release = vi.fn(() => { pointAt(handle, "lostpointercapture"); });
+  Object.assign(handle, { setPointerCapture: capture, hasPointerCapture: () => true, releasePointerCapture: release });
   const start = () => {
     pointAt(handle, "pointerdown", 240);
     pointAt(handle, "pointermove", 160);
@@ -167,6 +169,21 @@ it("clears cancelled drags and ignores drags that did not start on a handle", ()
   pointAt(secrets, "pointerdown", 240);
   pointAt(handle, "pointermove", 160);
   expectSettled();
+  pointAt(handle, "pointerup", 160);
+
+  // Under 4 px of travel is a press, not a drag: nothing lifts and nothing is written.
+  pointAt(handle, "pointerdown", 240);
+  expect(capture).toHaveBeenCalledWith(1);
+  pointAt(handle, "pointermove", 237);
+  expectSettled();
+  pointAt(handle, "pointerup", 237);
+  expectSettled();
+
+  start();
+  release.mockClear();
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  expectSettled();
+  expect(release).toHaveBeenCalledTimes(1);
   pointAt(handle, "pointerup", 160);
 
   for (const type of ["pointercancel", "lostpointercapture"] as const) {
@@ -269,6 +286,33 @@ it("alt+up and alt+down move the focused row and keep focus on it", () => {
     expect(document.activeElement).toBe(pods);
     fireEvent.keyDown(pods, { key: "ArrowUp" });
     expect(document.activeElement).toBe(pods);
+  } finally { document.removeEventListener("keydown", shell); }
+});
+
+it("alt arrows from the row's actions button move the row and never reach the logs", () => {
+  savePinned(localStorage, ["pods", "deployments.apps", "services"]);
+  const shell = vi.fn();
+  document.addEventListener("keydown", shell);
+  try {
+    render(<SettingsView kinds={KINDS.kinds} />);
+    pick("Pods", "Move down");
+    const more = screen.getByRole("button", { name: "Actions for Pods" });
+    expect(document.activeElement).toBe(more);
+    expect(fireEvent.keyDown(more, { key: "ArrowDown", altKey: true })).toBe(false);
+    expect(rowOrder()).toEqual(["Deployments", "Services", "Pods"]);
+    expect(document.activeElement).toBe(more);
+    expect(screen.getByRole("status").textContent).toBe("Pods moved to position 3 of 3.");
+    // At the end it stays put, and the key still stops in the row.
+    expect(fireEvent.keyDown(more, { key: "ArrowDown", altKey: true })).toBe(false);
+    expect(rowOrder()).toEqual(["Deployments", "Services", "Pods"]);
+    // Alt+Shift+arrows move nothing, but are the row's too.
+    for (const target of [pinnedRow("Pods"), more]) {
+      for (const key of ["ArrowUp", "ArrowDown"]) {
+        expect(fireEvent.keyDown(target, { key, altKey: true, shiftKey: true })).toBe(false);
+      }
+    }
+    expect(rowOrder()).toEqual(["Deployments", "Services", "Pods"]);
+    expect(shell).not.toHaveBeenCalled();
   } finally { document.removeEventListener("keydown", shell); }
 });
 
