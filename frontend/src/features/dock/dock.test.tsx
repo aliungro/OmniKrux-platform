@@ -122,25 +122,26 @@ describe("Dock", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
   });
 
-  it("keeps keyboard focus in the workspace when its requested log tab is removed in the opening batch", async () => {
-    const { client } = renderDock();
-    const survivor = shell("survivor", { kind: "logs", cluster: eks, pod: "redis-0" });
-    open(survivor);
-    let finish!: (response: Response) => void;
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
-    const origin = screen.getByRole("button", { name: "node shell" });
-    origin.focus();
-    act(() => dock.openPod(demoPod, "logs", { keyboardOrigin: origin }));
-
-    await act(async () => {
-      finish(await json(twoContainers));
-      // Let the describe enqueue the open and keyboard handoff before React commits this batch.
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      clusterLifecycle(client).remove(aks.id);
-    });
-
-    expect(screen.getAllByRole("tab")).toEqual([screen.getByRole("tab", { name: /redis-0/, selected: true })]);
-    expect(document.activeElement).toBe(origin);
+  it("opening logs from a row leaves focus on the row", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+    renderDock();
+    // The workspace button stands in for the table row the keys were pressed on.
+    const row = screen.getByRole("button", { name: "node shell" });
+    row.focus();
+    act(() => dock.openFollow(demoPod)); // L
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    act(() => dock.openPod(demoPod, "logs", { previous: true })); // p
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    act(() => dock.openPinned(demoPod)); // Shift+L
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(3));
+    expect(dock.state.sessions.map((x) => [x.follow ?? false, x.previous ?? false, x.pinned ?? false])).toEqual([
+      [true, false, false],
+      [false, true, false],
+      [false, false, true],
+    ]);
+    // The newest is selected, as a click's is, and the keyboard stays on the row.
+    expect(dock.state.focused).toBe(dock.state.sessions[2].id);
+    expect(document.activeElement).toBe(row);
   });
 
   it("switching tabs switches the visible identity", async () => {
@@ -588,6 +589,144 @@ describe("Dock", () => {
     fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
     expect(shown()).toHaveLength(2);
     expect(tabB.getAttribute("aria-selected")).toBe("true");
+  });
+
+  describe("the follow log", () => {
+    const rowOf = (name: string): ResourceRow => ({
+      uid: name, cluster_id: "c1", kind: "Pod", namespace: "payments", name, created_at: null, labels: {},
+      columns: { status: "Running", status_class: "ok", resource_version: "1" },
+    });
+    const oneContainer = describeBody({ containers: [web] });
+    const live = () => FakeWebSocket.instances.filter((w) => w.url.includes("/api/logs") && !w.closedByClient);
+    const flush = () => act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
+
+    it("L opens one follow log on the default container", async () => {
+      const annotated = describeBody({
+        ...twoContainers,
+        annotations: { "kubectl.kubernetes.io/default-container": "helper" },
+      });
+      vi.stubGlobal("fetch", vi.fn((url: string) => {
+        if (url.includes("/two-containers/")) return json(annotated);
+        if (url.includes("/broken/")) return json({ detail: "boom" }, 500);
+        return json(twoContainers);
+      }));
+      renderDock();
+      act(() => dock.openFollow(demoPod));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+      const [followed] = dock.state.sessions;
+      expect(followed).toMatchObject({ follow: true, pod: "two-containers", container: "helper" });
+      expect(followed.containers).toEqual(expect.arrayContaining(["web", "helper"]));
+      expect(dock.state.focused).toBe(followed.id);
+      expect(live()).toHaveLength(1);
+      expect(live()[0].params.get("container")).toBe("helper");
+
+      // No annotation: the first container, even though helper is the one failing.
+      act(() => dock.openFollow({ ...demoPod, uid: "plain", name: "plain" }));
+      await waitFor(() => expect(dock.state.sessions[0].pod).toBe("plain"));
+      expect(dock.state.sessions).toHaveLength(1);
+      expect(dock.state.sessions[0]).toMatchObject({ id: followed.id, container: "web" });
+
+      // A failed describe still follows the pod, on the server's choice of container.
+      act(() => dock.openFollow({ ...demoPod, uid: "broken", name: "broken" }));
+      await waitFor(() => expect(dock.state.sessions[0].pod).toBe("broken"));
+      expect(dock.state.sessions[0]).toMatchObject({ id: followed.id, container: null, containers: [] });
+    });
+
+    it("a late describe never retargets over a newer row", async () => {
+      let answerA!: () => void;
+      vi.stubGlobal("fetch", vi.fn((url: string) => {
+        if (url.includes("/api-a/")) {
+          return new Promise<Response>((resolve) => {
+            answerA = () => void json(oneContainer).then(resolve);
+          });
+        }
+        return json(oneContainer);
+      }));
+      renderDock();
+      act(() => dock.openFollow(rowOf("api-x")));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+      const id = dock.state.sessions[0].id;
+
+      act(() => dock.followRow(rowOf("api-a"))); // slow
+      act(() => dock.followRow(rowOf("api-b")));
+      await waitFor(() => expect(dock.state.sessions[0].pod).toBe("api-b"));
+      await act(async () => answerA());
+      await flush();
+      expect(dock.state.sessions).toHaveLength(1);
+      expect(dock.state.sessions[0]).toMatchObject({ id, pod: "api-b" });
+      expect(live().map((w) => w.params.get("pod"))).toEqual(["api-b"]);
+    });
+
+    it("pinFollow copies the follow target into a pinned tab without taking focus", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+      renderDock();
+      act(() => dock.pinFollow()); // nothing to pin yet
+      expect(dock.state.sessions).toHaveLength(0);
+      act(() => dock.openFollow(demoPod));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+      const followId = dock.state.sessions[0].id;
+
+      act(() => dock.pinFollow());
+      expect(dock.state.sessions).toHaveLength(2);
+      const pinned = dock.state.sessions[1];
+      expect(pinned).toMatchObject({ pinned: true, cluster: aks, namespace: "demo", pod: "two-containers", container: "web" });
+      expect(pinned.follow).toBeUndefined();
+      expect(pinned.id).not.toBe(followId);
+      expect(dock.state.focused).toBe(followId);
+      expect(screen.getAllByRole("tab")).toHaveLength(2);
+
+      // Pinned again: the tab is already there.
+      act(() => dock.pinFollow());
+      expect(dock.state.sessions).toHaveLength(2);
+      expect(dock.state.focused).toBe(followId);
+    });
+
+    it("the follow log uses one socket at a time", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json(oneContainer)));
+      renderDock();
+      act(() => dock.openFollow(rowOf("api-a")));
+      await waitFor(() => expect(live()).toHaveLength(1));
+      const panel = screen.getByRole("tabpanel");
+      const first = live()[0];
+
+      act(() => dock.followRow(rowOf("api-b")));
+      await waitFor(() => expect(live()[0]?.params.get("pod")).toBe("api-b"));
+      expect(live()).toHaveLength(1);
+      expect(first.closedByClient).toBe(true);
+      // One tab, and the same pane: the session was retargeted in place.
+      expect(screen.getAllByRole("tab")).toHaveLength(1);
+      expect(screen.getByRole("tabpanel")).toBe(panel);
+    });
+
+    it("following the followed pod again clears its hold without a describe", async () => {
+      const fetch = vi.fn(() => json(oneContainer));
+      vi.stubGlobal("fetch", fetch);
+      renderDock();
+      act(() => dock.followRow(rowOf("api-a"))); // no follow log yet: nothing to retarget
+      expect(fetch).not.toHaveBeenCalled();
+      act(() => dock.openFollow(rowOf("api-a")));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+      act(() => dock.holdFollow("notPod"));
+      expect(dock.state.sessions[0].hold).toBe("notPod");
+      const calls = fetch.mock.calls.length;
+      act(() => dock.followRow(rowOf("api-a")));
+      expect(dock.state.sessions[0].hold).toBeUndefined();
+      expect(fetch).toHaveBeenCalledTimes(calls);
+    });
+
+    it("a follow whose cluster is removed during its describe opens nothing", async () => {
+      let finish!: (response: Response) => void;
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+      const { client } = renderDock();
+      act(() => dock.openFollow(demoPod));
+      await act(async () => {
+        clusterLifecycle(client).remove(aks.id);
+        finish(await json(twoContainers));
+      });
+      await flush();
+      expect(dock.state.sessions).toHaveLength(0);
+      expect(screen.queryByRole("tab")).toBeNull();
+    });
   });
 
   describe("a late open never moves focus past a newer choice of yours", () => {

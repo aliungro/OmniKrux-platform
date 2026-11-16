@@ -319,7 +319,8 @@ it("moves from a pod to its exact log tab and returns for the next ArrowDown", a
   const first = startAtFirstPod();
   fireEvent.keyDown(first, { key: "l" });
   const firstTab = await logTab(pods[0].name);
-  expect(document.activeElement).toBe(firstTab);
+  expect(document.activeElement).toBe(first);
+  firstTab.focus();
   fireEvent.keyDown(firstTab, { key: "Escape" });
   await waitFor(() => expect(document.activeElement).toBe(first));
   expect(logStream(pods[0].name).closedByClient).toBe(true);
@@ -328,7 +329,8 @@ it("moves from a pod to its exact log tab and returns for the next ArrowDown", a
   expect(document.activeElement).toBe(second);
   fireEvent.keyDown(second, { key: "l" });
   const secondTab = await logTab(pods[1].name);
-  expect(document.activeElement).toBe(secondTab);
+  expect(document.activeElement).toBe(second);
+  secondTab.focus();
   fireEvent.keyDown(secondTab, { key: "ArrowUp", altKey: true });
   await waitFor(() => expect(document.activeElement).toBe(second));
   expect(logStream(pods[1].name).closedByClient).toBe(false);
@@ -339,18 +341,13 @@ it("reopens the same Previous log by focusing its committed tab", async () => {
   const first = startAtFirstPod();
   fireEvent.keyDown(first, { key: "p" });
   const previous = await screen.findByRole("tab", { name: /Logs Previous.*api-first/ });
-  expect(document.activeElement).toBe(previous);
+  expect(document.activeElement).toBe(first);
+  previous.focus();
   fireEvent.keyDown(previous, { key: "ArrowUp", altKey: true });
   await waitFor(() => expect(document.activeElement).toBe(first));
-  const wrapper = previous.parentElement!;
-  const strip = within(screen.getByRole("region", { name: "Logs and shells" })).getByRole("tablist");
-  Object.defineProperty(strip, "clientHeight", { value: 102 });
-  vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 34, 600, 102));
-  vi.spyOn(wrapper, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 34));
-  strip.scrollTop = 34;
   fireEvent.keyDown(first, { key: "p" });
-  await waitFor(() => expect(document.activeElement).toBe(previous));
-  expect(strip.scrollTop).toBe(0);
+  await waitFor(() => expect(previous.getAttribute("aria-selected")).toBe("true"));
+  expect(document.activeElement).toBe(first);
   expect(screen.getAllByRole("tab", { name: /Logs Previous/ })).toHaveLength(1);
 });
 
@@ -362,10 +359,11 @@ it("opens a superseded describe in the background and keeps the newer tab focuse
   fireEvent.keyDown(first, { key: "ArrowDown" });
   fireEvent.keyDown(podRow(pods[1].name), { key: "l" });
   const secondTab = await logTab(pods[1].name);
-  expect(document.activeElement).toBe(secondTab);
+  expect(secondTab.getAttribute("aria-selected")).toBe("true");
   await act(async () => finish(describeResponse()));
   await logTab(pods[0].name);
-  expect(document.activeElement).toBe(secondTab);
+  expect(secondTab.getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(podRow(pods[1].name));
 });
 
 it("drops the keyboard handoff if focus leaves and comes back during a slow describe", async () => {
@@ -430,6 +428,7 @@ it("returns to the main view when the opening row is removed and another pod rem
   const first = startAtFirstPod();
   fireEvent.keyDown(first, { key: "l" });
   const tab = await logTab(pods[0].name);
+  tab.focus();
   updatePods(watches, pods.slice(1));
   await waitFor(() => expect(first.isConnected).toBe(false));
   expect(podRow(pods[1].name).isConnected).toBe(true);
@@ -447,7 +446,7 @@ it("returns to the selected pod in the active split workspace", async () => {
   rightFirst.focus();
   fireEvent.keyDown(rightFirst, { key: "l" });
   const tab = await logTab(pods[0].name);
-  expect(document.activeElement).toBe(tab);
+  tab.focus();
   fireEvent.keyDown(tab, { key: "ArrowUp", altKey: true });
   await waitFor(() => expect(document.activeElement).toBe(rightFirst));
   expect(podRow(pods[1].name, left).getAttribute("aria-selected")).toBe("true");
@@ -484,7 +483,7 @@ it("does not close an open pod inspector on a repeated Escape after returning", 
   first.focus();
   fireEvent.keyDown(first, { key: "l" });
   const tab = await logTab(pods[0].name);
-  expect(document.activeElement).toBe(tab);
+  tab.focus();
   fireEvent.keyDown(tab, { key: "Escape" });
   await waitFor(() => expect(document.activeElement).toBe(first));
   fireEvent.keyDown(first, { key: "Escape", repeat: true });

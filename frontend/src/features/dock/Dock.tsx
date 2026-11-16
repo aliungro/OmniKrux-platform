@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
+import { memo, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { inTerminal, pressed } from "../chrome/shortcuts";
 import { LogPane } from "../logs/LogPane";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -14,7 +14,7 @@ import {
   type Session,
 } from "./dockState";
 import { LazyShellPane } from "./lazyShell";
-import { SessionTabs, panelId, revealSessionTab, tabId } from "./SessionTabs";
+import { SessionTabs, panelId, tabId } from "./SessionTabs";
 import { ShellContainerDialog } from "./ShellContainerDialog";
 import type { DockApi } from "./useDock";
 import s from "./Dock.module.css";
@@ -85,7 +85,7 @@ function Grip({ height, minimum, max, onResize }: { height: number; minimum: num
  * object changes only with the dock's own state, so watch updates to the table don't re-render it.
  */
 export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockApi; onFocusWorkspace: () => void }) {
-  const { state, dispatch, ask, shellChoice, keyboardFocus, claimKeyboardFocus } = dock;
+  const { state, dispatch, ask, shellChoice } = dock;
   const base = useId();
   const [viewport, setViewport] = useState(() => ({ height: window.innerHeight, width: window.innerWidth }));
   const [autofocusSuppressedTab, setAutofocusSuppressedTab] = useState<string | null>(null);
@@ -118,16 +118,6 @@ export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockA
     }, 250);
     return () => window.clearTimeout(t);
   }, [state.height]);
-
-  useLayoutEffect(() => {
-    if (!keyboardFocus) return;
-    const focused = state.sessions.find((session) => session.id === state.focused);
-    const tab = focused?.kind === "logs" ? document.getElementById(tabId(base, focused.id)) : null;
-    if (claimKeyboardFocus(keyboardFocus) && tab) {
-      revealSessionTab(tab);
-      tab.focus({ preventScroll: true });
-    }
-  }, [base, claimKeyboardFocus, keyboardFocus, state.focused, state.sessions]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     const close = !e.shiftKey && pressed("backToTable", e);
