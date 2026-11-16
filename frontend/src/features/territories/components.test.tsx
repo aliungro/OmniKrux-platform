@@ -13,24 +13,17 @@ import type { MetricsLookup } from "../../api/useMetrics";
 import type { ContainerState, Usage } from "../../api/types";
 import { Table } from "../../test/table";
 import { describeBody } from "../../test/describe";
-import { readFileSync } from "node:fs";
 import rowStyles from "./ResourceRowView.module.css";
 import statusStyles from "./Status.module.css";
 import bulletStyles from "./ContainerBullets.module.css";
 import bandStyles from "./ClusterBand.module.css";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
+import { componentCss } from "../../test/css";
 
-// Vitest stubs CSS imports. Apply real rules to their module class names for
-// computed-style integration checks; pixel layout remains a browser check.
-function componentCss(file: string, classes: Record<string, string>) {
-  return readFileSync(new URL(file, import.meta.url), "utf8").replace(/\.([a-zA-Z][\w-]*)/g,
-    (selector, name: string) => classes[name] ? `.${classes[name].split(" ")[0]}` : selector);
-}
-
-const rowCss = componentCss("./ResourceRowView.module.css", rowStyles);
-const statusCss = componentCss("./Status.module.css", statusStyles);
-const bulletsCss = componentCss("./ContainerBullets.module.css", bulletStyles);
-const tokensCss = componentCss("../../design/tokens.css", {});
+const rowCss = componentCss(import.meta.url, "./ResourceRowView.module.css", rowStyles);
+const statusCss = componentCss(import.meta.url, "./Status.module.css", statusStyles);
+const bulletsCss = componentCss(import.meta.url, "./ContainerBullets.module.css", bulletStyles);
+const tokensCss = componentCss(import.meta.url, "../../design/tokens.css", {});
 
 afterEach(() => {
   cleanup();
@@ -130,7 +123,7 @@ describe("cluster band copy", () => {
     const region = "region-".repeat(30);
     const loc = `AWS · ${region}`;
     const css = document.createElement("style");
-    css.textContent = componentCss("./ClusterBand.module.css", bandStyles);
+    css.textContent = componentCss(import.meta.url, "./ClusterBand.module.css", bandStyles);
     document.head.append(css);
     try {
       render(<ClusterBand t={terr({ cluster: cloud({ name, region }) })} kind={PODS} onRetry={() => {}} />);
@@ -154,7 +147,7 @@ describe("cluster band copy", () => {
     const name = "production-cluster-".repeat(30);
     const region = "region-".repeat(30);
     const css = document.createElement("style");
-    css.textContent = componentCss("./ClusterBand.module.css", bandStyles);
+    css.textContent = componentCss(import.meta.url, "./ClusterBand.module.css", bandStyles);
     document.head.append(css);
     try {
       const node_pools = [{ name: "system", count: 1, machine_type: "m7i.large", version: "1.31.3" }];

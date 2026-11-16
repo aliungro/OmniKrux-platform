@@ -8,7 +8,9 @@ import { clusterLifecycle } from "../../api/clusterLifecycle";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { container, describeBody } from "../../test/describe";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
+import { componentCss } from "../../test/css";
 import type { Session } from "./dockState";
+import tabStyles from "./SessionTabs.module.css";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -1347,4 +1349,225 @@ it("an arrow to the tab that is already selected never pulls the focus back late
   act(() => dock.dispatch({ type: "open", session: shell("c", { kind: "logs", pod: "c" }), focus: false }));
   expect(dock.state.sessions).toHaveLength(3);
   expect(document.activeElement).toBe(row);
+});
+
+describe("one row of tabs and the open menu", () => {
+  const logs = (id: string, over: Partial<Session> = {}): Session => shell(id, { kind: "logs", ...over });
+  /** A 60-character pod name. */
+  const longPod = (i: number) => `orders-ledger-reconciler-${String(i).padStart(2, "0")}-`.padEnd(60, "q");
+  /** Twenty logs, the fifth on a pod whose name says "crash"; the last one opened is selected. */
+  const openTwenty = () => {
+    for (let i = 0; i < 20; i++) {
+      open(logs(i === 4 ? "crash" : `s${i}`, i === 4 ? { pod: "crasher-7f9c6d-x2kq9", namespace: "demo" } : { pod: longPod(i) }));
+    }
+  };
+  /** The tablist is wider inside than it is drawn: its tabs don't fit. */
+  const overflowing = () => {
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+      configurable: true,
+      get(this: HTMLElement) { return this.getAttribute("role") === "tablist" ? 4000 : 0; },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get(this: HTMLElement) { return this.getAttribute("role") === "tablist" ? 800 : 0; },
+    });
+  };
+  const menuButton = () => screen.getByRole("button", { name: "All 20 open logs and shells" });
+  const openMenu = () => {
+    fireEvent.click(menuButton());
+    return screen.getByRole("combobox", { name: "Find a log or shell" });
+  };
+
+  afterEach(() => {
+    delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
+    delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    document.head.querySelectorAll("style[data-test-css]").forEach((x) => x.remove());
+  });
+
+  it("twenty long sessions stay on one row with the open menu", () => {
+    const css = document.createElement("style");
+    css.dataset.testCss = "";
+    css.textContent = componentCss(import.meta.url, "./SessionTabs.module.css", tabStyles);
+    document.head.append(css);
+    overflowing();
+    renderDock();
+    openTwenty();
+    const strip = screen.getByRole("tablist", { name: "Logs and shells" });
+    expect(within(strip).getAllByRole("tab")).toHaveLength(20);
+    expect(getComputedStyle(strip).flexWrap).toBe("nowrap");
+    const button = menuButton();
+    expect(button.textContent).toBe("20 open");
+    expect(button.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(button.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    // It sits between the tabs and the layout toggle.
+    expect(strip.nextElementSibling).toBe(button);
+    expect(button.nextElementSibling).toBe(screen.getByRole("button", { name: "Side by side" }));
+  });
+
+  it("the open menu is hidden while tabs fit", () => {
+    renderDock();
+    openTwenty();
+    expect(screen.queryByRole("button", { name: /open logs and shells/ })).toBeNull();
+  });
+
+  it("the menu finds a session and picking it selects its tab", () => {
+    overflowing();
+    renderDock();
+    openTwenty();
+    const find = openMenu();
+    expect(document.activeElement).toBe(find);
+    expect(menuButton().getAttribute("aria-expanded")).toBe("true");
+    const menu = screen.getByRole("dialog", { name: "Open logs and shells" });
+    const list = within(menu).getByRole("listbox");
+    expect(find.getAttribute("aria-controls")).toBe(list.id);
+    expect(within(list).getAllByRole("option")).toHaveLength(20);
+    // The selected session is the selected option, and the active one to start with.
+    const selected = within(list).getByRole("option", { selected: true });
+    expect(selected.getAttribute("title")).toBe(`aks-prod-weu / payments / ${longPod(19)} (app)`);
+    expect(find.getAttribute("aria-activedescendant")).toBe(selected.id);
+
+    fireEvent.change(find, { target: { value: "CRASH" } });
+    const [only, ...rest] = within(list).getAllByRole("option");
+    expect(rest).toHaveLength(0);
+    expect(only.textContent).toBe("AKScrasher-7f9c6d-x2kq9 · demo");
+    expect(only.getAttribute("title")).toBe("aks-prod-weu / demo / crasher-7f9c6d-x2kq9 (app)");
+    expect(find.getAttribute("aria-activedescendant")).toBe(only.id);
+
+    fireEvent.keyDown(find, { key: "Enter" });
+    const tab = screen.getByRole("tab", { name: /crasher-7f9c6d-x2kq9/ });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(tab);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(menuButton().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("arrows move the active option and a click picks one", () => {
+    overflowing();
+    renderDock();
+    openTwenty();
+    const find = openMenu();
+    const options = () => within(screen.getByRole("listbox")).getAllByRole("option");
+    fireEvent.keyDown(find, { key: "ArrowDown" }); // from the last, round to the first
+    expect(find.getAttribute("aria-activedescendant")).toBe(options()[0].id);
+    fireEvent.keyDown(find, { key: "ArrowUp" });
+    expect(find.getAttribute("aria-activedescendant")).toBe(options()[19].id);
+    fireEvent.click(options()[4]);
+    const tab = screen.getByRole("tab", { name: /crasher/ });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(tab);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("the menu says when nothing matches", () => {
+    overflowing();
+    renderDock();
+    openTwenty();
+    const find = openMenu();
+    fireEvent.change(find, { target: { value: "zzz" } });
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(within(screen.getByRole("dialog")).getByText('Nothing matches "zzz".')).toBeTruthy();
+    // Enter with nothing to pick does nothing.
+    fireEvent.keyDown(find, { key: "Enter" });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("the filter matches the marker and the kind", () => {
+    overflowing();
+    renderDock();
+    openTwenty();
+    act(() => dock.dispatch({ type: "open", session: logs("p", { pod: "stuck", pinned: true }) }));
+    fireEvent.click(screen.getByRole("button", { name: "All 21 open logs and shells" }));
+    const find = screen.getByRole("combobox", { name: "Find a log or shell" });
+    fireEvent.change(find, { target: { value: "pinned" } });
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["AKS📌stuck · payments"]);
+    fireEvent.change(find, { target: { value: "shell" } });
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    fireEvent.change(find, { target: { value: "logs" } });
+    expect(screen.getAllByRole("option")).toHaveLength(21);
+  });
+
+  it("escape closes only the menu", () => {
+    overflowing();
+    renderDock();
+    openTwenty();
+    const find = openMenu();
+    fireEvent.keyDown(find, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(20);
+    expect(document.activeElement).toBe(menuButton());
+    expect(returns).toBe(0);
+    // With the menu open and the keyboard back on its button, Esc there closes only the menu too.
+    fireEvent.click(menuButton());
+    act(() => menuButton().focus());
+    fireEvent.keyDown(menuButton(), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(menuButton());
+    expect(returns).toBe(0);
+  });
+
+  it("a click outside closes the menu and focus returns to its button", () => {
+    overflowing();
+    renderDock();
+    openTwenty();
+    openMenu();
+    fireEvent.pointerDown(screen.getByRole("region", { name: "Logs and shells" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(menuButton());
+  });
+
+  it("picking a session that closed meanwhile keeps focus on the menu button", () => {
+    overflowing();
+    renderDock();
+    openTwenty();
+    const find = openMenu();
+    fireEvent.change(find, { target: { value: "crash" } });
+    act(() => dock.dispatch({ type: "close", id: "crash" }));
+    fireEvent.keyDown(find, { key: "Enter" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const button = screen.getByRole("button", { name: "All 19 open logs and shells" });
+    expect(document.activeElement).toBe(button);
+    expect(dock.state.sessions).toHaveLength(19);
+    expect(returns).toBe(0);
+  });
+
+  it("picking a session that closed meanwhile, with the menu button gone, focuses the selected tab", () => {
+    overflowing();
+    renderDock();
+    openTwenty();
+    const find = openMenu();
+    fireEvent.change(find, { target: { value: "crash" } });
+    // Everything fits again once it closes.
+    delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
+    delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    act(() => dock.dispatch({ type: "close", id: "crash" }));
+    fireEvent.keyDown(find, { key: "Enter" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: /open logs and shells/ })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("tab", { selected: true }));
+    expect(returns).toBe(0);
+  });
+
+  it("follow and pinned tabs carry their markers", () => {
+    renderDock();
+    open(logs("f", { pod: "crasher", follow: true }));
+    open(logs("p", { pod: "stuck", pinned: true }));
+    const follow = screen.getByRole("tab", { name: /^Logs Follows row: aks-prod-weu \/ payments \/ crasher/ });
+    expect(follow.textContent).toContain("◉ follows row");
+    const pinned = screen.getByRole("tab", { name: /^Logs Pinned: aks-prod-weu \/ payments \/ stuck/ });
+    expect(pinned.textContent).toContain("📌");
+    expect(within(pinned).getByText("📌").getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("tabs show the pod name and keep the full identity in the title", () => {
+    renderDock();
+    open(logs("a", { pod: "payments-api-xk2pq", container: "app" }));
+    open(logs("b", { pod: "payments-api-xk2pq", previous: true }));
+    const [plain, previous] = screen.getAllByRole("tab");
+    expect(plain.textContent).toBe("AKSpayments-api-xk2pq");
+    expect(plain.getAttribute("title")).toBe("Logs: aks-prod-weu / payments / payments-api-xk2pq (app)");
+    expect(plain.getAttribute("aria-label")).toBe("Logs: aks-prod-weu / payments / payments-api-xk2pq (app)");
+    expect(previous.textContent).toBe("AKSPreviouspayments-api-xk2pq");
+    expect(previous.getAttribute("aria-label")).toBe("Logs Previous: aks-prod-weu / payments / payments-api-xk2pq (app)");
+  });
 });

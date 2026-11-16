@@ -387,7 +387,7 @@ describe("Console dock wiring", () => {
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const [tab] = sessions();
     expect(tab.textContent).toContain("KIND");
-    expect(tab.textContent).toContain("Logs");
+    expect(tab.textContent).toContain("◉ follows row");
     // L follows the pod on its default container (the first, no annotation); the picker offers
     // every container.
     expect(FakeWebSocket.last.params.get("container")).toBe("sidecar");
