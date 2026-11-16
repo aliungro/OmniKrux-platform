@@ -75,6 +75,7 @@ const ACTION_LABEL: Record<RowAction, (name: string) => string> = {
   details: (n) => `Details of ${n}`,
   yaml: (n) => `YAML of ${n}`,
   logs: (n) => `Logs of ${n}`,
+  pinLogs: (n) => `Pin logs of ${n}`,
   previousLogs: (n) => `Previous logs of ${n}`,
   shell: (n) => `Shell in ${n}`,
   workloadLogs: (n) => `Logs of ${n}'s pods`,

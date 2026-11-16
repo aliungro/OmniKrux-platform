@@ -11,9 +11,24 @@ import { KINDS } from "../../test/kinds";
 import { describeBody, container } from "../../test/describe";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
+import { FOLLOW_SETTLE_MS } from "../dock/follow";
 vi.mock("@xterm/xterm", () => ({Terminal:class {}}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon:class {}}));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
+// The YAML editor as CodeMirror draws it: a contenteditable box.
+vi.mock("../actions/lazyCodeMirror", () => ({
+  EDITOR_UNAVAILABLE: "Couldn't load the editor. Reload the page.",
+  loadCodeMirror: async () => ({
+    mergeView: () => ({ destroy: () => {} }),
+    editor: (parent: HTMLElement) => {
+      const content = document.createElement("div");
+      content.setAttribute("contenteditable", "true");
+      content.tabIndex = 0;
+      parent.append(content);
+      return { focus: () => content.focus(), destroy: () => content.remove() };
+    },
+  }),
+}));
 const east: Cluster = {id:"c1",name:"East",provider:"aks",context_name:"x",server:"https://east",...FILE_CLUSTER_METADATA, original_server:null,region:null,environment:"development",state:"ready",message:null};
 function stubClusters(clusters: Cluster[]) {
  vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?KINDS:url==="/api/clusters"?clusters:url.startsWith("/api/audit")?{records:[],next_before:null}:url==="/api/settings"?{encryption:{source:"environment",path:null},discovery_interval_s:600}:[]),{status:200,headers:{"content-type":"application/json"}}))));
@@ -263,17 +278,19 @@ const pods = ["api-first", "api-second"].map((name): ResourceRow => ({
   created_at: null, labels: {}, columns: {},
 }));
 const describeResponse = () => new Response(JSON.stringify(describeBody({ containers: [container({ name: "app" })] })));
-const logStream = (name: string) => FakeWebSocket.instances.find((socket) => socket.url.includes("/api/logs?") && socket.params.get("pod") === name)!;
+const logSockets = () => FakeWebSocket.instances.filter((socket) => socket.url.includes("/api/logs?"));
+const logStream = (name: string) => logSockets().find((socket) => socket.params.get("pod") === name)!;
 const logTab = (name: string) => screen.findByRole("tab", { name: new RegExp(`Logs.*${name}`) });
 const podRow = (name: string, root: HTMLElement = screen.getByRole("main")) =>
   within(root).getByRole("gridcell", { name }).closest<HTMLElement>("[data-row-key]")!;
-async function renderPods(describePod: (url: string) => Promise<Response> = async () => describeResponse(), split = false) {
+type Serve = (url: string, init?: RequestInit) => Promise<Response> | null;
+async function renderPods(describePod: (url: string) => Promise<Response> = async () => describeResponse(), split = false, serve: Serve = () => null) {
   for (const key of ["clientHeight", "offsetHeight", "clientWidth", "offsetWidth"] as const) {
     vi.spyOn(HTMLElement.prototype, key, "get").mockReturnValue(600);
   }
   stubClusters([east]);
   const fetch = vi.mocked(window.fetch).getMockImplementation()!;
-  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe") ? describePod(url) : fetch(url)));
+  vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => serve(url, init) ?? (url.includes("/describe") ? describePod(url) : fetch(url))));
   const ws = defaultWorkspace();
   const view = kindView(HOME, "pods");
   ws.kubernetes.tabs[0].view = view;
@@ -314,29 +331,75 @@ function startAtFirstPod() {
   return first;
 }
 
-it("moves from a pod to its exact log tab and returns for the next ArrowDown", async () => {
+it("L keeps the keyboard on the table and down retargets the follow log", async () => {
   await renderPods();
   const first = startAtFirstPod();
   fireEvent.keyDown(first, { key: "l" });
-  const firstTab = await logTab(pods[0].name);
+  const tab = await logTab(pods[0].name);
   expect(document.activeElement).toBe(first);
-  firstTab.focus();
-  fireEvent.keyDown(firstTab, { key: "Escape" });
-  await waitFor(() => expect(document.activeElement).toBe(first));
-  expect(logStream(pods[0].name).closedByClient).toBe(true);
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  const firstStream = logStream(pods[0].name);
+  expect(firstStream.closedByClient).toBe(false);
+
   fireEvent.keyDown(first, { key: "ArrowDown" });
   const second = podRow(pods[1].name);
   expect(document.activeElement).toBe(second);
-  fireEvent.keyDown(second, { key: "l" });
-  const secondTab = await logTab(pods[1].name);
+  expect(second.getAttribute("aria-selected")).toBe("true");
+  await waitFor(() => expect(logSockets().some((socket) => socket.params.get("pod") === pods[1].name)).toBe(true));
+  // One follow tab, the same one, retargeted in place: the old stream is closed, the tab stays
+  // selected, and the keyboard never left the table.
+  expect(firstStream.closedByClient).toBe(true);
+  expect(logStream(pods[1].name).closedByClient).toBe(false);
+  expect(screen.getAllByRole("tab", { name: /Logs/ })).toEqual([tab]);
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  expect(await logTab(pods[1].name)).toBe(tab);
   expect(document.activeElement).toBe(second);
-  secondTab.focus();
-  fireEvent.keyDown(secondTab, { key: "ArrowUp", altKey: true });
+
+  // L again on the followed pod changes nothing; from the tab, Alt+Up comes back to the same row.
+  fireEvent.keyDown(second, { key: "l" });
+  expect(document.activeElement).toBe(second);
+  tab.focus();
+  fireEvent.keyDown(tab, { key: "ArrowUp", altKey: true });
   await waitFor(() => expect(document.activeElement).toBe(second));
   expect(logStream(pods[1].name).closedByClient).toBe(false);
+  expect(logSockets().filter((socket) => !socket.closedByClient)).toHaveLength(1);
 });
 
-it("reopens the same Previous log by focusing its committed tab", async () => {
+it("holding down opens one stream after the selection settles", async () => {
+  const watches = await renderPods();
+  const many = Array.from({ length: 12 }, (_, i): ResourceRow => ({ ...pods[0], uid: `held-${i}`, name: `held-${String(i).padStart(2, "0")}` }));
+  updatePods(watches, many);
+  await waitFor(() => expect(screen.getAllByRole("gridcell", { name: "held-11" })).toHaveLength(1));
+  const main = screen.getByRole("main");
+  main.focus();
+  fireEvent.keyDown(main, { key: "ArrowDown" });
+  const start = document.activeElement as HTMLElement;
+  fireEvent.keyDown(start, { key: "l" });
+  await waitFor(() => expect(logSockets()).toHaveLength(1));
+  const opened = logSockets()[0];
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    for (let i = 0; i < 8; i++) {
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+      act(() => vi.advanceTimersByTime(30));
+    }
+    const eighth = (document.activeElement as HTMLElement).textContent ?? "";
+    const target = many.find((p) => eighth.includes(p.name))!;
+    expect(target.name).not.toBe(opened.params.get("pod"));
+    act(() => vi.advanceTimersByTime(FOLLOW_SETTLE_MS - 31));
+    expect(logSockets()).toHaveLength(1);
+    expect(opened.closedByClient).toBe(false);
+    for (let i = 0; i < 5; i++) await act(async () => vi.advanceTimersByTime(10));
+    expect(logSockets()).toHaveLength(2);
+    expect(logSockets()[1].params.get("pod")).toBe(target.name);
+    expect(opened.closedByClient).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("p reopens the same previous log without moving focus", async () => {
   await renderPods();
   const first = startAtFirstPod();
   fireEvent.keyDown(first, { key: "p" });
@@ -351,46 +414,21 @@ it("reopens the same Previous log by focusing its committed tab", async () => {
   expect(screen.getAllByRole("tab", { name: /Logs Previous/ })).toHaveLength(1);
 });
 
-it("opens a superseded describe in the background and keeps the newer tab focused", async () => {
-  let finish!: (response: Response) => void;
-  await renderPods((url) => url.includes(pods[0].name) ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(describeResponse()));
-  const first = startAtFirstPod();
-  fireEvent.keyDown(first, { key: "l" });
-  fireEvent.keyDown(first, { key: "ArrowDown" });
-  fireEvent.keyDown(podRow(pods[1].name), { key: "l" });
-  const secondTab = await logTab(pods[1].name);
-  expect(secondTab.getAttribute("aria-selected")).toBe("true");
-  await act(async () => finish(describeResponse()));
-  await logTab(pods[0].name);
-  expect(secondTab.getAttribute("aria-selected")).toBe("true");
-  expect(document.activeElement).toBe(podRow(pods[1].name));
-});
+const pin = { key: "L", shiftKey: true };
 
-it("drops the keyboard handoff if focus leaves and comes back during a slow describe", async () => {
-  let finish!: (response: Response) => void;
-  await renderPods(() => new Promise((resolve) => { finish = resolve; }));
-  const first = startAtFirstPod();
-  fireEvent.keyDown(first, { key: "l" });
-  screen.getByRole("main").focus();
-  first.focus();
-  await act(async () => finish(describeResponse()));
-  await logTab(pods[0].name);
-  expect(document.activeElement).toBe(first);
-});
-
-it("selects a keyboard-opened log behind another tab when focus moved away during a slow describe", async () => {
+it("selects a pinned log behind another tab when focus moved away during a slow describe", async () => {
   let finish!: (response: Response) => void;
   await renderPods((url) => url.includes(pods[0].name) ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(describeResponse()));
   const first = startAtFirstPod();
   fireEvent.keyDown(first, { key: "ArrowDown" });
   const second = podRow(pods[1].name);
-  fireEvent.keyDown(second, { key: "l" });
+  fireEvent.keyDown(second, pin);
   const secondTab = await logTab(pods[1].name);
   fireEvent.keyDown(secondTab, { key: "ArrowUp", altKey: true });
   await waitFor(() => expect(document.activeElement).toBe(second));
   fireEvent.keyDown(second, { key: "ArrowUp" });
   expect(document.activeElement).toBe(first);
-  fireEvent.keyDown(first, { key: "l" });
+  fireEvent.keyDown(first, pin);
   fireEvent.keyDown(first, { key: "ArrowDown" });
   expect(document.activeElement).toBe(second);
   await act(async () => finish(describeResponse()));
@@ -400,22 +438,22 @@ it("selects a keyboard-opened log behind another tab when focus moved away durin
   expect(document.activeElement).toBe(second);
 });
 
-it("selects an already open log again on L when focus moved away before it resolved", async () => {
+it("selects an already pinned log again on shift+L when focus moved away before it resolved", async () => {
   await renderPods();
   const first = startAtFirstPod();
-  fireEvent.keyDown(first, { key: "l" });
+  fireEvent.keyDown(first, pin);
   const firstTab = await logTab(pods[0].name);
   fireEvent.keyDown(firstTab, { key: "ArrowUp", altKey: true });
   await waitFor(() => expect(document.activeElement).toBe(first));
   fireEvent.keyDown(first, { key: "ArrowDown" });
   const second = podRow(pods[1].name);
-  fireEvent.keyDown(second, { key: "l" });
+  fireEvent.keyDown(second, pin);
   const secondTab = await logTab(pods[1].name);
   fireEvent.keyDown(secondTab, { key: "ArrowUp", altKey: true });
   await waitFor(() => expect(document.activeElement).toBe(second));
   fireEvent.keyDown(second, { key: "ArrowUp" });
   expect(document.activeElement).toBe(first);
-  fireEvent.keyDown(first, { key: "l" });
+  fireEvent.keyDown(first, pin);
   fireEvent.keyDown(first, { key: "ArrowDown" });
   expect(document.activeElement).toBe(second);
   await waitFor(() => expect(firstTab.getAttribute("aria-selected")).toBe("true"));
@@ -465,6 +503,122 @@ it.each(["Audit log", "Settings"])("leaves the shared dock for the active %s vie
   fireEvent.keyDown(tab, { key: "ArrowUp", altKey: true });
   await waitFor(() => expect(document.activeElement).toBe(main));
   expect(logStream(pods[0].name).closedByClient).toBe(false);
+});
+
+const deletable = {
+  ...KINDS,
+  kinds: KINDS.kinds.map((k) => (k.key === "pods" ? { ...k, verbs: ["get", "list", "watch", "update", "delete"] } : k)),
+};
+function serveDeletes(): { serve: Serve; plans: () => unknown[] } {
+  const plans: unknown[] = [];
+  const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
+  const serve: Serve = (url, init) => {
+    if (url.startsWith("/api/kinds")) return json(deletable);
+    if (url.includes("/yaml")) return json({ yaml: "kind: Pod\n" });
+    if (url === "/api/actions/plan" && init?.method === "POST") {
+      const req = JSON.parse(String(init.body)) as { target: { name: string } };
+      plans.push(req);
+      return json({
+        plan_id: "p1", action: "delete", target: req.target, kind: "Pod",
+        cluster: { id: "c1", name: "East", provider: "aks", environment: "development" }, title: `Delete Pod ${req.target.name}`,
+        summary: [`Delete Pod demo/${req.target.name}.`], warnings: [], blocked: [], diff: null, confirm_text: null,
+        apply_label: "Delete", expires_at: "2026-11-16T10:05:00Z",
+      });
+    }
+    if (url === "/api/actions/p1/apply") return json({ outcome: "succeeded", message: "Deleted.", job_id: null, audit_id: 1 });
+    return null;
+  };
+  return { serve, plans: () => plans };
+}
+function press(el: Element, init: KeyboardEventInit = { key: "Delete", ctrlKey: true }) {
+  const event = new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true });
+  act(() => {
+    el.dispatchEvent(event);
+  });
+  return event;
+}
+
+it("after a ctrl+delete removal focus is on a row, not the body", async () => {
+  const { serve, plans } = serveDeletes();
+  const three = [...pods, { ...pods[1], uid: "api-third", name: "api-third" }];
+  const watches = await renderPods(undefined, false, serve);
+  updatePods(watches, three);
+  await screen.findByRole("gridcell", { name: "api-third" });
+  const first = startAtFirstPod();
+  expect(press(first).defaultPrevented).toBe(true);
+  const review = await screen.findByRole("dialog", { name: `Delete Pod ${pods[0].name}` });
+  expect(plans()).toEqual([expect.objectContaining({ action: "delete", params: { expected_uid: pods[0].uid } })]);
+  fireEvent.click(within(review).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: `Delete Pod ${pods[0].name}` })).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(first));
+  // The watch then says the pod is gone.
+  updatePods(watches, three.slice(1));
+  await waitFor(() => expect(first.isConnected).toBe(false));
+  expect(document.activeElement).not.toBe(document.body);
+  expect(document.activeElement).toBe(podRow(pods[1].name));
+});
+
+it("ctrl+delete never acts from a field, a kind tab or a dialog", async () => {
+  const { serve, plans } = serveDeletes();
+  await renderPods(undefined, false, serve);
+  const first = startAtFirstPod();
+  const details = () => screen.queryByRole("region", { name: /^Details for/ });
+  const nothing = async () => {
+    await act(async () => {});
+    expect(plans()).toHaveLength(0);
+    expect(screen.queryByRole("dialog", { name: /^Delete Pod/ })).toBeNull();
+  };
+
+  // The filter: Ctrl+Delete and Ctrl+Backspace edit the text, as they always do.
+  const filter = screen.getByRole("textbox", { name: /Filter by name/ });
+  filter.focus();
+  expect(press(filter).defaultPrevented).toBe(false);
+  expect(press(filter, { key: "Backspace", ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(press(filter, { key: "Backspace", metaKey: true }).defaultPrevented).toBe(false);
+  await nothing();
+  expect(details()).toBeNull();
+
+  // The selected kind tab.
+  const kindTab = within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true });
+  kindTab.focus();
+  expect(press(kindTab).defaultPrevented).toBe(false);
+  await nothing();
+  expect(details()).toBeNull();
+
+  // The "?" sheet's Close button.
+  first.focus();
+  fireEvent.keyDown(first, { key: "?" });
+  const sheet = screen.getByRole("dialog", { name: "All shortcuts" });
+  const close = within(sheet).getByRole("button", { name: /Close/ });
+  expect(document.activeElement).toBe(close);
+  press(close);
+  await nothing();
+  expect(details()).toBeNull();
+  fireEvent.keyDown(close, { key: "Escape" });
+
+  // The palette's input.
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "k", ctrlKey: true });
+  const input = within(screen.getByRole("dialog", { name: "Commands" })).getByRole("combobox");
+  expect(document.activeElement).toBe(input);
+  expect(press(input).defaultPrevented).toBe(false);
+  await nothing();
+  expect(details()).toBeNull();
+  fireEvent.keyDown(input, { key: "Escape" });
+
+  // The YAML editor.
+  const row = podRow(pods[0].name);
+  row.focus();
+  fireEvent.keyDown(row, { key: "e" });
+  const editor = await waitFor(() => {
+    const box = details()?.querySelector<HTMLElement>('[contenteditable="true"]');
+    if (!box) throw new Error("Waiting for the editor");
+    return box;
+  });
+  await waitFor(() => expect(document.activeElement).toBe(editor));
+  expect(press(editor).defaultPrevented).toBe(false);
+  expect(press(editor, { key: "Backspace", metaKey: true }).defaultPrevented).toBe(false);
+  await nothing();
+  expect(editor.isConnected).toBe(true);
 });
 
 it("lists the logs zone's back shortcuts in help", () => {

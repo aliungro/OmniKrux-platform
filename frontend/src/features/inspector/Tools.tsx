@@ -164,13 +164,17 @@ export function useTools({
     setError(null);
   }, []);
 
-  /** Tool keys pressed inside the details, never in a field, the editor or a terminal. */
+  /**
+   * Tool keys pressed inside the details (Ctrl+D and Ctrl+Del or Cmd+Backspace delete), never in a
+   * field, the editor or a terminal. A held delete key reviews once.
+   */
   const onKey = (e: KeyboardEvent<HTMLElement>) => {
     if (e.defaultPrevented || isEditable(e.target)) return;
     const id = toolShortcut(e, keyedTools(tools));
     if (id === undefined) return;
     e.preventDefault();
     e.stopPropagation();
+    if (e.repeat && id === "delete") return;
     run(id as ToolId);
   };
 

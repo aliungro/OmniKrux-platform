@@ -388,8 +388,9 @@ describe("Console dock wiring", () => {
     const [tab] = sessions();
     expect(tab.textContent).toContain("KIND");
     expect(tab.textContent).toContain("Logs");
-    // The failing container is the one shown first; the picker offers every container.
-    expect(FakeWebSocket.last.params.get("container")).toBe("app");
+    // L follows the pod on its default container (the first, no annotation); the picker offers
+    // every container.
+    expect(FakeWebSocket.last.params.get("container")).toBe("sidecar");
     expect(screen.getByRole("combobox", { name: "Container" }).textContent).toBe("initsidecarapp");
     const pane = screen.getAllByRole("tabpanel").find((p) => !p.hidden)!;
     expect(pane.textContent).toContain("kind-omnikrux-dev / default / crasher-1");
@@ -400,6 +401,8 @@ describe("Console dock wiring", () => {
     fireEvent.keyDown(row, { key: "p" });
     await waitFor(() => expect(sessions()).toHaveLength(2));
     expect(FakeWebSocket.last.params.get("previous")).toBe("true");
+    // p still opens on the failing container, since that's the one worth reading.
+    expect(FakeWebSocket.last.params.get("container")).toBe("app");
   });
 
   it("dock dispatch does not re-render the table", async () => {

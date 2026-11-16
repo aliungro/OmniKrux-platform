@@ -416,13 +416,14 @@ it.each(["watch", "Settings"] as const)("closes matching dock sockets and forwar
     expect(stream).toBeDefined();
     return stream!;
   });
-  async function openSession(podName: string, key: "l" | "s") {
+  // Pinned logs (Shift+L): a tab per pod that never follows the selection.
+  async function openSession(podName: string, key: "L" | "s") {
     fireEvent.click(await screen.findByRole("gridcell", { name: podName }));
-    fireEvent.keyDown(document.body, { key });
+    fireEvent.keyDown(document.body, { key, shiftKey: key === "L" });
   }
-  await openSession("east-pod", "l");
+  await openSession("east-pod", "L");
   const eastLog = await findSocket("/api/logs", east);
-  await openSession("west-pod", "l");
+  await openSession("west-pod", "L");
   const westLog = await findSocket("/api/logs", west);
   await openSession("east-pod", "s");
   const eastShell = await findSocket("/api/exec", east);

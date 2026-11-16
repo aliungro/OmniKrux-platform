@@ -715,6 +715,30 @@ describe("changes from the details", () => {
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
     expect(calls.find((c) => c.url === "/api/actions/plan")?.body).toMatchObject({ action: "restart" });
   });
+
+  it("ctrl+delete in the details plans the delete, but in a field it edits the field", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan({ action: "delete" }))],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Scale", tools()));
+    const field = new KeyboardEvent("keydown", { key: "Delete", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      screen.getByLabelText("Replicas").dispatchEvent(field);
+    });
+    expect(field.defaultPrevented).toBe(false);
+    expect(calls.some((c) => c.url === "/api/actions/plan")).toBe(false);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Describe" }), { key: "Delete", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(calls.filter((c) => c.url === "/api/actions/plan").map((c) => c.body)).toEqual([
+      expect.objectContaining({ action: "delete", params: { expected_uid: deployment().uid } }),
+    ]);
+  });
 });
 
 describe("tool keys on rows", () => {
@@ -738,6 +762,8 @@ describe("tool keys on rows", () => {
   it.each([
     [{ key: "r" }, "restart"],
     [{ key: "d", ctrlKey: true }, "delete"],
+    [{ key: "Delete", ctrlKey: true }, "delete"],
+    [{ key: "Backspace", metaKey: true }, "delete"],
   ])("%o on a row opens its details and plans %s", async (press, action) => {
     const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], "POST /api/actions/plan": [ok(plan({ action: action as Plan["action"] }))] });
     wrap(
