@@ -135,7 +135,8 @@ export const Dock = memo(function Dock({
 }: {
   dock: DockApi;
   zoneActive?: boolean;
-  onFocusWorkspace: () => void;
+  /** Back to the table; `now` focuses it in this tick (a key press), else after the next frame (a removal). */
+  onFocusWorkspace: (opts?: { now?: boolean }) => void;
   ref?: Ref<DockHandle>;
 }) {
   const { state, dispatch, ask, shellChoice } = dock;
@@ -148,6 +149,7 @@ export const Dock = memo(function Dock({
   const pendingFocus = useRef<string | null>(null);
   /** What last had the focus in the dock, to rescue the focus when a removal takes it away. */
   const lastDockFocus = useRef<Element | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
   const backToWorkspace = useRef(onFocusWorkspace);
@@ -215,6 +217,20 @@ export const Dock = memo(function Dock({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [dispatch]);
 
+  // Alt+Up leaves a terminal for the table: caught on the way down, before xterm (or an IME path)
+  // can stop it on its textarea, and never sent to the shell.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!pressed("leaveLogs", e) || !inTerminal(e.target) || !(e.target instanceof Node)) return;
+      if (!sectionRef.current?.contains(e.target) || document.querySelector('[aria-modal="true"]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) backToWorkspace.current({ now: true });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
   // The dock is drawn within 70% of the window as it is now; the chosen height comes back when it grows.
   useEffect(() => {
     const onResize = () => setViewport({ height: window.innerHeight, width: window.innerWidth });
@@ -244,7 +260,7 @@ export const Dock = memo(function Dock({
     let act: (() => void) | null = null;
     // Back to the table, from anywhere in the dock: a session or the strip's controls (grip, layout).
     if ((!e.shiftKey && pressed("backToTable", e) && !inTerminal(target)) || pressed("leaveLogs", e)) {
-      act = onFocusWorkspace;
+      act = () => onFocusWorkspace({ now: true });
     }
     const owner = target.closest<HTMLElement>("[data-dock-session]");
     const at = state.sessions.findIndex((x) => x.id === owner?.dataset.dockSession);
@@ -303,7 +319,7 @@ export const Dock = memo(function Dock({
 
   if (state.sessions.length === 0) {
     return (
-      <section className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-dock data-keyboard-zone={zoneActive ? "logs" : undefined} data-page-keys="off" {...tracking}>
+      <section ref={sectionRef} className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-dock data-keyboard-zone={zoneActive ? "logs" : undefined} data-page-keys="off" {...tracking}>
         {dialog}
         {/* Always there, so a notice is announced when the text changes. */}
         <p className={s.hint} role="status">{notice?.text ?? EMPTY_DOCK}</p>
@@ -324,6 +340,7 @@ export const Dock = memo(function Dock({
 
   return (
     <section
+      ref={sectionRef}
       className={s.dock}
       style={{ height, "--dock-pane-min": `${minimum - STRIP_MIN}px` } as CSSProperties}
       aria-label="Logs and shells"

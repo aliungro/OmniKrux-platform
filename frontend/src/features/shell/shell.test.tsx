@@ -12,20 +12,29 @@ import { describeBody, container } from "../../test/describe";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import { FOLLOW_SETTLE_MS } from "../dock/follow";
-// The dock tests' terminal: a helper textarea inside a .xterm root, as xterm draws it.
+// The dock tests' terminal: a helper textarea inside a .xterm root, as xterm draws it. Like xterm, it
+// listens for keys on its textarea, asks the custom key handler first, and types what that allows;
+// `xterm.stopsKeys` makes it stop the key there, as xterm (or an IME path) can.
+const xterm = vi.hoisted(() => ({ stopsKeys: false, typed: [] as string[] }));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
     rows = 24;
     input = document.createElement("textarea");
+    handler: ((e: KeyboardEvent) => boolean) | null = null;
     loadAddon() {}
     open(host: HTMLElement) {
       const root = document.createElement("div");
       root.className = "xterm";
       root.append(this.input);
       host.append(root);
+      this.input.addEventListener("keydown", (e) => {
+        if (xterm.stopsKeys) e.stopPropagation();
+        if (this.handler?.(e) === false) return;
+        xterm.typed.push(e.key);
+      }, true);
     }
-    attachCustomKeyEventHandler() {}
+    attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean) { this.handler = handler; }
     focus() { this.input.focus(); }
     write() {}
     reset() {}
@@ -60,6 +69,8 @@ function stubClusters(clusters: Cluster[]) {
  vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?KINDS:url==="/api/clusters"?clusters:url.startsWith("/api/audit")?{records:[],next_before:null}:url==="/api/settings"?{encryption:{source:"environment",path:null},discovery_interval_s:600}:[]),{status:200,headers:{"content-type":"application/json"}}))));
 }
 beforeEach(()=>{
+ xterm.stopsKeys = false;
+ xterm.typed = [];
  FakeWebSocket.instances = [];
  vi.stubGlobal("WebSocket",FakeWebSocket);
  stubClusters([east]);
@@ -679,6 +690,27 @@ it("alt+up from a shell returns to the table", async () => {
   expect(fireEvent.keyDown(terminal, { key: "ArrowUp", altKey: true })).toBe(false);
   await waitFor(() => expect(document.activeElement).toBe(first));
   expect(screen.getByRole("tab", { name: new RegExp(`^Shell.*${pods[0].name}`) })).toBeTruthy();
+});
+
+it("alt+up leaves a terminal that stops the key on its textarea, at once and unsent", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "s" });
+  await waitFor(() => expect(document.activeElement).toBe(terminalOf()));
+  const terminal = terminalOf()!;
+  xterm.stopsKeys = true;
+  // Typed keys are the shell's.
+  fireEvent.keyDown(terminal, { key: "a" });
+  expect(xterm.typed).toEqual(["a"]);
+  expect(fireEvent.keyDown(terminal, { key: "ArrowUp", altKey: true })).toBe(false);
+  // Same tick: no frame to wait for, so nothing can take the focus first.
+  expect(document.activeElement).toBe(first);
+  expect(xterm.typed).toEqual(["a"]);
+  // Held, it leaves once and still sends nothing.
+  act(() => terminal.focus());
+  expect(fireEvent.keyDown(terminal, { key: "ArrowUp", altKey: true, repeat: true })).toBe(false);
+  expect(document.activeElement).toBe(terminal);
+  expect(xterm.typed).toEqual(["a"]);
 });
 
 it("alt+down from a row moves into the follow log and esc comes back", async () => {

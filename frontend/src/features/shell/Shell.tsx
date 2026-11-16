@@ -147,14 +147,26 @@ export function Shell() {
       focusView();
     }
   };
-  const focusWorkspaceFromDock = useCallback(() => {
-    const origin = document.activeElement;
-    requestAnimationFrame(() => {
-      const focused = document.activeElement;
-      if ((focused !== origin && focused !== document.body) || document.querySelector('[aria-modal="true"]')) return;
+  /**
+   * Back from the dock to the selected row, else `<main>`. A key press (`now`) lands in this tick, so
+   * nothing can take the focus first; a removal waits a frame and yields to whatever claimed it.
+   */
+  const focusWorkspaceFromDock = useCallback((opts?: { now?: boolean }) => {
+    const land = () => {
+      if (document.querySelector('[aria-modal="true"]')) return;
       const pane = main.current?.querySelector<HTMLElement>('[data-active-pane="true"]');
       if (pane && focusTableRow(pane, { selectedOnly: true })) return;
       main.current?.focus({ preventScroll: true });
+    };
+    if (opts?.now) {
+      land();
+      return;
+    }
+    const origin = document.activeElement;
+    requestAnimationFrame(() => {
+      const focused = document.activeElement;
+      if (focused !== origin && focused !== document.body) return;
+      land();
     });
   }, []);
 
