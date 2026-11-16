@@ -714,6 +714,75 @@ describe("Dock", () => {
       expect(fetch).toHaveBeenCalledTimes(calls);
     });
 
+    it("closing the follow tab during a retarget opens nothing", async () => {
+      let answerA!: () => void;
+      vi.stubGlobal("fetch", vi.fn((url: string) => {
+        if (url.includes("/api-a/")) {
+          return new Promise<Response>((resolve) => {
+            answerA = () => void json(oneContainer).then(resolve);
+          });
+        }
+        return json(oneContainer);
+      }));
+      renderDock();
+      act(() => dock.openFollow(rowOf("api-x")));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+      act(() => dock.followRow(rowOf("api-a"))); // slow
+      act(() => dock.dispatch({ type: "close", id: dock.state.sessions[0].id }));
+      await act(async () => answerA());
+      await flush();
+      expect(dock.state.sessions).toHaveLength(0);
+      expect(screen.queryByRole("tab")).toBeNull();
+    });
+
+    it("removing the follow log's cluster during a retarget to another cluster opens nothing", async () => {
+      let answerB!: () => void;
+      vi.stubGlobal("fetch", vi.fn((url: string) => {
+        if (url.includes("/clusters/c2/")) {
+          return new Promise<Response>((resolve) => {
+            answerB = () => void json(oneContainer).then(resolve);
+          });
+        }
+        return json(oneContainer);
+      }));
+      const { client } = renderDock();
+      act(() => dock.openFollow(rowOf("api-x")));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+      act(() => dock.followRow({ ...rowOf("api-b"), cluster_id: "c2" })); // slow, on eks
+      act(() => clusterLifecycle(client).remove(aks.id));
+      expect(dock.state.sessions).toHaveLength(0);
+      await act(async () => answerB());
+      await flush();
+      expect(dock.state.sessions).toHaveLength(0);
+      expect(screen.queryByRole("tab")).toBeNull();
+    });
+
+    it("pinning from the follow log and Shift+L on the same pod give one pinned tab", async () => {
+      // The follow log reads web (the first container); Shift+L would pick helper (failing).
+      vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+      renderDock();
+      act(() => dock.openFollow(demoPod));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+      act(() => dock.pinFollow());
+      expect(dock.state.sessions).toHaveLength(2);
+      const pinnedId = dock.state.sessions[1].id;
+      act(() => dock.openPinned(demoPod));
+      await waitFor(() => expect(dock.state.focused).toBe(pinnedId));
+      expect(dock.state.sessions).toHaveLength(2);
+      expect(dock.state.sessions.filter((x) => x.pinned)).toHaveLength(1);
+
+      // And the other way round: Shift+L first, then pin from the follow log.
+      cleanup();
+      FakeWebSocket.instances = [];
+      renderDock();
+      act(() => dock.openPinned(demoPod));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+      act(() => dock.openFollow(demoPod));
+      await waitFor(() => expect(dock.state.sessions).toHaveLength(2));
+      act(() => dock.pinFollow());
+      expect(dock.state.sessions.filter((x) => x.pinned)).toHaveLength(1);
+    });
+
     it("a follow whose cluster is removed during its describe opens nothing", async () => {
       let finish!: (response: Response) => void;
       vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));

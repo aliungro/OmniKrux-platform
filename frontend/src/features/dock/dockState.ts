@@ -63,9 +63,10 @@ export type DockAction =
   | { type: "replace"; id: string; session: Session; focus?: boolean }
   /**
    * Opens the one follow log, or retargets it in place (same id and position, so its pane stays
-   * mounted). `focus: false` as for "open".
+   * mounted). `focus: false` as for "open". `retarget: true` only moves an open follow log: with
+   * none (closed, or its cluster removed, while the describe was on its way) nothing opens.
    */
-  | { type: "follow"; session: Session; focus?: boolean }
+  | { type: "follow"; session: Session; focus?: boolean; retarget?: boolean }
   /** Sets or clears why the follow log still shows its last pod. */
   | { type: "hold"; reason: FollowHold | null }
   | { type: "toggleLayout" }
@@ -111,14 +112,18 @@ export function initialDockState(): DockState {
   return { sessions: [], focused: null, previous: null, layout: "single", height: loadHeight() };
 }
 
-/** Two sessions are the same when they'd show the same thing. */
+/**
+ * Two sessions are the same when they'd show the same thing. A pod has one pinned tab, whichever
+ * container it was opened on (its picker switches containers): pinning from the follow log and
+ * Shift+L on the same pod land on the same tab.
+ */
 function sameTarget(a: Session, b: Session): boolean {
   return (
     a.kind === b.kind &&
     a.cluster.id === b.cluster.id &&
     a.namespace === b.namespace &&
     a.pod === b.pod &&
-    a.container === b.container &&
+    (a.container === b.container || (!!a.pinned && !!b.pinned)) &&
     (a.previous ?? false) === (b.previous ?? false) &&
     (a.selector ?? "") === (b.selector ?? "") &&
     (a.cleanupPod ?? false) === (b.cleanupPod ?? false) &&
@@ -204,6 +209,7 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
     case "follow": {
       const current = followSession(state);
       const quiet = action.focus === false && state.focused !== null;
+      if (!current && action.retarget) return state;
       if (!current) {
         const added = unheld({ ...action.session, follow: true });
         delete added.pinned;

@@ -206,6 +206,33 @@ describe("follow and pinned logs", () => {
     expect(dockReducer(s, { type: "open", session: session("l", { pod: "a" }) }).sessions).toHaveLength(3);
   });
 
+  it("one pod gives one pinned tab whatever its container", () => {
+    let s = run(
+      start(),
+      { type: "open", session: session("p1", { pod: "a", container: "web", pinned: true }) },
+      { type: "open", session: session("x", { pod: "x" }) },
+    );
+    s = dockReducer(s, { type: "open", session: session("p2", { pod: "a", container: "helper", pinned: true }) });
+    expect(s.sessions.map((x) => x.id)).toEqual(["p1", "x"]);
+    expect(s.focused).toBe("p1");
+    // Unpinned logs of another container are still their own tabs.
+    s = run(
+      s,
+      { type: "open", session: session("l1", { pod: "a", container: "web" }) },
+      { type: "open", session: session("l2", { pod: "a", container: "helper" }) },
+    );
+    expect(s.sessions).toHaveLength(4);
+  });
+
+  it("a retarget with no follow log opens nothing", () => {
+    const s = run(start(), { type: "open", session: session("x", { pod: "x" }) });
+    expect(dockReducer(s, { type: "follow", session: session("f", { pod: "a", follow: true }), focus: false, retarget: true })).toBe(s);
+    expect(dockReducer(start(), { type: "follow", session: session("f", { pod: "a", follow: true }), retarget: true }).sessions).toHaveLength(0);
+    // With a follow log, a retarget moves it as before.
+    const f = run(s, { type: "follow", session: session("f", { pod: "a", follow: true }) });
+    expect(followSession(dockReducer(f, { type: "follow", session: session("g", { pod: "b" }), retarget: true }))).toMatchObject({ id: "f", pod: "b" });
+  });
+
   it("pinning a pod that is already pinned focuses its tab", () => {
     let s = run(
       start(),

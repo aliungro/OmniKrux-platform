@@ -148,17 +148,24 @@ export function useDock(clusters: Cluster[]): DockApi {
   }, []);
   const stateRef = useRef(state);
   stateRef.current = state;
+  /** The follow request on its way no longer applies (its tab closed, or its cluster went). */
+  const cancelFollow = useCallback(() => {
+    followSeq.current++;
+    pendingFollow.current = null;
+  }, []);
   const dispatch = useCallback((action: DockAction) => {
     if ((action.type === "open" || action.type === "replace" || action.type === "follow") &&
         lifecycle.isRemoved(action.session.cluster.id)) return;
     if (action.type === "focus" || (action.type === "close" && action.id === stateRef.current.focused)) nextOpen();
+    if (action.type === "close" && action.id === followSession(stateRef.current)?.id) cancelFollow();
     dispatchNow(action);
-  }, [lifecycle, nextOpen]);
+  }, [cancelFollow, lifecycle, nextOpen]);
   useEffect(() => lifecycle.subscribe(id => {
+    if (followSession(stateRef.current)?.cluster.id === id) cancelFollow();
     if (shellPending.current === id) nextOpen();
     dispatchNow({ type: "closeCluster", clusterId: id });
     setAsk(current => current?.cluster.id === id ? null : current);
-  }), [lifecycle, nextOpen]);
+  }), [cancelFollow, lifecycle, nextOpen]);
   const newId = useCallback(() => `s${++nextId.current}`, []);
   const clustersRef = useRef(clusters);
   clustersRef.current = clusters;
@@ -288,6 +295,8 @@ export function useDock(clusters: Cluster[]): DockApi {
         dispatch({
           type: "follow",
           focus: request !== null && request === latestOpen.current,
+          // A settled selection only moves an open follow log; it never opens one.
+          retarget: request === null,
           session: {
             id: newId(),
             kind: "logs",
@@ -322,8 +331,7 @@ export function useDock(clusters: Cluster[]): DockApi {
       if (pendingFollow.current?.key === key) return;
       if (key === followKey(current.cluster.id, current.namespace, current.pod)) {
         // Back on the followed pod: a retarget still on its way no longer applies, and the note goes.
-        followSeq.current++;
-        pendingFollow.current = null;
+        cancelFollow();
         dispatch({ type: "hold", reason: null });
         return;
       }
@@ -331,7 +339,7 @@ export function useDock(clusters: Cluster[]): DockApi {
       if (!cluster || lifecycle.isRemoved(cluster.id)) return;
       startFollow(row, cluster, null);
     },
-    [dispatch, lifecycle, startFollow],
+    [cancelFollow, dispatch, lifecycle, startFollow],
   );
 
   const holdFollow = useCallback((reason: FollowHold | null) => dispatch({ type: "hold", reason }), [dispatch]);
