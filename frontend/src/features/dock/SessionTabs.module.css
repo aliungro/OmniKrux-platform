@@ -27,7 +27,9 @@
   flex: 0 1 auto;
   display: inline-flex;
   align-items: center;
-  min-width: 96px;
+  /* Room for the badge and about ten letters of the pod: a crowded strip hands the rest of its
+     tabs to the "{n} open" menu rather than shrinking them to unreadable stubs. */
+  min-width: 148px;
   max-width: 240px;
   height: 34px;
   border-radius: 8px 8px 0 0;
@@ -112,10 +114,10 @@
   font-size: 11px;
 }
 
-/* Ellipsized, but a few letters always show. */
+/* Ellipsized, but about ten letters always show. */
 .pod {
   flex: 0 1 auto;
-  min-width: 4ch;
+  min-width: 10ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -165,9 +167,11 @@
   background: var(--surf-2);
 }
 
-/* The follow log keeps room for its marker and a few letters of its pod. */
+/* The follow log keeps room for its marker and about ten letters of its pod, and grows further
+   so that, selected, it keeps its pod's name. */
 .sess[data-follow] {
-  min-width: 176px;
+  min-width: 232px;
+  max-width: 280px;
 }
 
 /* "{n} open ⌄": only while the tabs don't fit. */

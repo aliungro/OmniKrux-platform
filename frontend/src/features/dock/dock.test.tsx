@@ -1417,6 +1417,30 @@ describe("one row of tabs and the open menu", () => {
     expect(button.nextElementSibling).toBe(screen.getByRole("button", { name: "Side by side" }));
   });
 
+  it("crowded tabs keep a readable name and leave the rest to the menu", async () => {
+    const css = document.createElement("style");
+    css.dataset.testCss = "";
+    css.textContent = componentCss(import.meta.url, "./SessionTabs.module.css", tabStyles);
+    document.head.append(css);
+    vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+    overflowing();
+    renderDock();
+    openTwenty();
+    act(() => dock.openFollow(demoPod));
+    await waitFor(() => expect(dock.state.sessions).toHaveLength(21));
+    const wrapper = (tab: HTMLElement) => tab.closest<HTMLElement>(`.${tabStyles.sess}`)!;
+    const [follow] = screen.getAllByRole("tab").filter((t) => wrapper(t).hasAttribute("data-follow"));
+    const plain = screen.getByRole("tab", { name: /crasher/ });
+    // About ten letters of a pod beside its badge (not a three-letter stub); the follow tab also
+    // keeps its marker, and grows further to keep its name while it is selected.
+    expect(getComputedStyle(wrapper(plain)).minWidth).toBe("148px");
+    // 10ch, which jsdom computes at 8px a ch.
+    expect(getComputedStyle(plain.querySelector(`.${tabStyles.pod}`)!).minWidth).toBe("80px");
+    expect(getComputedStyle(wrapper(follow)).minWidth).toBe("232px");
+    expect(getComputedStyle(wrapper(follow)).maxWidth).toBe("280px");
+    expect(screen.getByRole("button", { name: "All 21 open logs and shells" }).textContent).toBe("21 open");
+  });
+
   it("the open menu is hidden while tabs fit", () => {
     renderDock();
     openTwenty();
