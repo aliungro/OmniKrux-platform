@@ -34,6 +34,11 @@ vi.mock("@xterm/xterm", () => ({
     onResize() { return { dispose() {} }; }
   },
 }));
+const rowRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../territories/ResourceRowView", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("../territories/ResourceRowView")>();
+  return { ...orig, ResourceRowView: (props: Parameters<typeof orig.ResourceRowView>[0]) => { rowRenders.count++; return orig.ResourceRowView(props); } };
+});
 vi.mock("@xterm/addon-fit", () => ({FitAddon:class { fit() {} }}));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 // The YAML editor as CodeMirror draws it: a contenteditable box.
@@ -849,8 +854,47 @@ it("the logs bar shows outside kubernetes too", async () => {
   const first = startAtFirstPod();
   fireEvent.keyDown(first, { key: "l" });
   await logTab(pods[0].name);
-  fireEvent.keyDown(first, { key: "8", altKey: true });
-  await screen.findByRole("heading", { name: /audit/i }).catch(() => null);
-  fireEvent.keyDown(document.activeElement ?? document.body, { key: "ArrowDown", altKey: true });
-  expect(await screen.findByRole("navigation", { name: "Keyboard shortcuts: logs" })).toBeTruthy();
+  expect(screen.getByRole("navigation", { name: "Keyboard shortcuts: table" })).toBeTruthy();
+  fireEvent.keyDown(first, { key: "8", code: "Digit8", altKey: true });
+  await screen.findByRole("heading", { name: "Audit log" });
+  expect(screen.queryByRole("navigation", { name: /^Keyboard shortcuts/ })).toBeNull();
+  const main = screen.getByRole("main");
+  main.focus();
+  expect(document.activeElement).toBe(main);
+  fireEvent.keyDown(main, { key: "ArrowDown", altKey: true });
+  const strip = await screen.findByRole("navigation", { name: "Keyboard shortcuts: logs" });
+  expect(strip.textContent).toContain("back to the table");
+  expect(screen.queryByRole("navigation", { name: "Keyboard shortcuts: table" })).toBeNull();
+});
+
+it("no element carries the outline while a dialog or the ? sheet is open", async () => {
+  const { serve } = serveDeletes();
+  await renderPods(undefined, false, serve);
+  const first = startAtFirstPod();
+  await waitFor(() => expect(zonePane().getAttribute("data-keyboard-zone")).toBe("table"));
+  press(first);
+  await screen.findByRole("dialog", { name: `Delete Pod ${pods[0].name}` });
+  await waitFor(() => expect(document.querySelector("[data-keyboard-zone]")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(zonePane().getAttribute("data-keyboard-zone")).toBe("table"));
+  fireEvent.keyDown(document.activeElement!, { key: "?" });
+  await screen.findByRole("dialog", { name: "All shortcuts" });
+  await waitFor(() => expect(document.querySelector("[data-keyboard-zone]")).toBeNull());
+});
+
+it("a zone change does not re-render the table rows", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  await logTab(pods[0].name);
+  await waitFor(() => expect(zonePane().getAttribute("data-keyboard-zone")).toBe("table"));
+  await act(async () => { await new Promise((r) => setTimeout(r, FOLLOW_SETTLE_MS + 50)); });
+  const before = rowRenders.count;
+  expect(before).toBeGreaterThan(0);
+  fireEvent.keyDown(first, { key: "ArrowDown", altKey: true });
+  await waitFor(() => expect(zoneDock().getAttribute("data-keyboard-zone")).toBe("logs"));
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  await waitFor(() => expect(zonePane().getAttribute("data-keyboard-zone")).toBe("table"));
+  expect(rowRenders.count).toBe(before);
 });

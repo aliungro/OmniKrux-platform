@@ -401,6 +401,25 @@ describe("ShortcutBar per kind", () => {
     expect(text).toContain("Ctrl Del delete (asks first)");
   });
 
+  it("the bar shows cmd backspace on a mac and ctrl delete elsewhere", () => {
+    const platform = vi.spyOn(navigator, "platform", "get");
+    try {
+      platform.mockReturnValue("MacIntel");
+      const { unmount } = render(<ShortcutBar kind="pods" zone="table" />);
+      const mac = screen.getByRole("navigation", { name: "Keyboard shortcuts: table" }).textContent;
+      expect(mac).toContain("⌘ ⌫");
+      expect(mac).not.toContain("Ctrl Del");
+      unmount();
+      platform.mockReturnValue("Win32");
+      render(<ShortcutBar kind="pods" zone="table" />);
+      const win = screen.getByRole("navigation", { name: "Keyboard shortcuts: table" }).textContent;
+      expect(win).toContain("Ctrl Del");
+      expect(win).not.toContain("⌫");
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it("help keycaps follow the platform", () => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     try {
