@@ -37,7 +37,7 @@ export type ShortcutId =
   | "previousMatch"
   | "jumpLive"
   | "layout"
-  | "closeLog"
+  | "pinLogs" | "enterLogs" | "deleteFocused" | "backToTable" | "scrollLog" | "logEnds" | "pinFollow"
   | "leaveLogs"
   | "sessionTabs";
 
@@ -45,6 +45,8 @@ export interface Shortcut {
   id: ShortcutId;
   /** As drawn on the keycaps. */
   keys: string[];
+  /** The keycaps on macOS, where they differ. */
+  macKeys?: string[];
   /** For the "?" sheet. */
   label: string;
   /**
@@ -62,6 +64,8 @@ export interface Shortcut {
   ctrl?: boolean;
   /** Needs Alt held exactly; Ctrl+Alt (AltGr) never matches an Alt-only shortcut. */
   alt?: boolean;
+  /** Needs Shift held (so Caps Lock's capital letter does not match). */
+  shift?: boolean;
   /** For the strip along the bottom; absent: sheet only. */
   bar?: string;
 }
@@ -86,7 +90,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "edit", scope: "row", keys: ["e"], match: ["e"], label: "Edit the YAML" },
   { id: "delete", scope: "row", keys: ["Ctrl D"], match: ["d", "D"], ctrl: true, label: "Delete" },
   // Rows: what each kind's keys mean.
-  { id: "logs", scope: "row", kinds: ["pods"], keys: ["l"], match: ["l"], label: "Logs of the selected pod", bar: "logs" },
+  { id: "logs", scope: "row", kinds: ["pods"], keys: ["l"], match: ["l"], label: "Logs of the selected pod (they follow the row you select)", bar: "logs (they follow your row)" },
+  { id: "pinLogs", scope: "row", kinds: ["pods"], keys: ["Shift L"], match: ["L"], shift: true, label: "Pin the selected pod's log as its own tab", bar: "pin a log" },
+  // Not a row action: Shell moves the keyboard into the logs.
+  { id: "enterLogs", scope: "row", keys: ["Alt ↓"], match: ["ArrowDown"], alt: true, label: "Move the keyboard into the logs", bar: "into the logs" },
   { id: "previousLogs", scope: "row", kinds: ["pods"], keys: ["p"], match: ["p"], label: "Previous logs (the run before the last restart)", bar: "previous logs" },
   { id: "shell", scope: "row", kinds: ["pods"], keys: ["s"], match: ["s"], label: "Shell in the selected pod", bar: "shell" },
   { id: "scale", scope: "row", kinds: SCALABLE, keys: ["s"], match: ["s"], label: "Scale", bar: "scale" },
@@ -104,16 +111,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "palette", scope: "global", keys: ["Ctrl K"], match: ["k", "K"], ctrl: true, label: "Commands: kinds, views and the selected row's actions", bar: "commands" },
   { id: "filter", scope: "global", keys: ["/"], match: ["/"], label: "Filter rows", bar: "filter" },
   { id: "help", scope: "global", keys: ["?"], match: ["?"], label: "Show all shortcuts" },
-  // In a log pane.
+  { id: "deleteFocused", scope: "global", keys: ["Ctrl Del"], macKeys: ["⌘ ⌫"], label: "Delete what has the focus: a resource row (reviewed first) or a dock tab" },
+  // In the logs zone: a log pane, or anything else in the dock.
+  { id: "scrollLog", scope: "logs", keys: ["↑ ↓", "PgUp PgDn"], label: "Scroll the log by a line or a page" },
+  { id: "logEnds", scope: "logs", keys: ["Home", "End"], label: "Top of the log, or its live end (G too)" },
+  { id: "sessionTabs", scope: "logs", keys: ["←", "→"], label: "Switch between dock tabs" },
   { id: "searchLogs", scope: "logs", keys: ["Ctrl F"], match: ["f", "F"], ctrl: true, label: "Search logs", bar: "search logs" },
   { id: "nextMatch", scope: "logs", keys: ["Enter"], label: "Next match" },
   { id: "previousMatch", scope: "logs", keys: ["Shift", "Enter"], label: "Previous match" },
   { id: "jumpLive", scope: "logs", keys: ["G"], match: ["G"], label: "Jump to live" },
+  { id: "pinFollow", scope: "logs", keys: ["Shift L"], match: ["L"], shift: true, label: "Pin the follow log's pod as its own tab" },
+  { id: "backToTable", scope: "logs", keys: ["Esc"], match: ["Escape"], label: "Back to the table, same row (never closes a log)" },
+  { id: "leaveLogs", scope: "logs", keys: ["Alt ↑"], match: ["ArrowUp"], alt: true, label: "Back to the table, from a log or a shell" },
   // In the dock.
-  { id: "closeLog", scope: "dock", keys: ["Esc"], match: ["Escape"], label: "Close the focused log" },
-  { id: "leaveLogs", scope: "dock", keys: ["Alt ↑"], match: ["ArrowUp"], alt: true, label: "Return to the workspace" },
   { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch the bottom dock between one pane and side by side" },
-  { id: "sessionTabs", scope: "dock", keys: ["←", "→"], label: "Move between open logs and shells (bottom dock)" },
 ];
 
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));
@@ -132,21 +143,57 @@ export function shortcutsFor(kindKey: string): Shortcut[] {
   return SHORTCUTS.filter((s) => appliesTo(s, kindKey));
 }
 
-/** The strip along the bottom: moving and details, this kind's keys, then the page's own. */
-const BAR_TAIL: ShortcutId[] = ["searchLogs", "kinds", "palette", "filter"];
+export type KeyboardZone = "table" | "logs";
 
-export function barFor(kindKey: string): Shortcut[] {
-  const rows = shortcutsFor(kindKey).filter((s) => s.scope === "row" && s.bar !== undefined);
-  return [...rows, ...BAR_TAIL.map(byId)];
+export interface BarItem { id: ShortcutId; keys: readonly string[]; text: string }
+
+/** A Mac (and iPhone or iPad): where the keycaps show \u2318 and \u232b. */
+export function isMac(): boolean {
+  return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+}
+
+/** The keycaps drawn for a shortcut, e.g. ["Ctrl D"]; macOS shows `macKeys` where given. */
+export function keysFor(s: Shortcut | ShortcutId, mac: boolean = isMac()): readonly string[] {
+  const sc = typeof s === "string" ? byId(s) : s;
+  return mac && sc.macKeys ? sc.macKeys : sc.keys;
+}
+
+const item = (id: ShortcutId, mac: boolean, text: string, keys?: readonly string[]): BarItem => ({ id, keys: keys ?? keysFor(id, mac), text });
+
+/**
+ * The strip along the bottom for a keyboard zone. Table: this kind's keys, into the logs, delete,
+ * then the page's own. Logs: what works inside the dock.
+ */
+export function barFor(kindKey: string | undefined, zone: KeyboardZone, mac: boolean = isMac()): BarItem[] {
+  if (zone === "logs") {
+    return [
+      item("scrollLog", mac, "scroll"),
+      item("logEnds", mac, "top / live end"),
+      item("sessionTabs", mac, "switch tab"),
+      item("searchLogs", mac, "search"),
+      item("pinFollow", mac, "pin this log"),
+      item("deleteFocused", mac, "close the tab"),
+      item("backToTable", mac, "back to the table", ["Esc", "Alt \u2191"]),
+    ];
+  }
+  const rows = kindKey === undefined ? [] : shortcutsFor(kindKey).filter((s) => s.scope === "row" && s.bar !== undefined && s.id !== "enterLogs");
+  return [
+    ...rows.map((s) => item(s.id, mac, s.bar!)),
+    item("enterLogs", mac, "into the logs"),
+    item("deleteFocused", mac, "delete (asks first)"),
+    item("kinds", mac, "kinds"),
+    item("palette", mac, "commands"),
+    item("filter", mac, "filter"),
+  ];
 }
 
 export type ShortcutGroup = readonly [title: string, rows: readonly Shortcut[]];
 
-const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell:"Apps and tabs", row: "Rows", global: "Anywhere", logs: "Logs", dock: "Logs and shells (bottom dock)" };
+const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs", row: "Table", global: "Anywhere", logs: "Logs", dock: "Dock" };
 
 /** The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's. */
 export function allGroups(kindKey?: string): ShortcutGroup[] {
-  return (["shell", "row", "global", "logs", "dock"] as const).map((scope) => [
+  return (["shell", "row", "logs", "global", "dock"] as const).map((scope) => [
     GROUP_TITLES[scope],
     SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey))),
   ]);
@@ -161,7 +208,14 @@ type Pressed = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean;
 export function pressed(id: ShortcutId, e: Pressed): boolean {
   const s = byId(id);
   if (e.altKey !== !!s.alt || !!s.ctrl !== (e.ctrlKey || e.metaKey) || (s.alt && e.shiftKey)) return false;
+  if (s.shift && e.shiftKey !== true) return false;
   return (s.match?.includes(e.key) ?? false) || (e.code !== undefined && (s.code?.includes(e.code) ?? false));
+}
+
+/** Ctrl+Delete, or Cmd+Backspace: both on every platform, only the keycaps differ. */
+export function isDeleteKey(e: Pressed): boolean {
+  if (e.altKey || e.shiftKey) return false;
+  return (e.key === "Delete" && e.ctrlKey && !e.metaKey) || (e.key === "Backspace" && e.metaKey && !e.ctrlKey);
 }
 
 /**
@@ -170,9 +224,11 @@ export function pressed(id: ShortcutId, e: Pressed): boolean {
  * a pod: only one of them is ever available.
  */
 export function rowShortcut(e: Pressed, kindKey: string, available: readonly string[]): ShortcutId | undefined {
+  if (isDeleteKey(e)) return available.includes("delete") ? "delete" : undefined;
   return SHORTCUTS.find(
     (s) =>
       s.scope === "row" &&
+      s.id !== "enterLogs" &&
       appliesTo(s, kindKey) &&
       (s.id === "move" || s.id === "close" || available.includes(s.id)) &&
       pressed(s.id, e),
@@ -184,12 +240,12 @@ export function rowShortcut(e: Pressed, kindKey: string, available: readonly str
  * deployment and drains a node). Ctrl D is the one with a modifier.
  */
 export function toolShortcut(e: Pressed, available: readonly ShortcutId[]): ShortcutId | undefined {
+  if (isDeleteKey(e)) return available.includes("delete") ? "delete" : undefined;
   return available.find((id) => pressed(id, e));
 }
 
-/** The keycaps drawn for a shortcut, e.g. ["Ctrl D"]. */
 export function capsOf(id: ShortcutId): readonly string[] {
-  return byId(id).keys;
+  return keysFor(id);
 }
 
 /** A terminal (xterm): every key typed there is the shell's, Ctrl K and Ctrl F included. */

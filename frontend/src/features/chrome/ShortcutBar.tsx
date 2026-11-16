@@ -3,7 +3,7 @@ import { allGroups, barFor, capsOf, pageKey, pressed, type ShortcutGroup } from 
 import k from "./key.module.css";
 import s from "./ShortcutBar.module.css";
 
-function Keys({ keys }: { keys: string[] }) {
+function Keys({ keys }: { keys: readonly string[] }) {
   return (
     <>
       {keys.map((key) => (
@@ -73,9 +73,9 @@ export function ShortcutBar({ kind = "pods", onOpen }: { kind?: string; onOpen?:
     <>
       <nav className={s.keys} aria-label="Keyboard shortcuts" data-page-keys>
         <ul className={s.strip}>
-          {barFor(kind).map((x) => (
+          {barFor(kind ?? "pods", "table").map((x) => (
             <li key={x.id} className={s.item}>
-              <Keys keys={x.keys} /> {x.bar}
+              <Keys keys={x.keys} /> {x.text}
             </li>
           ))}
           <li className={s.item}>

@@ -1,0 +1,71 @@
+import { describe, expect, it } from "vitest";
+import { allGroups, barFor, isDeleteKey, pressed, rowShortcut, SHORTCUTS } from "./shortcuts";
+
+const base = { ctrlKey: false, metaKey: false, altKey: false, shiftKey: false };
+
+describe("shortcut registry", () => {
+  it("delete key is ctrl+delete or cmd+backspace only", () => {
+    expect(isDeleteKey({ ...base, key: "Delete", ctrlKey: true })).toBe(true);
+    expect(isDeleteKey({ ...base, key: "Backspace", metaKey: true })).toBe(true);
+    expect(isDeleteKey({ ...base, key: "Backspace", ctrlKey: true })).toBe(false);
+    expect(isDeleteKey({ ...base, key: "Delete" })).toBe(false);
+    expect(isDeleteKey({ ...base, key: "Delete", ctrlKey: true, altKey: true })).toBe(false);
+    expect(isDeleteKey({ ...base, key: "Delete", ctrlKey: true, shiftKey: true })).toBe(false);
+  });
+
+  it("ctrl+delete on a row means delete only where delete is offered", () => {
+    const e = { ...base, key: "Delete", ctrlKey: true };
+    expect(rowShortcut(e, "pods", ["details", "delete"])).toBe("delete");
+    expect(rowShortcut(e, "pods", ["details"])).toBeUndefined();
+  });
+
+  it("shift+L pins and plain l follows", () => {
+    const available = ["logs", "pinLogs"];
+    expect(rowShortcut({ ...base, key: "L", shiftKey: true }, "pods", available)).toBe("pinLogs");
+    expect(rowShortcut({ ...base, key: "l" }, "pods", available)).toBe("logs");
+    expect(rowShortcut({ ...base, key: "L" }, "pods", available)).toBeUndefined();
+  });
+
+  it("alt+down is not a row move", () => {
+    const e = { ...base, key: "ArrowDown", altKey: true };
+    expect(rowShortcut(e, "pods", ["logs", "pinLogs", "enterLogs"])).toBeUndefined();
+    expect(pressed("enterLogs", e)).toBe(true);
+  });
+
+  it("the logs bar lists the zone's keys in order", () => {
+    expect(barFor("pods", "logs", false).map((b) => [b.keys.join(" "), b.text])).toEqual([
+      ["↑ ↓ PgUp PgDn", "scroll"],
+      ["Home End", "top / live end"],
+      ["← →", "switch tab"],
+      ["Ctrl F", "search"],
+      ["Shift L", "pin this log"],
+      ["Ctrl Del", "close the tab"],
+      ["Esc Alt ↑", "back to the table"],
+    ]);
+  });
+
+  it("the pods table bar follows the prototype", () => {
+    const texts = barFor("pods", "table", false).map((b) => b.text);
+    const order = ["logs (they follow your row)", "pin a log", "previous logs", "into the logs", "delete (asks first)"];
+    const at = order.map((t) => texts.indexOf(t));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(texts).not.toContain("search logs");
+    expect(texts.filter((t) => t === "into the logs")).toHaveLength(1);
+    expect(barFor(undefined, "table", false).some((b) => b.id === "logs")).toBe(false);
+  });
+
+  it("macOS keycaps show cmd backspace", () => {
+    expect(barFor("pods", "table", true).find((b) => b.id === "deleteFocused")?.keys).toEqual(["⌘ ⌫"]);
+  });
+
+  it("help lists both zones", () => {
+    const groups = allGroups("pods");
+    expect(groups.map(([t]) => t)).toEqual(["Apps and tabs", "Table", "Logs", "Anywhere", "Dock"]);
+    const ids = (title: string) => groups.find(([t]) => t === title)![1].map((s) => s.id);
+    expect(ids("Table")).toEqual(expect.arrayContaining(["pinLogs", "enterLogs"]));
+    expect(ids("Logs")).toEqual(expect.arrayContaining(["backToTable", "leaveLogs", "pinFollow"]));
+    expect(SHORTCUTS.some((s) => (s.id as string) === "closeLog")).toBe(false);
+    expect(SHORTCUTS.some((s) => s.label.includes("Close the focused log"))).toBe(false);
+  });
+});

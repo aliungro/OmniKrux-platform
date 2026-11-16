@@ -130,7 +130,7 @@ export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockA
   }, [base, claimKeyboardFocus, keyboardFocus, state.focused, state.sessions]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
-    const close = !e.shiftKey && pressed("closeLog", e);
+    const close = !e.shiftKey && pressed("backToTable", e);
     if (!close && !pressed("leaveLogs", e)) return;
     const target = e.target;
     if (e.defaultPrevented || e.nativeEvent.isComposing || !(target instanceof Element) ||

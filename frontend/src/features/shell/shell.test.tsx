@@ -468,12 +468,12 @@ it.each(["Audit log", "Settings"])("leaves the shared dock for the active %s vie
   expect(logStream(pods[0].name).closedByClient).toBe(false);
 });
 
-it("lists the dock's close and return shortcuts in help", () => {
+it("lists the logs zone's back shortcuts in help", () => {
   renderShell();
   fireEvent.keyDown(document.body, { key: "?" });
   const help = within(screen.getByRole("dialog", { name: "All shortcuts" }));
-  expect(help.getByText("Close the focused log")).toBeTruthy();
-  expect(help.getByText("Return to the workspace")).toBeTruthy();
+  expect(help.getByText("Back to the table, same row (never closes a log)")).toBeTruthy();
+  expect(help.getByText("Back to the table, from a log or a shell")).toBeTruthy();
 });
 
 it("does not close an open pod inspector on a repeated Escape after returning", async () => {

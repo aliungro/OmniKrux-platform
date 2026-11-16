@@ -295,7 +295,7 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
   };
 
   const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (query && !e.shiftKey && !e.nativeEvent.isComposing && pressed("closeLog", e)) {
+    if (query && !e.shiftKey && !e.nativeEvent.isComposing && pressed("backToTable", e)) {
       e.preventDefault();
       e.stopPropagation();
       if (!e.repeat) changeQuery("");
