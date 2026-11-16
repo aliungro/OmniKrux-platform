@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { KINDS } from "../../test/kinds";
+import { removePinned } from "../../test/pinnedKinds";
 import { describeBody } from "../../test/describe";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import { Shell } from "../shell/Shell";
@@ -398,7 +399,7 @@ it("a pinned-only write failure stays accurately visible after leaving Settings"
     originalSet.call(this, key, value);
   });
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-  fireEvent.click(screen.getByRole("button", { name: "Remove Pods" }));
+  removePinned("Pods");
   fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
   expect(screen.getByRole("alert").textContent).toBe("Pinned kinds can't be saved in this browser (storage is full). Your changes last until you close this page.");
   set.mockRestore(); fireEvent.click(screen.getByRole("button", { name: "Settings" }));

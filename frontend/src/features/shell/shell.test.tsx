@@ -778,7 +778,7 @@ it("existing settings route shows global cloud sections and retains pinned kinds
   expect(location.hash).toBe("#/settings");
   const pins = screen.getByRole("region", { name: "Pinned kinds" });
   expect(pins.id).toBe("pinned-kinds");
-  expect(within(pins).getByRole("button", { name: "Remove Pods" })).toBeTruthy();
+  expect(within(pins).getByRole("button", { name: "Actions for Pods" })).toBeTruthy();
   const browser = screen.getByRole("region", { name: "This browser" });
   expect(browser.id).toBe("this-browser");
   expect(within(browser).getByRole("alert").textContent).toContain("Your saved pinned kinds couldn't be read");

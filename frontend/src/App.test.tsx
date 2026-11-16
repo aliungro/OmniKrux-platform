@@ -10,6 +10,7 @@ import { FakeWebSocket } from "./features/logs/fakeWebSocket";
 import { Shell as Console } from "./features/shell/Shell";
 import { seedPodsWorkspace } from "./test/seedWorkspace";
 import { KINDS } from "./test/kinds";
+import { removePinned } from "./test/pinnedKinds";
 import { container } from "./test/describe";
 
 // The dock imports the terminal; jsdom has no canvas for it, and these tests open no shell.
@@ -84,7 +85,7 @@ it("edit pinned kinds opens settings at the section and changes the live row", a
     expect(screen.getByRole("heading",{name:"Settings",level:1})).toBeTruthy();
     expect(scroll).toHaveBeenCalled();
     expect(location.hash).toBe("#/settings");
-    fireEvent.click(screen.getByRole("button",{name:"Remove Services"}));
+    removePinned("Services");
     fireEvent.click(screen.getByRole("button",{name:"Kubernetes"}));
     expect(screen.queryByRole("tab",{name:"Services"})).toBeNull();
     expect(screen.getByRole("tab",{name:"Pods"})).toBeTruthy();
