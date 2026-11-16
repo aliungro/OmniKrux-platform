@@ -83,6 +83,31 @@ it("shares a socket between visible same-kind panes and releases all Kubernetes 
   expect(screen.getAllByRole("grid", { name: "Pods by cluster" })).toHaveLength(1);
 });
 
+it("shares a committed column width between same-kind panes while drag previews stay local", async () => {
+  renderShell(true, "pods");
+  const tabs = within(screen.getByRole("tablist", { name: "Kubernetes tabs" }));
+  await screen.findByRole("grid", { name: "Pods by cluster" });
+  fireEvent.contextMenu(tabs.getByRole("tab", { name: "Pods · East", selected: false }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Split side by side" }));
+  const [left, right] = screen.getAllByRole("grid", { name: "Pods by cluster" });
+  const handle = within(left).getByRole("separator", { name: "Resize Name" });
+  vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect")
+    .mockReturnValue({ width: 200 } as DOMRect);
+  const pointer = (type: string, clientX: number) =>
+    fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+  const columns = (grid: HTMLElement) => grid.style.getPropertyValue("--cols");
+  const original = columns(right);
+  pointer("pointerdown", 100);
+  pointer("pointermove", 130);
+  await waitFor(() => expect(columns(left)).toMatch(/^230px /));
+  expect(columns(right)).toBe(original);
+  pointer("pointerup", 140);
+  expect(columns(left)).toMatch(/^240px /);
+  expect(columns(right)).toBe(columns(left));
+  fireEvent.keyDown(handle, { key: "Enter" });
+  expect(columns(right)).toBe(original);
+});
+
 it("splits workspace tabs, routes focus and history, and keeps the peer when a third tab replaces the active pane", async () => {
   renderShell(true);
   const tabs = within(screen.getByRole("tablist", { name: "Kubernetes tabs" }));

@@ -191,11 +191,18 @@ describe("selection", () => {
     const onOpenLogs = vi.fn();
     const onOpenShell = vi.fn();
     renderTable(3, { onOpenLogs, onOpenShell });
-    fireEvent.keyDown(podRow("pod-2"), { key: "l" });
-    fireEvent.keyDown(podRow("pod-1"), { key: "p" });
+    const second = podRow("pod-2");
+    second.focus();
+    fireEvent.keyDown(second, { key: "l" });
+    fireEvent.keyDown(second, { key: "l", repeat: true });
+    const first = podRow("pod-1");
+    first.focus();
+    fireEvent.keyDown(first, { key: "p" });
+    fireEvent.keyDown(first, { key: "p", repeat: true });
     fireEvent.keyDown(podRow("pod-2"), { key: "s" });
-    expect(onOpenLogs).toHaveBeenNthCalledWith(1, expect.objectContaining({ uid: "2" }), false);
-    expect(onOpenLogs).toHaveBeenNthCalledWith(2, expect.objectContaining({ uid: "1" }), true);
+    expect(onOpenLogs).toHaveBeenNthCalledWith(1, expect.objectContaining({ uid: "2" }), false, second);
+    expect(onOpenLogs).toHaveBeenNthCalledWith(2, expect.objectContaining({ uid: "1" }), true, first);
+    expect(onOpenLogs).toHaveBeenCalledTimes(2);
     expect(onOpenShell).toHaveBeenCalledWith(expect.objectContaining({ uid: "2" }));
   });
 

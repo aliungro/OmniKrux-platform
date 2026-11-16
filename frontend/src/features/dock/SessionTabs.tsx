@@ -1,8 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import pc from "../territories/provider.module.css";
-import { capsOf } from "../chrome/shortcuts";
-import k from "../chrome/key.module.css";
 import { identity, type DockLayout, type Session } from "./dockState";
 import s from "./SessionTabs.module.css";
 
@@ -23,6 +21,18 @@ export function tabId(base: string, id: string): string {
 
 export function panelId(base: string, id: string): string {
   return `${base}-panel-${id}`;
+}
+
+/** Reveal the full tab and its close button within the strip's vertical scroll area. */
+export function revealSessionTab(tab: HTMLElement) {
+  const wrapper = tab.parentElement;
+  const strip = wrapper?.parentElement;
+  if (!wrapper || !strip) return;
+  const bounds = wrapper.getBoundingClientRect();
+  const top = strip.getBoundingClientRect().top + strip.clientTop;
+  const bottom = top + strip.clientHeight;
+  if (bounds.top < top) strip.scrollTop += bounds.top - top;
+  else if (bounds.bottom > bottom) strip.scrollTop += bounds.bottom - bottom;
 }
 
 /**
@@ -50,7 +60,8 @@ export function SessionTabs({
 
   // Reveal the full session, including its close button, when it is opened or selected.
   useEffect(() => {
-    if (focused) refs.current.get(focused)?.parentElement?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    const tab = focused ? refs.current.get(focused) : undefined;
+    if (tab) revealSessionTab(tab);
   }, [focused]);
 
   // Left/right move between tabs, Home/End jump to the ends, as a tablist should.
@@ -82,6 +93,7 @@ export function SessionTabs({
               key={x.id}
               className={`${s.sess} ${pc[provider]}${on ? ` ${s.on}` : ""}`}
               data-provider={provider}
+              data-dock-session={x.id}
               onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
               onAuxClick={(e) => { if (e.button === 1) onClose(x.id); }}
             >
@@ -114,7 +126,8 @@ export function SessionTabs({
                 type="button"
                 className={s.x}
                 aria-label={`Close ${KIND_LABEL[x.kind].toLowerCase()} ${where}`}
-                title="Close"
+                title={x.kind === "logs" ? "Close (Esc)" : "Close"}
+                aria-keyshortcuts={x.kind === "logs" ? "Escape" : undefined}
                 onClick={() => onClose(x.id)}
               >
                 ×
@@ -126,12 +139,16 @@ export function SessionTabs({
       <button
         type="button"
         className={s.lay}
+        aria-label="Side by side"
         aria-pressed={layout === "split"}
         aria-disabled={sessions.length < 2}
-        title={sessions.length < 2 ? "Open a second log or shell to see two side by side." : undefined}
+        title={sessions.length < 2 ? "Side by side (Ctrl+\\). Open a second log or shell to use it." : "Side by side (Ctrl+\\)"}
         onClick={() => { if (sessions.length >= 2) onToggleLayout(); }}
       >
-        Side by side<span className={k.k} aria-hidden="true">{capsOf("layout")[0]}</span>
+        <svg aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+          <rect x="1.5" y="2" width="13" height="12" rx="1.5" />
+          <path d="M8 2v12" />
+        </svg>
       </button>
     </div>
   );

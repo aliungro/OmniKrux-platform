@@ -3,7 +3,7 @@ import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { useState } from "react";
 import { NO_AUDIT_FILTER } from "./useAudit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AuditRecord, Cluster } from "../../api/types";
 import { AuditView } from "./AuditView";
@@ -50,13 +50,102 @@ function serve(pages: (url: URL) => { records: AuditRecord[]; next_before: numbe
   return urls;
 }
 
-function AuditFixture() { const [filters,setFilters]=useState(NO_AUDIT_FILTER); return <AuditView filters={filters} onFilters={setFilters}/>; }
-function show() {
+function AuditFixture({ View }: { View: typeof AuditView }) {
+  const [filters, setFilters] = useState(NO_AUDIT_FILTER);
+  return <View filters={filters} onFilters={setFilters} />;
+}
+
+function show(View = AuditView) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><AuditFixture /></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><AuditFixture View={View} /></QueryClientProvider>);
 }
 
 describe("audit view", () => {
+  it("resizes and resets all seven columns without moving row focus or toggling details", async () => {
+    serve(() => ({ records: [record(2, { outcome: "failed", details: { replicas: 3 } }), record(1)], next_before: null }));
+    show();
+    const row = await screen.findByRole("row", { name: /web-2/ });
+    fireEvent.click(row);
+    const grid = screen.getByRole("grid");
+    const template = () => grid.style.getPropertyValue("--audit-cols");
+    const defaults = template();
+    const tracks = / (?![^()]*\))/;
+    const labels = ["When", "Who", "Action", "Where", "What", "Outcome", "Message"];
+    for (const [index, label] of labels.entries()) {
+      const header = within(grid).getByRole("columnheader", { name: label });
+      const handle = within(header).getByRole("separator", { name: `Resize ${label}` });
+      const measure = vi.spyOn(header, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+      act(() => handle.focus());
+      expect(handle.getAttribute("aria-valuemin")).toBe(label === "Who" ? "48" : "64");
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+      const expectedTracks = defaults.split(tracks);
+      expectedTracks[index] = "208px";
+      expect(template()).toBe(expectedTracks.join(" "));
+      if (label === "Outcome") {
+        measure.mockReturnValue({ width: 70 } as DOMRect);
+        fireEvent.keyDown(handle, { key: "ArrowLeft" });
+        expect(template().split(tracks)[index]).toBe("64px");
+        expect(within(row).getByRole("gridcell", { name: "Failed" }).title).toBe("Failed");
+      }
+      fireEvent.keyDown(handle, { key: "ArrowDown" });
+      fireEvent.keyDown(handle, { key: " " });
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(template()).toBe(defaults);
+      expect(document.activeElement).toBe(handle);
+      expect(row.tabIndex).toBe(0);
+      expect(row.getAttribute("aria-expanded")).toBe("true");
+    }
+    expect(screen.getByLabelText("Details").textContent).toContain('"replicas": 3');
+  });
+
+  it("persists the Message width from a drag while keeping filters, details, and the page cursor", async () => {
+    const key = "omnikrux.tableColumnWidths";
+    localStorage.removeItem(key);
+    vi.resetModules();
+    const { AuditView: InitialView } = await import("./AuditView");
+    const urls = serve((url) => url.searchParams.has("before")
+      ? { records: [record(1)], next_before: null }
+      : { records: [record(2, { diff: "+replicas: 3" })], next_before: 2 });
+    const initial = show(InitialView);
+    await screen.findByRole("row", { name: /web-2/ });
+    fireEvent.change(screen.getByRole("combobox", { name: "Action" }), { target: { value: "scale" } });
+    await waitFor(() => expect(urls.at(-1)!.searchParams.get("action")).toBe("scale"));
+    const row = await screen.findByRole("row", { name: /web-2/ });
+    fireEvent.click(row);
+    const handle = screen.getByRole("separator", { name: "Resize Message" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect")
+      .mockReturnValue({ width: 240 } as DOMRect);
+    const pointer = (type: string, clientX: number) => {
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+    };
+    const grid = screen.getByRole("grid");
+    const requestCount = urls.length;
+    pointer("pointerdown", 0);
+    pointer("pointermove", 60);
+    await waitFor(() => expect(grid.style.getPropertyValue("--audit-cols")).toMatch(/ 300px$/));
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(screen.getByText("+replicas: 3")).toBeTruthy();
+    pointer("pointerup", 80);
+    expect(grid.style.getPropertyValue("--audit-cols")).toMatch(/ 320px$/);
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ version: 1, tables: { audit: { message: 320 } } });
+    expect(urls).toHaveLength(requestCount);
+    expect(screen.getByText("+replicas: 3")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+    expect(await screen.findByRole("row", { name: /web-1/ })).toBeTruthy();
+    expect(urls.at(-1)!.searchParams.get("before")).toBe("2");
+    expect(urls.at(-1)!.searchParams.get("action")).toBe("scale");
+    initial.unmount();
+
+    vi.resetModules();
+    const { AuditView: ReloadedView } = await import("./AuditView");
+    show(ReloadedView);
+    const reloaded = await screen.findByRole("grid");
+    expect(reloaded.style.getPropertyValue("--audit-cols")).toMatch(/ 320px$/);
+    fireEvent.keyDown(within(reloaded).getByRole("separator", { name: "Resize Message" }), { key: "Enter" });
+    expect(reloaded.style.getPropertyValue("--audit-cols")).toMatch(/ minmax\(240px, 2fr\)$/);
+    localStorage.removeItem(key);
+  });
+
   it("audit view lists newest first with cluster badge", async () => {
     serve(() => ({ records: [record(3, { action: "restart" }), record(2, { cluster_id: "c2", cluster_name: "dev-aks", provider: "aks", action: "rollback" }), record(1)], next_before: null }));
     show();
@@ -148,7 +237,7 @@ describe("audit view", () => {
     await screen.findByRole("row", { name: /web-1/ });
     fireEvent.change(screen.getByLabelText("Cluster"), { target: { value: "c2" } });
     await waitFor(() => expect(urls.at(-1)!.searchParams.get("cluster")).toBe("c2"));
-    fireEvent.change(screen.getByLabelText("Action"), { target: { value: "scale" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Action" }), { target: { value: "scale" } });
     await waitFor(() => expect(urls.at(-1)!.searchParams.get("action")).toBe("scale"));
     expect(urls.at(-1)!.searchParams.get("cluster")).toBe("c2");
   });

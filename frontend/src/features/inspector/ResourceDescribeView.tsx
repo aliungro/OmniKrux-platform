@@ -3,6 +3,7 @@ import { LinkButton } from "../navigation/navigation";
 import { formatAge } from "../territories/model";
 import { Status } from "../territories/Status";
 import { EventsTable } from "./EventsTable";
+import { ResizableInspectorTable } from "./ResizableInspectorTable";
 import { SecretValues, type KeysAsk } from "./SecretValues";
 import d from "./DescribeView.module.css";
 import s from "./ResourceDescribeView.module.css";
@@ -69,7 +70,9 @@ function CellView({ cell, now, onLink }: { cell: Cell; now: Date; onLink?: OnLin
   return <>{cell.text}</>;
 }
 
-function SectionView({ section, now, onLink }: { section: Section; now: Date; onLink?: OnLink }) {
+function SectionView({ section, kindKey, view, now, onLink }: {
+  section: Section; kindKey: string; view: string; now: Date; onLink?: OnLink;
+}) {
   const { title, columns, rows, note } = section;
   return (
     <section className={s.section} aria-label={title}>
@@ -78,24 +81,25 @@ function SectionView({ section, now, onLink }: { section: Section; now: Date; on
         {rows.length > 0 && <span className={s.count}>{rows.length}</span>}
       </h6>
       {rows.length > 0 && columns.length > 0 && (
-        <div className={s.wrap}>
-          <table className={s.t} aria-label={title}>
-            <thead>
-              <tr>{columns.map((c) => <th key={c} scope="col">{c}</th>)}</tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  {r.map((cell, j) => (
-                    <td key={j} className={j === 0 ? s.first : undefined}>
-                      <CellView cell={cell} now={now} onLink={onLink} />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResizableInspectorTable
+          tableKey={`inspector:describe:${kindKey}:${title}`}
+          columns={columns.map((label, index) => ({ label, key: `${index}:${label}` }))}
+          className={s.t}
+          label={title}
+          view={view}
+        >
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                {r.map((cell, j) => (
+                  <td key={j} className={j === 0 ? s.first : undefined}>
+                    <CellView cell={cell} now={now} onLink={onLink} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </ResizableInspectorTable>
       )}
       {note && <p className={s.note}>{note}</p>}
     </section>
@@ -123,6 +127,7 @@ export function ResourceDescribeView({
   paneActive?: boolean;
 }) {
   const now = new Date();
+  const view = JSON.stringify([clusterId, data.kind_key, data.namespace, data.name]);
   const labels = Object.entries(data.labels);
   const annotations = Object.entries(data.annotations);
   const keys = data.secret_keys;
@@ -185,12 +190,12 @@ export function ResourceDescribeView({
               />
             </section>
           )}
-          {data.sections.map((sec, i) => <SectionView key={`${sec.title}\u0000${i}`} section={sec} now={now} onLink={onLink} />)}
+          {data.sections.map((sec, i) => <SectionView key={`${sec.title}\u0000${i}`} section={sec} kindKey={data.kind_key} view={view} now={now} onLink={onLink} />)}
         </section>
       )}
       <section className={d.col} aria-label="Events">
         <h5 className={d.h}>Events</h5>
-        <EventsTable events={data.events} error={data.events_error} />
+        <EventsTable events={data.events} error={data.events_error} view={view} />
       </section>
     </div>
   );

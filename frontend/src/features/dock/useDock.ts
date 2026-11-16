@@ -41,12 +41,16 @@ export type ShellChoice = {
   | { stage: "error"; error: string; retry: () => void; openDefault: (() => void) | null }
 );
 
+type KeyboardFocus = { request: number; origin: HTMLElement };
+
 export interface DockApi {
   state: DockState;
   /** A focus choice or closing the focused tab cancels pending opens' focus. */
   dispatch: Dispatch<DockAction>;
   /** Logs (optionally the previous run) or a shell for a pod row. */
-  openPod: (row: ResourceRow, kind: SessionKind, opts?: { previous?: boolean }) => void;
+  openPod: (row: ResourceRow, kind: SessionKind, opts?: { previous?: boolean; keyboardOrigin?: HTMLElement }) => void;
+  keyboardFocus: KeyboardFocus | null;
+  claimKeyboardFocus: (ticket: KeyboardFocus) => boolean;
   /** Logs of every pod the row's owner selects. */
   openOwnerLogs: (row: ResourceRow, owner: OwnerRef) => void;
   /**
@@ -106,8 +110,20 @@ export function useDock(clusters: Cluster[]): DockApi {
    * closed while focused), or a slow one would pull your keystrokes to another pod (or cluster).
    */
   const latestOpen = useRef(0);
+  const [keyboardFocus, setKeyboardFocus] = useState<KeyboardFocus | null>(null);
+  const pendingFocus = useRef<{ clusterId: string; ticket: KeyboardFocus; cancel: () => void } | null>(null);
+  useEffect(() => () => pendingFocus.current?.cancel(), []);
+  const claimKeyboardFocus = useCallback((ticket: KeyboardFocus) => {
+    setKeyboardFocus(null);
+    if (pendingFocus.current?.ticket !== ticket) return false;
+    pendingFocus.current.cancel();
+    return ticket.request === latestOpen.current && ticket.origin.isConnected &&
+      document.activeElement === ticket.origin && !document.querySelector('[aria-modal="true"]');
+  }, []);
+
   const shellPending = useRef<string | null>(null);
   const nextOpen = useCallback(() => {
+    pendingFocus.current?.cancel();
     if (shellPending.current) {
       shellPending.current = null;
       setShellChoice(null);
@@ -122,6 +138,7 @@ export function useDock(clusters: Cluster[]): DockApi {
     dispatchNow(action);
   }, [lifecycle, nextOpen]);
   useEffect(() => lifecycle.subscribe(id => {
+    if (pendingFocus.current?.clusterId === id) pendingFocus.current.cancel();
     if (shellPending.current === id) nextOpen();
     dispatchNow({ type: "closeCluster", clusterId: id });
     setAsk(current => current?.cluster.id === id ? null : current);
@@ -197,15 +214,25 @@ export function useDock(clusters: Cluster[]): DockApi {
   }, [containersOf, dispatch, newId, nextOpen]);
 
   const openPod = useCallback(
-    (row: ResourceRow, kind: SessionKind, opts: { previous?: boolean } = {}) => {
+    (row: ResourceRow, kind: SessionKind, opts: { previous?: boolean; keyboardOrigin?: HTMLElement } = {}) => {
       const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
-      if (!cluster) return;
+      if (!cluster || lifecycle.isRemoved(cluster.id)) return;
       if (kind === "shell") {
         openPodShell(row, cluster);
         return;
       }
       const request = nextOpen();
       const started = lifecycle.startChange();
+      const origin = opts.keyboardOrigin;
+      const ticket = origin ? { request, origin } : null;
+      if (ticket && document.activeElement === ticket.origin && !document.querySelector('[aria-modal="true"]')) {
+        const cancel = () => {
+          ticket.origin.removeEventListener("blur", cancel);
+          pendingFocus.current = null;
+        };
+        pendingFocus.current = { clusterId: cluster.id, ticket, cancel };
+        ticket.origin.addEventListener("blur", cancel);
+      }
       void containersOf(row).catch(() => null).then((d) => {
         if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         const session: Session = {
@@ -218,7 +245,14 @@ export function useDock(clusters: Cluster[]): DockApi {
           containers: d ? allContainers(d) : [],
         };
         if (opts.previous) session.previous = true;
-        dispatch({ type: "open", session, focus: request === latestOpen.current });
+        // The newest open is always selected, as a click's is. Only the keyboard handoff into it
+        // waits on focus: it is skipped when focus left the row (or a dialog opened) meanwhile.
+        const focus = request === latestOpen.current;
+        const handoff = focus && ticket && pendingFocus.current?.ticket === ticket &&
+          document.activeElement === ticket.origin && !document.querySelector('[aria-modal="true"]');
+        if (handoff) setKeyboardFocus(ticket);
+        else if (ticket && pendingFocus.current?.ticket === ticket) pendingFocus.current.cancel();
+        dispatch({ type: "open", session, focus });
       });
     },
     [containersOf, newId, dispatch, lifecycle, nextOpen, openPodShell],
@@ -391,7 +425,7 @@ export function useDock(clusters: Cluster[]): DockApi {
   );
 
   return useMemo(
-    () => ({ state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, shellChoice, ...fns }),
-    [state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, shellChoice, fns],
+    () => ({ state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, shellChoice, keyboardFocus, claimKeyboardFocus, ...fns }),
+    [state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, shellChoice, keyboardFocus, claimKeyboardFocus, fns],
   );
 }

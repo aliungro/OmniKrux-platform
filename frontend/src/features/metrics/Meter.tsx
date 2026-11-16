@@ -7,6 +7,7 @@ export function Meter({
   frac,
   hot = false,
   stale = false,
+  compact = false,
   title,
 }: {
   text: string;
@@ -14,15 +15,16 @@ export function Meter({
   /** Near the limit (or what the node can allocate), not merely above a request. */
   hot?: boolean;
   stale?: boolean;
+  compact?: boolean;
   title?: string;
 }) {
   const style = frac === null ? undefined : ({ "--v": `${Math.min(100, Math.round(frac * 100))}%` } as CSSProperties);
   return (
-    <span className={`${s.meter}${hot ? ` ${s.hot}` : ""}${stale ? ` ${s.stale}` : ""}`} title={title}>
+    <span className={`${s.meter}${hot ? ` ${s.hot}` : ""}${stale ? ` ${s.stale}` : ""}${compact ? ` ${s.compact}` : ""}`} title={title}>
       {frac !== null && (
         hot ? <i style={style} role="img" aria-label="near its limit" /> : <i style={style} aria-hidden="true" />
       )}
-      <span>{text}</span>
+      <span title={compact ? (title ? `${text}\n${title}` : text) : undefined}>{text}</span>
     </span>
   );
 }

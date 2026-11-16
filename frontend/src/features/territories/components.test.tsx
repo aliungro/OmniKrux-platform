@@ -1,6 +1,8 @@
 // frontend/src/features/territories/components.test.tsx
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ActionsProvider } from "../actions/ActionDialog";
 import { ProviderBadge } from "./ProviderBadge";
 import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
@@ -10,6 +12,7 @@ import { Cell, gridTemplate, minTableWidth } from "./cells";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { ContainerState, Usage } from "../../api/types";
 import { Table } from "../../test/table";
+import { describeBody } from "../../test/describe";
 import { readFileSync } from "node:fs";
 import rowStyles from "./ResourceRowView.module.css";
 import statusStyles from "./Status.module.css";
@@ -378,7 +381,231 @@ describe("kinds in the table", () => {
 
   it("pod status keeps room for its label and container bullets", () => {
     expect(gridTemplate(PODS.columns)).toContain("minmax(180px, 1fr)");
-    expect(minTableWidth(PODS.columns)).toBe(1250);
+    expect(minTableWidth(PODS.columns)).toBe(1162);
+  });
+
+  it.each([PODS, NODES])("uses 100 px CPU and 112 px Memory tracks for $key", (kind) => {
+    expect(gridTemplate(kind.columns)).toContain("100px 112px");
+  });
+
+  it("resizes and resets all Pod data columns without triggering sort or row actions", () => {
+    layout();
+    const onSort = vi.fn();
+    const onOpenLogs = vi.fn();
+    const kind = { ...PODS, verbs: [...PODS.verbs, "delete"] };
+    render(<QueryClientProvider client={new QueryClient()}><ActionsProvider>
+      <Table territories={[terr({ rows: [pod()], total: 1 })]} kind={kind}
+        onRetry={() => {}} onSort={onSort} onOpenLogs={onOpenLogs} />
+    </ActionsProvider></QueryClientProvider>);
+    const grid = screen.getByRole("grid");
+    const template = grid.style.getPropertyValue("--cols");
+    const checkbox = screen.getByRole<HTMLInputElement>("checkbox", { name: "Select payments-api-1" });
+    fireEvent.click(checkbox);
+    const row = checkbox.closest("[role=row]")!;
+    const headerRow = screen.getByRole("columnheader", { name: "Name" }).closest("[role=row]")!;
+    expect(row.closest("[role=grid]")).toBe(grid);
+    expect(headerRow.closest("[role=grid]")).toBe(grid);
+    expect(row.children).toHaveLength(headerRow.children.length);
+    const tracks = / (?![^()]*\))/;
+    for (const [index, label] of ["Name", "Namespace", "Status", "Ready", "Restarts", "CPU", "Memory", "Node", "Age"].entries()) {
+      const handle = within(grid).getByRole("separator", { name: `Resize ${label}` });
+      const header = handle.closest("[role=columnheader]")!;
+      vi.spyOn(header, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+      act(() => handle.focus());
+      expect(handle.getAttribute("aria-valuenow")).toBe("200");
+      expect(handle.getAttribute("aria-valuemin")).toBe(label === "Memory" ? "80" : "64");
+      expect(handle.getAttribute("aria-valuemax")).toBe("800");
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+      const resized = grid.style.getPropertyValue("--cols").split(tracks);
+      expect(resized[0]).toBe("28px");
+      expect(resized[index + 1]).toBe("208px");
+      expect(checkbox.checked).toBe(true);
+      fireEvent.keyDown(handle, { key: "ArrowDown" });
+      fireEvent.keyDown(handle, { key: "l" });
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(document.activeElement).toBe(handle);
+    }
+    expect(onSort).not.toHaveBeenCalled();
+    expect(onOpenLogs).not.toHaveBeenCalled();
+    expect(grid.querySelector("[data-row-key][aria-selected=true]")).toBeNull();
+  });
+
+  it("keeps Details open when Escape cancels a drag and closes it from the idle resize handle", async () => {
+    layout();
+    const data = describeBody({
+      events: [{ type: "Normal", reason: "Scheduled", message: "Assigned to worker", count: 1, last_seen: null }],
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(data)));
+    render(<QueryClientProvider client={new QueryClient()}>
+      <Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} />
+    </QueryClientProvider>);
+    const resourceRow = screen.getByRole("grid").querySelector<HTMLElement>("[data-row-key]")!;
+    fireEvent.click(resourceRow);
+    const handle = await screen.findByRole("separator", { name: "Resize Event" });
+    vi.spyOn(handle.closest("th")!, "getBoundingClientRect").mockReturnValue({ width: 120 } as DOMRect);
+    const pointer = (type: string, clientX: number) =>
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+    const pageKeys = vi.fn((event: KeyboardEvent) => event.key);
+    document.addEventListener("keydown", pageKeys);
+    try {
+      pointer("pointerdown", 100);
+      expect(handle.getAttribute("data-resizing")).toBe("true");
+      fireEvent.keyDown(handle, { key: "Escape" });
+      expect(handle.hasAttribute("data-resizing")).toBe(false);
+      expect(resourceRow.getAttribute("aria-expanded")).toBe("true");
+      expect(pageKeys).not.toHaveBeenCalled();
+
+      pointer("pointerdown", 100);
+      pointer("pointerup", 140);
+      expect(document.activeElement).toBe(handle);
+      fireEvent.keyDown(handle, { key: "Enter" });
+      fireEvent.keyDown(handle, { key: "ArrowDown" });
+      fireEvent.keyDown(handle, { key: "ArrowLeft", altKey: true });
+      fireEvent.keyDown(handle, { key: "k", ctrlKey: true });
+      fireEvent.keyDown(handle, { key: "Escape" });
+      expect(resourceRow.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("separator", { name: "Resize Event" })).toBeNull();
+      expect(resourceRow.getAttribute("aria-selected")).toBe("true");
+      expect(pageKeys.mock.results.map(result => result.value)).toEqual(["ArrowLeft", "k", "Escape"]);
+    } finally {
+      document.removeEventListener("keydown", pageKeys);
+    }
+  });
+
+  it("coalesces CRD pointer previews, cancels lost capture and saves only on the captured release", () => {
+    layout();
+    const props = { territories: [terr()], kind: CERTIFICATES, onRetry: () => {} };
+    const { rerender } = render(<Table {...props} menuView="before" />);
+    const grid = screen.getByRole("grid");
+    const template = grid.style.getPropertyValue("--cols");
+    const handle = within(grid).getByRole("separator", { name: "Resize Ready" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect")
+      .mockReturnValue({ width: 70 } as DOMRect);
+    const save = vi.spyOn(Storage.prototype, "setItem");
+    vi.useFakeTimers();
+    const pointer = (type: string, pointerId: number, clientX: number) => {
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId }));
+    };
+    try {
+      pointer("pointerdown", 2, 100);
+      pointer("pointermove", 2, 140);
+      pointer("pointermove", 2, 150);
+      pointer("pointerup", 3, 300);
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      act(() => vi.advanceTimersToNextFrame());
+      expect(grid.style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 120px 70px");
+      expect(save).not.toHaveBeenCalled();
+      pointer("lostpointercapture", 2, 150);
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(save).not.toHaveBeenCalled();
+
+      pointer("pointerdown", 2, 100);
+      pointer("pointermove", 2, 150);
+      act(() => vi.advanceTimersToNextFrame());
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      pointer("pointerup", 2, 150);
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(save).not.toHaveBeenCalled();
+
+      pointer("pointerdown", 2, 100);
+      pointer("pointermove", 2, 150);
+      act(() => vi.advanceTimersToNextFrame());
+      rerender(<Table {...props} menuView="after" />);
+      pointer("pointerup", 2, 150);
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(save).not.toHaveBeenCalled();
+
+      pointer("pointerdown", 2, 100);
+      pointer("pointermove", 2, 135);
+      pointer("pointerup", 2, 145);
+      act(() => vi.advanceTimersToNextFrame());
+      expect(grid.style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 115px 70px");
+      expect(save).toHaveBeenCalledTimes(1);
+      fireEvent.doubleClick(handle);
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(save).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("narrows a responsive column wider than the cap from its real width without a jump", () => {
+    layout();
+    render(<Table territories={[terr()]} kind={SERVICES} onRetry={() => {}} />);
+    const grid = screen.getByRole("grid");
+    const template = grid.style.getPropertyValue("--cols");
+    const handle = within(grid).getByRole("separator", { name: "Resize Name" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect")
+      .mockReturnValue({ width: 920 } as DOMRect);
+    const save = vi.spyOn(Storage.prototype, "setItem");
+    const pointer = (type: string, clientX: number) =>
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+
+    vi.useFakeTimers();
+    try {
+      act(() => handle.focus());
+      expect(handle.getAttribute("aria-valuenow")).toBe("920");
+      expect(handle.getAttribute("aria-valuemax")).toBe("920");
+
+      pointer("pointerdown", 100);
+      pointer("pointerup", 100);
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(save).not.toHaveBeenCalled();
+
+      pointer("pointerdown", 100);
+      pointer("pointermove", 99);
+      act(() => vi.advanceTimersToNextFrame());
+      expect(grid.style.getPropertyValue("--cols")).toMatch(/^919px /);
+      pointer("pointermove", 160);
+      act(() => vi.advanceTimersToNextFrame());
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      pointer("pointermove", 60);
+      act(() => vi.advanceTimersToNextFrame());
+      expect(grid.style.getPropertyValue("--cols")).toMatch(/^880px /);
+      expect(save).not.toHaveBeenCalled();
+      pointer("pointerup", 55);
+      expect(grid.style.getPropertyValue("--cols")).toMatch(/^875px /);
+      expect(save).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(grid.style.getPropertyValue("--cols")).toMatch(/^912px /);
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Home and End on a resize handle set the column to its minimum and maximum width", () => {
+    layout();
+    render(<Table territories={[terr()]} kind={SERVICES} onRetry={() => {}} />);
+    const grid = screen.getByRole("grid");
+    const template = grid.style.getPropertyValue("--cols");
+    const handle = within(grid).getByRole("separator", { name: "Resize Name" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect")
+      .mockReturnValue({ width: 300 } as DOMRect);
+    const pageKeys = vi.fn();
+    document.addEventListener("keydown", pageKeys);
+    try {
+      act(() => handle.focus());
+      expect(handle.getAttribute("aria-keyshortcuts")).toBe("ArrowLeft ArrowRight Home End Enter");
+      expect(fireEvent.keyDown(handle, { key: "Home" })).toBe(false);
+      expect(grid.style.getPropertyValue("--cols")).toMatch(/^64px /);
+      expect(handle.getAttribute("aria-valuenow")).toBe("64");
+      expect(fireEvent.keyDown(handle, { key: "End" })).toBe(false);
+      expect(grid.style.getPropertyValue("--cols")).toMatch(/^800px /);
+      expect(handle.getAttribute("aria-valuenow")).toBe("800");
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(pageKeys).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", pageKeys);
+    }
   });
 
   it("columns follow the kind's column specs", () => {
@@ -488,7 +715,9 @@ describe("cpu and memory cells", () => {
     expect(container.querySelector("i")?.getAttribute("style")).toContain("--v: 22%");
     cleanup();
     renderCell("memory", { usage: usage(), why: null });
-    expect(screen.getByText("301 / 256 Mi")).toBeTruthy();
+    const value = screen.getByText("301 / 256 Mi");
+    expect(value.getAttribute("title")).toBe("301 / 256 Mi\n118% of its limit (256 Mi)\nMeasured over 15 s");
+    expect(value.parentElement!.className).toMatch(/compact/);
   });
 
   it("a pod without a limit measures against its request, and without either has no bar", () => {

@@ -106,7 +106,10 @@
 }
 
 .table {
-  min-width: 1040px;
+  --audit-gap: 12px;
+  --audit-start: 18px;
+  --audit-end: 14px;
+  min-width: calc(var(--audit-track-min) + 6 * var(--audit-gap) + var(--audit-start) + var(--audit-end) + 2px);
 }
 
 .head {
@@ -118,18 +121,40 @@
 
 .grid {
   display: grid;
-  grid-template-columns: 138px 56px 190px minmax(170px, 1.1fr) minmax(170px, 1.2fr) 112px minmax(240px, 2fr);
-  column-gap: 12px;
+  grid-template-columns: var(--audit-cols);
+  column-gap: var(--audit-gap);
   align-items: center;
 }
 
 .cols {
   box-sizing: border-box;
   height: 30px;
-  padding: 8px 14px 6px 18px;
+  /* Match the row's insets, including the body border. */
+  padding: 2px calc(var(--audit-end) + 1px) 0 calc(var(--audit-start) + 1px);
   color: var(--ink-3);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.column {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-inline-end: 6px;
+}
+
+.heading {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (pointer: coarse) {
+  .column {
+    padding-inline-end: 13px;
+  }
 }
 
 .body {
@@ -152,7 +177,7 @@
   position: relative;
   box-sizing: border-box;
   height: 36px;
-  padding: 0 14px 0 18px;
+  padding: 0 var(--audit-end) 0 var(--audit-start);
   overflow: hidden;
   white-space: nowrap;
   border-bottom: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
@@ -199,9 +224,14 @@
 }
 
 .where,
-.what {
+.what,
+.outcome {
   display: flex;
   align-items: center;
+}
+
+.where,
+.what {
   gap: 8px;
 }
 

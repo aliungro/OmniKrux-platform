@@ -8,7 +8,8 @@ import { Shell } from "./Shell";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 import { HOME, kindView, defaultWorkspace } from "./workspace";
 import { KINDS } from "../../test/kinds";
-import type { Cluster } from "../../api/types";
+import { describeBody, container } from "../../test/describe";
+import type { Cluster, ResourceRow } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 vi.mock("@xterm/xterm", () => ({Terminal:class {}}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon:class {}}));
@@ -18,6 +19,7 @@ function stubClusters(clusters: Cluster[]) {
  vi.stubGlobal("fetch",vi.fn((url:string)=>Promise.resolve(new Response(JSON.stringify(url.startsWith("/api/kinds")?KINDS:url==="/api/clusters"?clusters:url.startsWith("/api/audit")?{records:[],next_before:null}:url==="/api/settings"?{encryption:{source:"environment",path:null},discovery_interval_s:600}:[]),{status:200,headers:{"content-type":"application/json"}}))));
 }
 beforeEach(()=>{
+ FakeWebSocket.instances = [];
  vi.stubGlobal("WebSocket",FakeWebSocket);
  stubClusters([east]);
 });
@@ -254,6 +256,251 @@ it.each(["Kinds","Kubernetes tabs"])("modified navigation keys do not rove %s",a
  renderShell(); await screen.findByRole("tablist",{name:"Kinds"}); const target=within(screen.getByRole("tablist",{name:strip})).getByRole("tab",{selected:true});target.focus();
  for(const key of ["ArrowLeft","ArrowRight","Home","End"]) {fireEvent.keyDown(target,{key,altKey:true,ctrlKey:true}); expect(document.activeElement).toBe(target);}
  await new Promise(r=>setTimeout(r,300));expect(document.activeElement).toBe(target);
+});
+
+const pods = ["api-first", "api-second"].map((name): ResourceRow => ({
+  uid: name, cluster_id: "c1", kind: "Pod", namespace: "demo", name,
+  created_at: null, labels: {}, columns: {},
+}));
+const describeResponse = () => new Response(JSON.stringify(describeBody({ containers: [container({ name: "app" })] })));
+const logStream = (name: string) => FakeWebSocket.instances.find((socket) => socket.url.includes("/api/logs?") && socket.params.get("pod") === name)!;
+const logTab = (name: string) => screen.findByRole("tab", { name: new RegExp(`Logs.*${name}`) });
+const podRow = (name: string, root: HTMLElement = screen.getByRole("main")) =>
+  within(root).getByRole("gridcell", { name }).closest<HTMLElement>("[data-row-key]")!;
+async function renderPods(describePod: (url: string) => Promise<Response> = async () => describeResponse(), split = false) {
+  for (const key of ["clientHeight", "offsetHeight", "clientWidth", "offsetWidth"] as const) {
+    vi.spyOn(HTMLElement.prototype, key, "get").mockReturnValue(600);
+  }
+  stubClusters([east]);
+  const fetch = vi.mocked(window.fetch).getMockImplementation()!;
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe") ? describePod(url) : fetch(url)));
+  const ws = defaultWorkspace();
+  const view = kindView(HOME, "pods");
+  ws.kubernetes.tabs[0].view = view;
+  if (split) {
+    ws.kubernetes.tabs.push({ id: "other", view, back: [], forward: [], scrollTop: 0 });
+  }
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+  renderShell();
+  if (split) {
+    const tabs = within(screen.getByRole("tablist", { name: "Kubernetes tabs" }));
+    const peer = (await tabs.findAllByRole("tab", { name: /Pods/ }))[1];
+    fireEvent.contextMenu(peer);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Split side by side" }));
+  }
+  const watches = await waitFor(() => {
+    const sockets = FakeWebSocket.instances.filter((socket) => socket.params.get("kind") === "pods" && !socket.closedByClient);
+    expect(sockets).toHaveLength(1);
+    return sockets;
+  });
+  updatePods(watches, pods);
+  await waitFor(() => expect(screen.getAllByRole("gridcell", { name: pods[0].name })).toHaveLength(split ? 2 : 1));
+  return watches;
+}
+function updatePods(watches: FakeWebSocket[], rows: ResourceRow[]) {
+  act(() => {
+    for (const watch of watches) {
+      watch.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+      watch.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows });
+    }
+  });
+}
+function startAtFirstPod() {
+  const main = screen.getByRole("main");
+  main.focus();
+  fireEvent.keyDown(main, { key: "ArrowDown" });
+  const first = podRow(pods[0].name);
+  expect(document.activeElement).toBe(first);
+  return first;
+}
+
+it("moves from a pod to its exact log tab and returns for the next ArrowDown", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  const firstTab = await logTab(pods[0].name);
+  expect(document.activeElement).toBe(firstTab);
+  fireEvent.keyDown(firstTab, { key: "Escape" });
+  await waitFor(() => expect(document.activeElement).toBe(first));
+  expect(logStream(pods[0].name).closedByClient).toBe(true);
+  fireEvent.keyDown(first, { key: "ArrowDown" });
+  const second = podRow(pods[1].name);
+  expect(document.activeElement).toBe(second);
+  fireEvent.keyDown(second, { key: "l" });
+  const secondTab = await logTab(pods[1].name);
+  expect(document.activeElement).toBe(secondTab);
+  fireEvent.keyDown(secondTab, { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(document.activeElement).toBe(second));
+  expect(logStream(pods[1].name).closedByClient).toBe(false);
+});
+
+it("reopens the same Previous log by focusing its committed tab", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "p" });
+  const previous = await screen.findByRole("tab", { name: /Logs Previous.*api-first/ });
+  expect(document.activeElement).toBe(previous);
+  fireEvent.keyDown(previous, { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(document.activeElement).toBe(first));
+  const wrapper = previous.parentElement!;
+  const strip = within(screen.getByRole("region", { name: "Logs and shells" })).getByRole("tablist");
+  Object.defineProperty(strip, "clientHeight", { value: 102 });
+  vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 34, 600, 102));
+  vi.spyOn(wrapper, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 34));
+  strip.scrollTop = 34;
+  fireEvent.keyDown(first, { key: "p" });
+  await waitFor(() => expect(document.activeElement).toBe(previous));
+  expect(strip.scrollTop).toBe(0);
+  expect(screen.getAllByRole("tab", { name: /Logs Previous/ })).toHaveLength(1);
+});
+
+it("opens a superseded describe in the background and keeps the newer tab focused", async () => {
+  let finish!: (response: Response) => void;
+  await renderPods((url) => url.includes(pods[0].name) ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(describeResponse()));
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  fireEvent.keyDown(first, { key: "ArrowDown" });
+  fireEvent.keyDown(podRow(pods[1].name), { key: "l" });
+  const secondTab = await logTab(pods[1].name);
+  expect(document.activeElement).toBe(secondTab);
+  await act(async () => finish(describeResponse()));
+  await logTab(pods[0].name);
+  expect(document.activeElement).toBe(secondTab);
+});
+
+it("drops the keyboard handoff if focus leaves and comes back during a slow describe", async () => {
+  let finish!: (response: Response) => void;
+  await renderPods(() => new Promise((resolve) => { finish = resolve; }));
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  screen.getByRole("main").focus();
+  first.focus();
+  await act(async () => finish(describeResponse()));
+  await logTab(pods[0].name);
+  expect(document.activeElement).toBe(first);
+});
+
+it("selects a keyboard-opened log behind another tab when focus moved away during a slow describe", async () => {
+  let finish!: (response: Response) => void;
+  await renderPods((url) => url.includes(pods[0].name) ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(describeResponse()));
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "ArrowDown" });
+  const second = podRow(pods[1].name);
+  fireEvent.keyDown(second, { key: "l" });
+  const secondTab = await logTab(pods[1].name);
+  fireEvent.keyDown(secondTab, { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(document.activeElement).toBe(second));
+  fireEvent.keyDown(second, { key: "ArrowUp" });
+  expect(document.activeElement).toBe(first);
+  fireEvent.keyDown(first, { key: "l" });
+  fireEvent.keyDown(first, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(second);
+  await act(async () => finish(describeResponse()));
+  const firstTab = await logTab(pods[0].name);
+  await waitFor(() => expect(firstTab.getAttribute("aria-selected")).toBe("true"));
+  expect(secondTab.getAttribute("aria-selected")).toBe("false");
+  expect(document.activeElement).toBe(second);
+});
+
+it("selects an already open log again on L when focus moved away before it resolved", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  const firstTab = await logTab(pods[0].name);
+  fireEvent.keyDown(firstTab, { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(document.activeElement).toBe(first));
+  fireEvent.keyDown(first, { key: "ArrowDown" });
+  const second = podRow(pods[1].name);
+  fireEvent.keyDown(second, { key: "l" });
+  const secondTab = await logTab(pods[1].name);
+  fireEvent.keyDown(secondTab, { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(document.activeElement).toBe(second));
+  fireEvent.keyDown(second, { key: "ArrowUp" });
+  expect(document.activeElement).toBe(first);
+  fireEvent.keyDown(first, { key: "l" });
+  fireEvent.keyDown(first, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(second);
+  await waitFor(() => expect(firstTab.getAttribute("aria-selected")).toBe("true"));
+  expect(screen.getAllByRole("tab", { name: new RegExp(`Logs.*${pods[0].name}`) })).toHaveLength(1);
+  expect(document.activeElement).toBe(second);
+});
+
+it("returns to the main view when the opening row is removed and another pod remains", async () => {
+  const watches = await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  updatePods(watches, pods.slice(1));
+  await waitFor(() => expect(first.isConnected).toBe(false));
+  expect(podRow(pods[1].name).isConnected).toBe(true);
+  fireEvent.keyDown(tab, { key: "Escape" });
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("main")));
+});
+
+it("returns to the selected pod in the active split workspace", async () => {
+  await renderPods(undefined, true);
+  const [left, right] = Array.from(screen.getByRole("main").querySelectorAll<HTMLElement>("[data-active-pane]"));
+  const leftFirst = podRow(pods[0].name, left);
+  leftFirst.focus();
+  fireEvent.keyDown(leftFirst, { key: "ArrowDown" });
+  const rightFirst = podRow(pods[0].name, right);
+  rightFirst.focus();
+  fireEvent.keyDown(rightFirst, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  expect(document.activeElement).toBe(tab);
+  fireEvent.keyDown(tab, { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(document.activeElement).toBe(rightFirst));
+  expect(podRow(pods[1].name, left).getAttribute("aria-selected")).toBe("true");
+  expect(rightFirst.getAttribute("aria-selected")).toBe("true");
+});
+
+it.each(["Audit log", "Settings"])("leaves the shared dock for the active %s view", async (app) => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  fireEvent.click(screen.getByRole("button", { name: app }));
+  const main = screen.getByRole("main");
+  await waitFor(() => expect(document.activeElement).toBe(main));
+  tab.focus();
+  fireEvent.keyDown(tab, { key: "ArrowUp", altKey: true });
+  await waitFor(() => expect(document.activeElement).toBe(main));
+  expect(logStream(pods[0].name).closedByClient).toBe(false);
+});
+
+it("lists the dock's close and return shortcuts in help", () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "?" });
+  const help = within(screen.getByRole("dialog", { name: "All shortcuts" }));
+  expect(help.getByText("Close the focused log")).toBeTruthy();
+  expect(help.getByText("Return to the workspace")).toBeTruthy();
+});
+
+it("does not close an open pod inspector on a repeated Escape after returning", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "Enter" });
+  const inspector = screen.getByRole("region", { name: /^Details for/ });
+  first.focus();
+  fireEvent.keyDown(first, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  expect(document.activeElement).toBe(tab);
+  fireEvent.keyDown(tab, { key: "Escape" });
+  await waitFor(() => expect(document.activeElement).toBe(first));
+  fireEvent.keyDown(first, { key: "Escape", repeat: true });
+  expect(inspector.isConnected).toBe(true);
+});
+
+it("does not pull focus back from a workspace control after a deferred return", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  fireEvent.keyDown(tab, { key: "ArrowUp", altKey: true });
+  const filter = screen.getByRole("textbox", { name: /Filter by name/ });
+  filter.focus();
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(document.activeElement).toBe(filter);
 });
 
 it("existing settings route shows global cloud sections and retains pinned kinds and browser notices", async () => {

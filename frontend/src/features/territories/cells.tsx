@@ -3,6 +3,7 @@ import type { Live } from "../../api/useMetrics";
 import { formatCpu, formatMemory, formatWindow, fraction, HOT_AT } from "../metrics/format";
 import { usageBasis } from "../metrics/basis";
 import { Meter } from "../metrics/Meter";
+import { validWidth } from "../tables/columnWidths";
 import { LinkButton, useGoTo } from "../navigation/navigation";
 import { formatAge, formatAgo, statusClass, textColumn, titleColumn } from "./model";
 import { Status } from "./Status";
@@ -11,33 +12,45 @@ import s from "./ResourceRowView.module.css";
 
 export const UNKNOWN = "—";
 
-const isMeter = (c: ColumnSpec) => c.type === "cpu" || c.type === "memory";
-/** A 60 px bar, its gap and a text like "301 / 256 Mi". */
-const METER_WIDTH = "minmax(150px, 1fr)";
+export function columnMinWidth(col: ColumnSpec): number {
+  return col.type === "memory" ? 80 : 64;
+}
+
+function fixedWidth(col: ColumnSpec, widths?: ReadonlyMap<string, number>): number | undefined {
+  const custom = widths?.get(col.key);
+  if (validWidth(custom)) {
+    return Math.max(columnMinWidth(col), custom);
+  }
+  if (col.type === "cpu") return 100;
+  if (col.type === "memory") return 112;
+  return undefined;
+}
 
 /** One grid template for the header and every row, from the columns' widths. */
-export function gridTemplate(columns: readonly ColumnSpec[], titleKey: string = "name"): string {
+export function gridTemplate(columns: readonly ColumnSpec[], titleKey: string = "name", widths?: ReadonlyMap<string, number>): string {
   // The built-in pod schema has restarts; other kinds keep their existing status width.
   const podColumns = columns.some((c) => c.key === "restarts");
   return columns
     .map((c) => {
+      const fixed = fixedWidth(c, widths);
+      if (fixed !== undefined) return `${fixed}px`;
       if (c.key === titleKey) return "minmax(200px, 2fr)";
       if (c.key === "name") return "1fr";
       if (podColumns && c.key === "status") return "minmax(180px, 1fr)";
-      if (isMeter(c)) return METER_WIDTH;
       return c.width === "s" ? "70px" : c.width === "l" ? "2fr" : "1fr";
     })
     .join(" ");
 }
 
 /** Wide enough that every column keeps a readable share; the table scrolls sideways below it. */
-export function minTableWidth(columns: readonly ColumnSpec[], titleKey: string = "name"): number {
+export function minTableWidth(columns: readonly ColumnSpec[], titleKey: string = "name", widths?: ReadonlyMap<string, number>): number {
   const podColumns = columns.some((c) => c.key === "restarts");
   const cols = columns.reduce((w, c) => {
+    const fixed = fixedWidth(c, widths);
+    if (fixed !== undefined) return w + fixed;
     if (c.key === titleKey) return w + 200;
     if (c.key === "name") return w + 100;
     if (podColumns && c.key === "status") return w + 180;
-    if (isMeter(c)) return w + 150;
     return w + (c.width === "s" ? 70 : c.width === "l" ? 180 : 100);
   }, 0);
   // Column gaps, the row's own padding and the table's.
@@ -201,5 +214,5 @@ function UsageMeter({ col, row, live, nodeSize, nowMs }: { col: ColumnSpec; row:
   const measured = u.stale
     ? `Measured ${formatAge(u.at, new Date(nowMs))} ago; metrics-server has nothing newer.`
     : `Measured over ${formatWindow(u.window_s)}`;
-  return <Meter text={text} frac={frac} hot={basis !== null && basis.basis !== "request" && frac !== null && frac >= HOT_AT} stale={u.stale} title={`${comparison}\n${measured}`} />;
+  return <Meter compact text={text} frac={frac} hot={basis !== null && basis.basis !== "request" && frac !== null && frac >= HOT_AT} stale={u.stale} title={`${comparison}\n${measured}`} />;
 }

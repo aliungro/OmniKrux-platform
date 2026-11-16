@@ -37,6 +37,8 @@ export type ShortcutId =
   | "previousMatch"
   | "jumpLive"
   | "layout"
+  | "closeLog"
+  | "leaveLogs"
   | "sessionTabs";
 
 export interface Shortcut {
@@ -108,6 +110,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "previousMatch", scope: "logs", keys: ["Shift", "Enter"], label: "Previous match" },
   { id: "jumpLive", scope: "logs", keys: ["G"], match: ["G"], label: "Jump to live" },
   // In the dock.
+  { id: "closeLog", scope: "dock", keys: ["Esc"], match: ["Escape"], label: "Close the focused log" },
+  { id: "leaveLogs", scope: "dock", keys: ["Alt ↑"], match: ["ArrowUp"], alt: true, label: "Return to the workspace" },
   { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch the bottom dock between one pane and side by side" },
   { id: "sessionTabs", scope: "dock", keys: ["←", "→"], label: "Move between open logs and shells (bottom dock)" },
 ];

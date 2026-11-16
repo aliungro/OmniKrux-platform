@@ -1,11 +1,12 @@
-import { memo, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { pressed } from "../chrome/shortcuts";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
+import { inTerminal, pressed } from "../chrome/shortcuts";
 import { LogPane } from "../logs/LogPane";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   MAX_SHARE,
   MIN_HEIGHT,
   clampHeight,
+  dockReducer,
   saveHeight,
   toLogSession,
   toShellSession,
@@ -13,7 +14,7 @@ import {
   type Session,
 } from "./dockState";
 import { LazyShellPane } from "./lazyShell";
-import { SessionTabs, panelId, tabId } from "./SessionTabs";
+import { SessionTabs, panelId, revealSessionTab, tabId } from "./SessionTabs";
 import { ShellContainerDialog } from "./ShellContainerDialog";
 import type { DockApi } from "./useDock";
 import s from "./Dock.module.css";
@@ -83,8 +84,8 @@ function Grip({ height, minimum, max, onResize }: { height: number; minimum: num
  * cluster. Sessions stay connected while their tab is in the background. Memoized: `useDock`'s API
  * object changes only with the dock's own state, so watch updates to the table don't re-render it.
  */
-export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
-  const { state, dispatch, ask, shellChoice } = dock;
+export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockApi; onFocusWorkspace: () => void }) {
+  const { state, dispatch, ask, shellChoice, keyboardFocus, claimKeyboardFocus } = dock;
   const base = useId();
   const [viewport, setViewport] = useState(() => ({ height: window.innerHeight, width: window.innerWidth }));
   const [autofocusSuppressedTab, setAutofocusSuppressedTab] = useState<string | null>(null);
@@ -118,6 +119,41 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
     return () => window.clearTimeout(t);
   }, [state.height]);
 
+  useLayoutEffect(() => {
+    if (!keyboardFocus) return;
+    const focused = state.sessions.find((session) => session.id === state.focused);
+    const tab = focused?.kind === "logs" ? document.getElementById(tabId(base, focused.id)) : null;
+    if (claimKeyboardFocus(keyboardFocus) && tab) {
+      revealSessionTab(tab);
+      tab.focus({ preventScroll: true });
+    }
+  }, [base, claimKeyboardFocus, keyboardFocus, state.focused, state.sessions]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    const close = !e.shiftKey && pressed("closeLog", e);
+    if (!close && !pressed("leaveLogs", e)) return;
+    const target = e.target;
+    if (e.defaultPrevented || e.nativeEvent.isComposing || !(target instanceof Element) ||
+        target !== document.activeElement || inTerminal(target) || target.closest("select, dialog, [role='dialog'], [role='alertdialog']") ||
+        document.querySelector('[aria-modal="true"]')) return;
+    const owner = target.closest<HTMLElement>("[data-dock-session]");
+    const session = state.sessions.find((x) => x.id === owner?.dataset.dockSession);
+    if (session?.kind !== "logs") return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.repeat) return;
+    onFocusWorkspace();
+    if (!close) return;
+    const action = { type: "close", id: session.id } as const;
+    const afterClose = dockReducer(state, action);
+    const survivor = afterClose.sessions.find((x) => x.id === afterClose.focused);
+    if (survivor?.kind === "shell" && survivor.id !== state.focused) {
+      setAutofocusSuppressedTab(tabId(base, survivor.id));
+    }
+    dispatch(action);
+  };
+
   const dialog = ask
     ? <ConfirmDialog ask={ask} onConfirm={dock.confirm} onCancel={dock.cancel} />
     : shellChoice && <ShellContainerDialog choice={shellChoice} onCancel={dock.cancel} />;
@@ -148,6 +184,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
       style={{ height, "--dock-pane-min": `${minimum - STRIP_MIN}px` } as CSSProperties}
       aria-label="Logs and shells"
       data-page-keys="off"
+      onKeyDown={onKeyDown}
       onFocusCapture={(e) => {
         const tab = (e.target as HTMLElement).closest('[role="tab"]');
         // Tab navigation suppresses this session's autofocus; new sessions can still activate.
@@ -174,6 +211,7 @@ export const Dock = memo(function Dock({ dock }: { dock: DockApi }) {
             role="tabpanel"
             id={panelId(base, x.id)}
             aria-labelledby={tabId(base, x.id)}
+            data-dock-session={x.id}
             hidden={!visible.includes(x)}
             data-first-pane={split && x === visible[0] ? "true" : undefined}
             className={s.panel}

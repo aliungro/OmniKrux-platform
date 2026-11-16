@@ -295,7 +295,11 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
   };
 
   const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
+    if (query && !e.shiftKey && !e.nativeEvent.isComposing && pressed("closeLog", e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) changeQuery("");
+    } else if (e.key === "Enter") {
       e.preventDefault();
       goToMatch(e.shiftKey ? -1 : 1);
     }

@@ -26,6 +26,27 @@
   background: var(--ink-3);
 }
 
+.compact {
+  gap: 4px;
+}
+
+.compact i {
+  flex: 0 1 24px;
+  min-width: 0;
+}
+
+.compact span {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact i + span {
+  max-width: calc(100% - 4px);
+}
+
 .hot,
 .hot i::after {
   color: var(--bad);

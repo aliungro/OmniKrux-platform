@@ -271,7 +271,7 @@ export function DescribeView({ data, onNodeShell, onOwnerLogs, onLink }: { data:
       </section>
       <section className={s.col} aria-label="Events">
         <h5 className={s.h}>Events</h5>
-        <EventsTable events={data.events} error={data.events_error} />
+        <EventsTable events={data.events} error={data.events_error} view={JSON.stringify([data.pod.namespace, data.pod.name])} />
       </section>
     </div>
   );

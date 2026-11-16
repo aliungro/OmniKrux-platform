@@ -27,6 +27,7 @@ import { Inspector, type WorkloadLogs } from "../inspector/Inspector";
 import type { ToolIntent } from "../inspector/Tools";
 import { flatten, kindTitle, rowKey, type RowRef, type Selection, type Territory } from "./model";
 import { gridTemplate, minTableWidth } from "./cells";
+import { useColumnWidths } from "../tables/columnWidths";
 import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
 import { SelectionCheckbox } from "./SelectionCheckbox";
@@ -64,7 +65,7 @@ export interface TerritoryTableProps {
   /** Live CPU and memory per row (pods and nodes); null for kinds without them. */
   metrics?: MetricsLookup | null;
   /** `previous`: the run before the last restart (the `p` key). */
-  onOpenLogs?: (row: ResourceRow, previous?: boolean) => void;
+  onOpenLogs?: (row: ResourceRow, previous?: boolean, keyboardOrigin?: HTMLElement) => void;
   onOpenShell?: (row: ResourceRow) => void;
   onNodeShell?: (row: ResourceRow, node: string) => void;
   onOwnerLogs?: (row: ResourceRow, owner: OwnerRef) => void;
@@ -260,7 +261,7 @@ export const TerritoryTable = memo(function TerritoryTable({
    * Runs what a row's key means (or the palette asked for): the details, the dock's logs and
    * shells, or, through the details, the YAML tab and the change tools, each reviewed first.
    */
-  const act = (row: ResourceRow, action: RowAction, from: "key" | "menu" | "palette") => {
+  const act = (row: ResourceRow, action: RowAction, from: "key" | "menu" | "palette", keyboardOrigin?: HTMLElement) => {
     const ref = { clusterId: row.cluster_id, uid: row.uid };
     switch (action) {
       case "details":
@@ -270,7 +271,8 @@ export const TerritoryTable = memo(function TerritoryTable({
       case "logs":
       case "previousLogs":
         select(row);
-        onOpenLogs?.(row, action === "previousLogs");
+        if (keyboardOrigin) onOpenLogs?.(row, action === "previousLogs", keyboardOrigin);
+        else onOpenLogs?.(row, action === "previousLogs");
         return;
       case "shell":
         select(row);
@@ -356,7 +358,7 @@ export const TerritoryTable = memo(function TerritoryTable({
     if (pressed("close", e)) {
       if (!open) return;
       e.preventDefault();
-      close();
+      if (!e.repeat) close();
       return;
     }
     if (at === undefined) return;
@@ -367,6 +369,8 @@ export const TerritoryTable = memo(function TerritoryTable({
     const id = rowShortcut(e, kind.key, rowActions(kind.key, verbsFor(kind, it.row), it.row, can));
     if (id === undefined) return;
     e.preventDefault();
+    // Holding a log shortcut or reveal must perform the action only once.
+    if (e.repeat && (id === "logs" || id === "previousLogs" || id === "reveal")) return;
     if (fromPage) {
       const key = rowKey(it.row.cluster_id, it.row.uid);
       const el = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])
@@ -377,8 +381,6 @@ export const TerritoryTable = memo(function TerritoryTable({
         virtualizer.scrollToIndex(at, { align: "auto" });
       }
     }
-    // A held `x` must not walk on into the secret's keys and reveal one (audited) by itself.
-    if (id === "reveal" && e.repeat) return;
     if (id === "move") {
       const step = e.key === "ArrowDown" ? 1 : -1;
       let i = at + step;
@@ -391,7 +393,9 @@ export const TerritoryTable = memo(function TerritoryTable({
       scrollAlign.current = "auto";
       return;
     }
-    act(it.row, id as RowAction, "key");
+    const active = document.activeElement;
+    const keyboardOrigin = (id === "logs" || id === "previousLogs") && active instanceof HTMLElement ? active : undefined;
+    act(it.row, id as RowAction, "key", keyboardOrigin);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -489,15 +493,40 @@ export const TerritoryTable = memo(function TerritoryTable({
   const tabKey = selectedKey !== null && indexByKey.has(selectedKey) ? selectedKey : indexByKey.keys().next().value;
   const margin = virtualizer.options.scrollMargin;
   const columns = kind.columns;
+  const { widths, commitWidth } = useColumnWidths(`resource:${kind.key}`);
   const columnCount = columns.length + Number(showCheckboxes);
   const titleKey = kind.key === "helm-releases" ? "release" : "name";
-  const tableStyle = useMemo(
-    () => ({
-      "--cols": `${showCheckboxes ? `${CHECKBOX_WIDTH}px ` : ""}${gridTemplate(columns, titleKey)}`,
-      minWidth: minTableWidth(columns, titleKey) + (showCheckboxes ? CHECKBOX_WIDTH + 12 : 0),
-    }) as CSSProperties,
-    [columns, titleKey, showCheckboxes],
-  );
+  const layoutFor = useCallback((w: ReadonlyMap<string, number>) => ({
+    cols: `${showCheckboxes ? `${CHECKBOX_WIDTH}px ` : ""}${gridTemplate(columns, titleKey, w)}`,
+    minWidth: minTableWidth(columns, titleKey, w) + (showCheckboxes ? CHECKBOX_WIDTH + 12 : 0),
+  }), [columns, titleKey, showCheckboxes]);
+  const tableStyle = useMemo(() => {
+    const { cols, minWidth } = layoutFor(widths);
+    return { "--cols": cols, minWidth } as CSSProperties;
+  }, [layoutFor, widths]);
+  // A column drag previews by writing the grid's template directly. A React pass per frame would
+  // render every visible row again; the saved width goes through state once, on release.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const previewWidths = useRef(new Map<string, number>());
+  const applyPreview = useCallback(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const preview = previewWidths.current;
+    const { cols, minWidth } = layoutFor(preview.size === 0 ? widths : new Map([...widths, ...preview]));
+    grid.style.setProperty("--cols", cols);
+    grid.style.minWidth = `${minWidth}px`;
+  }, [layoutFor, widths]);
+  const latestApply = useRef(applyPreview);
+  useLayoutEffect(() => {
+    latestApply.current = applyPreview;
+    // React has just written the saved template; keep a drag in progress on top of it.
+    if (previewWidths.current.size > 0) applyPreview();
+  }, [applyPreview]);
+  const previewColumn = useCallback((key: string, width: number | null) => {
+    if (width === null) previewWidths.current.delete(key);
+    else previewWidths.current.set(key, width);
+    latestApply.current();
+  }, []);
 
   const table = (
     <div ref={scrollRef} className={s.scroll} tabIndex={-1} onKeyDown={onKeyDown} onContextMenu={onContextMenu}
@@ -515,6 +544,7 @@ export const TerritoryTable = memo(function TerritoryTable({
         }
       }}>
       <div
+        ref={gridRef}
         role="grid"
         aria-label={`${kindTitle(kind)} by cluster`}
         aria-rowcount={items.length + 1}
@@ -529,7 +559,11 @@ export const TerritoryTable = memo(function TerritoryTable({
                 title={deletableRows.size > MAX_DELETE_SELECTION ? `Filter to ${MAX_DELETE_SELECTION} or fewer resources to select all` : undefined}
                 onChange={() => setMarked(allChecked ? new Set() : new Set(deletableRows.keys()))} />
             </span>}
-            {columns.map((c) => <ColumnHeader key={c.key} col={c} filter={columnFilters.find(f => f.key === c.key)} sort={sort} source={pickSource} onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} />)}
+            {columns.map((c) => <ColumnHeader key={`${kind.key}:${c.key}`} col={c}
+              filter={columnFilters.find(f => f.key === c.key)} sort={sort} source={pickSource}
+              onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} resizeView={menuView}
+              onPreviewWidth={width => previewColumn(c.key, width)}
+              onCommitWidth={width => commitWidth(c.key, width)} />)}
           </div>
         </div>
         <div role="rowgroup" className={s.body} style={{ height: virtualizer.getTotalSize() }}>

@@ -1,0 +1,12 @@
+.scroll {
+  min-inline-size: 0;
+  overflow-x: auto;
+  /* Keep the last handle's overhang inside the scroll surface. */
+  padding-inline-end: 11px;
+}
+
+.scroll th {
+  position: relative;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}

@@ -201,7 +201,7 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
         <Loaded q={describe}>
           {(d) => (
             <div className={s.events}>
-              <EventsTable events={d.events} error={d.events_error} />
+              <EventsTable events={d.events} error={d.events_error} view={JSON.stringify([row.cluster_id, row.uid])} />
             </div>
           )}
         </Loaded>
@@ -281,7 +281,7 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
         <Loaded q={describe}>
           {(d) => (
             <div className={s.events}>
-              <EventsTable events={d.events} error={d.events_error} />
+              <EventsTable events={d.events} error={d.events_error} view={JSON.stringify([row.cluster_id, row.uid])} />
             </div>
           )}
         </Loaded>

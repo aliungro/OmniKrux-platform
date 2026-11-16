@@ -1,10 +1,12 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import type { AuditRecord } from "../../api/types";
 import { useClusters } from "../../api/useClusters";
 import { useNow } from "../../hooks/useNow";
+import { ColumnResizeHandle } from "../tables/ColumnResizeHandle";
+import { MAX_COLUMN_WIDTH, useColumnWidths } from "../tables/columnWidths";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { Status } from "../territories/Status";
 import { formatAgo } from "../territories/model";
@@ -20,6 +22,16 @@ const SEARCH_DEBOUNCE_MS = 300;
 /** A diff longer than this shows its first lines; a whole-file edit would otherwise fill the page. */
 const MAX_DIFF_LINES = 1500;
 
+const COLUMNS = [
+  { key: "when", label: "When", base: 138, min: 64 },
+  { key: "who", label: "Who", base: 56, min: 48 },
+  { key: "action", label: "Action", base: 190, min: 64 },
+  { key: "where", label: "Where", base: 170, min: 64, flex: 1.1 },
+  { key: "what", label: "What", base: 170, min: 64, flex: 1.2 },
+  { key: "outcome", label: "Outcome", base: 112, min: 64 },
+  { key: "message", label: "Message", base: 240, min: 64, flex: 2 },
+];
+
 type Item = { type: "row"; record: AuditRecord } | { type: "detail"; record: AuditRecord };
 
 const TIME = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -29,6 +41,26 @@ function localTime(at: string | null, format: Intl.DateTimeFormat): string {
   if (!at) return "—";
   const d = new Date(at);
   return Number.isNaN(d.getTime()) ? "—" : format.format(d);
+}
+
+function AuditColumnHeader({ column, previewWidth, commitWidth }: {
+  column: (typeof COLUMNS)[number];
+} & Pick<ReturnType<typeof useColumnWidths>, "previewWidth" | "commitWidth">) {
+  const header = useRef<HTMLSpanElement>(null);
+  const readWidth = useCallback(() => header.current?.getBoundingClientRect().width ?? column.base, [column.base]);
+  return (
+    <span ref={header} role="columnheader" aria-label={column.label} className={s.column}>
+      <span className={s.heading} title={column.label}>{column.label}</span>
+      <ColumnResizeHandle
+        label={column.label}
+        minWidth={column.min}
+        maxWidth={MAX_COLUMN_WIDTH}
+        readWidth={readWidth}
+        onPreview={width => previewWidth(column.key, width)}
+        onCommit={width => commitWidth(column.key, width)}
+      />
+    </span>
+  );
 }
 
 const AuditRow = memo(function AuditRow({
@@ -73,7 +105,7 @@ const AuditRow = memo(function AuditRow({
         {what.kind && <span className={s.kind}>{what.kind}</span>}
         <span className={s.ellipsis}>{what.name}</span>
       </span>
-      <span role="gridcell" className={s.cell}>
+      <span role="gridcell" className={`${s.cell} ${s.outcome}`} title={outcome.label}>
         <Status label={outcome.label} cls={outcome.cls} />
       </span>
       <span role="gridcell" className={`${s.cell} ${s.message}`} title={message || undefined}>{message}</span>
@@ -124,6 +156,17 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
   const client = useQueryClient();
   useEffect(() => { void client.resetQueries({queryKey:["audit"]}); }, [client]);
   const query = useAudit(filters);
+  const { widths, previewWidth, commitWidth } = useColumnWidths("audit");
+  const tableStyle = useMemo(() => {
+    let trackMin = 0;
+    const tracks = COLUMNS.map(({ key, base, min, flex }) => {
+      const saved = widths.get(key);
+      const width = saved === undefined ? base : Math.max(min, saved);
+      trackMin += width;
+      return saved === undefined && flex !== undefined ? `minmax(${width}px, ${flex}fr)` : `${width}px`;
+    });
+    return { "--audit-cols": tracks.join(" "), "--audit-track-min": `${trackMin}px` } as CSSProperties;
+  }, [widths]);
   const now = useNow(60_000);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [focusId, setFocusId] = useState<number | null>(null);
@@ -218,11 +261,11 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
   } else {
     body = (
       <div ref={scrollRef} className={s.scroll} onKeyDown={onKeyDown}>
-        <div role="grid" aria-label="Audit log" aria-rowcount={records.length + 1} className={s.table}>
+        <div role="grid" aria-label="Audit log" aria-rowcount={records.length + 1} className={s.table} style={tableStyle}>
           <div role="rowgroup" className={s.head}>
             <div role="row" aria-rowindex={1} className={`${s.grid} ${s.cols}`}>
-              {["When", "Who", "Action", "Where", "What", "Outcome", "Message"].map((c) => (
-                <span key={c} role="columnheader">{c}</span>
+              {COLUMNS.map(column => (
+                <AuditColumnHeader key={column.key} column={column} previewWidth={previewWidth} commitWidth={commitWidth} />
               ))}
             </div>
           </div>

@@ -1,8 +1,10 @@
+import { useRef } from "react";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
+import { clusterLifecycle } from "../../api/clusterLifecycle";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { container, describeBody } from "../../test/describe";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
@@ -67,17 +69,18 @@ function json(body: unknown, status = 200) {
 let dock: DockApi;
 function Harness() {
   dock = useDock([aks, eks]);
+  const workspace = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button type="button" onClick={() => dock.askNodeShell("c1", "aks-np1-03")}>node shell</button>
-      <Dock dock={dock} />
+      <button ref={workspace} type="button" onClick={() => dock.askNodeShell("c1", "aks-np1-03")}>node shell</button>
+      <Dock dock={dock} onFocusWorkspace={() => workspace.current?.focus()} />
     </>
   );
 }
 
 function renderDock() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>);
+  return { ...render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>), client };
 }
 
 const open = (s: Session) => act(() => dock.dispatch({ type: "open", session: s }));
@@ -117,6 +120,27 @@ describe("Dock", () => {
     renderDock();
     expect(screen.getByText("Open logs (l) or a shell (s) from a pod")).toBeTruthy();
     expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
+  it("keeps keyboard focus in the workspace when its requested log tab is removed in the opening batch", async () => {
+    const { client } = renderDock();
+    const survivor = shell("survivor", { kind: "logs", cluster: eks, pod: "redis-0" });
+    open(survivor);
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    const origin = screen.getByRole("button", { name: "node shell" });
+    origin.focus();
+    act(() => dock.openPod(demoPod, "logs", { keyboardOrigin: origin }));
+
+    await act(async () => {
+      finish(await json(twoContainers));
+      // Let the describe enqueue the open and keyboard handoff before React commits this batch.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      clusterLifecycle(client).remove(aks.id);
+    });
+
+    expect(screen.getAllByRole("tab")).toEqual([screen.getByRole("tab", { name: /redis-0/, selected: true })]);
+    expect(document.activeElement).toBe(origin);
   });
 
   it("switching tabs switches the visible identity", async () => {
@@ -202,12 +226,22 @@ describe("Dock", () => {
     expect(dock.state.layout).toBe("split");
   });
 
+  it("shows a compact, named layout icon with the dock shortcut in its tooltip", async () => {
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    const toggle = screen.getByRole("button", { name: "Side by side" });
+    expect(toggle.getAttribute("title")).toBe("Side by side (Ctrl+\\)");
+    expect(toggle.textContent).toBe("");
+    expect(toggle.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("side by side is disabled with one session and says why", async () => {
     renderDock();
     await openShell(shell("a"));
     const toggle = screen.getByRole("button", { name: /side by side/i });
     expect(toggle.getAttribute("aria-disabled")).toBe("true");
-    expect(toggle.getAttribute("title")).toBe("Open a second log or shell to see two side by side.");
+    expect(toggle.getAttribute("title")).toBe("Side by side (Ctrl+\\). Open a second log or shell to use it.");
     toggle.focus();
     expect(document.activeElement).toBe(toggle);
     fireEvent.click(toggle);
@@ -695,4 +729,93 @@ describe("Dock", () => {
     expect(shellTab.getAttribute("aria-selected")).toBe("false");
     expect(shown()).toHaveLength(2);
   });
+});
+
+function openKeyboardTestLog(id: string) {
+  open(shell(id, { kind: "logs", pod: id, containers: ["app", "sidecar"] }));
+  return screen.getByRole("tab", { name: new RegExp(`^Logs: .* / ${id} \\(`) });
+}
+
+it("closes only the focused split peer and returns focus to the workspace", () => {
+  renderDock();
+  openKeyboardTestLog("first");
+  openKeyboardTestLog("second");
+  fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
+  const peer = within(shown()[0]).getByRole("log");
+  peer.focus();
+  expect(fireEvent.keyDown(peer, { key: "Escape" })).toBe(false);
+  expect(screen.queryByRole("tab", { name: /first/ })).toBeNull();
+  expect(FakeWebSocket.instances[0].closedByClient).toBe(true);
+  expect(FakeWebSocket.instances[1].closedByClient).toBe(false);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "node shell" }));
+});
+
+it.each(["log", "searchbox"])("Alt+Up leaves a live stream from %s", (role) => {
+  renderDock();
+  openKeyboardTestLog("api");
+  const control = screen.getByRole(role);
+  control.focus();
+  expect(fireEvent.keyDown(control, { key: "ArrowUp", altKey: true })).toBe(false);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "node shell" }));
+  expect(FakeWebSocket.last.closedByClient).toBe(false);
+});
+
+it("holds Escape on an empty search after the first press clears it", () => {
+  renderDock();
+  openKeyboardTestLog("api");
+  const search = screen.getByRole<HTMLInputElement>("searchbox");
+  search.focus();
+  fireEvent.change(search, { target: { value: "failure" } });
+  fireEvent.keyDown(search, { key: "Escape" });
+  expect(search.value).toBe("");
+  expect(fireEvent.keyDown(search, { key: "Escape", repeat: true })).toBe(false);
+  expect(FakeWebSocket.last.closedByClient).toBe(false);
+  fireEvent.keyDown(search, { key: "Escape" });
+  expect(FakeWebSocket.last.closedByClient).toBe(true);
+});
+
+it("keeps Escape and Alt+Up out of the native container picker, composition, and modal", () => {
+  renderDock();
+  const tab = openKeyboardTestLog("api");
+  const picker = screen.getByRole("combobox", { name: "Container" });
+  picker.focus();
+  expect(fireEvent.keyDown(picker, { key: "Escape" })).toBe(true);
+  expect(fireEvent.keyDown(picker, { key: "ArrowUp", altKey: true })).toBe(true);
+  tab.focus();
+  expect(fireEvent.keyDown(tab, { key: "Escape", isComposing: true })).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "node shell" }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  expect(fireEvent.keyDown(tab, { key: "Escape" })).toBe(true);
+  expect(FakeWebSocket.last.closedByClient).toBe(false);
+});
+
+it("leaves terminal keys alone and does not autofocus a shell revealed by a keyboard close", async () => {
+  renderDock();
+  await openShell(shell("terminal"));
+  const terminal = screen.getByRole("textbox");
+  expect(document.activeElement).toBe(terminal);
+  expect(fireEvent.keyDown(terminal, { key: "Escape" })).toBe(true);
+  expect(fireEvent.keyDown(terminal, { key: "ArrowUp", altKey: true })).toBe(true);
+  const logTab = openKeyboardTestLog("api");
+  logTab.focus();
+  fireEvent.keyDown(logTab, { key: "Escape" });
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "node shell" }));
+  expect(screen.getByRole("tab", { name: /Shell/ }).getAttribute("aria-selected")).toBe("true");
+  expect(FakeWebSocket.instances[0].closedByClient).toBe(false);
+});
+
+it("advertises Escape on the log close button and allows Tab to cross the dock boundary", async () => {
+  renderDock();
+  openKeyboardTestLog("api");
+  const close = screen.getByRole("button", { name: /Close logs.*api/ });
+  expect(close.getAttribute("title")).toBe("Close (Esc)");
+  expect(close.getAttribute("aria-keyshortcuts")).toBe("Escape");
+  const workspace = screen.getByRole("button", { name: "node shell" });
+  const resize = screen.getByRole("separator", { name: "Resize the dock" });
+  workspace.focus();
+  const user = userEvent.setup();
+  await user.tab();
+  expect(document.activeElement).toBe(resize);
+  await user.tab({ shift: true });
+  expect(document.activeElement).toBe(workspace);
 });

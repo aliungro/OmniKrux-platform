@@ -19,8 +19,9 @@ export function routesKindKeys(target: EventTarget | null): boolean {
 }
 
 /** Give focus back to the visible table's selected row, or its first row before a selection. */
-export function focusTableRow(root: ParentNode = document): boolean {
-  const row = root.querySelector<HTMLElement>('[role="grid"] [data-row-key][tabindex="0"]');
+export function focusTableRow(root: ParentNode = document, { selectedOnly = false } = {}): boolean {
+  const selected = selectedOnly ? '[aria-selected="true"]' : "";
+  const row = root.querySelector<HTMLElement>(`[role="grid"] [data-row-key][tabindex="0"]${selected}`);
   if (row === null) return false;
   row.focus({ preventScroll: true });
   return true;

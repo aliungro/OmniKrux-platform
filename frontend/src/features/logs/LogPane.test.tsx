@@ -247,3 +247,15 @@ describe("LogPane", () => {
     }
   });
 });
+
+it("clears a nonempty log search on the first plain Escape", () => {
+  render(<LogPane session={session()} />);
+  const search = screen.getByRole<HTMLInputElement>("searchbox", { name: "Search logs" });
+  search.focus();
+  fireEvent.change(search, { target: { value: "failed" } });
+  fireEvent.keyDown(search, { key: "Escape", shiftKey: true });
+  expect(search.value).toBe("failed");
+  expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+  expect(search.value).toBe("");
+  expect(document.activeElement).toBe(search);
+});

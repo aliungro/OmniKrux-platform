@@ -1,1 +1,49 @@
-.header { position:relative; min-width:0; display:flex; align-items:center; gap:4px; } .sort,.filter { border:0; padding:0; color:inherit; background:none; font:inherit; cursor:pointer; } .sort { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .filter { opacity:0; } .header:hover .filter,.header:focus-within .filter,.filter.active { opacity:1; } .sort:focus-visible,.filter:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.header {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 3px;
+  /* The remaining 8px of the handle sits inside the column gap. */
+  padding-inline-end: 6px;
+}
+
+.sort,
+.filter {
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sort,
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter {
+  flex: none;
+  opacity: 0;
+}
+
+.header:hover .filter,
+.header:focus-within .filter,
+.filter.active {
+  opacity: 1;
+}
+
+.sort:focus-visible,
+.filter:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .header { padding-inline-end: 13px; }
+}

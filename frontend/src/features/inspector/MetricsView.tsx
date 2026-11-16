@@ -5,9 +5,21 @@ import { hiddenWhy, METRICS_POLL_MS, useJudged } from "../../api/useMetrics";
 import { formatCpu, formatMemory, formatWindow, fraction, HOT_AT } from "../metrics/format";
 import { Meter } from "../metrics/Meter";
 import { formatAge } from "../territories/model";
+import { ResizableInspectorTable } from "./ResizableInspectorTable";
 import { podPath } from "./useDescribe";
 import k from "./MetricsView.module.css";
 import s from "./Inspector.module.css";
+
+const POD_COLUMNS = [
+  { key: "container", label: "Container" },
+  { key: "cpu", label: "CPU" },
+  { key: "memory", label: "Memory" },
+];
+
+const NODE_COLUMNS = [
+  { key: "resource", label: "Resource" },
+  { key: "used", label: "Used" },
+];
 
 function usePodMetrics(clusterId: string, ns: string, name: string) {
   return useQuery({
@@ -70,15 +82,12 @@ export function MetricsView({ clusterId, ns, name }: { clusterId: string; ns: st
   }
   const staleTitle = `Measured ${formatAge(m.at, new Date(now))} ago; metrics-server has nothing newer.`;
   return (
-    <div className={`${k.mv} ${k.pod}`}>
-      <table className={k.t}>
-        <thead>
-          <tr><th scope="col">Container</th><th scope="col">CPU</th><th scope="col">Memory</th></tr>
-        </thead>
+    <div className={k.mv}>
+      <ResizableInspectorTable tableKey="inspector:pod-metrics" columns={POD_COLUMNS} className={k.t} view={`${clusterId}/${ns}/${name}`}>
         <tbody>
           {m.containers.map((c) => <ContainerRow key={c.name} c={c} stale={m.stale} staleTitle={staleTitle} />)}
         </tbody>
-      </table>
+      </ResizableInspectorTable>
       <div className={`${k.foot}${m.stale ? ` ${k.stale}` : ""}`} title={m.stale ? staleTitle : undefined}>
         Measured {formatAge(m.at, new Date(now))} ago over {formatWindow(m.window_s)}
         {m.stale && ". metrics-server has nothing newer."}
@@ -120,10 +129,7 @@ export function NodeMetricsView({ clusterId, name }: { clusterId: string; name: 
   const memFrac = fraction(m.memory_b, m.allocatable_memory_b);
   return (
     <div className={k.mv}>
-      <table className={k.t}>
-        <thead>
-          <tr><th scope="col">Resource</th><th scope="col">Used</th></tr>
-        </thead>
+      <ResizableInspectorTable tableKey="inspector:node-metrics" columns={NODE_COLUMNS} className={k.t} view={`${clusterId}/${name}`}>
         <tbody>
           <tr>
             <td className={k.name}>CPU</td>
@@ -146,7 +152,7 @@ export function NodeMetricsView({ clusterId, name }: { clusterId: string; name: 
             </td>
           </tr>
         </tbody>
-      </table>
+      </ResizableInspectorTable>
       <div className={`${k.foot}${m.stale ? ` ${k.stale}` : ""}`} title={m.stale ? staleTitle : undefined}>
         Measured {formatAge(m.at, new Date(now))} ago over {formatWindow(m.window_s)}
         {m.stale && ". metrics-server has nothing newer."}

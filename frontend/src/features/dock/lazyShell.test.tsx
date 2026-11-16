@@ -33,7 +33,7 @@ function Harness() {
   return (
     <>
       <button type="button" onClick={() => dock.askNodeShell("c1", "aks-np1-03")}>node shell</button>
-      <Dock dock={dock} />
+      <Dock dock={dock} onFocusWorkspace={() => {}} />
     </>
   );
 }

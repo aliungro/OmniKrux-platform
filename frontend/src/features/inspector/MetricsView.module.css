@@ -1,17 +1,11 @@
 .mv {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
-}
-
-.pod {
-  box-sizing: border-box;
-  max-inline-size: var(--inspector-inline-size, 100%);
   padding: 8px 16px 12px 18px;
-  overflow-x: auto;
 }
 
 .t {
-  width: 100%;
   border-collapse: collapse;
 }
 
@@ -31,6 +25,7 @@
 .t td {
   padding-block: 7px;
   vertical-align: middle;
+  overflow-wrap: anywhere;
   border-top: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
 }
 
@@ -38,8 +33,14 @@
   font-weight: 600;
 }
 
-.pod .name {
-  overflow-wrap: anywhere;
+/* At narrow widths the meter's bar and usage can occupy separate lines. */
+.t td > span {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.t td > span > i {
+  max-inline-size: 100%;
 }
 
 /* Request and limit sit under the meter, quieter than the usage itself. */

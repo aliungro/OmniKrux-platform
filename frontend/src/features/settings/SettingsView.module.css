@@ -7,6 +7,40 @@
 .lede { margin: 0 0 20px; max-width: 70ch; color: var(--ink-3); line-height: 1.5; }
 .rows { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
 .row { position: relative; display: flex; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.row[data-pin-dragging] { opacity: .5; }
+/* A manual popover: the top layer keeps it above the top bar and the dock without a z-index. */
+.dragPreview {
+  position: fixed;
+  inset: 0 auto auto 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: inherit;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  pointer-events: none;
+  transform: translate3d(-100%, -100%, 0);
+}
+.dragCard {
+  max-height: inherit;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  padding: 10px 14px;
+  border: 1px solid var(--focus);
+  border-radius: 8px;
+  background: var(--surf-2);
+  color: var(--ink);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--bg) 70%, transparent);
+  animation: dragLift 120ms ease-out;
+}
+@keyframes dragLift {
+  from { opacity: .65; transform: scale(.96); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dragCard { animation: none; }
+}
 .row[data-drop-placement]::after {
   content: "";
   position: absolute;

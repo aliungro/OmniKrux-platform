@@ -182,7 +182,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
 
   const { openPod, openOwnerLogs, openWorkloadLogs, askNodeShell } = dock;
   const onOpenLogs = useCallback(
-    (row: ResourceRow, previous?: boolean) => openPod(row, "logs", { previous }),
+    (row: ResourceRow, previous?: boolean, keyboardOrigin?: HTMLElement) => openPod(row, "logs", { previous, keyboardOrigin }),
     [openPod],
   );
   const onOpenShell = useCallback((row: ResourceRow) => openPod(row, "shell"), [openPod]);

@@ -1,0 +1,41 @@
+.handle {
+  position: absolute;
+  z-index: 1;
+  inset-block: 0;
+  inset-inline-end: -8px;
+  width: 14px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.handle::after {
+  content: "";
+  position: absolute;
+  inset-block: 5px;
+  inset-inline-end: 8px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--focus);
+  opacity: 0;
+}
+
+.handle:is(:hover, :focus-visible, [data-resizing])::after {
+  opacity: 1;
+}
+
+.handle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+@media (pointer: coarse) {
+  .handle {
+    width: 24px;
+    inset-inline-end: -11px;
+  }
+
+  .handle::after {
+    inset-inline-end: 11px;
+  }
+}

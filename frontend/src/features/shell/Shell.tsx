@@ -142,6 +142,17 @@ export function Shell() {
       focusView();
     }
   };
+  const focusWorkspaceFromDock = useCallback(() => {
+    const origin = document.activeElement;
+    requestAnimationFrame(() => {
+      const focused = document.activeElement;
+      if ((focused !== origin && focused !== document.body) || document.querySelector('[aria-modal="true"]')) return;
+      const pane = main.current?.querySelector<HTMLElement>('[data-active-pane="true"]');
+      if (pane && focusTableRow(pane, { selectedOnly: true })) return;
+      main.current?.focus({ preventScroll: true });
+    });
+  }, []);
+
   const focusAfterPalette = () => {
     const pane = main.current?.querySelector<HTMLElement>('[data-active-pane="true"]');
     if (pane && kube) {
@@ -209,7 +220,7 @@ export function Shell() {
               <AuditView filters={ws.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />
             ) : <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection} />}
           </main>
-          <Dock dock={dock} />
+          <Dock dock={dock} onFocusWorkspace={focusWorkspaceFromDock} />
           {kind && <ShortcutBar kind={kind} onOpen={() => setHelp(true)} />}
         </div>
       </div>

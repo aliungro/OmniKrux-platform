@@ -1,6 +1,14 @@
 .ev {
-  width: 100%;
   border-collapse: collapse;
+}
+
+.ev th {
+  padding: 4px 13px 5px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: start;
 }
 
 .ev td {
@@ -14,10 +22,6 @@
 }
 
 /* Type marker: a warn-coloured square for Warning, a quiet dot for Normal. */
-.ty {
-  width: 18px;
-}
-
 .ty i {
   display: inline-block;
   width: 8px;
@@ -53,8 +57,9 @@
   overflow-wrap: anywhere;
 }
 
+.ev th:last-child,
 .ev td.ag {
-  padding-right: 0;
+  padding-inline-end: 13px;
   color: var(--ink-3);
   white-space: nowrap;
   text-align: right;

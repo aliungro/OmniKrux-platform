@@ -8,10 +8,12 @@ import { container, describeBody, resourceDescribe, secretDescribe } from "../..
 import { DescribeView } from "./DescribeView";
 import { EventsTable } from "./EventsTable";
 import { Inspector } from "./Inspector";
+import { MetricsView, NodeMetricsView } from "./MetricsView";
 import { ResourceDescribeView } from "./ResourceDescribeView";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -527,6 +529,133 @@ describe("resource inspector", () => {
     expect(await screen.findByText("950m")).toBeTruthy();
     expect(screen.getByText("allocatable 1900m · capacity 2000m")).toBeTruthy();
     expect(fetch.mock.calls.some(([u]) => u === "/api/clusters/c1/nodes/aks-np1-03/metrics")).toBe(true);
+  });
+});
+
+describe("inspector table column widths", () => {
+  const widthStore = "omnikrux.tableColumnWidths";
+  const savedWidths = () => JSON.parse(localStorage.getItem(widthStore) ?? '{"tables":{}}').tables;
+  const events = [{ type: "Normal", reason: "Scheduled", message: "Assigned to worker", count: 1, last_seen: null }];
+  const resize = (table: HTMLElement, label: string, index: number, from: number, to: number) => {
+    const header = within(table).getAllByRole("columnheader")[index] as HTMLTableCellElement;
+    const handle = within(header).getByRole("separator", { name: label });
+    // jsdom has no table layout. Supply the starting measurement; the native column
+    // at the same cell index is the layout input for both the header and every row.
+    const measure = vi.spyOn(header, "getBoundingClientRect").mockReturnValue({ width: from } as DOMRect);
+    fireEvent.keyDown(handle, { key: to > from ? "ArrowRight" : "ArrowLeft" });
+    measure.mockReturnValue({ width: to } as DOMRect);
+    fireEvent.focus(handle);
+    expect(handle.getAttribute("aria-valuenow")).toBe(String(to));
+    expect(header.cellIndex).toBe(index);
+    expect((table.querySelectorAll("col")[index] as HTMLElement).style.width).toBe(`${to}px`);
+    for (const row of table.querySelectorAll("tbody tr")) {
+      expect((row.children[index] as HTMLTableCellElement).cellIndex).toBe(index);
+    }
+    return handle;
+  };
+
+  it("resizes Pod and Node Metrics independently and sizes an all-fixed Pod table to its tracks", async () => {
+    const sample = { state: "ok", message: null, at: new Date().toISOString(), window_s: 15, stale: false };
+    const usage = { cpu_m: 100, memory_b: 1024 ** 2 };
+    vi.stubGlobal("fetch", (url: string) => json(url.includes("/pods/") ? {
+      ...sample,
+      containers: [{ name: "metrics-sidecar", ...usage, cpu_request_m: null, cpu_limit_m: null, memory_request_b: null, memory_limit_b: null }],
+    } : {
+      ...sample, ...usage, allocatable_cpu_m: 1500, capacity_cpu_m: 2000,
+      allocatable_memory_b: 4096 ** 2, capacity_memory_b: 4096 ** 2,
+    }));
+    wrap(<>
+      <MetricsView clusterId="c1" ns="payments" name="pod" />
+      <NodeMetricsView clusterId="c1" name="worker" />
+    </>);
+    const pod = (await screen.findByText("metrics-sidecar")).closest("table")!;
+    const node = (await screen.findByRole("columnheader", { name: "Used" })).closest("table")!;
+    const handles = [
+      resize(pod, "Resize Container", 0, 180, 188),
+      resize(pod, "Resize CPU", 1, 170, 178),
+      resize(pod, "Resize Memory", 2, 160, 168),
+    ];
+    expect(pod.style.tableLayout).toBe("fixed");
+    expect(pod.style.width).toBe("534px");
+    expect(node.style.tableLayout).toBe("");
+    expect(savedWidths()["inspector:pod-metrics"]).toEqual({ container: 188, cpu: 178, memory: 168 });
+    expect(savedWidths()["inspector:node-metrics"]).toBeUndefined();
+    handles.push(resize(node, "Resize Used", 1, 69, 64));
+    expect(node.style.minWidth).toBe("128px");
+    expect(pod.style.width).toBe("534px");
+    expect(savedWidths()["inspector:node-metrics"]).toEqual({ used: 64 });
+    for (const handle of handles) fireEvent.keyDown(handle, { key: "Enter" });
+  });
+
+  it("shares Events widths across instances and leaves the empty state free of a table", () => {
+    const { rerender } = render(<><EventsTable events={events} error={null} /><EventsTable events={events} error={null} /></>);
+    const [first, second] = screen.getAllByRole("table");
+    const headers = within(first).getAllByRole("columnheader");
+    expect(headers.map(header => header.textContent)).toEqual(["Type", "Event", "Age"]);
+    expect(headers.map(header => header.style.minWidth)).toEqual(["48px", "64px", "64px"]);
+    const type = resize(first, "Resize Type", 0, 55, 48);
+    expect(type.getAttribute("aria-valuemin")).toBe("48");
+    const event = resize(first, "Resize Event", 1, 120, 128);
+    expect((second.querySelectorAll("col")[1] as HTMLElement).style.width).toBe("128px");
+    expect(savedWidths()["inspector:events"]).toEqual({ type: 48, event: 128 });
+    expect(savedWidths()["inspector:pod-metrics"]).toBeUndefined();
+    fireEvent.keyDown(type, { key: "Enter" });
+    fireEvent.keyDown(event, { key: "Enter" });
+    rerender(<EventsTable events={[]} error={null} />);
+    expect(screen.getByText("No events")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("separator")).toBeNull();
+  });
+
+  it("keeps each header's ResizeObserver across renders and drag previews", () => {
+    const observed = vi.fn();
+    const disconnected = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      observe = observed;
+      unobserve() {}
+      disconnect = disconnected;
+    });
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<EventsTable events={events} error={null} />);
+      expect(observed).toHaveBeenCalledTimes(3);
+      rerender(<EventsTable events={[...events]} error={null} />);
+      const handle = screen.getByRole("separator", { name: "Resize Event" });
+      vi.spyOn(handle.closest("th")!, "getBoundingClientRect").mockReturnValue({ width: 120 } as DOMRect);
+      const pointer = (type: string, clientX: number) =>
+        fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+      pointer("pointerdown", 100);
+      for (const x of [110, 120, 130]) {
+        pointer("pointermove", x);
+        act(() => vi.advanceTimersToNextFrame());
+      }
+      expect((screen.getByRole("table").querySelectorAll("col")[1] as HTMLElement).style.width).toBe("150px");
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(observed).toHaveBeenCalledTimes(3);
+      expect(disconnected).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps repeated Describe column labels independent and scopes widths to the kind and section", () => {
+    const cols = { columns: ["Name", "Name"], rows: [[{ text: "first", link: null, cls: null }, { text: "second", link: null, cls: null }]], note: null };
+    const kind = (kind_key: string) => resourceDescribe({
+      kind_key, sections: [{ title: "Members", ...cols }, { title: "Peers", ...cols }], events,
+    });
+    const { rerender } = render(<ResourceDescribeView clusterId="c1" data={kind("deployments.apps")} />);
+    const members = () => screen.getByRole("table", { name: "Members" });
+    const handle = resize(members(), "Resize Name", 1, 112, 120);
+    expect((members().querySelector("col") as HTMLElement).style.width).toBe("");
+    expect(screen.getByRole("table", { name: "Peers" }).style.tableLayout).toBe("");
+    expect(savedWidths()["inspector:events"]).toBeUndefined();
+    expect(savedWidths()["inspector:describe:deployments.apps:Members"]).toEqual({ "1:Name": 120 });
+    rerender(<ResourceDescribeView clusterId="c1" data={kind("statefulsets.apps")} />);
+    expect(members().style.tableLayout).toBe("");
+    rerender(<ResourceDescribeView clusterId="c2" data={kind("deployments.apps")} />);
+    expect((members().querySelectorAll("col")[1] as HTMLElement).style.width).toBe("120px");
+    fireEvent.keyDown(handle, { key: "Enter" });
   });
 });
 

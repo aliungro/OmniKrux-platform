@@ -8,6 +8,9 @@ import { SettingsView } from "./SettingsView";
 import { KINDS } from "../../test/kinds";
 import { PINNED_KEY, resetPinnedKinds, savePinned } from "./pinnedKinds";
 import type { ReactElement, ReactNode } from "react";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function render(view: ReactElement, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
@@ -16,11 +19,14 @@ function render(view: ReactElement, client = new QueryClient({ defaultOptions: {
 
 const rows = () => within(screen.getByRole("list",{name:"Pinned kinds"})).getAllByRole("listitem");
 const rowOrder = () => rows().map(row => row.querySelector("strong")!.textContent);
-function pointAt(target: Element, type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel", clientY = 0) {
-  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientY });
-  Object.defineProperty(event, "pointerId", { value: 1 });
+function pointAt(target: Element, type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel" | "lostpointercapture", clientY = 0, clientX = 0, pointerId = 1) {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientY, clientX });
+  Object.defineProperty(event, "pointerId", { value: pointerId });
   return fireEvent(target, event);
 }
+const preview = () => document.querySelector<HTMLElement>("[data-pin-drag-preview]");
+const draggingRows = () => document.querySelectorAll("[data-pin-dragging]");
+const cues = () => Array.from(document.querySelectorAll("[data-drop-placement]"));
 function hitTest() {
   const before = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
   const hit = vi.fn();
@@ -95,12 +101,12 @@ it("clears cancelled drags and ignores drags that did not start on a handle", ()
   const { hit, restore } = hitTest();
   hit.mockReturnValue(pods);
   pointAt(secrets, "pointerdown");
-  pointAt(handle, "pointermove");
+  pointAt(handle, "pointermove", 10);
   expect(pods.getAttribute("data-drop-placement")).toBeNull();
   pointAt(handle, "pointerup");
 
   pointAt(handle, "pointerdown");
-  pointAt(handle, "pointermove");
+  pointAt(handle, "pointermove", 10);
   expect(pods.getAttribute("data-drop-placement")).not.toBeNull();
   pointAt(handle, "pointercancel");
   expect(pods.getAttribute("data-drop-placement")).toBeNull();
@@ -108,6 +114,222 @@ it("clears cancelled drags and ignores drags that did not start on a handle", ()
   restore();
   expect(rowOrder()).toEqual(initial);
   expect(save).not.toHaveBeenCalled();
+});
+
+it("shows the dragged kind and a single insertion line without reordering during the drag", () => {
+  savePinned(localStorage, ["pods", "deployments.apps", "services", "secrets"]);
+  const save = vi.spyOn(Storage.prototype, "setItem");
+  render(<SettingsView kinds={KINDS.kinds} />);
+  const initial = rowOrder();
+  const [pods, , services, secrets] = rows();
+  for (const target of [pods, services]) {
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue(new DOMRect(80, 100, 200, 40));
+  }
+  const handle = screen.getByTitle("Drag Secrets to reorder");
+  const frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+  const paint = () => act(() => frames.mock.lastCall?.[0](0));
+  const { hit, restore } = hitTest();
+  try {
+    hit.mockReturnValue(pods);
+    pointAt(handle, "pointerdown", 107, 100);
+    pointAt(handle, "pointermove", 110, 100);
+    expect(cues()).toEqual([]);
+    expect(preview()).toBeNull();
+    pointAt(handle, "pointermove", 110, 103);
+    paint();
+    expect(preview()?.getAttribute("aria-hidden")).toBe("true");
+    expect(preview()?.querySelector("strong")?.textContent).toBe("Secrets");
+    expect(preview()?.textContent).toContain("secrets");
+    expect(preview()?.style.transform).toMatch(/^translate3d\(115px, 122px, 0(?:px)?\)$/);
+    expect(Array.from(draggingRows())).toEqual([secrets]);
+    expect(cues()).toEqual([pods]);
+    expect(pods.dataset.dropPlacement).toBe("before");
+
+    frames.mockClear();
+    hit.mockReturnValue(services);
+    pointAt(handle, "pointermove", 135, 180);
+    expect(cues()).toEqual([]);
+    pointAt(handle, "pointermove", 115, 185);
+    pointAt(handle, "pointermove", 110, 190);
+    expect(frames).toHaveBeenCalledTimes(1);
+    paint();
+    expect(preview()?.style.transform).toMatch(/^translate3d\(202px, 122px, 0(?:px)?\)$/);
+    expect(cues()).toEqual([services]);
+    expect(services.dataset.dropPlacement).toBe("before");
+    expect(rowOrder()).toEqual(initial);
+    expect(save).not.toHaveBeenCalled();
+
+    hit.mockReturnValue(pods);
+    pointAt(handle, "pointerup", 130, 120);
+    expect(rowOrder()).toEqual(["Pods", "Secrets", "Deployments", "Services"]);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(preview()).toBeNull();
+    expect(cues()).toEqual([]);
+  } finally { restore(); }
+});
+
+it("cleans up the preview when a drag is cancelled or its target changes", () => {
+  savePinned(localStorage, ["pods", "deployments.apps", "services", "secrets"]);
+  const save = vi.spyOn(Storage.prototype, "setItem");
+  const view = render(<SettingsView kinds={KINDS.kinds} />);
+  const initial = rowOrder();
+  const [pods, , , secrets] = rows();
+  const handle = screen.getByTitle("Drag Secrets to reorder");
+  const input = screen.getByRole("combobox", { name: "Add a kind" });
+  const capture = vi.fn();
+  const release = vi.fn(() => { pointAt(handle, "lostpointercapture"); });
+  Object.assign(handle, { setPointerCapture: capture, hasPointerCapture: () => true, releasePointerCapture: release });
+  const frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+  const cancelFrame = vi.spyOn(window, "cancelAnimationFrame");
+  const { hit, restore } = hitTest();
+  const start = () => {
+    hit.mockReturnValue(pods);
+    pointAt(handle, "pointerdown");
+    pointAt(handle, "pointermove", 10);
+    expect(preview()).not.toBeNull();
+    expect(Array.from(draggingRows())).toEqual([secrets]);
+    expect(cues()).toEqual([pods]);
+  };
+  const expectClear = () => {
+    expect(preview()).toBeNull();
+    expect(draggingRows()).toHaveLength(0);
+    expect(cues()).toEqual([]);
+  };
+  try {
+    act(() => input.focus());
+    start();
+    expect(capture).toHaveBeenCalledWith(1);
+    for (const type of ["pointermove", "pointerup", "pointercancel", "lostpointercapture"] as const) {
+      pointAt(handle, type, 20, 20, 2);
+      expect(preview()).not.toBeNull();
+      expect(cues()).toEqual([pods]);
+    }
+    fireEvent.keyDown(input, { key: "Escape" });
+    expectClear();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    pointAt(handle, "pointerup", 10);
+
+    for (const type of ["pointercancel", "lostpointercapture"] as const) {
+      start();
+      pointAt(handle, type);
+      expectClear();
+      pointAt(handle, "pointerup", 10);
+    }
+
+    start();
+    hit.mockReturnValue(null);
+    pointAt(handle, "pointerup", 20);
+    expectClear();
+
+    hit.mockReturnValue(pods);
+    pointAt(handle, "pointerdown");
+    pointAt(handle, "pointerup", 2);
+    expectClear();
+    expect(rowOrder()).toEqual(initial);
+    expect(save).not.toHaveBeenCalled();
+
+    start();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Deployments" }));
+    expectClear();
+    pointAt(handle, "pointerup", 10);
+    expect(rowOrder()).toEqual(["Pods", "Services", "Secrets"]);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    start();
+    cancelFrame.mockClear();
+    expect(frames).toHaveBeenCalled();
+    view.unmount();
+    expectClear();
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    expect(save).toHaveBeenCalledTimes(1);
+  } finally { restore(); }
+});
+
+it("an Escape that cancels a pin drag stops there and does not reach the focused control", () => {
+  savePinned(localStorage, ["pods", "deployments.apps", "services", "secrets"]);
+  const outside = vi.fn();
+  render(<><button type="button" onKeyDown={e => outside(e.key)}>Close log</button><SettingsView kinds={KINDS.kinds} /></>);
+  const [pods] = rows();
+  const handle = screen.getByTitle("Drag Secrets to reorder");
+  const focused = screen.getByRole("button", { name: "Close log" });
+  vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+  const { hit, restore } = hitTest();
+  try {
+    act(() => focused.focus());
+    hit.mockReturnValue(pods);
+    pointAt(handle, "pointerdown");
+    pointAt(handle, "pointermove", 10);
+    expect(preview()).not.toBeNull();
+    expect(fireEvent.keyDown(focused, { key: "Escape" })).toBe(false);
+    expect(preview()).toBeNull();
+    expect(outside).not.toHaveBeenCalled();
+    expect(fireEvent.keyDown(focused, { key: "Escape" })).toBe(true);
+    expect(outside).toHaveBeenCalledWith("Escape");
+  } finally { restore(); }
+});
+
+it("lifts the drag preview into the top layer and styles it from the design tokens", () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "SettingsView.module.css"), "utf8");
+  const rule = (name: string) => css.match(new RegExp(`\.${name} \{([^}]*)\}`))![1];
+  for (const name of ["dragPreview", "dragCard"]) {
+    expect(rule(name)).not.toMatch(/z-index/);
+    expect(rule(name)).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
+  }
+  expect(rule("dragCard")).toMatch(/box-shadow: [^;]*var\(--bg\)/);
+  savePinned(localStorage, ["pods", "deployments.apps"]);
+  const shown = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "showPopover", { configurable: true, value: shown });
+  render(<SettingsView kinds={KINDS.kinds} />);
+  const [pods] = rows();
+  const handle = screen.getByTitle("Drag Deployments to reorder");
+  vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+  const { hit, restore } = hitTest();
+  try {
+    hit.mockReturnValue(pods);
+    pointAt(handle, "pointerdown");
+    pointAt(handle, "pointermove", 10);
+    expect(preview()!.getAttribute("popover")).toBe("manual");
+    expect(shown.mock.contexts).toEqual([preview()]);
+    pointAt(handle, "pointerup", 10);
+  } finally {
+    restore();
+    Reflect.deleteProperty(HTMLElement.prototype, "showPopover");
+  }
+});
+
+it("updates the destination when Settings scrolls under a stationary dragged pin", () => {
+  savePinned(localStorage, ["pods", "deployments.apps", "services", "secrets"]);
+  const save = vi.spyOn(Storage.prototype, "setItem");
+  const view = render(<SettingsView kinds={KINDS.kinds} />);
+  const [pods, deployments, services] = rows();
+  const handle = screen.getByTitle("Drag Secrets to reorder");
+  for (const target of [pods, deployments, services]) {
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue(new DOMRect(80, 100, 200, 40));
+  }
+  const { hit, restore } = hitTest();
+  try {
+    hit.mockReturnValue(pods);
+    pointAt(handle, "pointerdown", 108, 100);
+    pointAt(handle, "pointermove", 110, 100);
+    fireEvent.scroll(view.container.firstElementChild!);
+    expect(hit).not.toHaveBeenCalled();
+
+    pointAt(handle, "pointermove", 110, 170);
+    expect(cues()).toEqual([pods]);
+    hit.mockReturnValue(services);
+    fireEvent.scroll(view.container.firstElementChild!);
+    expect(hit).toHaveBeenLastCalledWith(170, 110);
+    expect(cues()).toEqual([services]);
+    expect(services.dataset.dropPlacement).toBe("before");
+    expect(rowOrder()).toEqual(["Pods", "Deployments", "Services", "Secrets"]);
+    expect(save).not.toHaveBeenCalled();
+
+    pointAt(handle, "pointerup", 110, 170);
+    expect(rowOrder()).toEqual(["Pods", "Deployments", "Secrets", "Services"]);
+    expect(cues()).toEqual([]);
+    expect(save).toHaveBeenCalledTimes(1);
+  } finally { restore(); }
 });
 it("reset to default restores the row", () => {
   render(<SettingsView kinds={KINDS.kinds}/>);

@@ -12,7 +12,8 @@
   position: relative;
   box-sizing: border-box;
   height: 36px;
-  padding: 0 14px 0 18px;
+  /* With the side borders, the insets are 19px and 14px, like the header. */
+  padding: 0 13px 0 18px;
   overflow: hidden;
   white-space: nowrap;
   background: var(--surf);
