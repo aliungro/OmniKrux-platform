@@ -352,7 +352,7 @@ describe("FilterBar counts", () => {
 });
 
 describe("ShortcutBar per kind", () => {
-  const strip = () => Array.from(within(screen.getByRole("navigation", { name: "Keyboard shortcuts" })).getAllByRole("listitem")).map((li) => li.textContent);
+  const strip = () => Array.from(within(screen.getByRole("navigation", { name: /^Keyboard shortcuts/ })).getAllByRole("listitem")).map((li) => li.textContent);
   it("shortcut bar follows the active kind", () => {
     const { rerender } = render(<ShortcutBar kind="pods" />);
     expect(strip()).toEqual([
@@ -384,6 +384,34 @@ describe("ShortcutBar per kind", () => {
     expect(anywhere).toContain("Ctrl K");
     expect(within(sheet).getByRole("region", { name: "Logs" }).textContent).toContain("Jump to live");
     expect(within(sheet).getByRole("region", { name: "Dock" }).textContent).toContain("Ctrl \\");
+  });
+
+  it("the bar shows the logs keys in the logs zone", () => {
+    render(<ShortcutBar kind="pods" zone="logs" />);
+    const text = screen.getByRole("navigation", { name: "Keyboard shortcuts: logs" }).textContent;
+    expect(text).toContain("back to the table");
+    expect(text).toContain("close the tab");
+    expect(text).not.toContain("previous logs");
+  });
+
+  it("the bar shows the table keys with alt down and ctrl delete", () => {
+    render(<ShortcutBar kind="pods" zone="table" />);
+    const text = screen.getByRole("navigation", { name: "Keyboard shortcuts: table" }).textContent;
+    expect(text).toContain("Alt ↓ into the logs");
+    expect(text).toContain("Ctrl Del delete (asks first)");
+  });
+
+  it("help keycaps follow the platform", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      render(<ShortcutBar kind="pods" zone="table" />);
+      fireEvent.click(screen.getByRole("button", { name: /all shortcuts/ }));
+      const sheet = screen.getByRole("dialog", { name: "All shortcuts" });
+      expect(sheet.textContent).toContain("⌘ ⌫");
+      expect(within(sheet).getByRole("region", { name: "Logs" }).textContent).toContain("Switch between dock tabs");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("help sheet names the dock", () => {

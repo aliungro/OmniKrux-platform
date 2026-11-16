@@ -130,9 +130,11 @@ function plain(e: KeyboardEvent<HTMLElement>): boolean {
 export const Dock = memo(function Dock({
   dock,
   onFocusWorkspace,
+  zoneActive = false,
   ref,
 }: {
   dock: DockApi;
+  zoneActive?: boolean;
   onFocusWorkspace: () => void;
   ref?: Ref<DockHandle>;
 }) {
@@ -301,7 +303,7 @@ export const Dock = memo(function Dock({
 
   if (state.sessions.length === 0) {
     return (
-      <section className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-dock data-page-keys="off" {...tracking}>
+      <section className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-dock data-keyboard-zone={zoneActive ? "logs" : undefined} data-page-keys="off" {...tracking}>
         {dialog}
         {/* Always there, so a notice is announced when the text changes. */}
         <p className={s.hint} role="status">{notice?.text ?? EMPTY_DOCK}</p>
@@ -326,6 +328,7 @@ export const Dock = memo(function Dock({
       style={{ height, "--dock-pane-min": `${minimum - STRIP_MIN}px` } as CSSProperties}
       aria-label="Logs and shells"
       data-dock
+      data-keyboard-zone={zoneActive ? "logs" : undefined}
       data-page-keys="off"
       onKeyDown={onKeyDown}
       {...tracking}

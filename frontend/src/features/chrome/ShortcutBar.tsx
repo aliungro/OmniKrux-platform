@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { allGroups, barFor, capsOf, pageKey, pressed, type ShortcutGroup } from "./shortcuts";
+import { allGroups, barFor, capsOf, keysFor, pageKey, pressed, type KeyboardZone, type ShortcutGroup } from "./shortcuts";
 import k from "./key.module.css";
 import s from "./ShortcutBar.module.css";
 
@@ -45,7 +45,7 @@ export function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGro
               <dl className={s.list}>
                 {rows.map((x) => (
                   <Fragment key={x.id}>
-                    <dt><Keys keys={x.keys} /></dt>
+                    <dt><Keys keys={keysFor(x)} /></dt>
                     <dd>{x.label}</dd>
                   </Fragment>
                 ))}
@@ -62,7 +62,7 @@ export function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGro
  * The key strip along the bottom and the "?" sheet, both for the kind on screen: `s` reads "shell"
  * on pods and "scale" on deployments, as the registry says.
  */
-export function ShortcutBar({ kind = "pods", onOpen }: { kind?: string; onOpen?: () => void }) {
+export function ShortcutBar({ kind, zone = "table", onOpen }: { kind?: string; zone?: KeyboardZone; onOpen?: () => void }) {
   const [open,setOpen] = useState(false);
   useEffect(() => {
     if (onOpen) return;
@@ -71,9 +71,9 @@ export function ShortcutBar({ kind = "pods", onOpen }: { kind?: string; onOpen?:
   },[onOpen]);
   return (
     <>
-      <nav className={s.keys} aria-label="Keyboard shortcuts" data-page-keys>
+      <nav className={s.keys} aria-label={`Keyboard shortcuts: ${zone}`} data-page-keys>
         <ul className={s.strip}>
-          {barFor(kind ?? "pods", "table").map((x) => (
+          {barFor(kind, zone).map((x) => (
             <li key={x.id} className={s.item}>
               <Keys keys={x.keys} /> {x.text}
             </li>

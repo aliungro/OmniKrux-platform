@@ -820,3 +820,37 @@ it("switching from a scoped split to Settings and back restores both panes and t
   fireEvent.click(screen.getByRole("button", { name: "Forward" }));
   expect(await screen.findByRole("region", { name: "Deployments · East" })).toBeTruthy();
 });
+
+const zonePane = () => document.querySelector('[data-active-pane="true"]')!;
+const zoneDock = () => document.querySelector("[data-dock]")!;
+
+it("the lilac outline moves with the keyboard", async () => {
+  await renderPods();
+  expect(zonePane().getAttribute("data-keyboard-zone")).toBe("table");
+  expect(zoneDock().hasAttribute("data-keyboard-zone")).toBe(false);
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  await logTab(pods[0].name);
+  fireEvent.keyDown(first, { key: "ArrowDown", altKey: true });
+  await waitFor(() => expect(zoneDock().getAttribute("data-keyboard-zone")).toBe("logs"));
+  expect(zonePane().hasAttribute("data-keyboard-zone")).toBe(false);
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  await waitFor(() => expect(zonePane().getAttribute("data-keyboard-zone")).toBe("table"));
+  expect(zoneDock().hasAttribute("data-keyboard-zone")).toBe(false);
+  fireEvent.keyDown(document.activeElement!, { key: "/" });
+  const filter = within(screen.getByRole("group", { name: "Filter rows" })).getByRole("textbox") as HTMLInputElement;
+  filter.focus();
+  await waitFor(() => expect(zonePane().hasAttribute("data-keyboard-zone")).toBe(false));
+  expect(zoneDock().hasAttribute("data-keyboard-zone")).toBe(false);
+});
+
+it("the logs bar shows outside kubernetes too", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  await logTab(pods[0].name);
+  fireEvent.keyDown(first, { key: "8", altKey: true });
+  await screen.findByRole("heading", { name: /audit/i }).catch(() => null);
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "ArrowDown", altKey: true });
+  expect(await screen.findByRole("navigation", { name: "Keyboard shortcuts: logs" })).toBeTruthy();
+});

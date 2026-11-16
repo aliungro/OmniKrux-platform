@@ -150,3 +150,10 @@
   border-bottom: 1px solid var(--rule);
   border-radius: 0 0 12px 12px;
 }
+
+/* The table zone has the keyboard: a lilac outline that appears at once, never eased. */
+:global([data-keyboard-zone="table"]) .scroll {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  border-radius: 8px;
+}

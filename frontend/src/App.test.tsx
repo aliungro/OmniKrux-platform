@@ -194,7 +194,7 @@ describe("Shortcut bar", () => {
   it("shortcut bar lists the keys", async () => {
     vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
-    const bar = await screen.findByRole("navigation", { name: "Keyboard shortcuts" });
+    const bar = await screen.findByRole("navigation", { name: /^Keyboard shortcuts/ });
     const items = Array.from(bar.querySelectorAll("li")).map((li) => li.textContent);
     expect(items).toEqual([
       "↑↓ move",
@@ -549,7 +549,7 @@ describe("Console kinds, more", () => {
     window.location.hash = "#kind=services";
     vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
-    const bar = await screen.findByRole("navigation", { name: "Keyboard shortcuts" });
+    const bar = await screen.findByRole("navigation", { name: /^Keyboard shortcuts/ });
     expect(bar.textContent).not.toContain("previous logs");
     expect(bar.textContent).not.toContain("shell");
     expect(bar.textContent).toContain("move");
