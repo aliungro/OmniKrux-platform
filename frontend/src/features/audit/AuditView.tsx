@@ -213,7 +213,8 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
       toggle(id);
       return;
     }
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    // With Alt, Ctrl or Cmd the arrows are the page's (Alt+Down goes into the logs).
+    if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
     const at = indexById.get(id);
     if (at === undefined) return;

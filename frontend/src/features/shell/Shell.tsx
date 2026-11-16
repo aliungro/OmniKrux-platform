@@ -10,7 +10,7 @@ import { focusTableRow } from "../chrome/pageKeys";
 import { AllShortcuts, ShortcutBar } from "../chrome/ShortcutBar";
 import { allGroups, isEditable, pageKey, pressed } from "../chrome/shortcuts";
 import { TopBar, type ScopeCluster } from "../chrome/TopBar";
-import { Dock } from "../dock/Dock";
+import { Dock, type DockHandle } from "../dock/Dock";
 import { useDock } from "../dock/useDock";
 import { KubernetesTab, type KubernetesTabProps } from "../kubernetes/KubernetesTab";
 import { CommandPalette, usePaletteKeys, type PaletteMode } from "../palette/CommandPalette";
@@ -85,6 +85,7 @@ export function Shell() {
   const [forwardsAsk, setForwardsAsk] = useState(0);
   const forwards = usePortForwards().query.data?.length ?? 0;
   const main = useRef<HTMLElement>(null);
+  const dockRef = useRef<DockHandle>(null);
   const kube = ws.app === "kubernetes";
   // Outside Kubernetes no view holds a watch. Dock sessions and forwards still learn of a removed
   // cluster from clusterLifecycle: the registry poll (useClusters, every 15 s) and removals made
@@ -174,6 +175,8 @@ export function Shell() {
     const app = appForKey(e);
     if (app) { e.preventDefault(); switchApp(app); return; }
     if (pressed("help", e)) { e.preventDefault(); setHelp(true); return; }
+    // Alt+Down: into the logs, from any app (the dock is shared). Held, it moves in once.
+    if (pressed("enterLogs", e)) { e.preventDefault(); if (!e.repeat) dockRef.current?.enter(); return; }
     if (!kube) return;
     if (pressed("newTab", e)) newTab();
     else if (pressed("closeTab", e)) closeTab();
@@ -220,7 +223,7 @@ export function Shell() {
               <AuditView filters={ws.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />
             ) : <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection} />}
           </main>
-          <Dock dock={dock} onFocusWorkspace={focusWorkspaceFromDock} />
+          <Dock ref={dockRef} dock={dock} onFocusWorkspace={focusWorkspaceFromDock} />
           {kind && <ShortcutBar kind={kind} onOpen={() => setHelp(true)} />}
         </div>
       </div>

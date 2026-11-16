@@ -16,7 +16,14 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     input = document.createElement("textarea");
     loadAddon() {}
-    open(host: HTMLElement) { host.append(this.input); }
+    // As xterm draws it: the helper textarea inside a .xterm root.
+    open(host: HTMLElement) {
+      const root = document.createElement("div");
+      root.className = "xterm";
+      root.append(this.input);
+      host.append(root);
+    }
+    attachCustomKeyEventHandler() {}
     focus() { this.input.focus(); }
     write() {}
     reset() {}
@@ -28,7 +35,8 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
-import { Dock } from "./Dock";
+import { pressed } from "../chrome/shortcuts";
+import { Dock, type DockHandle } from "./Dock";
 import { useDock, type DockApi } from "./useDock";
 
 const DEBUG_COPY = "Ephemeral debug containers can't be removed. This one stays in the pod until the pod is deleted.";
@@ -67,13 +75,22 @@ function json(body: unknown, status = 200) {
 }
 
 let dock: DockApi;
+/** How many times the dock handed the keyboard back to the workspace. */
+let returns = 0;
 function Harness() {
   dock = useDock([aks, eks]);
   const workspace = useRef<HTMLButtonElement>(null);
+  const handle = useRef<DockHandle>(null);
   return (
     <>
-      <button ref={workspace} type="button" onClick={() => dock.askNodeShell("c1", "aks-np1-03")}>node shell</button>
-      <Dock dock={dock} onFocusWorkspace={() => workspace.current?.focus()} />
+      {/* Stands in for the table row: Alt+Down moves into the logs, as Shell's page keys do. */}
+      <button ref={workspace} type="button" onClick={() => dock.askNodeShell("c1", "aks-np1-03")}
+        onKeyDown={(e) => {
+          if (!pressed("enterLogs", e)) return;
+          e.preventDefault();
+          if (!e.repeat) handle.current?.enter();
+        }}>node shell</button>
+      <Dock ref={handle} dock={dock} onFocusWorkspace={() => { returns += 1; workspace.current?.focus(); }} />
     </>
   );
 }
@@ -105,6 +122,7 @@ const twoContainers = describeBody({
 });
 
 beforeEach(() => {
+  returns = 0;
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -944,7 +962,15 @@ function openKeyboardTestLog(id: string) {
   return screen.getByRole("tab", { name: new RegExp(`^Logs: .* / ${id} \\(`) });
 }
 
-it("closes only the focused split peer and returns focus to the workspace", () => {
+const workspaceButton = () => screen.getByRole("button", { name: "node shell" });
+const logIn = (id: string) => {
+  const panel = shown().find((p) => p.getAttribute("data-dock-session") === id);
+  if (!panel) throw new Error(`${id} is not shown`);
+  return within(panel).getByRole("log");
+};
+const tabOf = (id: string) => screen.getByRole("tab", { name: new RegExp(`/ ${id} \\(`) });
+
+it("esc on a split peer returns to the workspace and closes nothing", () => {
   renderDock();
   openKeyboardTestLog("first");
   openKeyboardTestLog("second");
@@ -952,10 +978,9 @@ it("closes only the focused split peer and returns focus to the workspace", () =
   const peer = within(shown()[0]).getByRole("log");
   peer.focus();
   expect(fireEvent.keyDown(peer, { key: "Escape" })).toBe(false);
-  expect(screen.queryByRole("tab", { name: /first/ })).toBeNull();
-  expect(FakeWebSocket.instances[0].closedByClient).toBe(true);
-  expect(FakeWebSocket.instances[1].closedByClient).toBe(false);
-  expect(document.activeElement).toBe(screen.getByRole("button", { name: "node shell" }));
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(FakeWebSocket.instances.every((w) => !w.closedByClient)).toBe(true);
+  expect(document.activeElement).toBe(workspaceButton());
 });
 
 it.each(["log", "searchbox"])("Alt+Up leaves a live stream from %s", (role) => {
@@ -964,22 +989,265 @@ it.each(["log", "searchbox"])("Alt+Up leaves a live stream from %s", (role) => {
   const control = screen.getByRole(role);
   control.focus();
   expect(fireEvent.keyDown(control, { key: "ArrowUp", altKey: true })).toBe(false);
-  expect(document.activeElement).toBe(screen.getByRole("button", { name: "node shell" }));
+  expect(document.activeElement).toBe(workspaceButton());
   expect(FakeWebSocket.last.closedByClient).toBe(false);
 });
 
-it("holds Escape on an empty search after the first press clears it", () => {
+it("alt+down moves into the focused log and esc returns to the same row", () => {
+  renderDock();
+  openKeyboardTestLog("first");
+  openKeyboardTestLog("second");
+  const row = workspaceButton();
+  row.focus();
+  expect(fireEvent.keyDown(row, { key: "ArrowDown", altKey: true })).toBe(false);
+  expect(document.activeElement).toBe(logIn("second"));
+  expect(fireEvent.keyDown(document.activeElement!, { key: "Escape" })).toBe(false);
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(document.activeElement).toBe(row);
+  expect(FakeWebSocket.instances.every((w) => !w.closedByClient)).toBe(true);
+});
+
+it("alt+down into a shell gives its terminal the keyboard", async () => {
+  renderDock();
+  await openShell(shell("sh"));
+  const terminal = screen.getByRole("textbox");
+  const row = workspaceButton();
+  row.focus();
+  fireEvent.keyDown(row, { key: "ArrowDown", altKey: true });
+  await waitFor(() => expect(document.activeElement).toBe(terminal));
+});
+
+it("a held escape returns once and closes nothing", () => {
+  renderDock();
+  openKeyboardTestLog("api");
+  const log = screen.getByRole("log");
+  log.focus();
+  // A repeat that arrives on the log is swallowed and does nothing.
+  expect(fireEvent.keyDown(log, { key: "Escape", repeat: true })).toBe(false);
+  expect(document.activeElement).toBe(log);
+  expect(returns).toBe(0);
+  expect(fireEvent.keyDown(log, { key: "Escape" })).toBe(false);
+  expect(returns).toBe(1);
+  for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: "Escape", repeat: true });
+  expect(returns).toBe(1);
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(FakeWebSocket.last.closedByClient).toBe(false);
+  expect(document.activeElement).toBe(workspaceButton());
+});
+
+it("alt+down with nothing open says so", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    renderDock();
+    const row = workspaceButton();
+    row.focus();
+    expect(screen.getByRole("status").textContent).toBe("Open logs (l) or a shell (s) from a pod");
+    fireEvent.keyDown(row, { key: "ArrowDown", altKey: true });
+    expect(screen.getByRole("status").textContent).toBe("No logs open yet: press L on a pod first.");
+    expect(document.activeElement).toBe(row);
+    act(() => vi.advanceTimersByTime(3_900));
+    expect(screen.getByRole("status").textContent).toBe("No logs open yet: press L on a pod first.");
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByRole("status").textContent).toBe("Open logs (l) or a shell (s) from a pod");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("left and right switch dock tabs from the log", async () => {
+  renderDock();
+  openKeyboardTestLog("a");
+  openKeyboardTestLog("b");
+  await openShell(shell("c", { pod: "redis-0" }));
+  act(() => dock.dispatch({ type: "focus", id: "a" }));
+  logIn("a").focus();
+  expect(fireEvent.keyDown(logIn("a"), { key: "ArrowRight" })).toBe(false);
+  expect(dock.state.focused).toBe("b");
+  expect(document.activeElement).toBe(logIn("b"));
+  // A shell's terminal would take the arrows: its tab button gets the focus instead.
+  fireEvent.keyDown(logIn("b"), { key: "ArrowRight" });
+  expect(dock.state.focused).toBe("c");
+  const shellTab = screen.getByRole("tab", { name: /^Shell/ });
+  expect(document.activeElement).toBe(shellTab);
+  await act(async () => {});
+  expect(document.activeElement).toBe(shellTab);
+  // The tablist's own arrows wrap around to the first tab.
+  fireEvent.keyDown(shellTab, { key: "ArrowRight" });
+  expect(dock.state.focused).toBe("a");
+  // And from the first log, left wraps around to the last.
+  logIn("a").focus();
+  fireEvent.keyDown(logIn("a"), { key: "ArrowLeft" });
+  expect(dock.state.focused).toBe("c");
+  expect(document.activeElement).toBe(shellTab);
+});
+
+it("alt+up from the log viewport returns to the table and alt+left is not a tab switch", () => {
+  renderDock();
+  openKeyboardTestLog("a");
+  openKeyboardTestLog("b");
+  const log = logIn("b");
+  log.focus();
+  for (const init of [{ altKey: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }]) {
+    expect(fireEvent.keyDown(log, { key: "ArrowLeft", ...init })).toBe(true);
+    expect(fireEvent.keyDown(log, { key: "ArrowRight", ...init })).toBe(true);
+  }
+  expect(dock.state.focused).toBe("b");
+  expect(document.activeElement).toBe(log);
+  expect(fireEvent.keyDown(log, { key: "ArrowUp", altKey: true })).toBe(false);
+  expect(document.activeElement).toBe(workspaceButton());
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+});
+
+it("ctrl+delete closes the highlighted tab and focus moves to the next", () => {
+  renderDock();
+  openKeyboardTestLog("a");
+  openKeyboardTestLog("b");
+  openKeyboardTestLog("c");
+  fireEvent.click(tabOf("b"));
+  logIn("b").focus();
+  expect(fireEvent.keyDown(logIn("b"), { key: "Delete", ctrlKey: true })).toBe(false);
+  expect(dock.state.sessions.map((x) => x.id)).toEqual(["a", "c"]);
+  expect(document.activeElement).toBe(logIn("c"));
+  // From the tab button, and with the macOS key: the neighbour takes over, as in a browser.
+  tabOf("c").focus();
+  expect(fireEvent.keyDown(tabOf("c"), { key: "Backspace", metaKey: true })).toBe(false);
+  expect(dock.state.sessions.map((x) => x.id)).toEqual(["a"]);
+  expect(document.activeElement).toBe(logIn("a"));
+  // A held key closes once.
+  openKeyboardTestLog("d");
+  logIn("d").focus();
+  expect(fireEvent.keyDown(logIn("d"), { key: "Delete", ctrlKey: true, repeat: true })).toBe(false);
+  expect(dock.state.sessions.map((x) => x.id)).toEqual(["a", "d"]);
+  // The close button of a tab closes that tab.
+  const close = screen.getByRole("button", { name: /^Close logs .* \/ a \(/ });
+  close.focus();
+  fireEvent.keyDown(close, { key: "Delete", ctrlKey: true });
+  expect(dock.state.sessions.map((x) => x.id)).toEqual(["d"]);
+  expect(document.activeElement).toBe(logIn("d"));
+  expect(returns).toBe(0);
+});
+
+it("closing the last tab with ctrl+delete returns to the same row", () => {
+  renderDock();
+  openKeyboardTestLog("api");
+  const row = workspaceButton();
+  row.focus();
+  fireEvent.keyDown(row, { key: "ArrowDown", altKey: true });
+  const log = screen.getByRole("log");
+  expect(document.activeElement).toBe(log);
+  expect(fireEvent.keyDown(log, { key: "Delete", ctrlKey: true })).toBe(false);
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(FakeWebSocket.last.closedByClient).toBe(true);
+  expect(document.activeElement).toBe(row);
+});
+
+it("ctrl+delete in the log search or a terminal never closes", async () => {
+  renderDock();
+  await openShell(shell("sh"));
+  const terminal = screen.getByRole("textbox");
+  openKeyboardTestLog("api");
+  const search = screen.getByRole("searchbox");
+  search.focus();
+  expect(fireEvent.keyDown(search, { key: "Delete", ctrlKey: true })).toBe(true);
+  expect(fireEvent.keyDown(search, { key: "Backspace", metaKey: true })).toBe(true);
+  expect(fireEvent.keyDown(search, { key: "Backspace", ctrlKey: true })).toBe(true);
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(document.activeElement).toBe(search);
+  fireEvent.click(screen.getByRole("tab", { name: /^Shell/ }));
+  act(() => terminal.focus());
+  expect(fireEvent.keyDown(terminal, { key: "Delete", ctrlKey: true })).toBe(true);
+  expect(fireEvent.keyDown(terminal, { key: "Backspace", metaKey: true })).toBe(true);
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(document.activeElement).toBe(terminal);
+  expect(FakeWebSocket.instances.every((w) => !w.closedByClient)).toBe(true);
+});
+
+it("shift+L in the follow log pins its pod", async () => {
+  vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+  renderDock();
+  act(() => dock.openFollow(demoPod));
+  await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+  const log = screen.getByRole("log");
+  log.focus();
+  expect(fireEvent.keyDown(log, { key: "L", shiftKey: true })).toBe(false);
+  expect(dock.state.sessions).toHaveLength(2);
+  expect(dock.state.sessions[1]).toMatchObject({ pinned: true, pod: "two-containers" });
+  expect(document.activeElement).toBe(log);
+  // Held, it pins once; from the follow tab, it pins the same pod (already pinned: one tab).
+  fireEvent.keyDown(log, { key: "L", shiftKey: true, repeat: true });
+  const followTab = screen.getAllByRole("tab")[0];
+  followTab.focus();
+  fireEvent.keyDown(followTab, { key: "L", shiftKey: true });
+  expect(dock.state.sessions).toHaveLength(2);
+  // On a pinned log it means nothing.
+  fireEvent.click(screen.getAllByRole("tab")[1]);
+  const pinnedLog = within(shown()[0]).getByRole("log");
+  pinnedLog.focus();
+  expect(fireEvent.keyDown(pinnedLog, { key: "L", shiftKey: true })).toBe(true);
+  expect(dock.state.sessions).toHaveLength(2);
+});
+
+it("closing the focused follow tab by cluster removal rescues focus", async () => {
+  vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+  const { client } = renderDock();
+  act(() => dock.openFollow(demoPod));
+  await waitFor(() => expect(dock.state.sessions).toHaveLength(1));
+  const log = screen.getByRole("log");
+  log.focus();
+  act(() => clusterLifecycle(client).remove(aks.id));
+  expect(dock.state.sessions).toHaveLength(0);
+  expect(log.isConnected).toBe(false);
+  expect(document.activeElement).not.toBe(document.body);
+  expect(document.activeElement).toBe(workspaceButton());
+});
+
+it("the close button names ctrl+delete", async () => {
+  renderDock();
+  openKeyboardTestLog("api");
+  await openShell(shell("sh"));
+  for (const close of [
+    screen.getByRole("button", { name: /Close logs.*api/ }),
+    screen.getByRole("button", { name: /Close shell/ }),
+  ]) {
+    expect(close.getAttribute("title")).toBe("Close (Ctrl+Del)");
+    expect(close.getAttribute("aria-keyshortcuts")).toBe("Control+Delete");
+  }
+  const platform = vi.spyOn(Navigator.prototype, "platform", "get").mockReturnValue("MacIntel");
+  try {
+    openKeyboardTestLog("other");
+    const close = screen.getByRole("button", { name: /Close logs.*other/ });
+    expect(close.getAttribute("title")).toBe("Close (⌘⌫)");
+    expect(close.getAttribute("aria-keyshortcuts")).toBe("Meta+Backspace");
+  } finally {
+    platform.mockRestore();
+  }
+  // Tab still crosses the dock's edge both ways.
+  const workspace = workspaceButton();
+  const resize = screen.getByRole("separator", { name: "Resize the dock" });
+  workspace.focus();
+  const user = userEvent.setup();
+  await user.tab();
+  expect(document.activeElement).toBe(resize);
+  await user.tab({ shift: true });
+  expect(document.activeElement).toBe(workspace);
+});
+
+it("the first escape clears the search, the second goes back to the table", () => {
   renderDock();
   openKeyboardTestLog("api");
   const search = screen.getByRole<HTMLInputElement>("searchbox");
   search.focus();
   fireEvent.change(search, { target: { value: "failure" } });
-  fireEvent.keyDown(search, { key: "Escape" });
+  expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
   expect(search.value).toBe("");
+  expect(document.activeElement).toBe(search);
+  // The held first press doesn't carry on out of the logs.
   expect(fireEvent.keyDown(search, { key: "Escape", repeat: true })).toBe(false);
-  expect(FakeWebSocket.last.closedByClient).toBe(false);
+  expect(document.activeElement).toBe(search);
   fireEvent.keyDown(search, { key: "Escape" });
-  expect(FakeWebSocket.last.closedByClient).toBe(true);
+  expect(document.activeElement).toBe(workspaceButton());
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(FakeWebSocket.last.closedByClient).toBe(false);
 });
 
 it("keeps Escape and Alt+Up out of the native container picker, composition, and modal", () => {
@@ -989,41 +1257,40 @@ it("keeps Escape and Alt+Up out of the native container picker, composition, and
   picker.focus();
   expect(fireEvent.keyDown(picker, { key: "Escape" })).toBe(true);
   expect(fireEvent.keyDown(picker, { key: "ArrowUp", altKey: true })).toBe(true);
+  expect(fireEvent.keyDown(picker, { key: "Delete", ctrlKey: true })).toBe(true);
+  expect(document.activeElement).toBe(picker);
   tab.focus();
   expect(fireEvent.keyDown(tab, { key: "Escape", isComposing: true })).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "node shell" }));
+  expect(fireEvent.keyDown(tab, { key: "ArrowUp", altKey: true, isComposing: true })).toBe(true);
+  fireEvent.click(workspaceButton());
   expect(screen.getByRole("alertdialog")).toBeTruthy();
+  tab.focus();
   expect(fireEvent.keyDown(tab, { key: "Escape" })).toBe(true);
+  expect(fireEvent.keyDown(tab, { key: "ArrowUp", altKey: true })).toBe(true);
+  expect(fireEvent.keyDown(tab, { key: "Delete", ctrlKey: true })).toBe(true);
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(returns).toBe(0);
   expect(FakeWebSocket.last.closedByClient).toBe(false);
 });
 
-it("leaves terminal keys alone and does not autofocus a shell revealed by a keyboard close", async () => {
+it("ctrl+delete on a log beside a shell does not autofocus the shell", async () => {
   renderDock();
   await openShell(shell("terminal"));
   const terminal = screen.getByRole("textbox");
   expect(document.activeElement).toBe(terminal);
+  // Esc belongs to the terminal (vim, less); Alt+Up leaves it.
   expect(fireEvent.keyDown(terminal, { key: "Escape" })).toBe(true);
-  expect(fireEvent.keyDown(terminal, { key: "ArrowUp", altKey: true })).toBe(true);
-  const logTab = openKeyboardTestLog("api");
-  logTab.focus();
-  fireEvent.keyDown(logTab, { key: "Escape" });
-  expect(document.activeElement).toBe(screen.getByRole("button", { name: "node shell" }));
-  expect(screen.getByRole("tab", { name: /Shell/ }).getAttribute("aria-selected")).toBe("true");
-  expect(FakeWebSocket.instances[0].closedByClient).toBe(false);
-});
-
-it("advertises Escape on the log close button and allows Tab to cross the dock boundary", async () => {
-  renderDock();
+  expect(document.activeElement).toBe(terminal);
+  expect(fireEvent.keyDown(terminal, { key: "ArrowUp", altKey: true })).toBe(false);
+  expect(document.activeElement).toBe(workspaceButton());
   openKeyboardTestLog("api");
-  const close = screen.getByRole("button", { name: /Close logs.*api/ });
-  expect(close.getAttribute("title")).toBe("Close (Esc)");
-  expect(close.getAttribute("aria-keyshortcuts")).toBe("Escape");
-  const workspace = screen.getByRole("button", { name: "node shell" });
-  const resize = screen.getByRole("separator", { name: "Resize the dock" });
-  workspace.focus();
-  const user = userEvent.setup();
-  await user.tab();
-  expect(document.activeElement).toBe(resize);
-  await user.tab({ shift: true });
-  expect(document.activeElement).toBe(workspace);
+  const log = screen.getByRole("log");
+  log.focus();
+  fireEvent.keyDown(log, { key: "Delete", ctrlKey: true });
+  const shellTab = screen.getByRole("tab", { name: /Shell/ });
+  expect(shellTab.getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(shellTab);
+  await act(async () => {});
+  expect(document.activeElement).toBe(shellTab);
+  expect(FakeWebSocket.instances[0].closedByClient).toBe(false);
 });

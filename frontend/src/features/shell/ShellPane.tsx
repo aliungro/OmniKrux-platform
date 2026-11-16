@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { ShellSession } from "../../api/types";
+import { pressed } from "../chrome/shortcuts";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import pc from "../territories/provider.module.css";
 import { useExec } from "./useExec";
@@ -124,6 +125,9 @@ export function ShellPane({
         // Not laid out yet (hidden tab); the next resize fits it.
       }
     };
+    // Alt+Up leaves the shell for the table: not sent to the shell, so it reaches the dock.
+    // Every other key, Esc included (vim, less), is the shell's.
+    term.attachCustomKeyEventHandler?.((e) => !(e.type === "keydown" && pressed("leaveLogs", e)));
     const typed = term.onData((d) => send(d));
     const sized = term.onResize(({ cols, rows }) => resize(cols, rows));
     let watcher: ResizeObserver | null = null;

@@ -201,6 +201,19 @@ describe("audit view", () => {
     expect(screen.queryByText("+replicas: 3")).toBeNull();
   });
 
+  it("leaves alt, ctrl and cmd arrows on a row to the page (alt+down goes into the logs)", async () => {
+    serve(() => ({ records: [record(2), record(1)], next_before: null }));
+    show();
+    const [first, second] = await screen.findAllByRole("row", { name: /web-/ });
+    act(() => first.focus());
+    for (const init of [{ altKey: true }, { ctrlKey: true }, { metaKey: true }]) {
+      expect(fireEvent.keyDown(first, { key: "ArrowDown", ...init })).toBe(true);
+    }
+    expect(document.activeElement).toBe(first);
+    expect(fireEvent.keyDown(first, { key: "ArrowDown" })).toBe(false);
+    await waitFor(() => expect(document.activeElement).toBe(second));
+  });
+
   it("only the two header lines are diff headers", async () => {
     // A removed line whose own text starts with "--" is still a removed line.
     serve(() => ({

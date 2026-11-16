@@ -1,4 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
+import { isMac } from "../chrome/shortcuts";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import pc from "../territories/provider.module.css";
 import { identity, type DockLayout, type Session } from "./dockState";
@@ -57,6 +58,10 @@ export function SessionTabs({
   onToggleLayout: () => void;
 }) {
   const refs = useRef(new Map<string, HTMLButtonElement>());
+  // Ctrl+Del, or Cmd+Backspace on a Mac, closes the tab that has the focus.
+  const mac = isMac();
+  const closeTitle = mac ? "Close (⌘⌫)" : "Close (Ctrl+Del)";
+  const closeKeys = mac ? "Meta+Backspace" : "Control+Delete";
 
   // Reveal the full session, including its close button, when it is opened or selected.
   useEffect(() => {
@@ -64,8 +69,10 @@ export function SessionTabs({
     if (tab) revealSessionTab(tab);
   }, [focused]);
 
-  // Left/right move between tabs, Home/End jump to the ends, as a tablist should.
+  // Left/right move between tabs, Home/End jump to the ends, as a tablist should. With a modifier
+  // they are someone else's (Alt+Left and Alt+Right are history).
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const at = sessions.findIndex((x) => x.id === focused);
     if (at < 0) return;
     let next = -1;
@@ -126,8 +133,8 @@ export function SessionTabs({
                 type="button"
                 className={s.x}
                 aria-label={`Close ${KIND_LABEL[x.kind].toLowerCase()} ${where}`}
-                title={x.kind === "logs" ? "Close (Esc)" : "Close"}
-                aria-keyshortcuts={x.kind === "logs" ? "Escape" : undefined}
+                title={closeTitle}
+                aria-keyshortcuts={closeKeys}
                 onClick={() => onClose(x.id)}
               >
                 ×

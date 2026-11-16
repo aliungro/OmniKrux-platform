@@ -12,8 +12,29 @@ import { describeBody, container } from "../../test/describe";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import { FOLLOW_SETTLE_MS } from "../dock/follow";
-vi.mock("@xterm/xterm", () => ({Terminal:class {}}));
-vi.mock("@xterm/addon-fit", () => ({FitAddon:class {}}));
+// The dock tests' terminal: a helper textarea inside a .xterm root, as xterm draws it.
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    cols = 80;
+    rows = 24;
+    input = document.createElement("textarea");
+    loadAddon() {}
+    open(host: HTMLElement) {
+      const root = document.createElement("div");
+      root.className = "xterm";
+      root.append(this.input);
+      host.append(root);
+    }
+    attachCustomKeyEventHandler() {}
+    focus() { this.input.focus(); }
+    write() {}
+    reset() {}
+    dispose() {}
+    onData() { return { dispose() {} }; }
+    onResize() { return { dispose() {} }; }
+  },
+}));
+vi.mock("@xterm/addon-fit", () => ({FitAddon:class { fit() {} }}));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 // The YAML editor as CodeMirror draws it: a contenteditable box.
 vi.mock("../actions/lazyCodeMirror", () => ({
@@ -621,12 +642,95 @@ it("ctrl+delete never acts from a field, a kind tab or a dialog", async () => {
   expect(editor.isConnected).toBe(true);
 });
 
-it("lists the logs zone's back shortcuts in help", () => {
+it("lists the dock's close and return shortcuts in help", () => {
   renderShell();
   fireEvent.keyDown(document.body, { key: "?" });
   const help = within(screen.getByRole("dialog", { name: "All shortcuts" }));
   expect(help.getByText("Back to the table, same row (never closes a log)")).toBeTruthy();
   expect(help.getByText("Back to the table, from a log or a shell")).toBeTruthy();
+  expect(help.getByText("Delete what has the focus: a resource row (reviewed first) or a dock tab")).toBeTruthy();
+});
+
+const terminalOf = () => document.querySelector<HTMLTextAreaElement>(".xterm textarea");
+
+it("S still opens a shell that takes the keyboard", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "s" });
+  const tab = await screen.findByRole("tab", { name: new RegExp(`^Shell.*${pods[0].name}`) });
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  await waitFor(() => expect(document.activeElement).toBe(terminalOf()));
+});
+
+it("alt+up from a shell returns to the table", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "s" });
+  await waitFor(() => expect(document.activeElement).toBe(terminalOf()));
+  const terminal = terminalOf()!;
+  // Esc is the terminal's (vim, less).
+  expect(fireEvent.keyDown(terminal, { key: "Escape" })).toBe(true);
+  expect(document.activeElement).toBe(terminal);
+  expect(fireEvent.keyDown(terminal, { key: "ArrowUp", altKey: true })).toBe(false);
+  await waitFor(() => expect(document.activeElement).toBe(first));
+  expect(screen.getByRole("tab", { name: new RegExp(`^Shell.*${pods[0].name}`) })).toBeTruthy();
+});
+
+it("alt+down from a row moves into the follow log and esc comes back", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  await logTab(pods[0].name);
+  expect(document.activeElement).toBe(first);
+  expect(fireEvent.keyDown(first, { key: "ArrowDown", altKey: true })).toBe(false);
+  const log = screen.getByRole("log");
+  expect(document.activeElement).toBe(log);
+  expect(first.getAttribute("aria-selected")).toBe("true");
+  fireEvent.keyDown(log, { key: "Escape" });
+  await waitFor(() => expect(document.activeElement).toBe(first));
+  expect(screen.getAllByRole("tab", { name: /Logs/ })).toHaveLength(1);
+  expect(logStream(pods[0].name).closedByClient).toBe(false);
+});
+
+it("alt+down works from the audit log too, and says so with nothing open", async () => {
+  renderShell();
+  fireEvent.click(screen.getByRole("button", { name: "Audit log" }));
+  const main = screen.getByRole("main");
+  await waitFor(() => expect(document.activeElement).toBe(main));
+  expect(fireEvent.keyDown(main, { key: "ArrowDown", altKey: true })).toBe(false);
+  expect(screen.getByText("No logs open yet: press L on a pod first.")).toBeTruthy();
+  expect(document.activeElement).toBe(main);
+});
+
+it("moving to a deployment keeps the last pod and says so", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "l" });
+  await logTab(pods[0].name);
+  const main = screen.getByRole("main");
+  main.focus();
+  fireEvent.keyDown(main, { key: "ArrowRight" });
+  await screen.findByRole("grid", { name: "Deployments by cluster" });
+  const socket = await waitFor(() => {
+    const connection = FakeWebSocket.instances.filter(w => w.params.get("kind") === "deployments.apps" && !w.closedByClient).at(-1);
+    if (!connection) throw new Error("Waiting for the Deployments watch");
+    return connection;
+  });
+  act(() => {
+    socket.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    socket.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [{
+      uid: "dep", cluster_id: "c1", kind: "Deployment", namespace: "demo", name: "api",
+      created_at: null, labels: {}, columns: {},
+    }] });
+  });
+  await screen.findByRole("gridcell", { name: "api" });
+  main.focus();
+  fireEvent.keyDown(main, { key: "ArrowDown" });
+  await new Promise((resolve) => setTimeout(resolve, FOLLOW_SETTLE_MS));
+  const pane = screen.getByRole("region", { name: `Logs for ${pods[0].name}` });
+  await waitFor(() => expect(within(pane).getByRole("status").textContent)
+    .toBe(`Still showing ${pods[0].name}: the selected row isn't a pod.`));
+  expect(logStream(pods[0].name).closedByClient).toBe(false);
 });
 
 it("does not close an open pod inspector on a repeated Escape after returning", async () => {

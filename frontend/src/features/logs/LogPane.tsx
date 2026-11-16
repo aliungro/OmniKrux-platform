@@ -159,12 +159,21 @@ function emptyText(status: LogStreamStatus, previous: boolean): string | null {
   }
 }
 
+/** What the pane reads from; when it changes (the follow log moved to another pod), the stream starts over. */
+function targetOf(session: LogSession): string {
+  return [session.clusterId, session.namespace, session.pod ?? "", session.selector ?? "", session.container ?? ""].join("|");
+}
+
 /**
  * A live, searchable log for one session. Lines live in a ring buffer outside React; the pane
  * renders only the rows in view, and only when the buffer's version moves.
  * `active`: whether Ctrl F belongs to this pane (the dock passes it for the focused session).
+ * `note`: why the follow log still shows its last pod, announced under the header.
+ *
+ * Retargeted in place (the follow log moving to another pod), it reads the new pod's container
+ * from the start, following, and keeps the reader's search, wrap and timestamps (and the focus).
  */
-export function LogPane({ session, active = true }: { session: LogSession; active?: boolean }) {
+export function LogPane({ session, active = true, note = null }: { session: LogSession; active?: boolean; note?: string | null }) {
   const [previous, setPrevious] = useState(session.previous ?? false);
   const [container, setContainer] = useState<string | null>(session.container ?? session.containers[0] ?? null);
   const [follow, setFollow] = useState(true);
@@ -173,6 +182,16 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
   const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [currentSeq, setCurrentSeq] = useState<number | null>(null);
+
+  const targetKey = targetOf(session);
+  const [shownKey, setShownKey] = useState(targetKey);
+  if (shownKey !== targetKey) {
+    setShownKey(targetKey);
+    setContainer(session.container ?? session.containers[0] ?? null);
+    setPrevious(session.previous ?? false);
+    setFollow(true);
+    setCurrentSeq(null);
+  }
 
   const { buffer, status, message, retry } = useLogStream({
     cluster: session.clusterId,
@@ -294,6 +313,30 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
     }
   };
 
+  /**
+   * The log's own keys, with no modifier held (Alt+Up leaves the logs): a line or a page up or
+   * down, the top (which stops following) and the live end. Left and right are the dock's.
+   */
+  const onLogKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    readerScrolls();
+    const el = scrollRef.current;
+    if (!el || e.target !== el || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const page = Math.round(el.clientHeight * 0.9);
+    const by: Record<string, number> = { ArrowUp: -LINE_HEIGHT, ArrowDown: LINE_HEIGHT, PageUp: -page, PageDown: page };
+    if (e.key in by) {
+      if (by[e.key] < 0) setFollow(false); // reading back: new lines mustn't pull the view down
+      el.scrollTop = Math.max(0, Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + by[e.key]));
+    } else if (e.key === "Home") {
+      setFollow(false);
+      el.scrollTop = 0;
+    } else if (e.key === "End") {
+      jumpToLive();
+    } else {
+      return;
+    }
+    e.preventDefault();
+  };
+
   const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (query && !e.shiftKey && !e.nativeEvent.isComposing && pressed("backToTable", e)) {
       e.preventDefault();
@@ -376,6 +419,8 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
           </a>
         )}
       </header>
+      {/* Always there (empty, it takes no room), so a new note is announced. */}
+      <p className={s.note} role="status">{note}</p>
 
       <div className={s.bar}>
         <div className={`${s.search}${query ? ` ${s.searching}` : ""}`}>
@@ -437,7 +482,7 @@ export function LogPane({ session, active = true }: { session: LogSession; activ
           onWheel={readerScrolls}
           onTouchStart={readerScrolls}
           onPointerDown={readerScrolls}
-          onKeyDown={readerScrolls}
+          onKeyDown={onLogKey}
         >
           <div className={s.body} style={{ height: virtualizer.getTotalSize() }}>
             {body}

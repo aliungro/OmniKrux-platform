@@ -26,6 +26,8 @@ const fake = vi.hoisted(() => {
     dispose() { this.disposed = true; }
     onData(cb: (d: string) => void) { this.data.push(cb); return { dispose() {} }; }
     onResize(cb: (s: { cols: number; rows: number }) => void) { this.size.push(cb); return { dispose() {} }; }
+    keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
+    attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean) { this.keyHandler = handler; }
     type(d: string) { this.data.forEach((cb) => cb(d)); }
     resize(cols: number, rows: number) {
       this.cols = cols;
@@ -244,6 +246,21 @@ describe("ShellPane", () => {
     const { ws } = open();
     act(() => ws.emit({ type: "exit", code: 127, message: null, cannot_run: false }));
     expect(screen.queryByRole("button", { name: "Start a debug container" })).toBeNull();
+  });
+
+  it("alt+up leaves the terminal and esc stays in it", () => {
+    render(<ShellPane session={session()} />);
+    const handler = FakeTerminal.last.keyHandler!;
+    expect(handler).toBeTypeOf("function");
+    const key = (type: string, init: KeyboardEventInit) => handler(new KeyboardEvent(type, init));
+    // Alt+Up is not sent to the shell, so it bubbles to the dock, which goes back to the table.
+    expect(key("keydown", { key: "ArrowUp", altKey: true })).toBe(false);
+    // Everything else is the shell's: Esc for vim and less, the arrows for history.
+    expect(key("keydown", { key: "Escape" })).toBe(true);
+    expect(key("keydown", { key: "ArrowUp" })).toBe(true);
+    expect(key("keydown", { key: "ArrowDown", altKey: true })).toBe(true);
+    expect(key("keydown", { key: "ArrowUp", altKey: true, ctrlKey: true })).toBe(true);
+    expect(key("keyup", { key: "ArrowUp", altKey: true })).toBe(true);
   });
 
   it("disposes the terminal and closes the socket on unmount", () => {
