@@ -3,8 +3,6 @@
 .pane {
   --log-bg: #100E18;
   --log-ink: #C2BDD8;
-  --log-rail: #13111C;
-  --log-thumb: #2E2942;
   --hit: rgba(242, 193, 78, 0.28);
   --hit-ink: #FFE3A0;
   --mono: "Geist Mono", ui-monospace, Consolas, monospace;
@@ -253,8 +251,6 @@
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--log-ink);
-  scrollbar-width: thin;
-  scrollbar-color: var(--log-thumb) var(--log-rail);
 }
 
 .logs:focus-visible {
