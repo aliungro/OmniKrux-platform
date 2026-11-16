@@ -1441,10 +1441,53 @@ describe("one row of tabs and the open menu", () => {
     expect(screen.getByRole("button", { name: "All 21 open logs and shells" }).textContent).toBe("21 open");
   });
 
+  /**
+   * As Chrome lays the strip out: 800px wide, and its tabs fit only while a short tab is selected
+   * (the selected tab doesn't shrink and shows its close button, so a long one pushes the rest out).
+   */
+  const fitsWithShortSelected = () => {
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.getAttribute("role") !== "tablist") return 0;
+        const selected = this.querySelector('[role="tab"][aria-selected="true"]')?.textContent ?? "";
+        return selected.includes("orders-ledger") ? 1100 : 760;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get(this: HTMLElement) { return this.getAttribute("role") === "tablist" ? 800 : 0; },
+    });
+  };
+  const openFour = () => {
+    open(logs("long", { pod: longPod(1) }));
+    for (const id of ["a", "b", "c"]) open(logs(id, { pod: `web-${id}` }));
+  };
+  const menuOf = (n: number) => screen.queryByRole("button", { name: `All ${n} open logs and shells` });
+
   it("the open menu is hidden while tabs fit", () => {
+    fitsWithShortSelected();
     renderDock();
-    openTwenty();
-    expect(screen.queryByRole("button", { name: /open logs and shells/ })).toBeNull();
+    openFour();
+    expect(menuOf(4)).toBeNull();
+    // Selecting the long tab pushes the rest out of the strip; a short one again lets them fit.
+    fireEvent.click(screen.getByRole("tab", { name: /orders-ledger/ }));
+    expect(menuOf(4)).not.toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: /web-b/ }));
+    expect(menuOf(4)).toBeNull();
+  });
+
+  it("selecting a long tab shows the menu, so clipped tabs stay reachable", () => {
+    fitsWithShortSelected();
+    renderDock();
+    openFour();
+    expect(menuOf(4)).toBeNull();
+    // By keyboard: the arrows walk from web-a back to the long tab.
+    const tab = screen.getByRole("tab", { name: /web-a/ });
+    fireEvent.click(tab);
+    fireEvent.keyDown(tab, { key: "ArrowLeft" });
+    expect(screen.getByRole("tab", { name: /orders-ledger/ }).getAttribute("aria-selected")).toBe("true");
+    expect(menuOf(4)?.textContent).toBe("4 open");
   });
 
   it("the menu finds a session and picking it selects its tab", () => {

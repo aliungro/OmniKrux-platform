@@ -29,7 +29,8 @@ export function revealSessionTab(tab: HTMLElement) {
 
 /**
  * Whether the strip's tabs don't fit in one row. Measured when the strip is resized, and when
- * `contents` (what the tabs show) changes, since that changes their widths and not the strip's.
+ * `contents` (what the tabs show, and which is selected) changes, since that changes their widths
+ * and not the strip's.
  */
 export function useStripOverflow(ref: RefObject<HTMLElement | null>, contents: string): boolean {
   const [over, setOver] = useState(false);
@@ -83,9 +84,10 @@ export function SessionTabs({
   const [menuOpen, setMenuOpen] = useState(false);
   /** Where the focus goes once the menu has closed: the picked tab, or (with `pick` unset) the button. */
   const afterMenu = useRef<{ pick?: string } | null>(null);
+  // The selection counts too: the selected tab doesn't shrink and shows its close button.
   const overflow = useStripOverflow(
     strip,
-    sessions.map((x) => [x.id, x.pod, tagOf(x)].join(" ")).join("\n"),
+    [focused, ...sessions.map((x) => [x.id, x.pod, tagOf(x)].join(" "))].join("\n"),
   );
   // Ctrl+Del, or Cmd+Backspace on a Mac, closes the tab that has the focus.
   const mac = isMac();
