@@ -1294,3 +1294,57 @@ it("ctrl+delete on a log beside a shell does not autofocus the shell", async () 
   expect(document.activeElement).toBe(shellTab);
   expect(FakeWebSocket.instances[0].closedByClient).toBe(false);
 });
+
+it.each([
+  ["alt+up", { key: "ArrowUp", altKey: true }],
+  ["esc", { key: "Escape" }],
+] as const)("%s on the grip leaves the height alone and returns to the row", (_, init) => {
+  renderDock();
+  openKeyboardTestLog("api");
+  const row = workspaceButton();
+  const grip = screen.getByRole("separator", { name: "Resize the dock" });
+  const height = grip.getAttribute("aria-valuenow");
+  grip.focus();
+  expect(fireEvent.keyDown(grip, init)).toBe(false);
+  expect(grip.getAttribute("aria-valuenow")).toBe(height);
+  expect(dock.state.height).toBe(Number(height));
+  expect(document.activeElement).toBe(row);
+  // The grip's own keys still resize, and only without a modifier.
+  grip.focus();
+  for (const mod of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }]) {
+    expect(fireEvent.keyDown(grip, { key: "ArrowDown", ...mod })).toBe(true);
+  }
+  expect(grip.getAttribute("aria-valuenow")).toBe(height);
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+});
+
+it.each(["alt+up", "esc"])("%s on the side-by-side button returns to the row", (which) => {
+  renderDock();
+  openKeyboardTestLog("a");
+  openKeyboardTestLog("b");
+  const layout = screen.getByRole("button", { name: "Side by side" });
+  layout.focus();
+  const init = which === "esc" ? { key: "Escape" } : { key: "ArrowUp", altKey: true };
+  expect(fireEvent.keyDown(layout, init)).toBe(false);
+  expect(document.activeElement).toBe(workspaceButton());
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(dock.state.layout).toBe("single");
+});
+
+it("an arrow to the tab that is already selected never pulls the focus back later", () => {
+  renderDock();
+  openKeyboardTestLog("a");
+  openKeyboardTestLog("b");
+  fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
+  expect(dock.state.focused).toBe("b");
+  // The arrow arrives on the peer's log while b is still the selected tab: nothing to dispatch.
+  fireEvent.keyDown(logIn("a"), { key: "ArrowRight" });
+  expect(dock.state.focused).toBe("b");
+  expect(document.activeElement).toBe(logIn("b"));
+  // Back on the table, a later change in the dock (a log opened quietly) leaves the focus there.
+  const row = workspaceButton();
+  row.focus();
+  act(() => dock.dispatch({ type: "open", session: shell("c", { kind: "logs", pod: "c" }), focus: false }));
+  expect(dock.state.sessions).toHaveLength(3);
+  expect(document.activeElement).toBe(row);
+});

@@ -71,6 +71,8 @@ function Grip({ height, minimum, max, onResize }: { height: number; minimum: num
     drag.current = null;
   };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    // With a modifier the arrows are someone else's: Alt+Up leaves the logs.
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const by: Record<string, number> = { ArrowUp: height + STEP, ArrowDown: height - STEP, Home: minimum, End: max };
     if (!(e.key in by)) return;
     e.preventDefault();
@@ -237,22 +239,31 @@ export const Dock = memo(function Dock({
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     const target = dockKeyTarget(e);
     if (!target) return;
+    let act: (() => void) | null = null;
+    // Back to the table, from anywhere in the dock: a session or the strip's controls (grip, layout).
+    if ((!e.shiftKey && pressed("backToTable", e) && !inTerminal(target)) || pressed("leaveLogs", e)) {
+      act = onFocusWorkspace;
+    }
     const owner = target.closest<HTMLElement>("[data-dock-session]");
     const at = state.sessions.findIndex((x) => x.id === owner?.dataset.dockSession);
-    if (at < 0) return;
     const session = state.sessions[at];
     const onLog = target.matches('[role="log"]');
     // The tab button or its close button.
     const onTab = target.closest('[role="tablist"]') !== null;
 
-    let act: (() => void) | null = null;
-    if ((!e.shiftKey && pressed("backToTable", e) && !inTerminal(target)) || pressed("leaveLogs", e)) {
-      act = onFocusWorkspace;
+    if (act || !session) {
+      // Nothing else is the strip's.
     } else if (onLog && plain(e) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
       act = () => {
         const n = state.sessions.length;
         const next = state.sessions[(at + (e.key === "ArrowRight" ? 1 : n - 1)) % n];
         if (next.id === session.id) return;
+        if (next.id === state.focused) {
+          // Already selected (an arrow from its split peer): nothing re-renders, so focus it now
+          // rather than leave a pending focus for some later change to spring on the table.
+          landingOf(next.id)?.focus();
+          return;
+        }
         moveTo(next.id);
         dispatch({ type: "focus", id: next.id });
       };
