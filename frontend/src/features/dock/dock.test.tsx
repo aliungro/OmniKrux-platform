@@ -1498,7 +1498,8 @@ describe("one row of tabs and the open menu", () => {
     expect(document.activeElement).toBe(find);
     expect(menuButton().getAttribute("aria-expanded")).toBe("true");
     const menu = screen.getByRole("dialog", { name: "Open logs and shells" });
-    const list = within(menu).getByRole("listbox");
+    // Named apart from the dialog, so it isn't announced twice.
+    const list = within(menu).getByRole("listbox", { name: "Matching logs and shells" });
     expect(find.getAttribute("aria-controls")).toBe(list.id);
     expect(within(list).getAllByRole("option")).toHaveLength(20);
     // The selected session is the selected option, and the active one to start with.
@@ -1511,6 +1512,8 @@ describe("one row of tabs and the open menu", () => {
     expect(rest).toHaveLength(0);
     expect(only.textContent).toBe("AKScrasher-7f9c6d-x2kq9 · demo");
     expect(only.getAttribute("title")).toBe("aks-prod-weu / demo / crasher-7f9c6d-x2kq9 (app)");
+    // Named as its tab is, not by the badge, marker and pod run together.
+    expect(only.getAttribute("aria-label")).toBe("Logs: aks-prod-weu / demo / crasher-7f9c6d-x2kq9 (app)");
     expect(find.getAttribute("aria-activedescendant")).toBe(only.id);
 
     fireEvent.keyDown(find, { key: "Enter" });
@@ -1560,6 +1563,7 @@ describe("one row of tabs and the open menu", () => {
     const find = screen.getByRole("combobox", { name: "Find a log or shell" });
     fireEvent.change(find, { target: { value: "pinned" } });
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["AKS📌stuck · payments"]);
+    expect(screen.getByRole("option", { name: "Logs Pinned: aks-prod-weu / payments / stuck (app)" })).toBeTruthy();
     fireEvent.change(find, { target: { value: "shell" } });
     expect(screen.queryAllByRole("option")).toHaveLength(0);
     fireEvent.change(find, { target: { value: "logs" } });

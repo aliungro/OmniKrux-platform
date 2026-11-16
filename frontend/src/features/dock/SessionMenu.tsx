@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import pc from "../territories/provider.module.css";
 import { identity, type Session } from "./dockState";
-import { KIND_LABEL, SessionMarker, tagOf } from "./SessionMarker";
+import { KIND_LABEL, SessionMarker, sessionName, tagOf } from "./SessionMarker";
 import s from "./SessionMenu.module.css";
 
 const EDGE = 8; // the menu keeps this far from the window's edges
@@ -147,7 +147,7 @@ export function SessionMenu({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKey}
       />
-      <div role="listbox" id={listId} aria-label="Open logs and shells" className={s.list}>
+      <div role="listbox" id={listId} aria-label="Matching logs and shells" className={s.list}>
         {shown.map((x) => {
           const provider = knownProvider(x.cluster.provider);
           return (
@@ -156,6 +156,7 @@ export function SessionMenu({
               id={optionId(x.id)}
               role="option"
               aria-selected={x.id === focused}
+              aria-label={sessionName(x)}
               data-active={x.id === active ? "true" : undefined}
               title={identity(x)}
               className={`${s.option} ${pc[provider]}`}

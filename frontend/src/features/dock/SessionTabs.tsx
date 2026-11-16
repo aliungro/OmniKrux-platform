@@ -3,7 +3,7 @@ import { isMac } from "../chrome/shortcuts";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import pc from "../territories/provider.module.css";
 import { identity, type DockLayout, type Session } from "./dockState";
-import { KIND_LABEL, SessionMarker, tagOf } from "./SessionMarker";
+import { KIND_LABEL, SessionMarker, sessionName, tagOf } from "./SessionMarker";
 import { SessionMenu } from "./SessionMenu";
 import s from "./SessionTabs.module.css";
 
@@ -149,7 +149,6 @@ export function SessionTabs({
         {sessions.map((x) => {
           const on = x.id === focused;
           const provider = knownProvider(x.cluster.provider);
-          const tag = tagOf(x);
           const where = identity(x);
           return (
             <div
@@ -169,7 +168,7 @@ export function SessionTabs({
                 type="button"
                 role="tab"
                 id={tabId(base, x.id)}
-                aria-label={`${KIND_LABEL[x.kind]}${tag ? ` ${tag}` : ""}: ${where}`}
+                aria-label={sessionName(x)}
                 aria-selected={on}
                 aria-controls={panelId(base, x.id)}
                 tabIndex={on ? 0 : -1}

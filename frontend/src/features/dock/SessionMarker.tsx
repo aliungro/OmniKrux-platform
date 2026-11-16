@@ -1,4 +1,4 @@
-import type { Session } from "./dockState";
+import { identity, type Session } from "./dockState";
 import s from "./SessionTabs.module.css";
 
 export const KIND_LABEL = { logs: "Logs", shell: "Shell" } as const;
@@ -12,6 +12,12 @@ export function tagOf(x: Session): string | null {
   if (x.selector) return "All pods";
   if (x.previous) return "Previous";
   return null;
+}
+
+/** A session's accessible name, on its tab and its "{n} open" option: "Logs Pinned: cluster / namespace / pod (container)". */
+export function sessionName(x: Session): string {
+  const tag = tagOf(x);
+  return `${KIND_LABEL[x.kind]}${tag ? ` ${tag}` : ""}: ${identity(x)}`;
 }
 
 /**
