@@ -6,10 +6,28 @@ import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
 import { Status } from "./Status";
 import { CERTIFICATES, DEPLOYMENTS, EVENTS, HELM, NODES, PODS, SERVICES } from "../../test/kinds";
-import { Cell } from "./cells";
+import { Cell, gridTemplate, minTableWidth } from "./cells";
 import type { MetricsLookup } from "../../api/useMetrics";
-import type { Usage } from "../../api/types";
+import type { ContainerState, Usage } from "../../api/types";
 import { Table } from "../../test/table";
+import { readFileSync } from "node:fs";
+import rowStyles from "./ResourceRowView.module.css";
+import statusStyles from "./Status.module.css";
+import bulletStyles from "./ContainerBullets.module.css";
+import bandStyles from "./ClusterBand.module.css";
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
+
+// Vitest stubs CSS imports. Apply real rules to their module class names for
+// computed-style integration checks; pixel layout remains a browser check.
+function componentCss(file: string, classes: Record<string, string>) {
+  return readFileSync(new URL(file, import.meta.url), "utf8").replace(/\.([a-zA-Z][\w-]*)/g,
+    (selector, name: string) => classes[name] ? `.${classes[name].split(" ")[0]}` : selector);
+}
+
+const rowCss = componentCss("./ResourceRowView.module.css", rowStyles);
+const statusCss = componentCss("./Status.module.css", statusStyles);
+const bulletsCss = componentCss("./ContainerBullets.module.css", bulletStyles);
+const tokensCss = componentCss("../../design/tokens.css", {});
 
 afterEach(() => {
   cleanup();
@@ -48,8 +66,109 @@ describe("components", () => {
 const cluster = (over = {}) => ({ id: "c1", name: "aks-prod-weu", context_name: "x", server: "https://weu.azmk8s.io:443", original_server: null, provider: "aks", region: null, environment: "production", state: "ready", message: null, ...over }) as any;
 const terr = (over = {}) => ({ cluster: cluster(), state: "ready", message: null, rows: [], total: 0, failing: 0, pending: 0, ...over }) as any;
 const pod = (over = {}) => ({ uid: "u1", cluster_id: "c1", kind: "Pod", namespace: "payments", name: "payments-api-1", created_at: null, columns: { status: "CrashLoopBackOff", status_class: "bad", ready: "0/2", restarts: 14, node: null, last_restart_at: null }, ...over }) as any;
+const cloud = (over = {}) => cluster({
+  ...FILE_CLUSTER_METADATA, name: "eks-prod", source: "cloud", provider: "eks", region: "eu-west-1", server: null,
+  cloud: { account_id: "aws-1", account_name: "Production AWS", resource_id: "eks-prod" }, ...over,
+});
 
 describe("cluster band copy", () => {
+  it.each([
+    ["aks", "Azure"], ["eks", "AWS"], ["gke", "Google Cloud"], ["oke", "Oracle Cloud"],
+  ])("band shows cloud and region for cloud clusters (%s)", (provider, label) => {
+    render(<ClusterBand t={terr({ cluster: cloud({ provider }) })} kind={PODS} onRetry={() => {}} />);
+    const location = `${label} · eu-west-1`;
+    expect(screen.getByText(location).title).toBe(location);
+  });
+  it.each(["1.31.3", "v1.31.3"])("band shows kubernetes version (%s)", (version) => {
+    render(<ClusterBand t={terr({ cluster: cloud({ kubernetes_version: version }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("v1.31.3")).toBeTruthy();
+  });
+  it("band summarizes node pools with a title", () => {
+    const node_pools = [
+      { name: "system", count: 3, machine_type: "m7i.large", version: "1.31.3" },
+      { name: "jobs", count: 0, machine_type: null, version: null },
+      { name: "gpu", count: null, machine_type: "g6.xlarge", version: null },
+      { name: "spare", count: null, machine_type: null, version: null },
+    ];
+    render(<ClusterBand t={terr({ cluster: cloud({ node_pools, node_count: 3 }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("4 node pools · 3 nodes").title).toBe(
+      "system: 3 × m7i.large (1.31.3)\njobs: 0\ngpu: g6.xlarge\nspare",
+    );
+  });
+  it("unknown node count shows pools only", () => {
+    const node_pools = [{ name: "system", count: null, machine_type: null, version: "1.31.3" }];
+    render(<ClusterBand t={terr({ cluster: cloud({ node_pools }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("1 node pool").title).toBe("system: (1.31.3)");
+  });
+  it("shows zero cloud node pools when the node count is unknown", () => {
+    render(<ClusterBand t={terr({ cluster: cloud({ node_pools: [], node_count: null }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("0 node pools")).toBeTruthy();
+    expect(screen.queryByText(/0 nodes/)).toBeNull();
+  });
+  it("node pools the cloud couldn't list read as unknown, never as zero", () => {
+    render(<ClusterBand t={terr({ cluster: cloud({ node_pools: null, node_count: null }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByText("node pools unknown").title).toBe("The cloud provider didn't list this cluster's node pools.");
+    expect(screen.queryByText(/0 node pools/)).toBeNull();
+  });
+  it("vanished cluster note shows on the band", () => {
+    const note = "Not found in Production AWS any more: it may have been deleted. Remove it from Omnikrux under Settings.";
+    const metricsNote = "Metrics server is unavailable";
+    render(<ClusterBand t={terr({ cluster: cloud({ cloud_note: note }) })} kind={PODS} metricsNote={metricsNote} onRetry={() => {}} />);
+    expect(screen.getByText(note).title).toBe(note);
+    expect(screen.getByTestId("band-summary").textContent).toBe("No pods");
+    expect(screen.getByTestId("band-metrics").title).toBe(metricsNote);
+  });
+  it("kubeconfig cluster band unchanged without metadata", () => {
+    render(<ClusterBand t={terr({ cluster: cluster({ ...FILE_CLUSTER_METADATA, region: "east" }) })} kind={PODS} onRetry={() => {}} />);
+    expect(screen.getByRole("rowheader").textContent).toBe("AKSaks-prod-weueast · weu.azmk8s.ioProductionNo pods");
+  });
+  it("keeps long name and location in titles and lets them shrink before the summary", () => {
+    const name = "production-cluster-".repeat(30);
+    const region = "region-".repeat(30);
+    const loc = `AWS · ${region}`;
+    const css = document.createElement("style");
+    css.textContent = componentCss("./ClusterBand.module.css", bandStyles);
+    document.head.append(css);
+    try {
+      render(<ClusterBand t={terr({ cluster: cloud({ name, region }) })} kind={PODS} onRetry={() => {}} />);
+      for (const text of [name, loc]) {
+        const element = screen.getByText(text);
+        expect(element.title).toBe(text);
+        expect(getComputedStyle(element).minWidth).toBe("0px");
+        expect(getComputedStyle(element).textOverflow).toBe("ellipsis");
+      }
+      expect(getComputedStyle(screen.getByTestId("band-summary")).flexShrink).toBe("0");
+    } finally {
+      css.remove();
+    }
+  });
+  it.each([
+    { label: "error", state: "error", message: "Can't reach the cluster: the connection timed out" },
+    { label: "retry", state: "syncing", message: "Retrying — The connection to the cluster timed out" },
+    { label: "absent kind", state: "absent", message: "This cluster doesn't serve widgets" },
+    { label: "failed discovery", state: "absent", discoveryFailed: "Can't list widgets on this cluster right now: the connection timed out" },
+  ])("reserves space for the $label explanation in a narrow band", ({ state, message, discoveryFailed }) => {
+    const name = "production-cluster-".repeat(30);
+    const region = "region-".repeat(30);
+    const css = document.createElement("style");
+    css.textContent = componentCss("./ClusterBand.module.css", bandStyles);
+    document.head.append(css);
+    try {
+      const node_pools = [{ name: "system", count: 1, machine_type: "m7i.large", version: "1.31.3" }];
+      const t = terr({ cluster: cloud({ name, region, kubernetes_version: "1.31.3", node_pools, node_count: 1 }), state, message, discoveryFailed });
+      const kind = { ...NODES, key: "widgets.example.dev", plural_label: "widgets", columns: NODES.columns.filter(column => column.key === "name" || column.key === "age") };
+      render(<div style={{ width: minTableWidth(kind.columns) - 32 }}><ClusterBand t={t} kind={kind} onRetry={() => {}} /></div>);
+      const reason = (discoveryFailed ?? message)!;
+      const summary = screen.getByText(reason);
+      expect(summary.title).toBe(reason);
+      const style = getComputedStyle(summary);
+      expect(Number.parseFloat(style.minWidth)).toBeGreaterThan(0);
+      expect(style.textOverflow).toBe("ellipsis");
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    } finally {
+      css.remove();
+    }
+  });
   it("shows name, server host, environment and failing count", () => {
     render(<ClusterBand t={terr({ rows: [pod()], total: 48, failing: 1 })} kind={PODS} onRetry={() => {}} />);
     expect(screen.getByText("aks-prod-weu")).toBeTruthy();
@@ -117,6 +236,122 @@ describe("status and pod row", () => {
   });
 });
 
+describe("container status bullets", () => {
+  const state = (over: Partial<ContainerState> = {}): ContainerState =>
+    ({ name: "web", init: false, state: "ready", reason: null, restarts: 0, ...over });
+  const renderPod = (containers: unknown) => render(<ResourceRowView row={pod({ columns: {
+    status: "CrashLoopBackOff", status_class: "bad", containers,
+  } })} kind={PODS} provider="aks" />);
+
+  it("one bullet per container in order", () => {
+    renderPod([state(), state({ name: "sidecar", state: "waiting" }), state({ name: "worker", state: "running" })]);
+    const group = screen.getByRole("img", { name: "Containers: 1 ready, 2 not ready" });
+    expect(Array.from(group.children).map((el) => el.getAttribute("title"))).toEqual([
+      "web: running and ready · 0 restarts", "sidecar: waiting · 0 restarts", "worker: running, not ready · 0 restarts",
+    ]);
+    expect(Array.from(group.children).map((el) => el.getAttribute("data-shape"))).toEqual(["dot", "dot", "dot"]);
+    expect(group.nextElementSibling?.textContent).toBe("CrashLoopBackOff");
+    expect(group.closest('[role="gridcell"]')?.querySelectorAll("[data-shape]")).toHaveLength(3);
+  });
+
+  it("failing is a rose diamond", () => {
+    renderPod([state({ state: "failing", reason: "Error" })]);
+    expect(screen.getByTitle("web: failing (Error) · 0 restarts").getAttribute("data-shape")).toBe("diamond");
+  });
+
+  it("finished is hollow", () => {
+    renderPod([state({ state: "done", reason: "Completed" })]);
+    expect(screen.getByTitle("web: finished (Completed)").getAttribute("data-shape")).toBe("ring");
+  });
+
+  it.each([
+    ["ready", null, 1, "web: running and ready · 1 restart"],
+    ["running", null, 2, "web: running, not ready · 2 restarts"],
+    ["waiting", "ContainerCreating", 0, "web: waiting (ContainerCreating) · 0 restarts"],
+    ["waiting", null, 0, "web: waiting · 0 restarts"],
+    ["failing", "CrashLoopBackOff", 3, "web: failing (CrashLoopBackOff) · 3 restarts"],
+    ["done", "Completed", 5, "web: finished (Completed)"],
+  ] as const)("tooltip names container, state, reason and restarts: %s %s", (value, reason, restarts, title) => {
+    renderPod([state({ state: value, reason, restarts })]);
+    expect(screen.getByTitle(title)).toBeTruthy();
+  });
+
+  it("init containers are labelled init", () => {
+    renderPod([state({ name: "setup", init: true })]);
+    expect(screen.getByTitle("init setup: running and ready · 0 restarts")).toBeTruthy();
+  });
+
+  it("group label counts the states", () => {
+    renderPod([state(), state({ state: "waiting" }), state({ state: "running" }), state({ state: "failing" }), state({ state: "done" })]);
+    expect(screen.getByRole("img", { name: "Containers: 1 ready, 2 not ready, 1 failing, 1 finished" })).toBeTruthy();
+  });
+
+  it("more than six containers collapse into +n", () => {
+    renderPod(Array.from({ length: 8 }, (_, i) => state({ name: `web-${i}` })));
+    const group = screen.getByRole("img", { name: "Containers: 8 ready" });
+    expect(group.querySelectorAll("[data-shape]")).toHaveLength(6);
+    expect(screen.getByText("+2").title).toBe("web-6: running and ready · 0 restarts\nweb-7: running and ready · 0 restarts");
+  });
+
+  it.each([undefined, null, "ready", {}, [], [null], [{ name: "web", state: "ready" }]])("rows without a containers column show no bullets: %j", (containers) => {
+    renderPod(containers);
+    expect(screen.queryByRole("img", { name: /^Containers:/ })).toBeNull();
+  });
+
+  it("non-pod rows do not show container bullets", () => {
+    render(<ResourceRowView row={pod({ kind: "Deployment", columns: { status: "Available", containers: [state()] } })} kind={DEPLOYMENTS} provider="aks" />);
+    expect(screen.queryByRole("img", { name: /^Containers:/ })).toBeNull();
+  });
+
+  it("status label truncates before the fixed-size container marks in a 36px row", () => {
+    const css = document.createElement("style");
+    css.textContent = tokensCss + rowCss + statusCss + bulletsCss;
+    document.head.append(css);
+    try {
+      renderPod(Array.from({ length: 7 }, (_, i) => state({ name: `web-${i}` })));
+      const label = screen.getByText("CrashLoopBackOff");
+      const group = screen.getByRole("img", { name: "Containers: 7 ready" });
+      const cell = label.closest('[role="gridcell"]')!;
+      expect(getComputedStyle(cell).display).toBe("flex");
+      expect(getComputedStyle(cell).alignItems).toBe("center");
+      expect(getComputedStyle(label.parentElement!).minWidth).toBe("0px");
+      expect(getComputedStyle(label.parentElement!).flexShrink).toBe("1");
+      expect(getComputedStyle(label).textOverflow).toBe("ellipsis");
+      expect(getComputedStyle(label).overflow).toBe("hidden");
+      expect(getComputedStyle(label).whiteSpace).toBe("nowrap");
+      expect(getComputedStyle(group).flexShrink).toBe("0");
+      expect(getComputedStyle(group).whiteSpace).toBe("nowrap");
+      expect(getComputedStyle(group.firstElementChild!).width).toBe("7px");
+      expect(getComputedStyle(group.firstElementChild!).height).toBe("7px");
+      expect(getComputedStyle(group.closest('[role="row"]')!).height).toBe("36px");
+    } finally { css.remove(); }
+  });
+
+  it("container shapes use the status palette and a hollow finished ring", () => {
+    const css = document.createElement("style");
+    css.textContent = tokensCss + rowCss + statusCss + bulletsCss;
+    document.head.append(css);
+    try {
+      renderPod([state(), state({ state: "running" }), state({ state: "waiting" }), state({ state: "failing" }), state({ state: "done" })]);
+      const marks = Array.from(screen.getByRole("img").children).map((el) => getComputedStyle(el));
+      expect(marks[0].backgroundColor).toBe("rgb(79, 214, 160)");
+      expect(marks[1].backgroundColor).toBe("rgb(242, 193, 78)");
+      expect(marks[2].backgroundColor).toBe("rgb(242, 193, 78)");
+      expect(marks[3].backgroundColor).toBe("rgb(255, 79, 160)");
+      expect(marks[3].transform).toBe("rotate(45deg)");
+      expect(marks[3].borderRadius).toBe("1px");
+      expect(marks[4].backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      // CSSOM retains the specified subpixel border; computed used widths round it.
+      const ring = screen.getByRole("img").lastElementChild!;
+      const ringRule = Array.from(css.sheet!.cssRules).find((rule) =>
+        rule instanceof CSSStyleRule && ring.matches(rule.selectorText) && rule.style.getPropertyValue("border")) as CSSStyleRule;
+      expect(ringRule.style.getPropertyValue("border")).toBe("1.5px solid var(--ink-3)");
+      expect(marks[4].borderStyle).toBe("solid");
+      expect(marks[4].borderColor).toBe("rgb(119, 113, 143)");
+    } finally { css.remove(); }
+  });
+});
+
 function layout() {
   // jsdom has no layout; give everything a size so the virtualizer renders rows.
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
@@ -132,6 +367,20 @@ const row = (over: Record<string, unknown> = {}, columns: Record<string, unknown
 const cells = (r: HTMLElement) => Array.from(r.querySelectorAll('[role="gridcell"]')).map((c) => c.textContent);
 
 describe("kinds in the table", () => {
+  it("secret column does not take the name column's width", () => {
+    expect(gridTemplate(HELM.columns, "release")).toBe("minmax(200px, 2fr) 1fr 70px 1fr 70px 1fr");
+    expect(minTableWidth(HELM.columns, "release")).toBe(764);
+    layout();
+    render(<Table territories={[terr()]} kind={HELM} onRetry={() => {}} />);
+    expect(screen.getByRole("grid").style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 70px 1fr 70px 1fr");
+    expect(screen.getByRole("grid").style.minWidth).toBe("764px");
+  });
+
+  it("pod status keeps room for its label and container bullets", () => {
+    expect(gridTemplate(PODS.columns)).toContain("minmax(180px, 1fr)");
+    expect(minTableWidth(PODS.columns)).toBe(1250);
+  });
+
   it("columns follow the kind's column specs", () => {
     layout();
     vi.useFakeTimers({ now: new Date("2026-11-06T16:00:00Z"), toFake: ["Date"] });
@@ -264,7 +513,7 @@ describe("cpu and memory cells", () => {
     render(
       <Cell
         col={NODES.columns.find((c) => c.key === "cpu")!}
-        row={pod({ columns: { allocatable_cpu_m: 1000 } })}
+        row={pod({ kind: "Node", columns: { allocatable_cpu_m: 1000 } })}
         now={new Date()}
         live={{ usage: usage({ cpu_m: 950 }), why: null }}
       />,
@@ -280,7 +529,7 @@ describe("cpu and memory cells", () => {
   it("stale item dimmed with measured-ago title", () => {
     renderCell("cpu", { usage: usage({ stale: true, at: "2026-11-07T14:07:00Z" }), why: null });
     const meter = screen.getByText("110m").parentElement!;
-    expect(meter.getAttribute("title")).toBe("Measured 3m ago; metrics-server has nothing newer.");
+    expect(meter.getAttribute("title")).toBe("22% of its limit (500m)\nMeasured 3m ago; metrics-server has nothing newer.");
     expect(meter.className).toMatch(/stale/);
     cleanup();
     renderCell("cpu", { usage: usage(), why: null });
@@ -299,6 +548,7 @@ describe("cpu and memory cells", () => {
     const metrics: MetricsLookup = {
       usage: () => ({ usage: null, why: message }),
       why: () => message,
+      nodeSize: () => null,
       now: Date.now(),
     };
     render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} metrics={metrics} />);
@@ -311,4 +561,96 @@ describe("cpu and memory cells", () => {
     render(<ClusterBand t={terr()} kind={PODS} onRetry={() => {}} metricsNote={null} />);
     expect(screen.queryByTestId("band-metrics")).toBeNull();
   });
+});
+
+
+describe("usage basis in rows", () => {
+  const MIB = 1024 ** 2;
+  const cpu = PODS.columns.find(c => c.type === "cpu")!;
+  const memory = PODS.columns.find(c => c.type === "memory")!;
+  const usage: Usage = { cpu_m: 900, memory_b: 512 * MIB, at: "2026-11-07T14:00:00Z", window_s: 15, stale: false };
+  const size = { cpu_m: 1000, memory_b: 1024 * MIB };
+
+  it("every pod row with metrics shows a bar using its live node size", () => {
+    const metrics: MetricsLookup = {
+      usage: () => ({ usage: { ...usage, cpu_m: 0 }, why: null }), why: () => null,
+      nodeSize: (clusterId, node) => clusterId === "c1" && node === "worker" ? size : null,
+      now: Date.now(),
+    };
+    const { container } = render(<ResourceRowView row={pod({ columns: { node: "worker" } })} kind={PODS} provider="aks" metrics={metrics} />);
+    const bars = container.querySelectorAll("i");
+    expect(bars).toHaveLength(2);
+    expect(bars[0].getAttribute("style")).toContain("--v: 0%");
+    expect(bars[1].getAttribute("style")).toContain("--v: 50%");
+  });
+
+  it.each([
+    ["Pod", { cpu_limit_m: 1000, cpu_request_m: 500 }, "90% of its limit (1000m)", true],
+    ["Pod", { cpu_limit_m: 0, cpu_request_m: 1000 }, "90% of its request (1000m); no limit set", false],
+    ["Pod", { cpu_limit_m: 0, cpu_request_m: 0 }, "90% of node worker (1000m allocatable); no request or limit set", true],
+    ["Node", { allocatable_cpu_m: 1000, cpu_limit_m: 500 }, "90% of what the node can allocate (1000m)", true],
+  ])("tooltip names the basis and hot applies only against limit or node: %s %j", (kind, columns, title, hot) => {
+    const { container } = render(<Cell col={cpu} row={pod({ kind, columns: { ...columns, node: "worker" } })} now={new Date()} live={{ usage, why: null }} nodeSize={size} />);
+    const bar = container.querySelector("i")!;
+    expect(bar.getAttribute("style")).toContain("--v: 90%");
+    expect(bar.parentElement!.title).toBe(`${title}\nMeasured over 15 s`);
+    expect(screen.queryByLabelText("near its limit") !== null).toBe(hot);
+  });
+
+  it("node memory measures against allocatable and formats the amount", () => {
+    const { container } = render(<Cell col={memory} row={pod({ kind: "Node", columns: { allocatable_memory_b: 1024 * MIB } })} now={new Date()} live={{ usage, why: null }} />);
+    expect(container.querySelector("i")?.getAttribute("style")).toContain("--v: 50%");
+    expect(container.querySelector("i")?.parentElement!.title).toBe("50% of what the node can allocate (1 Gi)\nMeasured over 15 s");
+  });
+
+  it("unknown node size shows text with the reason and no bar", () => {
+    const { container } = render(<Cell col={cpu} row={pod({ columns: {} })} now={new Date()} live={{ usage, why: null }} />);
+    expect(container.querySelector("i")).toBeNull();
+    expect(screen.getByText("900m").parentElement!.title).toBe("No limit, request or node size to compare with.\nMeasured over 15 s");
+  });
+
+  it.each([null, { usage: null, why: "Metrics-server is unavailable." }])("no metrics shows a dash, never an empty bar", live => {
+    const { container } = render(<Cell col={cpu} row={pod()} now={new Date()} live={live} nodeSize={size} />);
+    expect(container.querySelector("i")).toBeNull();
+    expect(screen.getByText("\u2014").getAttribute("title")).toBe(live?.why ?? null);
+  });
+});
+
+it("header sorts asc, desc, then default", () => {
+  const onSort = vi.fn(); const props = { territories:[terr()], kind:PODS, onRetry:()=>{}, onSort };
+  const {rerender} = render(<Table {...props} />);
+  fireEvent.click(screen.getByTitle("Sort by Name")); expect(onSort).toHaveBeenLastCalledWith({key:"name",dir:"asc"});
+  rerender(<Table {...props} sort={{key:"name",dir:"asc"}} />);
+  fireEvent.click(screen.getByTitle("Sort by Name")); expect(onSort).toHaveBeenLastCalledWith({key:"name",dir:"desc"});
+  rerender(<Table {...props} sort={{key:"name",dir:"desc"}} />);
+  fireEvent.click(screen.getByTitle("Sort by Name")); expect(onSort).toHaveBeenLastCalledWith(null);
+});
+
+it("pods filter by node from a pick-list", () => {
+  const onFilter = vi.fn(); const source = [terr({ rows:[pod({columns:{node:"worker-1"}})] })];
+  render(<Table territories={source} pickSource={source} kind={PODS} onRetry={()=>{}} onColumnFilter={onFilter} />);
+  fireEvent.click(screen.getByRole("button",{name:"Filter by Node"}));
+  fireEvent.click(screen.getByLabelText(/worker-1/)); fireEvent.click(screen.getByRole("button",{name:"Apply"}));
+  expect(onFilter).toHaveBeenCalledWith("node",{key:"node",op:"oneOf",values:["worker-1"]});
+});
+it("restarts min filter", () => {
+  const onFilter = vi.fn(); render(<Table territories={[terr()]} kind={PODS} onRetry={()=>{}} onColumnFilter={onFilter} />);
+  fireEvent.click(screen.getByRole("button",{name:"Filter by Restarts"}));
+  fireEvent.change(screen.getByLabelText("Min"),{target:{value:"2"}}); fireEvent.click(screen.getByRole("button",{name:"Apply"}));
+  expect(onFilter).toHaveBeenCalledWith("restarts",{key:"restarts",op:"between",min:2,max:null});
+});
+it("events filter by last seen within 1 h", () => {
+  const onFilter = vi.fn(); render(<Table territories={[terr()]} kind={EVENTS} onRetry={()=>{}} onColumnFilter={onFilter} />);
+  fireEvent.click(screen.getByRole("button",{name:"Filter by Last seen"}));
+  fireEvent.click(screen.getByRole("button",{name:"Apply"}));
+  expect(onFilter).toHaveBeenCalledWith("last_seen",{key:"last_seen",op:"within",seconds:3600});
+});
+
+it("limits a large pick list and lets search reach any value", () => {
+  const source = [terr({rows:Array.from({length:1000},(_,i)=>pod({uid:String(i),columns:{node:`node-${i}`}}))})];
+  render(<Table territories={source} pickSource={source} kind={PODS} onRetry={()=>{}} />);
+  fireEvent.click(screen.getByRole("button",{name:"Filter by Node"}));
+  expect(screen.getAllByRole("checkbox").length).toBeLessThanOrEqual(100);
+  fireEvent.change(screen.getByPlaceholderText("Find a value"),{target:{value:"node-999"}});
+  expect(screen.getByLabelText(/node-999/)).toBeTruthy();
 });

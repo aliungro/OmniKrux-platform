@@ -44,6 +44,24 @@ describe("http errors", () => {
     );
   });
 
+  it("the console's own sentences name the field and end with one period", async () => {
+    vi.stubGlobal(
+      "fetch",
+      answer(
+        {
+          detail: [
+            { type: "string_pattern_mismatch", loc: ["body", "tenant_id"], msg: "A field has an invalid format. Check the value and try again." },
+            { type: "missing", loc: ["body", "regions", 1], msg: "A required field is missing." },
+          ],
+        },
+        422,
+      ),
+    );
+    expect((await rejection(postJson("/api/x", {}))).message).toBe(
+      "The console's server refused the request: tenant_id: A field has an invalid format. Check the value and try again. regions.1: A required field is missing.",
+    );
+  });
+
   it("an answer without a usable detail falls back to the status", async () => {
     vi.stubGlobal("fetch", answer({ detail: [{ nope: true }] }, 500, "Internal Server Error"));
     expect((await rejection(getJson("/api/x"))).message).toBe("500 Internal Server Error");

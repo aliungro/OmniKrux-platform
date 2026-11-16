@@ -6,7 +6,6 @@ two channels: 0 carries the data both ways and 1 carries the kubelet's error tex
 with the port number (2 bytes, little endian), which is not data. The kubelet dials the pod's
 port once per stream, so every local connection gets a stream of its own."""
 
-import asyncio
 import contextlib
 import logging
 from contextlib import AsyncExitStack
@@ -14,9 +13,9 @@ from typing import Self
 
 import aiohttp
 from kubernetes_asyncio.client import CoreV1Api
-from kubernetes_asyncio.client.exceptions import ApiException
 
-from omnikrux.kube.connections import ClusterConnections
+from omnikrux.kube.client import CloudWsApiClient
+from omnikrux.kube.connections import ClusterConnections, open_kube_websocket
 
 log = logging.getLogger(__name__)
 
@@ -36,17 +35,20 @@ class ForwardError(Exception):
         self.message = message
 
 
-def error_message(text: str, pod: str, port: int) -> str:
-    """The kubelet's error text as a cause and a next step; its raw words (network namespaces,
-    uids, dial errors) go to the server log only."""
+def error_message(text: str, pod: str, port: int, *, cloud: bool = False) -> str:
+    """Classify the failure. File and upload clusters retain kubelet details in the server log."""
     if "connection refused" in text:
         return (
             f"Nothing in pod {pod} is listening on port {port} (connection refused). "
             "Check the port number, or wait for the app in the pod to start, then connect again."
         )
-    log.info(
-        "port-forward to pod %s port %d failed: %s", pod, port, " ".join(text.split())[:MAX_LOGGED]
-    )
+    if not cloud:
+        log.info(
+            "port-forward to pod %s port %d failed: %s",
+            pod,
+            port,
+            " ".join(text.split())[:MAX_LOGGED],
+        )
     if "timeout" in text or "timed out" in text:
         return (
             f"Port {port} in pod {pod} didn't answer in time. "
@@ -62,12 +64,19 @@ class PortForwardChannel:
     """One stream to one port, opened with `open` and owning its client; `close` releases both."""
 
     def __init__(
-        self, ws: aiohttp.ClientWebSocketResponse, resources: AsyncExitStack, pod: str, port: int
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        resources: AsyncExitStack,
+        pod: str,
+        port: int,
+        *,
+        cloud: bool = False,
     ):
         self._ws = ws
         self._resources = resources
         self._pod = pod
         self._port = port
+        self._cloud = cloud
         self._prefix = {DATA: PORT_PREFIX, ERROR: PORT_PREFIX}  # port bytes still to drop
 
     @classmethod
@@ -78,6 +87,7 @@ class PortForwardChannel:
         the pod is gone)."""
         async with AsyncExitStack() as stack:
             api = await stack.enter_async_context(connections.ws_api(cluster))
+            cloud = isinstance(api, CloudWsApiClient)
             connecting = await CoreV1Api(api).connect_get_namespaced_pod_portforward(
                 pod,
                 namespace,
@@ -85,12 +95,14 @@ class PortForwardChannel:
                 _preload_content=False,
                 _headers={"sec-websocket-protocol": PROTOCOL},
             )
-            try:
-                async with asyncio.timeout(CONNECT_SECONDS):
-                    ws = await stack.enter_async_context(connecting)
-            except aiohttp.WSServerHandshakeError as exc:  # no body: the status says enough
-                raise ApiException(status=exc.status, reason=exc.message) from exc
-            return cls(ws, stack.pop_all(), pod, port)
+            ws = await open_kube_websocket(
+                stack,
+                connecting,
+                action="open the port-forward connection",
+                cloud=cloud,
+                timeout=CONNECT_SECONDS,
+            )
+            return cls(ws, stack.pop_all(), pod, port, cloud=cloud)
 
     def _payload(self, channel: int, data: bytes) -> bytes:
         """`data` without what is left of the channel's port prefix."""
@@ -129,7 +141,7 @@ class PortForwardChannel:
                 continue
             if channel == ERROR:
                 text = data.decode("utf-8", "replace")
-                raise ForwardError(error_message(text, self._pod, self._port))
+                raise ForwardError(error_message(text, self._pod, self._port, cloud=self._cloud))
             return data
 
     async def close(self) -> None:

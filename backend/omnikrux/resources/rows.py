@@ -120,6 +120,47 @@ def _resources(pod: dict) -> dict[str, Any]:
     return out
 
 
+def container_states(pod: dict) -> list[dict]:
+    """Spec-ordered container health, with ordinary init containers only while active."""
+    spec, status = pod.get("spec") or {}, pod.get("status") or {}
+    result = []
+    for init, spec_key, status_key in (
+        (True, "initContainers", "initContainerStatuses"),
+        (False, "containers", "containerStatuses"),
+    ):
+        statuses = {cs.get("name"): cs for cs in status.get(status_key) or []}
+        for container in spec.get(spec_key) or []:
+            name = container["name"]
+            cs = statuses.get(name) or {}
+            state = cs.get("state") or {}
+            label, reason = "waiting", None
+            sidecar = init and container.get("restartPolicy") == "Always"
+            if "running" in state:
+                label = "ready" if cs.get("ready") and (not init or sidecar) else "running"
+            elif "waiting" in state:
+                reason = (state["waiting"] or {}).get("reason")
+                label = "failing" if reason in BAD_WAITING else "waiting"
+            elif "terminated" in state:
+                terminated = state["terminated"] or {}
+                code = terminated.get("exitCode", 0)
+                label = "done" if code == 0 else "failing"
+                reason = terminated.get("reason") or (
+                    "Completed" if code == 0 else f"Exit code {code}"
+                )
+            if init and not sidecar and label not in {"running", "failing"}:
+                continue
+            result.append(
+                {
+                    "name": name,
+                    "init": init,
+                    "state": label,
+                    "reason": reason,
+                    "restarts": cs.get("restartCount") or 0,
+                }
+            )
+    return result
+
+
 def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
     status = pod.get("status") or {}
     containers = status.get("containerStatuses") or []
@@ -139,6 +180,7 @@ def pod_row(pod: dict, cluster_id: str) -> ResourceRow:
             "restarts": sum((cs.get("restartCount") or 0) for cs in containers),
             "node": (pod.get("spec") or {}).get("nodeName"),
             "last_restart_at": last_restart,
+            "containers": container_states(pod),
             **_resources(pod),
         }
     )

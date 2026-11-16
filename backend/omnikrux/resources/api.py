@@ -19,17 +19,18 @@ from omnikrux.actions import authz
 from omnikrux.actions.authz import NotAllowed
 from omnikrux.actions.workloads import Revision, deployment_revisions
 from omnikrux.audit.store import (
+    NO_AUDIT,
     AuditEntry,
     AuditLog,
     AuditUnavailable,
     actor_of,
-    no_audit_message,
 )
 from omnikrux.exec.debug import (
     NODE_SHELL_NAMESPACE,
     DebugError,
     add_debug_container,
     create_node_shell_pod,
+    failure_words,
     finish_even_if_cancelled,
     new_debug_container_name,
     new_node_shell_pod_name,
@@ -62,6 +63,7 @@ CANCELLED = "The request stopped before the cluster answered."
 NO_KEY = "Secret {name} has no key {key}."
 NOT_SELECTED = "{label} {where} not found: that object doesn't have the label {selector}."
 UNRECORDED = "The value isn't shown: the audit log couldn't record the reveal. Try again."
+NO_REVEAL = "The value isn't shown: the audit log can't be written ({reason})."
 # A revealed value is kept by no cache: not the browser's, not a proxy's.
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
@@ -113,7 +115,10 @@ async def _owner_selector(api: ApiClient, namespace: str, owner: OwnerRef) -> st
             )
         )
     except Exception as exc:  # noqa: BLE001 (describe never fails over this)
-        log.info("Could not read %s %s/%s (%s)", owner.kind, namespace, owner.name, exc)
+        # Type and status only: an error's Status body never reaches a log line.
+        log.info(
+            "Could not read %s %s/%s (%s)", owner.kind, namespace, owner.name, failure_words(exc)
+        )
         return None
     selector = (body.get("spec") or {}).get("selector") or {}
     labels = selector.get("matchLabels") or {}
@@ -312,7 +317,12 @@ class DebugOut(BaseModel):
 
 
 async def _begin_audit(
-    request: Request, entry: AuditEntry, object_kind: str, object_name: str
+    request: Request,
+    entry: AuditEntry,
+    object_kind: str,
+    object_name: str,
+    *,
+    refused: str = NO_AUDIT,
 ) -> int:
     """Check the cluster and the actor, then write the `started` record (no audit, no change).
     `object_kind`/`object_name`: what is authorized (a node shell is authorized on its node)."""
@@ -334,7 +344,7 @@ async def _begin_audit(
     try:
         return await request.app.state.audit.begin(entry)
     except AuditUnavailable as exc:
-        raise HTTPException(status_code=503, detail=no_audit_message(exc)) from exc
+        raise HTTPException(status_code=503, detail=refused.format(reason=exc.reason)) from exc
 
 
 async def _audited_call[T](
@@ -458,7 +468,7 @@ async def reveal_secret(
     if (problem := object_name_problem(name, namespace)) is not None:
         raise HTTPException(status_code=422, detail=problem)
     audit: AuditLog = request.app.state.audit
-    audit_id = await _begin_audit(request, entry, "secrets", name)
+    audit_id = await _begin_audit(request, entry, "secrets", name, refused=NO_REVEAL)
 
     async def run(api: ApiClient) -> str | None:
         secret = await _get_json(api, f"/api/v1/namespaces/{namespace}/secrets/{name}")

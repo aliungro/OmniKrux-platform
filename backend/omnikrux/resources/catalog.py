@@ -4,13 +4,15 @@ import asyncio
 import dataclasses
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
 from omnikrux.clusters.registry import ClusterInfo
-from omnikrux.kube.connections import ClusterConnections, kube_error_message
+from omnikrux.kube.client import CloudApiClient
+from omnikrux.kube.connections import ClusterConnections, cloud_kube_error, kube_error_message
 from omnikrux.kube.discovery import Discovery, discover
 from omnikrux.resources.kinds import HELM_RELEASES, KINDS, KindSpec, generic_spec, kind_key
 
@@ -33,6 +35,7 @@ class ClusterKinds:
     specs: dict[str, KindSpec]
     failed_groups: dict[str, str]
     fetched_at: float  # time.monotonic()
+    version: str | None = None
 
 
 class ColumnOut(BaseModel):
@@ -56,6 +59,7 @@ class ServedKind(BaseModel):
     sort: Literal["status", "recent"]
     builtin: bool
     verbs: list[str]
+    verbs_by_cluster: dict[str, list[str]]
     clusters: list[str]
 
 
@@ -102,10 +106,12 @@ class KindCatalog:
         registry: ClusterLister,
         *,
         ttl: float = DISCOVERY_TTL_SECONDS,
+        is_cloud: Callable[[str], Awaitable[bool]] | None = None,
     ):
         self._connections = connections
         self._registry = registry
         self._ttl = ttl
+        self._is_cloud = is_cloud
         self._entries: dict[str, ClusterKinds] = {}
         self._inflight: dict[str, asyncio.Task[ClusterKinds]] = {}
 
@@ -140,6 +146,10 @@ class KindCatalog:
             raise KindNotServed(key)
         return spec
 
+    def cached_version(self, cluster_id: str) -> str | None:
+        entry = self._entries.get(cluster_id)
+        return entry.version if entry is not None else None
+
     async def union(self, *, refresh: bool = False) -> KindsOut:
         """Every kind any cluster serves, with the clusters serving it; all clusters at once.
 
@@ -157,6 +167,7 @@ class KindCatalog:
                     kinds[key] = _served(spec, info.id)
                 else:
                     served.clusters.append(info.id)
+                    served.verbs_by_cluster[info.id] = sorted(spec.verbs)
                     served.verbs = sorted(set(served.verbs) | spec.verbs)
         order = {key: n for n, key in enumerate(KINDS)}
         ordered = sorted(
@@ -183,12 +194,20 @@ class KindCatalog:
     # --- internals ----------------------------------------------------------------------
 
     async def _discover(self, cluster_id: str) -> ClusterKinds:
-        async with self._connections.api(cluster_id) as api:
-            discovery = await discover(api)
+        cloud = self._is_cloud is not None and await self._is_cloud(cluster_id)
+        try:
+            async with self._connections.api(cluster_id) as api:
+                cloud = cloud or isinstance(api, CloudApiClient)
+                discovery = await discover(api, cloud=cloud)
+        except Exception as exc:
+            if not cloud or (isinstance(exc, KeyError) and exc.args == (cluster_id,)):
+                raise
+            raise cloud_kube_error("read which kinds the cluster serves", exc=exc) from None
         entry = ClusterKinds(
             specs=cluster_specs(discovery),
             failed_groups=discovery.failed_groups,
             fetched_at=time.monotonic(),
+            version=discovery.version,
         )
         if self._inflight.get(cluster_id) is asyncio.current_task():  # not forgotten meanwhile
             self._entries[cluster_id] = entry
@@ -231,5 +250,6 @@ def _served(spec: KindSpec, cluster_id: str) -> ServedKind:
         sort=spec.sort,
         builtin=spec.key in KINDS,
         verbs=sorted(spec.verbs),
+        verbs_by_cluster={cluster_id: sorted(spec.verbs)},
         clusters=[cluster_id],
     )

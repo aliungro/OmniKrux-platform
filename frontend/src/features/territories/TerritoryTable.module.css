@@ -1,5 +1,101 @@
-.scroll {
+.frame {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-height: 0;
+}
+
+.selectionStatus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.bulkBar {
+  position: absolute;
+  z-index: 3;
+  inset-inline: 8px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  box-sizing: border-box;
+  margin-inline: auto;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--rule) 80%, var(--ink-2));
+  border-radius: 11px;
+  background: var(--surf);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.4);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.bulkCount {
+  padding-inline: 6px 2px;
+  color: var(--focus);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bulkBar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bulkBar .bulkDelete {
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--rule));
+  background: color-mix(in srgb, var(--bad) 10%, var(--surf));
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+}
+
+.bulkBar .bulkDelete:hover {
+  background: color-mix(in srgb, var(--bad) 17%, var(--surf));
+}
+
+.bulkDelete svg {
+  width: 14px;
+  height: 14px;
+}
+
+.bulkBar .bulkClear {
+  color: var(--ink-2);
+}
+
+.bulkBar .bulkClear:hover {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+@media (max-width: 420px) {
+  .bulkDelete svg { display: none; }
+  .bulkBar { gap: 4px; }
+  .bulkBar button { padding-inline: 6px; }
+}
+
+@media (pointer: coarse) {
+  .bulkBar button { min-height: 44px; }
+}
+
+.scroll {
+  --table-gutter: 16px;
+  container-type: inline-size;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   font-size: 13px;
   color: var(--ink);
@@ -7,7 +103,7 @@
 
 /* min-width and the column template (--cols) come from the kind's columns, inline. */
 .table {
-  padding: 0 16px;
+  padding: 0 var(--table-gutter);
 }
 
 .head {
@@ -22,7 +118,7 @@
 .cols {
   box-sizing: border-box;
   height: 30px;
-  padding: 8px 14px 6px 18px;
+  padding: 0 14px 0 19px;
   color: var(--ink-3);
   font-size: 12px;
   white-space: nowrap;
@@ -41,6 +137,8 @@
 
 /* The open inspector continues its territory card: same side edges, a rule above. */
 .inspRow {
+  /* The resource columns may force a wider grid than the visible table pane. */
+  --inspector-inline-size: calc(100cqi - 2 * var(--table-gutter) - 2px);
   box-sizing: border-box;
   border: 1px solid var(--rule);
   border-bottom: 0;

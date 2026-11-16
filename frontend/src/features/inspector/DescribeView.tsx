@@ -164,14 +164,16 @@ function Env({ e, onLink }: { e: EnvVar; onLink?: (link: Link) => void }) {
   return (
     <li className={s.env} data-testid={`env-${e.name}`}>
       <span className={s.envName}>{e.name}</span>
-      {e.value !== null ? (
-        <span className={s.envValue} data-testid="env-value" title={e.value}>{e.value === "" ? '""' : e.value}</span>
-      ) : (
-        // A reference: name where it comes from, never a value (Secrets never reach the browser).
-        <span className={s.envSource}>
-          from {e.source ? <Linked text={e.source} link={e.link} onLink={onLink} /> : "a reference the console can't name"}
-        </span>
-      )}
+      <span className={s.envDetails}>
+        {e.value !== null && (
+          <span className={s.envValue} data-testid="env-value" title={e.value}>{e.value === "" ? '""' : e.value}</span>
+        )}
+        {(e.source !== null || e.value === null) && (
+          <span className={s.envSource}>
+            from {e.source ? <Linked text={e.source} link={e.link} onLink={onLink} /> : "a reference the console can't name"}
+          </span>
+        )}
+      </span>
     </li>
   );
 }
@@ -224,12 +226,14 @@ function ContainerCard({ c, kind, now, onLink }: { c: ContainerInfo; kind: Conta
               </Fragment>
             ))}
           </dl>
-          {c.env.length > 0 && (
-            <div className={s.wide}>
-              <h6 className={s.sub}>Environment</h6>
+          <div className={s.wide}>
+            <h6 className={s.sub}>Environment</h6>
+            {c.env.length > 0 ? (
               <ul className={s.envs}>{c.env.map((e, i) => <Env key={`${e.name}\u0000${i}`} e={e} onLink={onLink} />)}</ul>
-            </div>
-          )}
+            ) : (
+              <p className={s.none}>No environment variables declared</p>
+            )}
+          </div>
           {c.mounts.length > 0 && (
             <div className={s.wide}>
               <h6 className={s.sub}>Mounts</h6>

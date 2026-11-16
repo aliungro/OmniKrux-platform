@@ -40,6 +40,7 @@ import asyncio
 import copy
 import json
 import re
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -264,12 +265,14 @@ class FakeKubeApi:
         self.paths: list[str] = []
         self.requests: list[tuple[str, str, dict]] = []
         self.auth: set[str | None] = set()
+        self.token_check: Callable[[str | None], bool] | None = None
         self.release = asyncio.Event()
         self.url = ""
         self.resources: list[FakeResource] = default_resources()
         self.broken_groups: set[str] = set()
         self.hanging_groups: set[str] = set()
         self.forbidden_kinds: set[str] = set()
+        self.fail_lists: dict[str, list[int]] = {}
         # metrics-server: ok; missing (the group is not served: absent from discovery, 404);
         # unavailable (the aggregated API answers 503, also in discovery).
         self.metrics_mode = "ok"
@@ -331,7 +334,10 @@ class FakeKubeApi:
     async def handle(self, request: web.Request) -> web.StreamResponse:
         self.paths.append(request.path)
         self.requests.append((request.method, request.path, dict(request.query)))
-        self.auth.add(request.headers.get("Authorization"))
+        authorization = request.headers.get("Authorization")
+        self.auth.add(authorization)
+        if self.token_check is not None and not self.token_check(authorization):
+            return web.json_response(status_body(401, "Unauthorized", "Unauthorized"), status=401)
         if self.mode == "hang":
             await self.release.wait()
         if self.mode == "forbidden":
@@ -498,6 +504,11 @@ class FakeKubeApi:
             if res.key == "pods" and ns is None:
                 return await self._watch(request)  # the pod watch keeps its modes
             return await self._watch_any(request, res, ns)
+        if failures := self.fail_lists.get(request.path):
+            status = failures.pop(0)
+            return web.json_response(
+                status_body(status, "InternalError", f"listing {res.plural} failed"), status=status
+            )
         selected = self._selected(request, res.key, ns)
         if isinstance(selected, web.Response):
             return selected

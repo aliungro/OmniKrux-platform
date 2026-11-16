@@ -42,6 +42,7 @@ async def test_migration_matches_orm_model(tmp_settings):
     from alembic.migration import MigrationContext
 
     from omnikrux.audit import models as audit_models  # noqa: F401
+    from omnikrux.cloud import models as cloud_models  # noqa: F401
     from omnikrux.clusters import models  # noqa: F401
     from omnikrux.db import Base
 
@@ -197,3 +198,39 @@ async def test_migration_0004_upgrade_and_downgrade(tmp_settings):
     await engine.dispose()
     assert "audit" not in names
     assert [tuple(r) for r in clusters] == [("f",)]
+
+
+async def test_migration_0005_upgrade_and_downgrade(tmp_settings):
+    from sqlalchemy import text
+
+    def schema(conn):
+        found = inspect(conn)
+        return set(found.get_table_names()), {col["name"] for col in found.get_columns("clusters")}
+
+    engine = make_engine(tmp_settings.db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(_migrate, "upgrade", "0004")
+        await conn.execute(_row("f", "file", "kind-dev", "https://h:1", "2026-01-01 10:00:00"))
+        old_tables, old_columns = await conn.run_sync(schema)
+    async with engine.begin() as conn:
+        await conn.run_sync(_migrate, "upgrade", "0005")
+        tables, columns = await conn.run_sync(schema)
+        assert tables - old_tables == {"cloud_accounts", "cloud_discovered"}
+        assert columns - old_columns == {
+            "cloud_account_id",
+            "cloud_resource_id",
+            "cloud_details",
+            "kubernetes_version",
+            "node_pools",
+            "node_count",
+            "cloud_missing_since",
+        }
+        assert (
+            await conn.execute(text("SELECT cloud_account_id FROM clusters"))
+        ).scalar_one() is None
+        await conn.execute(_row("c", "cloud", "sample-resource", "https://h:2", "2026-01-02"))
+    async with engine.begin() as conn:
+        await conn.run_sync(_migrate, "downgrade", "0004")
+        assert await conn.run_sync(schema) == (old_tables, old_columns)
+        assert (await conn.execute(text("SELECT id FROM clusters"))).scalar_one() == "f"
+    await engine.dispose()

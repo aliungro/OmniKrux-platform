@@ -37,6 +37,7 @@ from omnikrux.kube.pods import (
     read_pod,
     state_words,
 )
+from omnikrux.stream_sessions import CLOSE_SECONDS, StreamSession, StreamSessions, StreamStopped
 from omnikrux.web_security import is_cross_origin
 
 log = logging.getLogger(__name__)
@@ -145,9 +146,10 @@ async def _delete_node_shell(
 
 
 async def _fail(websocket: WebSocket, message: str, code: int, reason: str | None = None) -> None:
-    with contextlib.suppress(*BROWSER_GONE):  # the browser may already have left
-        await websocket.send_text(json.dumps({"type": "error", "message": message}))
-        await websocket.close(code=code, reason=reason)
+    with contextlib.suppress(*BROWSER_GONE, TimeoutError):
+        async with asyncio.timeout(CLOSE_SECONDS):
+            await websocket.send_text(json.dumps({"type": "error", "message": message}))
+            await websocket.close(code=code, reason=reason)
 
 
 @router.websocket("/api/exec")
@@ -171,18 +173,39 @@ async def exec_shell(
     if not namespace or not pod or (command is not None and not all(command)):
         await _fail(websocket, "Choose a namespace and a pod (and no empty command words).", 1008)
         return
+    sessions: StreamSessions = websocket.app.state.streams
+    session = None
+    try:
+        session = await sessions.register(cluster, cleanup_pod=cleanup_pod)
+        await _exec_shell(websocket, session, namespace, pod, container, command)
+    except StreamStopped as exc:
+        await exc.close(websocket, {"type": "error"})
+    finally:
+        if session is not None:
+            sessions.release(session)
+
+
+async def _exec_shell(
+    websocket: WebSocket,
+    session: StreamSession,
+    namespace: str,
+    pod: str,
+    container: str | None,
+    command: list[str] | None,
+) -> None:
     connections: ClusterConnections = websocket.app.state.connections
     audit: AuditLog = websocket.app.state.audit
     actor = actor_of(websocket)
-    cleanup = cleanup_pod
+    cluster = session.cluster_id
+    cleanup = session.cleanup_pod
     try:
         try:
-            await authz.authorize(actor, "shell", cluster, namespace, "pods", pod)
+            await session.run(authz.authorize(actor, "shell", cluster, namespace, "pods", pod))
         except NotAllowed as exc:  # a node-shell pod asked to be cleaned up still goes
             await _fail(websocket, exc.message, 4403)
             return
         try:
-            found = await _read_pod(connections, cluster, namespace, pod)
+            found = await session.run(_read_pod(connections, cluster, namespace, pod))
         except KeyError:
             cleanup = False  # no such cluster: nothing to delete there
             await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
@@ -190,7 +213,7 @@ async def exec_shell(
         except ExecRefused as exc:  # the delete below still only matches a node-shell pod
             await _fail(websocket, exc.message, 1011)
             return
-        if cleanup_pod and not is_node_shell(found):
+        if cleanup and not is_node_shell(found):
             cleanup = False
             message = (
                 "Only node-shell pods are deleted when their session ends, "
@@ -207,7 +230,7 @@ async def exec_shell(
             kind="pods",
             name=pod,
         )
-        await _session(websocket, connections, audit, entry, found, container, command)
+        await _session(websocket, session, connections, audit, entry, found, container, command)
     finally:
         if cleanup:  # whichever side closed, or if the session failed or was cancelled
             await finish_even_if_cancelled(
@@ -217,6 +240,7 @@ async def exec_shell(
 
 async def _session(
     websocket: WebSocket,
+    session: StreamSession,
     connections: ClusterConnections,
     audit: AuditLog,
     entry: AuditEntry,
@@ -235,42 +259,67 @@ async def _session(
         await _fail(websocket, exc.message, 1011)
         return
     entry.details = {"container": container, "command": command}
-    try:
+    audit_id = None
+    end = CONSOLE_STOPPED
+
+    async def begin() -> None:
+        nonlocal audit_id
         audit_id = await audit.begin(entry)
-    except AuditUnavailable as exc:
-        await _fail(websocket, no_audit_message(exc), 1011)
-        return
+
     try:
-        channel = await _open_channel(connections, cluster, namespace, pod, container, command)
-    except KeyError:
-        await audit.finish(audit_id, "failed", "Unknown cluster")
-        await _fail(websocket, "Unknown cluster", 4404, reason="Unknown cluster")
-        return
-    except ExecRefused as exc:
-        await audit.finish(audit_id, "failed", exc.message)
-        await _fail(websocket, exc.message, 1011)
-        return
-    except asyncio.CancelledError:  # cancelled while opening: the console is stopping
-        await finish_even_if_cancelled(
-            audit.finish(audit_id, CONSOLE_STOPPED.outcome, CONSOLE_STOPPED.message)
+        session.check_stopped()
+        try:
+            await finish_even_if_cancelled(begin())
+        except AuditUnavailable as exc:
+            await _fail(websocket, no_audit_message(exc), 1011)
+            return
+        end, code = await session.run(
+            _relay_shell(websocket, connections, cluster, namespace, pod, container, command)
         )
+    except StreamStopped as exc:
+        if exc.code == 4404:
+            end = SessionEnd("ended", exc.message)
         raise
-    except Exception as exc:  # not a refusal _open_channel knows: still said in words
-        log.warning("exec failed to open", exc_info=exc)
-        message = f"The shell couldn't be opened ({type(exc).__name__}). Try again."
-        await finish_even_if_cancelled(audit.finish(audit_id, "failed", message))
-        await _fail(websocket, message, 1011)
-        return
-    where = f"cluster={cluster} ns={namespace} pod={pod} container={container}"
-    log.info("exec opened %s", where)
-    try:
-        end = await ExecBridge(channel).run(websocket)
-    except asyncio.CancelledError:  # the console is stopping
-        end = CONSOLE_STOPPED
+    except asyncio.CancelledError:
         raise
     except Exception as exc:
         end = SessionEnd("failed", f"The shell session failed ({type(exc).__name__}).")
         raise
     finally:
+        if audit_id is not None:
+            await finish_even_if_cancelled(audit.finish(audit_id, end.outcome, end.message))
+    if code is not None:
+        assert end.message is not None
+        await _fail(websocket, end.message, code, reason=end.message if code == 4404 else None)
+
+
+async def _relay_shell(
+    websocket: WebSocket,
+    connections: ClusterConnections,
+    cluster: str,
+    namespace: str,
+    pod: str,
+    container: str,
+    command: list[str],
+) -> tuple[SessionEnd, int | None]:
+    """Return an HTTP-style socket error code only when the channel could not open."""
+    try:
+        channel = await _open_channel(connections, cluster, namespace, pod, container, command)
+    except KeyError:
+        return SessionEnd("failed", "Unknown cluster"), 4404
+    except ExecRefused as exc:
+        return SessionEnd("failed", exc.message), 1011
+    except Exception as exc:  # not a refusal _open_channel knows: still said in words
+        log.warning("exec failed to open", exc_info=exc)
+        message = f"The shell couldn't be opened ({type(exc).__name__}). Try again."
+        return SessionEnd("failed", message), 1011
+    where = f"cluster={cluster} ns={namespace} pod={pod} container={container}"
+    log.info("exec opened %s", where)
+    try:
+        if isinstance(channel, KubeExecChannel) and channel.cloud:
+            bridge = ExecBridge(channel, cloud=True, secrets=channel.secrets, hosts=channel.hosts)
+        else:
+            bridge = ExecBridge(channel)
+        return await bridge.run(websocket), None
+    finally:
         log.info("exec closed %s", where)
-        await finish_even_if_cancelled(audit.finish(audit_id, end.outcome, end.message))

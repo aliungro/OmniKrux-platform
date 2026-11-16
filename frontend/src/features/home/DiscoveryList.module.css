@@ -1,0 +1,60 @@
+.list {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.list p { margin: 0; }
+
+.group {
+  background: var(--surf);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.group + .group { margin-top: 10px; }
+.group h3 { margin: 0; padding: 10px 12px; font-size: 14px; font-weight: 600; }
+.rows { margin: 0; padding: 0; list-style: none; }
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px 20px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-top: 1px solid var(--rule);
+  overflow-wrap: anywhere;
+}
+
+.identity { flex: 1 1 180px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.checkbox { flex: 0 0 16px; }
+.checkbox input { margin: 0; accent-color: var(--focus); vertical-align: middle; }
+.details { flex: 2 1 290px; min-width: 0; }
+.metadata { display: flex; flex-wrap: wrap; gap: 2px 12px; color: var(--ink-2); }
+.state, .details .warning, .details .muted { margin-top: 3px; }
+.state[data-state="new"] { color: var(--focus); }
+.state[data-state="added"] { color: var(--ok); }
+.state[data-state="dismissed"], .muted { color: var(--ink-2); }
+.state[data-state="blocked"], .warning, .problems { color: var(--warn); }
+.environment { color: var(--ok); }
+.environment[data-environment="production"] { color: var(--warn); }
+
+.check { border-top: 1px solid var(--rule); }
+.check, .group > .muted { padding: 8px 12px; }
+.check .warning { margin-top: 4px; }
+.problems { margin: 5px 0 0; padding-left: 18px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 6px; }
+
+.list button {
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surf-2);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.list .add { color: var(--focus); }
+.list button:hover:not(:disabled) { border-color: var(--focus); }
+.list button:disabled { opacity: .6; cursor: default; }

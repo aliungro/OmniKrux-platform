@@ -1,3 +1,4 @@
+import { APPS } from "../shell/apps";
 /**
  * The one list of keyboard shortcuts. The table reads its row keys here, the inspector its tool
  * keys, the palette its keycaps, the dock and the log pane their keys, the shortcut bar its strip
@@ -7,7 +8,9 @@
  */
 
 export type ShortcutId =
+  | "apps" | "newTab" | "closeTab" | "nextTab" | "previousTab" | "back" | "forward"
   | "move"
+  | "moveKind"
   | "details"
   | "close"
   | "yaml"
@@ -46,7 +49,7 @@ export interface Shortcut {
    * Where it works: on a table row (and in its open details), anywhere on the page, in a log pane,
    * or in the dock. Also the "?" sheet's group.
    */
-  scope: "row" | "global" | "logs" | "dock";
+  scope: "row" | "global" | "logs" | "dock" | "shell";
   /** The kinds it acts on; absent: every kind (a row key still needs the row to offer it). */
   kinds?: string[];
   /** `KeyboardEvent.key` values that trigger it, where something reads them from here. */
@@ -55,6 +58,8 @@ export interface Shortcut {
   code?: string[];
   /** Needs Ctrl (or Cmd) held; every other shortcut works only without them. */
   ctrl?: boolean;
+  /** Needs Alt held exactly; Ctrl+Alt (AltGr) never matches an Alt-only shortcut. */
+  alt?: boolean;
   /** For the strip along the bottom; absent: sheet only. */
   bar?: string;
 }
@@ -63,6 +68,14 @@ const SCALABLE = ["deployments.apps", "statefulsets.apps", "replicasets.apps"];
 const RESTARTABLE = ["deployments.apps", "statefulsets.apps", "daemonsets.apps"];
 
 export const SHORTCUTS: readonly Shortcut[] = [
+  { id:"apps",scope:"shell",keys:["Alt 1–9"],label:`Switch app (${APPS.map(a=>`${a.label} ${a.key}`).join(", ")})`,alt:true },
+  { id:"newTab",scope:"shell",keys:["Alt T"],label:"New tab",code:["KeyT"],alt:true },
+  { id:"closeTab",scope:"shell",keys:["Alt W"],label:"Close tab",code:["KeyW"],alt:true },
+  { id:"nextTab",scope:"shell",keys:["Alt PgDn"],label:"Next tab",match:["PageDown"],alt:true },
+  { id:"previousTab",scope:"shell",keys:["Alt PgUp"],label:"Previous tab",match:["PageUp"],alt:true },
+  { id:"back",scope:"shell",keys:["Alt ←"],label:"Back in this tab",match:["ArrowLeft"],alt:true },
+  { id:"forward",scope:"shell",keys:["Alt →"],label:"Forward in this tab",match:["ArrowRight"],alt:true },
+  { id:"moveKind",scope:"shell",keys:["←","→"],label:"Move between kinds",match:["ArrowLeft","ArrowRight"] },
   // Rows: moving and the details, on every kind.
   { id: "move", scope: "row", keys: ["↑", "↓"], match: ["ArrowUp", "ArrowDown"], label: "Move between rows", bar: "move" },
   { id: "details", scope: "row", keys: ["Enter"], match: ["Enter", "d"], label: "Open or close the details (d too)", bar: "details" },
@@ -95,8 +108,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "previousMatch", scope: "logs", keys: ["Shift", "Enter"], label: "Previous match" },
   { id: "jumpLive", scope: "logs", keys: ["G"], match: ["G"], label: "Jump to live" },
   // In the dock.
-  { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch between one pane and side by side" },
-  { id: "sessionTabs", scope: "dock", keys: ["←", "→"], label: "Move between session tabs" },
+  { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch the bottom dock between one pane and side by side" },
+  { id: "sessionTabs", scope: "dock", keys: ["←", "→"], label: "Move between open logs and shells (bottom dock)" },
 ];
 
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));
@@ -125,11 +138,11 @@ export function barFor(kindKey: string): Shortcut[] {
 
 export type ShortcutGroup = readonly [title: string, rows: readonly Shortcut[]];
 
-const GROUP_TITLES: Record<Shortcut["scope"], string> = { row: "Rows", global: "Anywhere", logs: "Logs", dock: "Dock" };
+const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell:"Apps and tabs", row: "Rows", global: "Anywhere", logs: "Logs", dock: "Logs and shells (bottom dock)" };
 
 /** The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's. */
 export function allGroups(kindKey?: string): ShortcutGroup[] {
-  return (["row", "global", "logs", "dock"] as const).map((scope) => [
+  return (["shell", "row", "global", "logs", "dock"] as const).map((scope) => [
     GROUP_TITLES[scope],
     SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey))),
   ]);
@@ -138,12 +151,12 @@ export function allGroups(kindKey?: string): ShortcutGroup[] {
 /** Every group with every shortcut, whatever the kind. */
 export const ALL_GROUPS: readonly ShortcutGroup[] = allGroups();
 
-type Pressed = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean };
+type Pressed = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey?: boolean };
 
-/** Whether a key press is this shortcut: its key, and Ctrl (or Cmd) held exactly when it needs it. */
+/** Match the key or physical code, with Alt and Ctrl (or Cmd) held exactly when required. */
 export function pressed(id: ShortcutId, e: Pressed): boolean {
   const s = byId(id);
-  if (e.altKey || !!s.ctrl !== (e.ctrlKey || e.metaKey)) return false;
+  if (e.altKey !== !!s.alt || !!s.ctrl !== (e.ctrlKey || e.metaKey) || (s.alt && e.shiftKey)) return false;
   return (s.match?.includes(e.key) ?? false) || (e.code !== undefined && (s.code?.includes(e.code) ?? false));
 }
 

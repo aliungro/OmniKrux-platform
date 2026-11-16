@@ -28,6 +28,7 @@ Action = Literal[
     "restart",
     "rollback",
     "delete",
+    "evict",
     "cordon",
     "uncordon",
     "drain",
@@ -36,6 +37,10 @@ Action = Literal[
     "node_shell",
     "port_forward",
     "secret_reveal",
+    "cluster_add",
+    "cluster_remove",
+    "cloud_account_add",
+    "cloud_account_remove",
 ]
 Outcome = Literal["started", "succeeded", "failed", "ended", "unknown"]
 STARTED: Outcome = "started"
@@ -62,6 +67,8 @@ class AuditEntry:
     name: str | None
     details: dict | None = None
     diff: str | None = None
+    cluster_name: str | None = None
+    provider: str | None = None
 
 
 class AuditUnavailable(Exception):
@@ -165,8 +172,8 @@ class AuditLog:
                 actor=entry.actor,
                 action=entry.action,
                 cluster_id=entry.cluster_id,
-                cluster_name=cluster_name,
-                provider=provider,
+                cluster_name=cluster_name if entry.cluster_name is None else entry.cluster_name,
+                provider=provider if entry.provider is None else entry.provider,
                 namespace=entry.namespace,
                 kind=entry.kind,
                 name=entry.name,

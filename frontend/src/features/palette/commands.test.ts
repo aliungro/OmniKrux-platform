@@ -6,6 +6,11 @@ import { rowActions } from "../actions/tools";
 import { buildCommands, rankCommands, type CommandContext } from "./commands";
 
 const CONFIGMAPS: KindInfo = { ...SERVICES, key: "configmaps", kind: "ConfigMap", plural: "configmaps", label: "Config map", plural_label: "config maps", short_names: ["cm"] };
+const BUDGET: KindInfo = {
+  ...PODS, key: "poddisruptionbudgets.policy", group: "policy", kind: "PodDisruptionBudget",
+  label: "PodDisruptionBudget", plural: "poddisruptionbudgets", plural_label: "poddisruptionbudgets",
+  short_names: ["pdb"],
+};
 const KUSTOMIZATIONS: KindInfo = {
   ...CERTIFICATES, key: "kustomizations.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", kind: "Kustomization",
   plural: "kustomizations", label: "Kustomization", plural_label: "kustomizations", short_names: ["ks"],
@@ -41,6 +46,15 @@ const VERBS = ["get", "list", "watch", "update", "patch", "delete"];
 const ALL = { change: true, logs: true, shell: true, workloadLogs: true };
 
 describe("buildCommands", () => {
+  it("helm release palette label is the release name", () => {
+    const helm = row({ kind: "HelmRelease", name: "revision-secret", columns: { release: "shop-web" } });
+    const cmds = buildCommands(ctx({ selected: { row: helm, kind: HELM, clusterName: "kind-dev", actions: ["details", "rollback"] } }));
+    const actions = cmds.filter((c) => c.group === "Actions");
+    expect(actions.map((c) => c.label)).toEqual(["Details of shop-web", "Roll back shop-web…"]);
+    expect(actions[0].keywords).toContain("shop-web");
+    expect(rankCommands("revision-secret", cmds)).toContain(actions[0]);
+  });
+
   it("every served kind is a command that jumps to it", () => {
     const c = ctx();
     const cmds = buildCommands(c);
@@ -79,7 +93,7 @@ describe("buildCommands", () => {
     const pods = { ...PODS, verbs: VERBS };
     const p = buildCommands(ctx({ selected: { row: pod, kind: pods, clusterName: "kind-dev", actions: rowActions("pods", VERBS, pod, ALL) } }));
     expect(p.filter((x) => x.group === "Actions").map((x) => x.label)).toEqual([
-      "Details of api-1", "YAML of api-1", "Logs of api-1", "Previous logs of api-1", "Shell in api-1", "Edit api-1…", "Port-forward api-1…", "Delete api-1…",
+      "Details of api-1", "YAML of api-1", "Logs of api-1", "Previous logs of api-1", "Shell in api-1", "Edit api-1…", "Port-forward api-1…", "Evict api-1…", "Delete api-1…",
     ]);
     // A Secret's row: its keys (Ruling R38), never a reveal straight from the palette.
     const secret = row({ kind: "Secret", name: "db" });
@@ -103,6 +117,26 @@ describe("buildCommands", () => {
 
 describe("rankCommands", () => {
   const cmds = buildCommands(ctx({ onForwards: () => {} }));
+
+  it.each(["poddist", "poddistr", "PodDistributionBudget", "poddisr", "pdb", "PodDisruptionBudget"])(
+    "finds the discovered budget for %s",
+    query => {
+      const context = ctx({ kinds: [...SERVED, BUDGET] });
+      const [budget] = rankCommands(query, buildCommands(context));
+      expect(budget).toMatchObject({ label: "PodDisruptionBudgets", hint: BUDGET.key });
+      budget.run();
+      expect(context.onKind).toHaveBeenCalledWith(BUDGET.key);
+      expect(rankCommands(query, cmds)).not.toContainEqual(expect.objectContaining({ hint: BUDGET.key }));
+    },
+  );
+
+  it("ranks real prefixes ahead of the alias, and the alias ahead of subsequences", () => {
+    const prefix = { ...PODS, key: "prefix.example", short_names: ["poddistrprefix"] };
+    const fuzzy = { ...PODS, key: "fuzzy.example", short_names: ["p-o-d-d-i-s-t-r"] };
+    const budget = { ...BUDGET, short_names: [] };
+    const commands = buildCommands(ctx({ kinds: [fuzzy, budget, prefix] }));
+    expect(rankCommands("poddistr", commands).map(command => command.hint)).toEqual([prefix.key, budget.key, fuzzy.key]);
+  });
 
   it("short names from discovery match (cm, svc, po)", () => {
     expect(rankCommands("cm", cmds)[0].label).toBe("Config maps");
@@ -130,4 +164,14 @@ describe("rankCommands", () => {
     expect(rankCommands("", many)).toHaveLength(50);
     expect(rankCommands("kind", many)).toHaveLength(50);
   });
+});
+
+it("the palette lists kinds in pinned order", () => {
+ const commands=buildCommands(ctx({pinned:["nodes","services","pods"]}));
+ expect(commands.filter(c=>c.group==="Kinds").map(c=>c.label)).toEqual(["Nodes","Services","Pods","Config maps","Deployments","Events","Helm releases","StatefulSets"]);
+});
+
+it("pinned custom and Flux kinds precede builtins in user order", () => {
+ const cmds=buildCommands(ctx({pinned:["certificates.cert-manager.io", "pods", KUSTOMIZATIONS.key, "services"]}));
+ expect(cmds.filter(c=>c.id.startsWith("kind:")).slice(0,4).map(c=>c.label)).toEqual(["Certificates","Pods","Kustomizations","Services"]);
 });

@@ -40,6 +40,7 @@ function Loaded<T>({ q, children }: { q: UseQueryResult<T>; children: (data: T) 
 
 interface Props {
   row: ResourceRow;
+  paneActive?: boolean;
   provider: Provider;
   /** The row's kind key (`pods`, `deployments.apps`, …). */
   kindKey?: string;
@@ -164,13 +165,13 @@ export function Inspector({ kindKey = "pods", ...props }: Props) {
   return kindKey === "pods" ? <PodInspector {...props} onLink={onLink} /> : <ResourceInspector {...props} kindKey={kindKey} onLink={onLink} />;
 }
 
-function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, onOpenLogs, onOpenShell, onNodeShell, onOwnerLogs, onClose, onLink }: Omit<Props, "kindKey"> & { onLink: (l: Link) => void }) {
+function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, onOpenLogs, onOpenShell, onNodeShell, onOwnerLogs, onClose, onLink, paneActive = true }: Omit<Props, "kindKey"> & { onLink: (l: Link) => void }) {
   const [tab, setTab] = useState<Tab>("Describe");
   const ns = row.namespace ?? "";
   const rv = textColumn(row, "resource_version") ?? "";
   const describe = useDescribe(row.cluster_id, ns, row.name, rv);
   const yaml = usePodYaml(row.cluster_id, ns, row.name, rv, tab === "YAML");
-  const change = useTools({ row, kindKey: "pods", verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone });
+  const change = useTools({ row, kindKey: "pods", verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone, paneActive });
   useViewIntent(intent, onIntentDone, { yaml: () => setTab("YAML") });
   const editor = change.editor(yaml.data);
   const tools = (
@@ -209,14 +210,14 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
   );
 }
 
-function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, onIntentDone, onNodeShell, onWorkloadLogs, onClose, onLink }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
+function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, onIntentDone, onNodeShell, onWorkloadLogs, onClose, onLink, paneActive = true }: Omit<Props, "kindKey"> & { kindKey: string; onLink: (l: Link) => void }) {
   const [tab, setTab] = useState<Tab>("Describe");
   // Every row carries its resource version (backend `base_row`): a change reloads the details.
   const version = textColumn(row, "resource_version") ?? "";
   const describe = useResourceDescribe(row.cluster_id, kindKey, row.namespace, row.name, version);
   const yaml = useResourceYaml(row.cluster_id, kindKey, row.namespace, row.name, version, tab === "YAML");
   const nodes = kindKey === "nodes";
-  const change = useTools({ row, kindKey, verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone });
+  const change = useTools({ row, kindKey, verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone, paneActive });
   const logs = useWorkloadLogs(row, kindKey, describe, onWorkloadLogs);
   // Ruling R38: `x` on a Secret's row shows its keys and focuses the first; `x` there reveals it.
   const [keysAsk, setKeysAsk] = useState<KeysAsk | null>(null);
@@ -264,6 +265,7 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
               onLink={onLink}
               focusKeys={keysAsk}
               onKeysFocused={keysFocused}
+              paneActive={paneActive}
             />
           )}
         </Loaded>

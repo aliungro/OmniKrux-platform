@@ -1,7 +1,10 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import type { Cluster, ResourceRow } from "../../api/types";
+import { container, describeBody } from "../../test/describe";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import type { Session } from "./dockState";
 
@@ -9,9 +12,10 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
     rows = 24;
+    input = document.createElement("textarea");
     loadAddon() {}
-    open() {}
-    focus() {}
+    open(host: HTMLElement) { host.append(this.input); }
+    focus() { this.input.focus(); }
     write() {}
     reset() {}
     dispose() {}
@@ -34,7 +38,7 @@ const cluster = (over: Partial<Cluster> = {}): Cluster => ({
   name: "aks-prod-weu",
   context_name: "aks-prod-weu",
   server: "https://x",
-  original_server: null,
+  ...FILE_CLUSTER_METADATA, original_server: null,
   provider: "aks",
   region: null,
   environment: "production",
@@ -84,6 +88,18 @@ async function openShell(s: Session) {
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(before + 1));
 }
 const shown = () => screen.getAllByRole("tabpanel").filter((p) => !p.hidden);
+
+const demoPod: ResourceRow = {
+  uid: "demo-pod", cluster_id: "c1", kind: "Pod", namespace: "demo", name: "two-containers", created_at: null,
+  labels: {}, columns: { ready: "1/2", resource_version: "1" },
+};
+const web = container({ name: "web", state: "Running", state_class: "ok", ready: true });
+const helper = container({ name: "helper", state: "Waiting: CrashLoopBackOff" });
+const twoContainers = describeBody({
+  containers: [web, helper],
+  init_containers: [container({ name: "prepare", state: "Terminated: Completed" })],
+  ephemeral_containers: [container({ name: "debugger", state: "Running" })],
+});
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
@@ -140,14 +156,173 @@ describe("Dock", () => {
     expect(screen.getByText("Open logs (l) or a shell (s) from a pod")).toBeTruthy();
   });
 
+  it("middle-click closes only the targeted background session", () => {
+    renderDock();
+    open({ ...shell("a", { pod: "orders-worker" }), kind: "logs" });
+    open({ ...shell("b", { pod: "redis-0" }), kind: "logs" });
+    const [tabA, tabB] = screen.getAllByRole("tab");
+    const [socketA, socketB] = FakeWebSocket.instances;
+
+    fireEvent.click(tabA);
+    expect(tabA.getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(tabB);
+    expect(tabB.getAttribute("aria-selected")).toBe("true");
+    const [pane] = shown();
+
+    fireEvent.contextMenu(tabA, { button: 2 });
+    fireEvent(tabA, new MouseEvent("auxclick", { bubbles: true, button: 2 }));
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    fireEvent(within(tabA).getByText("orders-worker"), new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+
+    expect(screen.getAllByRole("tab")).toEqual([tabB]);
+    expect(shown()).toEqual([pane]);
+    expect(tabB.getAttribute("aria-selected")).toBe("true");
+    expect(socketA.closedByClient).toBe(true);
+    expect(socketB.closedByClient).toBe(false);
+    expect(FakeWebSocket.instances).toEqual([socketA, socketB]);
+  });
+
+  it("suppresses middle-button auto-scroll on the session wrapper only", () => {
+    renderDock();
+    open({ ...shell("a"), kind: "logs" });
+    const tab = screen.getByRole("tab");
+    expect(fireEvent.mouseDown(tab, { button: 1 })).toBe(false);
+    expect(fireEvent.mouseDown(tab, { button: 0 })).toBe(true);
+    expect(fireEvent.mouseDown(screen.getByRole("tablist"), { button: 1 })).toBe(true);
+  });
+
   it("Ctrl \\ toggles the layout", async () => {
     renderDock();
     await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
     const toggle = screen.getByRole("button", { name: /side by side/i });
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.keyDown(window, { key: "\\", ctrlKey: true });
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
     expect(dock.state.layout).toBe("split");
+  });
+
+  it("side by side is disabled with one session and says why", async () => {
+    renderDock();
+    await openShell(shell("a"));
+    const toggle = screen.getByRole("button", { name: /side by side/i });
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.getAttribute("title")).toBe("Open a second log or shell to see two side by side.");
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    fireEvent.keyDown(window, { key: "\\", ctrlKey: true });
+    expect(dock.state.layout).toBe("single");
+    await openShell(shell("b", { pod: "redis-0" }));
+    expect(toggle.getAttribute("aria-disabled")).toBe("false");
+    fireEvent.click(toggle);
+    expect(shown()).toHaveLength(2);
+  });
+
+  it.each(["logs", "shell"] as const)("two %s side by side", async (kind) => {
+    renderDock();
+    if (kind === "shell") {
+      await openShell(shell("a"));
+      await openShell(shell("b", { pod: "redis-0" }));
+    } else {
+      open({ ...shell("a"), kind });
+      open({ ...shell("b", { pod: "redis-0" }), kind });
+    }
+    fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    const panes = shown();
+    expect(panes).toHaveLength(2);
+    expect(panes[0].textContent).toContain("payments-api-xk2pq");
+    expect(panes[1].textContent).toContain("redis-0");
+  });
+
+  it.each(["a", "b"])("closing one of two side-by-side sessions shows the other alone (%s)", async (id) => {
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    expect(shown()).toHaveLength(2);
+    act(() => dock.dispatch({ type: "close", id }));
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0].textContent).toContain(id === "a" ? "redis-0" : "payments-api-xk2pq");
+  });
+
+  it("dock is labelled logs and shells", async () => {
+    renderDock();
+    expect(screen.getByRole("region", { name: "Logs and shells" }).getAttribute("data-page-keys")).toBe("off");
+    await openShell(shell("a"));
+    expect(screen.getByRole("region", { name: "Logs and shells" }).getAttribute("data-page-keys")).toBe("off");
+    expect(screen.getByRole("tablist", { name: "Logs and shells" })).toBeTruthy();
+  });
+
+  it("arrowing across session tabs keeps focus on the tabs", async () => {
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    const [a, b] = screen.getAllByRole("tab");
+    act(() => b.focus());
+    fireEvent.keyDown(b, { key: "ArrowLeft" });
+    expect(a.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(a);
+    fireEvent.keyDown(a, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(b);
+    // Clicking into a terminal still moves focus there and selects its session.
+    const input = shown()[0].querySelector("textarea")!;
+    act(() => input.focus());
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("a newly opened shell takes focus after navigating the tabs", async () => {
+    renderDock();
+    await openShell(shell("a"));
+    const tab = screen.getByRole("tab");
+    act(() => tab.focus());
+    await openShell(shell("b", { pod: "redis-0" }));
+    await waitFor(() => expect(document.activeElement).toBe(shown()[0].querySelector("textarea")));
+  });
+
+  it("Tab from a shell tab keeps focus on its close button", async () => {
+    const user = userEvent.setup();
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    await user.click(screen.getAllByRole("tab")[1]);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getAllByRole("button", { name: /^Close shell/ })[1]);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /side by side/i }));
+    await user.tab();
+    expect(document.activeElement).toBe(shown()[0].querySelector("textarea"));
+  });
+
+  it("clicking the layout after shell tab navigation keeps focus on the control", async () => {
+    const user = userEvent.setup();
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    await user.click(screen.getAllByRole("tab")[1]);
+    const target = screen.getByRole("button", { name: /side by side/i });
+    await user.click(target);
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("Tabbing back to the grip after shell tab navigation keeps focus on the grip", async () => {
+    const user = userEvent.setup();
+    renderDock();
+    await openShell(shell("a"));
+    await openShell(shell("b", { pod: "redis-0" }));
+    await user.click(screen.getAllByRole("tab")[1]);
+    await user.tab({ shift: true }); // the background tab's close button
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(screen.getByRole("separator", { name: "Resize the dock" }));
+  });
+
+  it("Ctrl F searches the focused log when two logs are side by side", () => {
+    renderDock();
+    open({ ...shell("a"), kind: "logs" });
+    open({ ...shell("b", { pod: "redis-0" }), kind: "logs" });
+    fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    expect(document.activeElement).toBe(within(shown()[1]).getByRole("searchbox", { name: "Search logs" }));
   });
 
   it("exec failure offers a debug container", async () => {
@@ -237,7 +412,110 @@ describe("Dock", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("an open that resolves late never takes focus from a newer one", async () => {
+  describe("pod shell container choice", () => {
+    const choose = () => screen.findByRole("combobox", { name: "Container" }) as Promise<HTMLSelectElement>;
+
+    it("lists regular containers and starts one shell only after confirming the chosen one", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json(twoContainers)));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+
+      const select = await choose();
+      const dialog = screen.getByRole("dialog", { name: "Open shell" });
+      expect(dialog.textContent).toContain("aks-prod-weu / demo / two-containers");
+      expect(select.value).toBe("web");
+      expect(document.activeElement).toBe(select);
+      expect(within(select).getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "web · Running", "helper · Waiting: CrashLoopBackOff",
+      ]);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      fireEvent.change(select, { target: { value: "helper" } });
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Open shell" }));
+
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      expect(FakeWebSocket.last.params.get("pod")).toBe("two-containers");
+      expect(FakeWebSocket.last.params.get("container")).toBe("helper");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("preselects the annotated regular container and Escape cancels the choice", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json({
+        ...twoContainers, annotations: { "kubectl.kubernetes.io/default-container": "helper" },
+      })));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      expect((await choose()).value).toBe("helper");
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    });
+
+    it("opens a single regular container directly despite init and ephemeral containers", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json({ ...twoContainers, containers: [web] })));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      expect(FakeWebSocket.last.params.get("container")).toBe("web");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("discards a pending describe after cancelling the lookup", async () => {
+      let resolve!: (response: Response) => void;
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((done) => { resolve = done; })));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+      await act(async () => resolve(await json(twoContainers)));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(dock.state.sessions).toEqual([]);
+    });
+
+    it("discards a slow single-container response after a newer shell open", async () => {
+      let resolve!: (response: Response) => void;
+      vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("two-containers")
+        ? new Promise<Response>((done) => { resolve = done; })
+        : json(describeBody({ containers: [helper] }))));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      act(() => dock.openPod({ ...demoPod, name: "newer" }, "shell"));
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      await act(async () => resolve(await json(describeBody({ containers: [web] }))));
+      expect(dock.state.sessions.map((session) => session.pod)).toEqual(["newer"]);
+      expect(FakeWebSocket.last.params.get("pod")).toBe("newer");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("offers a retry when describe fails for a pod known to have multiple containers", async () => {
+      vi.stubGlobal("fetch", vi.fn()
+        .mockImplementationOnce(() => json({ detail: "Pod details are unavailable." }, 503))
+        .mockImplementationOnce(() => json(twoContainers)));
+      renderDock();
+      act(() => dock.openPod(demoPod, "shell"));
+      const dialog = screen.getByRole("dialog");
+      expect((await within(dialog).findByRole("alert")).textContent).toContain("Pod details are unavailable.");
+      expect(within(dialog).queryByRole("button", { name: /default/i })).toBeNull();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+      expect((await choose()).value).toBe("web");
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    });
+
+    it("explains a failed describe before allowing the server default when the count is unknown", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => json({ detail: "Pod details are unavailable." }, 503)));
+      renderDock();
+      act(() => dock.openPod({ ...demoPod, columns: {} }, "shell"));
+      const dialog = screen.getByRole("dialog");
+      expect((await within(dialog).findByRole("alert")).textContent).toContain("Pod details are unavailable.");
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Open default shell" }));
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      expect(FakeWebSocket.last.params.has("container")).toBe(false);
+    });
+  });
+
+  it("a log open that resolves late never takes focus from a newer one", async () => {
     const rowOf = (cluster_id: string, name: string): ResourceRow => ({
       uid: name, cluster_id, kind: "Pod", namespace: "payments", name, created_at: null, labels: {},
       columns: { status: "Running", status_class: "ok", resource_version: "1" },
@@ -259,20 +537,23 @@ describe("Dock", () => {
       return json(describe("api-b"));
     }));
     renderDock();
-    act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
-    act(() => dock.openPod(rowOf("c2", "api-b"), "shell"));
+    act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
+    act(() => dock.openPod(rowOf("c2", "api-b"), "logs"));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     expect(FakeWebSocket.last.params.get("pod")).toBe("api-b");
 
     await act(async () => slowAnswer());
     await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
-    // A's tab is there, but B (the newer request, where you're typing) keeps the focus.
+    // A's tab is there, but B (the newer request) keeps the focus.
     const [tabB, tabA] = screen.getAllByRole("tab");
     expect(tabA.textContent).toContain("api-a");
     expect(tabB.getAttribute("aria-selected")).toBe("true");
     expect(tabA.getAttribute("aria-selected")).toBe("false");
     const [pane] = shown();
     expect(pane.textContent).toContain("eks-staging / payments / api-b");
+    fireEvent.click(screen.getByRole("button", { name: /side by side/i }));
+    expect(shown()).toHaveLength(2);
+    expect(tabB.getAttribute("aria-selected")).toBe("true");
   });
 
   describe("a late open never moves focus past a newer choice of yours", () => {
@@ -304,7 +585,7 @@ describe("Dock", () => {
       renderDock();
       await openShell(shell("x"));
       await openShell(shell("y", { cluster: eks, namespace: "cache", pod: "redis-0", container: "redis" }));
-      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
       fireEvent.click(screen.getAllByRole("tab")[0]); // back to x, and typing there
       expect(selected().textContent).toContain("payments-api-xk2pq");
 
@@ -314,9 +595,34 @@ describe("Dock", () => {
       expect(shown()[0].textContent).toContain("aks-prod-weu / payments / payments-api-xk2pq");
     });
 
+    it("closing a background tab keeps a pending open's focus", async () => {
+      const user = userEvent.setup();
+      renderDock();
+      await openShell(shell("x"));
+      await openShell(shell("y", { pod: "redis-0" }));
+      await user.click(screen.getAllByRole("tab")[1]);
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
+      await user.click(screen.getAllByRole("button", { name: /^Close shell/ })[0]);
+      await act(async () => slowAnswer());
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      expect(selected().textContent).toContain("api-a");
+      expect(shown()[0].textContent).toContain("api-a");
+    });
+
+    it("closing the focused tab cancels a pending open's focus", async () => {
+      renderDock();
+      await openShell(shell("x"));
+      await openShell(shell("y", { pod: "redis-0" }));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
+      fireEvent.click(screen.getAllByRole("button", { name: /^Close shell/ })[1]);
+      await act(async () => slowAnswer());
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      expect(selected().textContent).toContain("payments-api-xk2pq");
+    });
+
     it("a node shell you confirmed keeps the focus", async () => {
       renderDock();
-      act(() => dock.openPod(rowOf("c1", "api-a"), "shell"));
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs"));
       fireEvent.click(screen.getByRole("button", { name: "node shell" }));
       fireEvent.click(screen.getByRole("button", { name: "Start node shell" }));
       await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
@@ -331,7 +637,7 @@ describe("Dock", () => {
       renderDock();
       await openShell(shell("x"));
       await openShell(shell("y", { cluster: eks, namespace: "cache", pod: "redis-0", container: "redis" }));
-      act(() => dock.openPod(rowOf("c1", "api-a"), "shell")); // slow describe, from the table
+      act(() => dock.openPod(rowOf("c1", "api-a"), "logs")); // slow describe, from the table
       // Back into Y's terminal, which is already the selected tab: keys go there again.
       fireEvent.focusIn(shown()[0]);
       expect(selected().textContent).toContain("redis-0");

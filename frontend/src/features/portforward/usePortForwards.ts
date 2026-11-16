@@ -1,10 +1,18 @@
 import { useCallback, useMemo } from "react";
-import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { clusterLifecycle } from "../../api/clusterLifecycle";
 import { deleteEmpty, getJson, postJson } from "../../api/http";
-import type { ForwardIn, ForwardOut } from "../../api/types";
+import type { Cluster, ForwardIn, ForwardOut } from "../../api/types";
+import { CLUSTERS_QUERY_KEY } from "../../api/useClusters";
 
 export const PORT_FORWARDS_KEY = ["port-forwards"] as const;
 export const FORWARDS_POLL_MS = 5000;
+
+export async function forgetClusterForwards(client: QueryClient, id: string): Promise<void> {
+  await client.cancelQueries({ queryKey: PORT_FORWARDS_KEY });
+  client.setQueryData<ForwardOut[]>(PORT_FORWARDS_KEY, forwards => forwards?.filter(forward => forward.cluster_id !== id));
+  void client.invalidateQueries({ queryKey: PORT_FORWARDS_KEY });
+}
 
 export interface PortForwards {
   query: UseQueryResult<ForwardOut[]>;
@@ -17,9 +25,17 @@ export interface PortForwards {
 /** The running forwards, read every 5 s, with start and stop. A start or stop also refreshes the audit log. */
 export function usePortForwards(): PortForwards {
   const queryClient = useQueryClient();
+  const lifecycle = clusterLifecycle(queryClient);
   const query = useQuery({
     queryKey: PORT_FORWARDS_KEY,
-    queryFn: () => getJson<ForwardOut[]>("/api/port-forwards"),
+    queryFn: async ({ signal }) => {
+      const started = lifecycle.startChange();
+      const forwards = await getJson<ForwardOut[]>("/api/port-forwards", signal);
+      const registry = queryClient.getQueryData<Cluster[]>(CLUSTERS_QUERY_KEY);
+      return forwards.filter(({ cluster_id }) =>
+        !lifecycle.isRemoved(cluster_id) && !lifecycle.wasRemovedSince(cluster_id, started) &&
+        (!lifecycle.wasRemovedSince(cluster_id, 0) || registry?.some(cluster => cluster.id === cluster_id)));
+    },
     refetchInterval: FORWARDS_POLL_MS,
     retry: false,
   });

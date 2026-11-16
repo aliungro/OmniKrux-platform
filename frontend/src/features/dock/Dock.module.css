@@ -48,12 +48,12 @@
 
 .panes {
   flex: 1;
-  min-height: 0;
+  min-height: var(--dock-pane-min);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* Side by side: logs on the left, the shell on the right, as in the mockup. */
+/* Side by side follows tab order, whether the panes are logs or shells. */
 .split {
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
 }
@@ -67,13 +67,8 @@
   display: none;
 }
 
-.split .logs {
-  order: 0;
+.split .panel[data-first-pane] {
   border-right: 1px solid var(--rule);
-}
-
-.split .shell {
-  order: 1;
 }
 
 /* Below tablet width the two panes stack. */
@@ -83,7 +78,7 @@
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   }
 
-  .split .logs {
+  .split .panel[data-first-pane] {
     border-right: 0;
     border-bottom: 1px solid var(--rule);
   }

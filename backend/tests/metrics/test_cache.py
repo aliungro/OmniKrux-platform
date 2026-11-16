@@ -2,9 +2,15 @@
 old numbers, one fetch per (cluster, kind) per TTL, and one slow cluster not holding up another."""
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+
+import pytest
 
 from omnikrux.kube.connections import ClusterConnections
+from omnikrux.metrics import cache as cache_module
+from omnikrux.metrics import client as metrics_client
 from omnikrux.metrics.cache import NOT_ANSWERING, NOT_INSTALLED, MetricsCache
 from tests.fakekube import kubeconfig_for, serve_fake_api
 
@@ -219,3 +225,215 @@ async def test_close_leaves_no_task_behind(fake_api):
     waiter.cancel()
     await asyncio.gather(waiter, return_exceptions=True)
     assert cache.in_flight == 0
+
+
+async def test_node_sizes_unreadable_quantities_are_none(fake_api):
+    fake_api.objects["nodes"][("", "worker")] = {
+        "metadata": {"name": "worker"},
+        "status": {"allocatable": {"cpu": "junk", "memory": "8Gi"}},
+    }
+    fake_api.objects["nodes"][("", "empty")] = {"metadata": {"name": "empty"}}
+    fake_api.objects["nodes"][("", "broken")] = {
+        "metadata": {"name": "broken"},
+        "status": {"allocatable": {"cpu": "1e999999999", "memory": "invalid"}},
+    }
+    cache = cache_for(fake_api)
+    try:
+        got = await cache.get("a", "pods")
+        assert {name: size.model_dump() for name, size in got.nodes.items()} == {
+            "worker": {"cpu_m": None, "memory_b": 8589934592},
+            "empty": {"cpu_m": None, "memory_b": None},
+            "broken": {"cpu_m": None, "memory_b": None},
+        }
+    finally:
+        await cache.close()
+
+
+async def test_node_metrics_do_not_list_node_sizes(fake_api):
+    cache = cache_for(fake_api)
+    try:
+        got = await cache.get("a", "nodes")
+        assert got.state == "ok" and got.nodes == {}
+        assert "/api/v1/nodes" not in fake_api.paths
+    finally:
+        await cache.close()
+
+
+async def test_node_sizes_cached_per_cluster_for_300_seconds(fake_api, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(cache_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    fake_api.objects["nodes"][("", "worker")] = {
+        "metadata": {"name": "worker"},
+        "status": {"allocatable": {"cpu": "4"}},
+    }
+    async with serve_fake_api() as other:
+        other.objects["nodes"][("", "worker")] = {
+            "metadata": {"name": "worker"},
+            "status": {"allocatable": {"cpu": "2"}},
+        }
+        cache = MetricsCache(ClusterConnections(Registry(a=fake_api, b=other)), ttl=0)
+        try:
+            assert (await cache.get("a", "pods")).nodes["worker"].cpu_m == 4000
+            fake_api.objects["nodes"][("", "worker")]["status"]["allocatable"]["cpu"] = "8"
+            clock[0] += 299
+            assert (await cache.get("a", "pods")).nodes["worker"].cpu_m == 4000
+            assert (await cache.get("b", "pods")).nodes["worker"].cpu_m == 2000
+            assert fake_api.paths.count("/api/v1/nodes") == 1
+            clock[0] += 1
+            # Due again: a refresh starts in the background and the last good sizes answer
+            # until it lands.
+            async with asyncio.timeout(5):
+                while (await cache.get("a", "pods")).nodes["worker"].cpu_m != 8000:
+                    await asyncio.sleep(0.01)
+            assert fake_api.paths.count("/api/v1/nodes") == 2
+            assert other.paths.count("/api/v1/nodes") == 1
+        finally:
+            await cache.close()
+
+
+@pytest.mark.parametrize("timeout,budget", [(0.4, 0.2), (20, 5)])
+async def test_node_sizes_and_usage_fetched_concurrently(fake_api, monkeypatch, timeout, budget):
+    usage_started, nodes_started = asyncio.Event(), asyncio.Event()
+    call_json = metrics_client.call_json
+
+    async def synchronized_call(api, method, path, **kwargs):
+        if path == "/api/v1/nodes":
+            assert kwargs["timeout"] == budget
+            nodes_started.set()
+            await usage_started.wait()
+        else:
+            usage_started.set()
+            await nodes_started.wait()
+        return await call_json(api, method, path, **kwargs)
+
+    monkeypatch.setattr(metrics_client, "call_json", synchronized_call)
+    fake_api.pod_metrics[("demo", "web-1")] = pod_metric()
+    fake_api.objects["nodes"][("", "worker")] = {
+        "metadata": {"name": "worker"},
+        "status": {"allocatable": {"cpu": "4"}},
+    }
+    cache = cache_for(fake_api, timeout=timeout)
+    try:
+        got = await asyncio.wait_for(cache.get("a", "pods"), 1)
+        assert got.state == "ok" and got.items
+        assert got.nodes["worker"].cpu_m == 4000
+    finally:
+        await cache.close()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "exception", "forbidden"])
+async def test_optional_node_failure_is_bounded_logged_safely_and_retried_after_a_pause(
+    fake_api, monkeypatch, caplog, failure
+):
+    clock = [1000.0]
+    monkeypatch.setattr(cache_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    calls = []
+    failing = [True]
+    call_json = metrics_client.call_json
+
+    async def failing_nodes(api, method, path, **kwargs):
+        if path == "/api/v1/nodes":
+            calls.append(path)
+            if failing[0] and failure == "timeout":
+                await asyncio.Event().wait()
+            if failing[0] and failure == "exception":
+                raise RuntimeError("credential-sensitive details")
+        return await call_json(api, method, path, **kwargs)
+
+    monkeypatch.setattr(metrics_client, "call_json", failing_nodes)
+    fake_api.forbidden_kinds.add("nodes")
+    fake_api.objects["nodes"][("", "worker")] = {
+        "metadata": {"name": "worker"},
+        "status": {"allocatable": {"cpu": "4"}},
+    }
+    fake_api.pod_metrics[("demo", "web-1")] = pod_metric()
+    cache = cache_for(fake_api, ttl=0, timeout=0.4)
+    try:
+        with caplog.at_level(logging.INFO, logger="omnikrux.metrics.cache"):
+            first = await cache.get("a", "pods")
+        assert first.state == "ok" and first.items["demo/web-1"].cpu_m == 250
+        assert first.nodes == {}
+        exception_type = {
+            "timeout": "TimeoutError",
+            "exception": "RuntimeError",
+            "forbidden": "ApiException",
+        }[failure]
+        assert exception_type in caplog.text
+        assert "credential-sensitive" not in caplog.text and "forbidden" not in caplog.text
+        assert len(calls) == 1
+        failing[0] = False
+        fake_api.forbidden_kinds.clear()
+        # The failure is remembered: the next polls don't download the node list again.
+        assert (await cache.get("a", "pods")).nodes == {}
+        assert len(calls) == 1
+        clock[0] += cache_module.NODE_SIZES_RETRY_SECONDS
+        recovered = await cache.get("a", "pods")
+        assert recovered.state == "ok" and recovered.nodes["worker"].cpu_m == 4000
+        assert len(calls) == 2
+        assert (await cache.get("a", "pods")).nodes["worker"].cpu_m == 4000
+        assert len(calls) == 2
+    finally:
+        await cache.close()
+
+
+async def test_successful_empty_node_list_is_cached(fake_api):
+    cache = cache_for(fake_api, ttl=0)
+    try:
+        assert (await cache.get("a", "pods")).nodes == {}
+        assert (await cache.get("a", "pods")).nodes == {}
+        assert fake_api.paths.count("/api/v1/nodes") == 1
+    finally:
+        await cache.close()
+
+
+async def _slow_nodes(monkeypatch, delay: float, calls: list) -> None:
+    call_json = metrics_client.call_json
+
+    async def slow(api, method, path, **kwargs):
+        if path == "/api/v1/nodes":
+            calls.append(path)
+            await asyncio.sleep(delay)
+        return await call_json(api, method, path, **kwargs)
+
+    monkeypatch.setattr(metrics_client, "call_json", slow)
+
+
+async def test_slow_node_list_never_holds_pod_metrics_back(fake_api, monkeypatch):
+    """A node list slower than the pods' budget allows: usage still answers, and promptly."""
+    calls: list = []
+    await _slow_nodes(monkeypatch, 3, calls)
+    fake_api.pod_metrics[("demo", "web-1")] = pod_metric()
+    cache = cache_for(fake_api, ttl=0, timeout=2)
+    try:
+        started = asyncio.get_running_loop().time()
+        got = await cache.get("a", "pods")
+        assert got.state == "ok" and got.items["demo/web-1"].cpu_m == 250
+        assert got.nodes == {}
+        assert (
+            asyncio.get_running_loop().time() - started < cache_module.NODE_SIZES_GRACE_SECONDS + 1
+        )
+        await cache.get("a", "pods")
+        assert len(calls) == 1  # one node list in flight per cluster, never one per poll
+    finally:
+        await cache.close()
+
+
+async def test_last_good_node_sizes_serve_while_a_refresh_runs(fake_api, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(cache_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    fake_api.objects["nodes"][("", "worker")] = {
+        "metadata": {"name": "worker"},
+        "status": {"allocatable": {"cpu": "4"}},
+    }
+    cache = cache_for(fake_api, ttl=0)
+    try:
+        assert (await cache.get("a", "pods")).nodes["worker"].cpu_m == 4000
+        calls: list = []
+        await _slow_nodes(monkeypatch, 3, calls)
+        clock[0] += cache_module.NODE_SIZES_TTL
+        started = asyncio.get_running_loop().time()
+        assert (await cache.get("a", "pods")).nodes["worker"].cpu_m == 4000
+        assert asyncio.get_running_loop().time() - started < 1
+        assert len(calls) == 1
+    finally:
+        await cache.close()

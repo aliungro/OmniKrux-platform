@@ -1,3 +1,5 @@
+import { ColumnHeader } from "./ColumnHeader";
+import type { ColumnFilter, SortSpec } from "./columnFilters";
 import {
   memo,
   useCallback,
@@ -9,20 +11,25 @@ import {
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
+  type MouseEvent,
   type SetStateAction,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/types";
-import { rowActions, type RowAction } from "../actions/tools";
+import { BulkDeleteDialog, type DeleteSelection } from "../actions/BulkDeleteDialog";
+import { canDelete, rowActions, TOOL_LABEL, type RowAction, type ToolId } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
-import { pressed, rowShortcut } from "../chrome/shortcuts";
+import { pageKey, pressed, rowShortcut } from "../chrome/shortcuts";
+import { routesPageKeys } from "../chrome/pageKeys";
+import { ContextMenu, isMenuKey, menuAnchor, type MenuAnchor, type MenuItem } from "../chrome/ContextMenu";
 import { Inspector, type WorkloadLogs } from "../inspector/Inspector";
 import type { ToolIntent } from "../inspector/Tools";
 import { flatten, kindTitle, rowKey, type RowRef, type Selection, type Territory } from "./model";
 import { gridTemplate, minTableWidth } from "./cells";
 import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
+import { SelectionCheckbox } from "./SelectionCheckbox";
 import rv from "./ResourceRowView.module.css";
 import s from "./TerritoryTable.module.css";
 
@@ -33,9 +40,20 @@ const INSPECTOR_ESTIMATE = 360;
 /** The sticky column header's height; keep in step with `.cols` in TerritoryTable.module.css. */
 const HEADER_HEIGHT = 30;
 const OVERSCAN = 10;
+const MAX_DELETE_SELECTION = 50;
+const CHECKBOX_WIDTH = 28;
+const BULK_BAR_CLEARANCE = 80;
 
 export interface TerritoryTableProps {
   territories: Territory[];
+  initialScrollTop?: number;
+  onScroll?: (top: number) => void;
+  onMissingSelection?: () => void;
+  columnFilters?: readonly ColumnFilter[];
+  sort?: SortSpec | null;
+  onColumnFilter?: (key: string, f: ColumnFilter | null) => void;
+  onSort?: (s: SortSpec | null) => void;
+  pickSource?: Territory[];
   kind: KindInfo;
   /** The current row and whether its details are open; held by Console so other views can set it. */
   selection: Selection;
@@ -62,6 +80,9 @@ export interface TerritoryTableProps {
    * into view, and focuses it unless you've moved focus outside the table meanwhile.
    */
   reveal?: number;
+  onOpenSplit?: (row: ResourceRow) => void;
+  menuView?: unknown;
+  paneActive?: boolean;
 }
 
 /** An action on a row, by its `rowKey`; `seq` tells two asks apart. */
@@ -78,12 +99,22 @@ function sameRef(a: RowRef | null, b: RowRef): boolean {
 /** A cluster in one of these states hides its rows until it's live again; they're not gone. */
 const NOT_LIVE: ReadonlySet<ClusterState> = new Set(["syncing", "error", "unknown"]);
 
+const ROW_MENU_LABELS: Partial<Record<RowAction, string>> = {
+  details: "Details", yaml: "YAML", logs: "Logs", previousLogs: "Previous logs",
+  workloadLogs: "Logs", shell: "Shell", reveal: "Show secret keys",
+};
+
+function verbsFor(kind: KindInfo, row: ResourceRow): readonly string[] {
+  return kind.verbs_by_cluster?.[row.cluster_id] ?? kind.verbs;
+}
+
 /**
  * Memoized: Console passes stable props, so a change elsewhere on the page (the dock, a dialog)
  * doesn't re-render the table.
  */
 export const TerritoryTable = memo(function TerritoryTable({
-  territories,
+  territories, initialScrollTop = 0, onScroll, onMissingSelection,
+  columnFilters = [], sort = null, onColumnFilter = () => {}, onSort = () => {}, pickSource = territories,
   kind,
   selection,
   onSelection,
@@ -97,6 +128,9 @@ export const TerritoryTable = memo(function TerritoryTable({
   onWorkloadLogs,
   request = null,
   reveal = 0,
+  onOpenSplit,
+  menuView,
+  paneActive = true,
 }: TerritoryTableProps) {
   const { selected, open } = selection;
   const items = useMemo(() => flatten(territories, open ? selected : null), [territories, open, selected]);
@@ -109,6 +143,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [items]);
   const selectedKey = selected ? rowKey(selected.clusterId, selected.uid) : null;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const restored = useRef(false);
   /** Set when the keyboard moved the selection; the row takes focus once it has rendered. */
   const focusPending = useRef(false);
   /**
@@ -121,12 +156,66 @@ export const TerritoryTable = memo(function TerritoryTable({
   const revealed = useRef(reveal);
   /** A key pressed on a row that its details carry out: a change tool, the YAML tab, a workload's logs. */
   const [intent, setIntent] = useState<(ToolIntent & { key: string }) | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ key: string; anchor: MenuAnchor; view: unknown; kind: string } | null>(null);
   const intentDone = useCallback(() => setIntent(null), []);
   const can = {
     change: useStartAction() !== null,
     logs: onOpenLogs !== undefined,
     shell: onOpenShell !== undefined,
     workloadLogs: onWorkloadLogs !== undefined,
+  };
+  const [marked, setMarked] = useState<ReadonlySet<string>>(() => new Set());
+  const [deleteReview, setDeleteReview] = useState<DeleteSelection[] | null>(null);
+  const checkAll = useRef<HTMLInputElement>(null);
+  const deletableRows = useMemo(() => {
+    const choices = new Map<string, DeleteSelection>();
+    if (!can.change) return choices;
+    for (const territory of territories) {
+      if (territory.state !== "ready" || !canDelete(kind.key, kind.verbs_by_cluster?.[territory.cluster.id] ?? kind.verbs)) continue;
+      for (const row of territory.rows) {
+        if (!row.uid) continue;
+        const key = rowKey(row.cluster_id, row.uid);
+        choices.set(key, {
+          key, uid: row.uid, clusterName: territory.cluster.name,
+          target: { cluster_id: row.cluster_id, kind_key: kind.key, namespace: row.namespace, name: row.name },
+        });
+      }
+    }
+    return choices;
+  }, [can.change, kind, territories]);
+  const checked = Array.from(deletableRows.values()).filter(choice => marked.has(choice.key));
+  const allChecked = checked.length > 0 && checked.length === deletableRows.size;
+  const partial = checked.length > 0 && !allChecked;
+  const atLimit = checked.length >= MAX_DELETE_SELECTION;
+  const showCheckboxes = deletableRows.size > 0;
+  // Keep room to scroll past the overlay at the bottom, including before any row is checked.
+  const endPadding = showCheckboxes ? BULK_BAR_CLEARANCE : 16;
+  useLayoutEffect(() => {
+    setMarked(old => {
+      const current = [...old].filter(key => deletableRows.has(key));
+      return current.length === old.size ? old : new Set(current);
+    });
+  }, [deletableRows]);
+  useLayoutEffect(() => {
+    if (checkAll.current) checkAll.current.indeterminate = partial;
+  }, [partial, showCheckboxes]);
+
+  const toggleMarked = (key: string) => {
+    setMarked(old => {
+      const next = new Set(old);
+      if (next.delete(key)) return next;
+      if (next.size >= MAX_DELETE_SELECTION || !deletableRows.has(key)) return old;
+      next.add(key);
+      return next;
+    });
+  };
+  const closeDeleteReview = (deleted: readonly string[]) => {
+    if (deleted.length > 0) {
+      const completed = new Set(deleted);
+      setMarked(old => new Set([...old].filter(key => !completed.has(key))));
+      if (checked.every(item => completed.has(item.key))) scrollRef.current?.focus({ preventScroll: true });
+    }
+    setDeleteReview(null);
   };
 
   const estimateSize = useCallback((i: number) => {
@@ -144,10 +233,11 @@ export const TerritoryTable = memo(function TerritoryTable({
     estimateSize,
     getItemKey,
     overscan: OVERSCAN,
-    paddingEnd: 16,
+    paddingEnd: endPadding,
     // The body starts below the sticky header, which also covers the top of the viewport.
     scrollMargin: HEADER_HEIGHT,
     scrollPaddingStart: HEADER_HEIGHT,
+    scrollPaddingEnd: endPadding,
   });
   const now = new Date();
 
@@ -170,7 +260,7 @@ export const TerritoryTable = memo(function TerritoryTable({
    * Runs what a row's key means (or the palette asked for): the details, the dock's logs and
    * shells, or, through the details, the YAML tab and the change tools, each reviewed first.
    */
-  const act = (row: ResourceRow, action: RowAction, from: "key" | "palette") => {
+  const act = (row: ResourceRow, action: RowAction, from: "key" | "menu" | "palette") => {
     const ref = { clusterId: row.cluster_id, uid: row.uid };
     switch (action) {
       case "details":
@@ -196,6 +286,61 @@ export const TerritoryTable = memo(function TerritoryTable({
   const actRef = useRef(act);
   actRef.current = act;
 
+  const rowAt = (key: string) => {
+    const index = indexByKey.get(key);
+    const item = index === undefined ? undefined : items[index];
+    return item?.type === "row" ? item.row : null;
+  };
+  const openRowMenu = (trigger: HTMLElement, point?: { clientX: number; clientY: number }) => {
+    const key = trigger.dataset.rowKey;
+    if (!key || !indexByKey.has(key)) return false;
+    setRowMenu({ key, anchor: menuAnchor(trigger, point), view: menuView, kind: kind.key });
+    return true;
+  };
+  const restoreRowFocus = (trigger?: HTMLElement) => {
+    const fallback = scrollRef.current?.querySelector<HTMLElement>('[data-row-key][tabindex="0"]');
+    (trigger?.isConnected ? trigger : fallback ?? scrollRef.current)?.focus({ preventScroll: true });
+  };
+  const menuRow = rowMenu ? rowAt(rowMenu.key) : null;
+  const menuMatchesView = rowMenu?.view === menuView && rowMenu?.kind === kind.key;
+  const menuItems: MenuItem[] = [];
+  if (rowMenu && menuRow && menuMatchesView && paneActive) {
+    for (const action of rowActions(kind.key, verbsFor(kind, menuRow), menuRow, can)) {
+      menuItems.push({
+        id: action,
+        label: ROW_MENU_LABELS[action] ?? TOOL_LABEL[action as ToolId],
+        danger: action === "delete" || action === "drain" || action === "evict",
+        onSelect: () => {
+          const current = rowAt(rowMenu.key);
+          if (current && rowMenu.anchor.trigger.isConnected) act(current, action, "menu");
+        },
+      });
+    }
+    if (onOpenSplit) menuItems.push({
+      id: "open-split", label: "Open in new split tab", divider: menuItems.length > 0, restoreFocus: false,
+      onSelect: () => {
+        const current = rowAt(rowMenu.key);
+        if (current && rowMenu.anchor.trigger.isConnected) onOpenSplit(current);
+      },
+    });
+  }
+  useLayoutEffect(() => {
+    if (!rowMenu) return;
+    if (paneActive && menuRow && menuMatchesView && rowMenu.anchor.trigger.isConnected) return;
+    setRowMenu(null);
+    if (paneActive) restoreRowFocus(rowMenu.anchor.trigger);
+  });
+
+  const onContextMenu = (e: MouseEvent<HTMLDivElement>) => {
+    if (!(e.target instanceof Element)) return;
+    if (e.target.closest('a, button, input, textarea, select, [contenteditable]')) return;
+    const trigger = e.target.closest<HTMLElement>("[data-row-key]");
+    if (trigger && e.currentTarget.contains(trigger) && openRowMenu(trigger, e)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
   // The palette's ask, once, on the row as it is now (never one that has gone meanwhile).
   const asked = useRef(request?.seq ?? 0);
   useEffect(() => {
@@ -206,7 +351,7 @@ export const TerritoryTable = memo(function TerritoryTable({
     if (it?.type === "row") actRef.current(it.row, request.action, "palette");
   }, [request, indexByKey, items]);
 
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+  const runRowKey = (e: KeyboardEvent<HTMLDivElement> | globalThis.KeyboardEvent, at: number | undefined, fromPage = false) => {
     // Escape closes the details from the row or from inside them.
     if (pressed("close", e)) {
       if (!open) return;
@@ -214,17 +359,24 @@ export const TerritoryTable = memo(function TerritoryTable({
       close();
       return;
     }
-    // Everything else acts on a focused row, never on keys typed inside the details.
-    const key = (e.target as HTMLElement).dataset?.rowKey;
-    const at = key === undefined ? undefined : indexByKey.get(key);
     if (at === undefined) return;
     const it = items[at];
     if (it.type !== "row") return;
     // The key means what this kind gives it (`s`: a pod's shell, a deployment's scale, a node's
     // shell), among what this row offers (a node has the one of cordon and uncordon that applies).
-    const id = rowShortcut(e, kind.key, rowActions(kind.key, kind.verbs, it.row, can));
+    const id = rowShortcut(e, kind.key, rowActions(kind.key, verbsFor(kind, it.row), it.row, can));
     if (id === undefined) return;
     e.preventDefault();
+    if (fromPage) {
+      const key = rowKey(it.row.cluster_id, it.row.uid);
+      const el = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])
+        .find((n) => n.dataset.rowKey === key);
+      if (el) el.focus({ preventScroll: true });
+      else {
+        focusPending.current = true;
+        virtualizer.scrollToIndex(at, { align: "auto" });
+      }
+    }
     // A held `x` must not walk on into the secret's keys and reveal one (audited) by itself.
     if (id === "reveal" && e.repeat) return;
     if (id === "move") {
@@ -241,6 +393,61 @@ export const TerritoryTable = memo(function TerritoryTable({
     }
     act(it.row, id as RowAction, "key");
   };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Everything except Escape acts on a focused row, never on keys inside the details.
+    const target = e.target as HTMLElement;
+    const key = target.dataset?.rowKey;
+    if (key && isMenuKey(e) && openRowMenu(target)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (key && e.key === " " && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && deletableRows.has(key)) {
+      e.preventDefault();
+      if (!e.repeat) toggleMarked(key);
+      return;
+    }
+    runRowKey(e, key === undefined ? undefined : indexByKey.get(key));
+  };
+
+  const onPageKey = (e: globalThis.KeyboardEvent) => {
+    if (!paneActive || !pageKey(e) || !routesPageKeys(e.target)) return;
+    // Keep native activation and navigation on chrome controls (including nested button icons).
+    if (["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
+      && e.target instanceof Element
+      && e.target.closest('button, a[href], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], summary')) return;
+    const at = selectedKey === null ? undefined : indexByKey.get(selectedKey);
+    if (at === undefined && pressed("move", e)) {
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      let edge = step === 1 ? 0 : items.length - 1;
+      while (edge >= 0 && edge < items.length && items[edge].type !== "row") edge += step;
+      const it = items[edge];
+      if (it?.type !== "row") return;
+      e.preventDefault();
+      focusPending.current = true;
+      scrollPending.current = true;
+      scrollAlign.current = "auto";
+      select(it.row);
+      return;
+    }
+    runRowKey(e, at, true);
+  };
+  const pageKeyRef = useRef(onPageKey);
+  pageKeyRef.current = onPageKey;
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => pageKeyRef.current(e);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (restored.current || !territories.some(t => t.state === "ready" && t.rows.length > 0)) return;
+    restored.current = true;
+    const index = selectedKey === null ? undefined : indexByKey.get(selectedKey);
+    if (index !== undefined) virtualizer.scrollToIndex(index, { align: "auto" });
+    else if (scrollRef.current) scrollRef.current.scrollTop = initialScrollTop;
+  }, [territories, selectedKey, indexByKey, virtualizer, initialScrollTop]);
 
   // Bring the selected row into view, then focus it once the virtualizer has rendered it.
   useLayoutEffect(() => {
@@ -262,7 +469,7 @@ export const TerritoryTable = memo(function TerritoryTable({
       const home = territories.find((t) => t.cluster.id === selected?.clusterId);
       if (home && NOT_LIVE.has(home.state)) return;
       // Deleted or filtered out on a live cluster: nothing left to inspect.
-      if (open) onSelection((prev) => (prev.open ? { ...prev, open: false } : prev));
+      if (open) { if (onMissingSelection) onMissingSelection(); else onSelection((prev) => (prev.open ? { ...prev, open: false } : prev)); }
       return;
     }
     if (scrollPending.current) {
@@ -282,13 +489,31 @@ export const TerritoryTable = memo(function TerritoryTable({
   const tabKey = selectedKey !== null && indexByKey.has(selectedKey) ? selectedKey : indexByKey.keys().next().value;
   const margin = virtualizer.options.scrollMargin;
   const columns = kind.columns;
+  const columnCount = columns.length + Number(showCheckboxes);
+  const titleKey = kind.key === "helm-releases" ? "release" : "name";
   const tableStyle = useMemo(
-    () => ({ "--cols": gridTemplate(columns), minWidth: minTableWidth(columns) }) as CSSProperties,
-    [columns],
+    () => ({
+      "--cols": `${showCheckboxes ? `${CHECKBOX_WIDTH}px ` : ""}${gridTemplate(columns, titleKey)}`,
+      minWidth: minTableWidth(columns, titleKey) + (showCheckboxes ? CHECKBOX_WIDTH + 12 : 0),
+    }) as CSSProperties,
+    [columns, titleKey, showCheckboxes],
   );
 
-  return (
-    <div ref={scrollRef} className={s.scroll} onKeyDown={onKeyDown}>
+  const table = (
+    <div ref={scrollRef} className={s.scroll} tabIndex={-1} onKeyDown={onKeyDown} onContextMenu={onContextMenu}
+      style={{ scrollPaddingBottom: endPadding }}
+      onScroll={(e) => {
+        onScroll?.(e.currentTarget.scrollTop);
+        if (!rowMenu) return;
+        const trigger = rowMenu.anchor.trigger;
+        const viewport = e.currentTarget.getBoundingClientRect();
+        const bounds = trigger.getBoundingClientRect();
+        if (!trigger.isConnected || bounds.bottom <= viewport.top + HEADER_HEIGHT || bounds.top >= viewport.bottom
+          || bounds.right <= viewport.left || bounds.left >= viewport.right) {
+          setRowMenu(null);
+          restoreRowFocus();
+        }
+      }}>
       <div
         role="grid"
         aria-label={`${kindTitle(kind)} by cluster`}
@@ -298,7 +523,13 @@ export const TerritoryTable = memo(function TerritoryTable({
       >
         <div role="rowgroup" className={s.head}>
           <div role="row" aria-rowindex={1} className={`${rv.grid} ${s.cols}`}>
-            {columns.map((c) => <span key={c.key} role="columnheader">{c.label}</span>)}
+            {showCheckboxes && <span role="columnheader">
+              <SelectionCheckbox ref={checkAll} aria-label="Select all visible resources"
+                checked={allChecked} disabled={deletableRows.size > MAX_DELETE_SELECTION}
+                title={deletableRows.size > MAX_DELETE_SELECTION ? `Filter to ${MAX_DELETE_SELECTION} or fewer resources to select all` : undefined}
+                onChange={() => setMarked(allChecked ? new Set() : new Set(deletableRows.keys()))} />
+            </span>}
+            {columns.map((c) => <ColumnHeader key={c.key} col={c} filter={columnFilters.find(f => f.key === c.key)} sort={sort} source={pickSource} onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} />)}
           </div>
         </div>
         <div role="rowgroup" className={s.body} style={{ height: virtualizer.getTotalSize() }}>
@@ -317,14 +548,15 @@ export const TerritoryTable = memo(function TerritoryTable({
                   className={`${s.item} ${s.inspRow}${last ? ` ${s.last}` : ""}`}
                   style={{ transform: `translateY(${v.start - margin}px)` }}
                 >
-                  <div role="gridcell" aria-colspan={columns.length}>
+                  <div role="gridcell" aria-colspan={columnCount}>
                     <Inspector
                       row={it.row}
                       kindKey={kind.key}
-                      verbs={kind.verbs}
+                      verbs={verbsFor(kind, it.row)}
                       intent={intent?.key === rowKey(it.row.cluster_id, it.row.uid) ? intent : null}
                       onIntentDone={intentDone}
                       provider={it.provider}
+                      paneActive={paneActive}
                       onOpenLogs={onOpenLogs}
                       onOpenShell={onOpenShell}
                       onNodeShell={onNodeShell}
@@ -345,6 +577,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                     kind={kind}
                     onRetry={onRetry}
                     rowIndex={rowIndex}
+                    columnCount={columnCount}
                     metricsNote={metrics ? metrics.why(it.t.cluster.id) : null}
                   />
                 ) : (
@@ -361,6 +594,11 @@ export const TerritoryTable = memo(function TerritoryTable({
                     podCounts={podCounts}
                     metrics={metrics}
                     onActivate={toggle}
+                    bulk={showCheckboxes ? {
+                      checked: key !== null && marked.has(key),
+                      onToggle: key !== null && deletableRows.has(key) && (!atLimit || marked.has(key))
+                        ? () => toggleMarked(key) : undefined,
+                    } : undefined}
                   />
                 )}
               </div>
@@ -368,6 +606,35 @@ export const TerritoryTable = memo(function TerritoryTable({
           })}
         </div>
       </div>
+      {rowMenu && menuRow && menuItems.length > 0 && (
+        <ContextMenu anchor={rowMenu.anchor} label={`Actions for ${menuRow.name}`} items={menuItems}
+          onClose={() => setRowMenu(null)} />
+      )}
+    </div>
+  );
+
+  return (
+    <div className={s.frame}>
+      {table}
+      <span className={s.selectionStatus} role="status" aria-atomic="true">
+        {checked.length > 0 ? `${checked.length} selected${atLimit ? ` (limit of ${MAX_DELETE_SELECTION})` : ""}` : ""}
+      </span>
+      {checked.length > 0 && <div className={s.bulkBar} role="group" aria-label="Selected resources">
+        <span aria-hidden="true" className={s.bulkCount} title={atLimit ? `Limit of ${MAX_DELETE_SELECTION} per batch` : undefined}>
+          {checked.length} selected
+        </span>
+        <button type="button" className={s.bulkDelete} onClick={() => setDeleteReview(checked)}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6" />
+          </svg>
+          Delete selected
+        </button>
+        <button type="button" className={s.bulkClear} aria-label="Clear selection" onClick={() => {
+          setMarked(new Set());
+          scrollRef.current?.focus({ preventScroll: true });
+        }}>Clear</button>
+      </div>}
+      {deleteReview && <BulkDeleteDialog selected={deleteReview} onClose={closeDeleteReview} />}
     </div>
   );
 });

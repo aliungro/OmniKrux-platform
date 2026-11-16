@@ -126,12 +126,15 @@ def test_waiting_crashloop_state_text():
     assert (c.state, c.state_class) == ("Waiting: ContainerCreating", "warn")
 
 
-def test_secret_env_value_never_included():
+def test_environment_declarations_serialize_without_secret_values():
     pod = oom_pod()
     pod["spec"]["containers"][0]["env"] = [
         {"name": "MODE", "value": "fast"},
+        {"name": "EMPTY", "value": ""},
+        {"name": "UNEXPANDED", "value": "$(MODE)/data"},
         {
             "name": "DB_PASSWORD",
+            "value": "hunter2",  # A malformed reference must still omit the value.
             "valueFrom": {"secretKeyRef": {"name": "db", "key": "password"}},
         },
         {
@@ -139,25 +142,37 @@ def test_secret_env_value_never_included():
             "valueFrom": {"configMapKeyRef": {"name": "payments-config", "key": "level"}},
         },
         {"name": "NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+        {"name": "POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
         {"name": "MEM", "valueFrom": {"resourceFieldRef": {"resource": "limits.memory"}}},
     ]
     pod["spec"]["containers"][0]["envFrom"] = [
         {"secretRef": {"name": "api-keys"}},
-        {"configMapRef": {"name": "settings"}},
+        {"prefix": "APP_", "configMapRef": {"name": "settings"}},
     ]
-    # Even if a (malformed) secret reference also carried a literal value, it must not leak.
-    pod["spec"]["containers"][0]["env"][1]["value"] = "hunter2"
     [c] = describe_pod(pod, []).containers
     assert [(e.name, e.value, e.source) for e in c.env] == [
         ("MODE", "fast", None),
+        ("EMPTY", "", None),
+        ("UNEXPANDED", "$(MODE)/data", None),
         ("DB_PASSWORD", None, "Secret db key password"),
         ("LEVEL", None, "ConfigMap payments-config key level"),
         ("NODE", None, "Field spec.nodeName"),
+        ("POD_NAMESPACE", "demo", "Field metadata.namespace"),
         ("MEM", None, "Resource limits.memory"),
         ("(all keys)", None, "Secret api-keys"),
-        ("(all keys)", None, "ConfigMap settings"),
+        ("(all keys)", None, "ConfigMap settings (prefix APP_)"),
     ]
     assert "hunter2" not in json.dumps(describe_pod(pod, []).model_dump())
+
+
+def test_namespace_field_ref_stays_source_only_when_namespace_is_missing():
+    pod = oom_pod()
+    del pod["metadata"]["namespace"]
+    pod["spec"]["containers"][0]["env"] = [
+        {"name": "POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
+    ]
+    [entry] = describe_pod(pod, []).containers[0].env
+    assert (entry.value, entry.source, entry.link) == (None, "Field metadata.namespace", None)
 
 
 def event(reason, count=None, *, type_="Warning", message="Back-off restarting", **extra):
@@ -198,8 +213,16 @@ def test_events_grouped_warnings_first():
 
 def test_init_and_ephemeral_containers_listed():
     pod = oom_pod()
-    pod["spec"]["initContainers"] = [{"name": "migrate", "image": "migrate:1"}]
-    pod["spec"]["ephemeralContainers"] = [{"name": "debugger-abc", "image": "busybox:1.36"}]
+    pod["spec"]["initContainers"] = [
+        {"name": "migrate", "image": "migrate:1", "env": [{"name": "INIT", "value": "1"}]},
+    ]
+    pod["spec"]["ephemeralContainers"] = [
+        {
+            "name": "debugger-abc",
+            "image": "busybox:1.36",
+            "env": [{"name": "DEBUG", "value": "on"}],
+        },
+    ]
     pod["status"]["initContainerStatuses"] = [
         {
             "name": "migrate",
@@ -213,6 +236,7 @@ def test_init_and_ephemeral_containers_listed():
     ]
     d = describe_pod(pod, [])
     assert [c.name for c in d.containers] == ["app"]
+    assert d.containers[0].env == []
     [init] = d.init_containers
     assert (init.name, init.image, init.state, init.state_class) == (
         "migrate",
@@ -220,8 +244,10 @@ def test_init_and_ephemeral_containers_listed():
         "Terminated: Completed (exit 0)",
         "done",
     )
+    assert [(e.name, e.value) for e in init.env] == [("INIT", "1")]
     [eph] = d.ephemeral_containers
     assert (eph.name, eph.image, eph.state) == ("debugger-abc", "busybox:1.36", "Running")
+    assert [(e.name, e.value) for e in eph.env] == [("DEBUG", "on")]
 
 
 def test_missing_fields_do_not_crash():

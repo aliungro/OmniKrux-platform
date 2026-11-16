@@ -8,6 +8,9 @@ from typing import Annotated
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from omnikrux.cloud.dirs import CloudDirs
+from omnikrux.cloud.endpoints import CloudEndpoints
+
 # Host headers the console answers to (DNS-rebinding guard). "*.localhost" allows any subdomain.
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "[::1]", "*.localhost")
 
@@ -60,6 +63,12 @@ class Settings(BaseSettings):
     # OMNIKRUX_PORT_FORWARD_BIND: the address port-forwards listen on. 127.0.0.1 everywhere, also
     # in the container (safe with --network host); Docker's bridge publishing needs 0.0.0.0.
     port_forward_bind: str = "127.0.0.1"
+    azure_dir: Path | None = None
+    aws_dir: Path | None = None
+    gcloud_dir: Path | None = None
+    oci_dir: Path | None = None
+    cloud_endpoints: Annotated[str | None, NoDecode] = None
+    cloud_discovery_seconds: int = 600
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod
@@ -85,6 +94,36 @@ class Settings(BaseSettings):
     def forward_bind(self) -> str:
         """ValueError in plain words for something that isn't an IP (the app refuses to start)."""
         return parse_bind_address(self.port_forward_bind)
+
+    @property
+    def endpoints(self) -> CloudEndpoints:
+        if self.cloud_endpoints is None:
+            return CloudEndpoints()
+        return CloudEndpoints.from_json(self.cloud_endpoints)
+
+    @property
+    def cloud_dirs(self) -> CloudDirs:
+        if self.in_container:
+            defaults = CloudDirs(
+                Path("/cloud/azure"), Path("/cloud/aws"), Path("/cloud/gcloud"), Path("/cloud/oci")
+            )
+        else:
+            home = Path.home()
+            gcloud_config = os.getenv("CLOUDSDK_CONFIG")
+            appdata = os.getenv("APPDATA") if os.name == "nt" else None
+            gcloud = Path(appdata) / "gcloud" if appdata else home / ".config" / "gcloud"
+            defaults = CloudDirs(
+                home / ".azure",
+                home / ".aws",
+                Path(gcloud_config) if gcloud_config else gcloud,
+                home / ".oci",
+            )
+        return CloudDirs(
+            self.azure_dir or defaults.azure,
+            self.aws_dir or defaults.aws,
+            self.gcloud_dir or defaults.gcloud,
+            self.oci_dir or defaults.oci,
+        )
 
     @property
     def kubeconfig_paths(self) -> list[Path]:

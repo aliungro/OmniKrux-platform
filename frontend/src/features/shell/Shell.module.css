@@ -1,0 +1,73 @@
+.shell { height:100vh; height:100dvh; display:grid; grid-template-columns:72px minmax(0,1fr); overflow:hidden; }
+.content { min-width:0; min-height:0; display:flex; flex-direction:column; }
+.main { flex:1; min-height:0; display:flex; flex-direction:column; outline:none; }
+.saveProblem { flex-shrink:0; margin:0; padding:8px 20px; border-bottom:1px solid var(--rule); color:var(--warn); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+
+.single, .split {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--rule);
+}
+
+.pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  outline: none;
+  background: var(--bg);
+}
+
+.paneTitle, .splitTools {
+  flex: none;
+  min-width: 0;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surf);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.paneTitle {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pane[data-active-pane="true"] .paneTitle {
+  box-shadow: inset 2px 0 var(--focus);
+  color: var(--ink);
+}
+
+.splitTools {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.splitTools button {
+  padding: 3px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--surf-2);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.splitTools button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+@media (max-width: 760px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+}

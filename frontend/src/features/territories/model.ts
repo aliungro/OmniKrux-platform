@@ -1,19 +1,23 @@
+import { compileColumnFilters, compareKeys, sortKey, type ColumnFilter, type SortSpec } from "./columnFilters";
 import type { Cluster, ClusterState, ColumnSpec, KindInfo, KindsResponse, Provider, ResourceRow, StatusClass } from "../../api/types";
 import type { WatchState } from "../../api/watchState";
 
-export type FilterStatus = "all" | "failing" | "pending" | "restartedToday" | "warnings";
+export const FILTER_STATUSES = ["all", "failing", "pending", "restartedToday", "warnings"] as const;
+export type FilterStatus = typeof FILTER_STATUSES[number];
 
 export interface Filters {
   status: FilterStatus;
+  columns: ColumnFilter[];
+  sort: SortSpec | null;
   text: string;
   /** One namespace, or null for all of them. */
   namespace: string | null;
 }
 
-export const NO_FILTER: Filters = { status: "all", text: "", namespace: null };
+export const NO_FILTER: Filters = { status: "all", text: "", namespace: null, columns: [], sort: null };
 
 export function isNoFilter(f: Filters): boolean {
-  return f.status === "all" && f.text.trim() === "" && f.namespace === null;
+  return f.status === "all" && f.text.trim() === "" && f.namespace === null && f.columns.length === 0 && f.sort === null;
 }
 
 export interface Territory {
@@ -225,8 +229,9 @@ export function chipsFor(kind: Pick<KindInfo, "key" | "columns">): ChipDef[] {
   return hasStatus(kind) ? [FAILING, PENDING] : [];
 }
 
-/** Whether the text is in a row's name, namespace, node, one of its `k=v` labels or images. */
+/** Whether the text is in a row's title, name, namespace, node, labels or images. */
 function matchesText(row: ResourceRow, q: string): boolean {
+  if (rowTitle(row).toLowerCase().includes(q)) return true;
   if (row.name.toLowerCase().includes(q)) return true;
   if (row.namespace !== null && row.namespace.toLowerCase().includes(q)) return true;
   const node = textColumn(row, "node");
@@ -241,11 +246,24 @@ function matchesText(row: ResourceRow, q: string): boolean {
   return false;
 }
 
-export function matchesFilter(row: ResourceRow, f: Filters, now: Date, kindKey = "pods"): boolean {
-  if (!matchesStatus(row, f.status, now, kindKey)) return false;
-  if (f.namespace !== null && row.namespace !== f.namespace) return false;
+export function compileFilters(f: Filters, kind: Pick<KindInfo, "key" | "columns">, now: Date): (row: ResourceRow) => boolean {
+  const columns = compileColumnFilters(f.columns, kind.columns, now);
   const q = f.text.trim().toLowerCase();
-  return q === "" || matchesText(row, q);
+  return row => matchesStatus(row, f.status, now, kind.key) && (f.namespace === null || row.namespace === f.namespace) && (q === "" || matchesText(row, q)) && columns(row);
+}
+export function matchesFilter(row: ResourceRow, f: Filters, now: Date, kind: Pick<KindInfo, "key" | "columns"> | string = POD_KIND): boolean {
+  return compileFilters(f, typeof kind === "string" ? { key: kind, columns: [] } : kind, now)(row);
+}
+
+/** Keep each independent filter that still shows a navigation target. */
+export function showingFilters(row: ResourceRow, f: Filters, kind: Pick<KindInfo, "key" | "columns">, now: Date): Filters {
+  const columns = compileColumnFilters(f.columns, kind.columns, now).matching(row);
+  const status = matchesStatus(row, f.status, now, kind.key) ? f.status : "all";
+  const q = f.text.trim().toLowerCase();
+  const text = q === "" || matchesText(row, q) ? f.text : "";
+  const namespace = f.namespace === null || row.namespace === null || f.namespace === row.namespace ? f.namespace : null;
+  return status === f.status && namespace === f.namespace && text === f.text && columns.length === f.columns.length
+    ? f : { ...f, status, namespace, text, columns };
 }
 
 const RANK: Record<StatusClass, number> = { bad: 0, warn: 1, ok: 2, done: 2 };
@@ -259,7 +277,9 @@ function recency(row: ResourceRow): number {
 }
 
 /** `status`: failing first, then pending, then the rest, by name within each. `recent`: newest first. */
-function sortRows(rows: ResourceRow[], sort: KindInfo["sort"]): ResourceRow[] {
+function sortRows(rows: ResourceRow[], sort: KindInfo["sort"], spec: SortSpec | null, columns: readonly ColumnSpec[]): ResourceRow[] {
+  const col = spec && columns.find(c => c.key === spec.key && !["cpu", "memory", "pods"].includes(c.type));
+  if (col && spec) return rows.map(row => ({row, key: sortKey(row, col)})).sort((a,b) => compareKeys(a.key,b.key,spec.dir) || byName(a.row.name,b.row.name)).map(x => x.row);
   if (sort === "recent") {
     return rows
       .map((row) => ({ row, at: recency(row) }))
@@ -290,8 +310,8 @@ function buildTerritory(
   live: LiveStatus,
   rows: Map<string, ResourceRow> | undefined,
   f: Filters,
-  now: Date,
   kind: KindInfo,
+  predicate: (row: ResourceRow) => boolean,
 ): Territory {
   const all = rows ? Array.from(rows.values()) : [];
   let failing = 0;
@@ -305,7 +325,7 @@ function buildTerritory(
     cluster,
     state: live ? live.state : fallback.state,
     message: live ? live.message : fallback.message,
-    rows: sortRows(all.filter((row) => matchesFilter(row, f, now, kind.key)), kind.sort),
+    rows: sortRows(all.filter(predicate), kind.sort, f.sort, kind.columns),
     total: all.length,
     failing,
     pending,
@@ -334,9 +354,14 @@ export function buildTerritories(
   now: Date,
   kind: KindInfo = POD_KIND,
 ): Territory[] {
-  // Filters only read `now` for its local day, which can't change within a minute.
-  const minute = Math.floor(now.getTime() / 60_000);
-  const filterKey = [kind.key, kind.sort, f.status, f.namespace ?? "", f.text.trim().toLowerCase()].join("\u0000");
+  // Relative time filters can cross their boundary at any instant.
+  const minute = f.columns.some(c => c.op === "within" || c.op === "olderThan")
+    ? now.getTime() : Math.floor(now.getTime() / 60_000);
+  // The kind's columns are part of the key: a filter restored before /api/kinds answers can't
+  // apply to the fallback columns, and must apply as soon as the real columns arrive.
+  const columnKeys = kind.columns.map(c => c.key).join(",");
+  const filterKey = [kind.key, kind.sort, columnKeys, f.status, f.namespace ?? "", f.text.trim().toLowerCase(), JSON.stringify(f.columns), JSON.stringify(f.sort)].join("\u0000");
+  const predicate = compileFilters(f, kind, now);
   return clusters.map((cluster) => {
     const live: LiveStatus = Object.hasOwn(w.clusters, cluster.id) ? w.clusters[cluster.id] : undefined;
     const state = live ? live.state : notYetWatched(cluster).state;
@@ -352,7 +377,7 @@ export function buildTerritories(
     const hit = byFilter.get(filterKey);
     if (hit && hit.cluster === cluster && hit.live === live && hit.minute === minute) return hit.territory;
 
-    const territory = buildTerritory(cluster, live, rows, f, now, kind);
+    const territory = buildTerritory(cluster, live, rows, f, kind, predicate);
     if (!hit && byFilter.size >= MAX_FILTERS_PER_ROWS) byFilter.clear();
     byFilter.set(filterKey, { cluster, live, minute, territory });
     return territory;
@@ -470,4 +495,19 @@ export function formatAge(createdAt: string | null, now: Date): string {
 export function formatAgo(at: string | null, now: Date): string {
   const age = formatAge(at, now);
   return age === "—" ? age : `${age} ago`;
+}
+
+/** `pools` is null when the cloud couldn't list them: unknown, never "0 node pools". */
+export function poolSummary(pools: number | null, nodes: number | null): string {
+  const poolText = pools === null ? "node pools unknown" : `${pools} node ${pools === 1 ? "pool" : "pools"}`;
+  return nodes === null ? poolText : `${poolText} · ${nodes} ${nodes === 1 ? "node" : "nodes"}`;
+}
+
+export function clusterPoolSummary(cluster: Cluster): string | null {
+  const nodes = cluster.node_count ?? null;
+  if (cluster.source !== "cloud") {
+    const pools = cluster.node_pools?.length ?? 0;
+    return pools === 0 && nodes === null ? null : poolSummary(pools, nodes);
+  }
+  return poolSummary(cluster.node_pools ? cluster.node_pools.length : null, nodes);
 }

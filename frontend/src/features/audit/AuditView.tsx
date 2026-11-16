@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import type { AuditRecord } from "../../api/types";
 import { useClusters } from "../../api/useClusters";
@@ -8,7 +9,7 @@ import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { Status } from "../territories/Status";
 import { formatAgo } from "../territories/model";
 import { ACTION_LABELS, actionLabel, diffKind, messageOf, outcomeOf, whatOf } from "./labels";
-import { NO_AUDIT_FILTER, useAudit, type AuditFilters } from "./useAudit";
+import { useAudit, type AuditFilters } from "./useAudit";
 import pc from "../territories/provider.module.css";
 import s from "./AuditView.module.css";
 
@@ -116,10 +117,12 @@ function Detail({ record }: { record: AuditRecord }) {
  * thousands of records stay smooth; older ones come a page at a time. A row opens to show what
  * changed (a diff) and its details, exactly as the server recorded them.
  */
-export function AuditView({ onBack }: { onBack: () => void }) {
+export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFilters: (f: AuditFilters) => void }) {
   const clusters = useClusters();
-  const [filters, setFilters] = useState<AuditFilters>(NO_AUDIT_FILTER);
-  const [typed, setTyped] = useState("");
+  const setFilters = onFilters;
+  const [typed, setTyped] = useState(filters.text);
+  const client = useQueryClient();
+  useEffect(() => { void client.resetQueries({queryKey:["audit"]}); }, [client]);
   const query = useAudit(filters);
   const now = useNow(60_000);
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -129,9 +132,9 @@ export function AuditView({ onBack }: { onBack: () => void }) {
 
   // The search goes to the server once typing pauses.
   useEffect(() => {
-    const t = setTimeout(() => setFilters((f) => (f.text === typed ? f : { ...f, text: typed })), SEARCH_DEBOUNCE_MS);
+    const t = setTimeout(() => { if (filters.text !== typed) setFilters({ ...filters, text: typed }); }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [typed]);
+  }, [typed, filters]);
 
   const records = useMemo(() => query.data?.pages.flatMap((p) => p.records) ?? [], [query.data]);
   const items = useMemo<Item[]>(
@@ -263,7 +266,6 @@ export function AuditView({ onBack }: { onBack: () => void }) {
   return (
     <section className={s.view} aria-label="Audit log">
       <div className={s.bar}>
-        <button type="button" className={s.btn} onClick={onBack}>Back to resources</button>
         <h1 className={s.title}>Audit log</h1>
         <div className={s.filters}>
           <label className={s.field}>

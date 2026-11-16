@@ -4,10 +4,11 @@ import logging
 import time
 
 import pytest
+from aiohttp import web
 
 from omnikrux.kube.client import ClusterUnavailable, make_api_client
 from omnikrux.kube.discovery import ApiResource, discover
-from tests.fakekube import FakeResource, kubeconfig_for
+from tests.fakekube import VERSION, FakeResource, kubeconfig_for
 
 
 @pytest.fixture
@@ -19,6 +20,22 @@ async def api(fake_api):
 
 def by_key(discovery) -> dict[tuple[str, str], ApiResource]:
     return {(r.group, r.plural): r for r in discovery.resources}
+
+
+async def test_discovery_reads_version_and_tolerates_failure(api, fake_api, monkeypatch):
+    initial = await discover(api)
+    assert initial.version == VERSION["gitVersion"]
+    route = fake_api._route
+
+    async def broken_version(request):
+        if request.path == "/version":
+            return web.Response(status=403, text="untrusted version response")
+        return await route(request)
+
+    monkeypatch.setattr(fake_api, "_route", broken_version)
+    result = await discover(api)
+    assert result.version is None and result.resources == initial.resources
+    assert result.failed_groups == {}
 
 
 async def test_discovery_lists_core_and_group_resources(api, fake_api):
@@ -173,10 +190,10 @@ async def test_crd_items_that_are_not_a_list_keep_generic_columns(api, monkeypat
 
     real = discovery_mod._get
 
-    async def get(api, path, timeout=30):
+    async def get(api, path, timeout=30, *, cloud=False):
         if path == discovery_mod.CRDS_PATH:
             return {"items": 5}
-        return await real(api, path, timeout)
+        return await real(api, path, timeout, cloud=cloud)
 
     monkeypatch.setattr(discovery_mod, "_get", get)
     discovery = await discover(api)

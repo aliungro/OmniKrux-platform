@@ -24,6 +24,7 @@ export function DialogShell({
   busy,
   onCancel,
   first,
+  restoreFocusTo,
   labelledBy,
   describedBy,
   className = "",
@@ -34,6 +35,7 @@ export function DialogShell({
   busy: boolean;
   onCancel: () => void;
   first: RefObject<HTMLElement | null>;
+  restoreFocusTo?: RefObject<HTMLElement | null>;
   labelledBy: string;
   describedBy?: string;
   className?: string;
@@ -46,7 +48,7 @@ export function DialogShell({
     returnTo.current = document.activeElement;
     first.current?.focus();
     return () => {
-      const back = returnTo.current;
+      const back = restoreFocusTo?.current ?? returnTo.current;
       if (back instanceof HTMLElement && back.isConnected) back.focus();
     };
   }, []); // once, on open: `first` is a ref

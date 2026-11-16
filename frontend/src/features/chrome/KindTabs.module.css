@@ -112,3 +112,8 @@
   outline-offset: 2px;
   border-radius: 6px;
 }
+
+.tabGroup { display: flex; align-items: center; flex: none; }
+.pin { flex: none; margin-right: 8px; width: 23px; height: 23px; border: 1px solid var(--rule); border-radius: 5px; background: var(--surf); color: var(--ink-3); font: inherit; cursor: pointer; }
+.pin:hover { color: var(--focus); background: var(--surf-2); }
+.pin:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

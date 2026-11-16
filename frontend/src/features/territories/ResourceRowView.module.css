@@ -51,6 +51,84 @@
   background: var(--surf-2);
 }
 
+.row[data-bulk-selected] {
+  background: color-mix(in srgb, var(--focus) 10%, var(--surf-2));
+}
+
+.checkbox {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 26px;
+}
+
+.checkbox input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.checkbox input:disabled {
+  cursor: default;
+}
+
+.checkboxMark {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 15px;
+  height: 15px;
+  border: 1px solid color-mix(in srgb, var(--ink-2) 65%, var(--surf));
+  border-radius: 4px;
+  color: var(--focus);
+  pointer-events: none;
+}
+
+.checkbox input:is(:checked, :indeterminate) + .checkboxMark {
+  border-color: var(--focus);
+  background: color-mix(in srgb, var(--focus) 18%, var(--surf));
+}
+
+.checkbox input:checked + .checkboxMark::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border: solid currentColor;
+  border-width: 0 0 2px 2px;
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+.checkbox input:indeterminate + .checkboxMark::after {
+  content: "";
+  width: 7px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.checkbox input:hover:not(:disabled) + .checkboxMark {
+  border-color: var(--focus);
+}
+
+.checkbox input:focus-visible + .checkboxMark {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.checkbox input:disabled + .checkboxMark {
+  opacity: 0.45;
+}
+
+@media (forced-colors: active) {
+  .checkbox input { opacity: 1; }
+  .checkboxMark { visibility: hidden; }
+}
+
 .row:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
@@ -64,6 +142,16 @@
 
 .name {
   font-weight: 600;
+}
+
+/* Keep the container group intact; the status label gives up its space first. */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.status > :last-child {
+  flex-shrink: 1;
 }
 
 .dim {

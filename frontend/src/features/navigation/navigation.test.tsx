@@ -1,10 +1,12 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/navigation/navigation.test.tsx — links that jump to the object they name.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { applyMessage, emptyWatchState, type WatchState } from "../../api/watchState";
-import { Console } from "../../App";
+import { Shell as Console } from "../../features/shell/Shell";
+import { seedPodsWorkspace } from "../../test/seedWorkspace";
 import { describeBody, container, resourceDescribe, secretDescribe } from "../../test/describe";
 import { KINDS } from "../../test/kinds";
 import { NO_FILTER, NO_SELECTION, type Filters, type Selection } from "../territories/model";
@@ -24,7 +26,7 @@ vi.mock("../../api/useWatch", async () => {
 
 const cluster: Cluster = {
   id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443",
-  original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null,
+  ...FILE_CLUSTER_METADATA, original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null,
 };
 
 const row = (uid: string, kind: string, namespace: string | null, name: string, columns: Record<string, unknown> = {}): ResourceRow =>
@@ -40,8 +42,8 @@ function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
 }
 
-const POD = row("p1", "Pod", "payments", "payments-api-1", { status: "CrashLoopBackOff", status_class: "bad", resource_version: "1" });
-const OTHER_POD = row("p0", "Pod", "payments", "aaa-first", { status: "Running", status_class: "ok", resource_version: "1" });
+const POD = row("p1", "Pod", "payments", "payments-api-1", { columns: [], sort: null, status: "CrashLoopBackOff", status_class: "bad", resource_version: "1" });
+const OTHER_POD = row("p0", "Pod", "payments", "aaa-first", { columns: [], sort: null, status: "Running", status_class: "ok", resource_version: "1" });
 const RS = row("rs1", "ReplicaSet", "payments", "payments-api-7f9c4", { ready: "0/1" });
 const SECRET = row("s1", "Secret", "payments", "payments-db", { type: "Opaque", keys: 2 });
 
@@ -80,6 +82,7 @@ async function openPod() {
 }
 
 beforeEach(() => {
+  seedPodsWorkspace();
   window.history.replaceState(null, "", "/");
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
@@ -105,7 +108,7 @@ describe("links in the console", () => {
   it("owner link navigates to the replicaset and opens it", async () => {
     const details = await openPod();
     fireEvent.click(await within(details).findByRole("button", { name: "ReplicaSet payments-api-7f9c4" }));
-    await waitFor(() => expect(window.location.hash).toBe("#kind=replicasets.apps"));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/kubernetes\//));
     const opened = await screen.findByRole("region", { name: "Details for payments-api-7f9c4" });
     expect(await within(opened).findByText("1 desired, 0 current, 0 ready")).toBeTruthy();
     const r = rowOf("payments-api-7f9c4");
@@ -113,13 +116,13 @@ describe("links in the console", () => {
     expect(r.getAttribute("aria-expanded")).toBe("true");
     // Back returns to the pods.
     window.history.back();
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toContain("Pods"));
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toContain("Pods"));
   });
 
   it("env secret link navigates to the secret", async () => {
     const details = await openPod();
     fireEvent.click(await within(details).findByRole("button", { name: "Secret payments-db key password" }));
-    await waitFor(() => expect(window.location.hash).toBe("#kind=secrets"));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/kubernetes\//));
     const opened = await screen.findByRole("region", { name: "Details for payments-db" });
     expect(await within(opened).findByTestId("secret-key-password")).toBeTruthy();
     expect(rowOf("payments-db").getAttribute("aria-selected")).toBe("true");
@@ -139,7 +142,7 @@ describe("links in the console", () => {
     watches.byKind.secrets = applyMessage(emptyWatchState(), { type: "cluster_status", cluster_id: "c1", state: "syncing", message: null });
     const details = await openPod();
     fireEvent.click(await within(details).findByRole("button", { name: "Secret payments-db key password" }));
-    await waitFor(() => expect(window.location.hash).toBe("#kind=secrets"));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/kubernetes\//));
     const filter = screen.getByPlaceholderText("Filter by name, label or image");
     fireEvent.change(filter, { target: { value: "x" } });
     // The Secret arrives; the next render sees it, but the jump was dropped.
@@ -164,10 +167,10 @@ describe("links in the console", () => {
   it("an object cell in the table jumps to its object", async () => {
     window.location.hash = "#kind=events";
     const object = { kind_key: "pods", namespace: "payments", name: "payments-api-1", label: "Pod/payments-api-1" };
-    watches.byKind.events = ready([row("e1", "Event", "payments", "payments-api-1.17", { status: "Warning", status_class: "warn", object, reason: "BackOff" })]);
+    watches.byKind.events = ready([row("e1", "Event", "payments", "payments-api-1.17", { columns: [], sort: null, status: "Warning", status_class: "warn", object, reason: "BackOff" })]);
     renderConsole();
     fireEvent.click(await screen.findByRole("button", { name: "Pod/payments-api-1" }));
-    await waitFor(() => expect(window.location.hash).toBe("#kind=pods"));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/kubernetes\//));
     expect(await screen.findByRole("region", { name: "Details for payments-api-1" })).toBeTruthy();
   });
 });
@@ -208,12 +211,21 @@ describe("useNavigator", () => {
     const sel = setSelection.mock.calls.at(-1)![0];
     expect(typeof sel === "function" ? sel(NO_SELECTION) : sel).toEqual({ selected: { clusterId: "c1", uid: "s1" }, open: true });
     const next = setFilters.mock.calls.at(-1)![0];
-    const filters: Filters = { status: "failing", text: "zzz", namespace: "kube-system" };
+    const filters: Filters = { columns: [], sort: null, status: "failing", text: "zzz", namespace: "kube-system" };
     expect(typeof next === "function" ? next(filters) : next).toEqual(NO_FILTER);
     // A filter that already shows it is kept.
-    const keep: Filters = { status: "all", text: "payments", namespace: "payments" };
+    const keep: Filters = { columns: [], sort: null, status: "all", text: "payments", namespace: "payments" };
     expect(typeof next === "function" ? next(keep) : next).toEqual(keep);
     expect(hook.result.current.reveal).toBe(before + 1);
+  });
+
+  it("a link keeps column filters that show the target and drops those that hide it", () => {
+    const { hook, setFilters } = harness(ready([SECRET]));
+    act(() => hook.result.current.goTo({ clusterId: "c1", kind_key: "secrets", namespace: "payments", name: "payments-db" }));
+    const next = setFilters.mock.calls.at(-1)![0];
+    const f: Filters = { ...NO_FILTER, columns: [{key:"name",op:"contains",text:"payments"}, {key:"age",op:"within",seconds:0}] };
+    const result = typeof next === "function" ? next(f) : next;
+    expect(result.columns).toEqual([f.columns[0]]);
   });
 
   it("asks for the link's kind, then waits for it", () => {
@@ -287,4 +299,25 @@ describe("useNavigator", () => {
     hook.rerender({ watch: ready([SECRET]) });
     expect(setSelection).not.toHaveBeenCalled();
   });
+});
+
+it("revealed values stay out of storage and are dropped on tab switch", async () => {
+  const base = server();
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.endsWith("/reveal")
+    ? json({ key: "password", value: "never-store-this-value", encoding: "utf-8" })
+    : base(url)));
+  const details = await openPod();
+  fireEvent.click(await within(details).findByRole("button", { name: "Secret payments-db key password" }));
+  const key = await screen.findByTestId("secret-key-password");
+  fireEvent.click(within(key).getByRole("button", { name: "Reveal" }));
+  await screen.findByText("never-store-this-value");
+  expect(JSON.stringify(localStorage)).not.toContain("never-store-this-value");
+  expect(location.hash).not.toContain("never-store-this-value");
+  expect(JSON.stringify(history.state)).not.toContain("never-store-this-value");
+  fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+  const tabs = screen.getByRole("tablist", { name: "Kubernetes tabs" });
+  fireEvent.click(within(tabs).getAllByRole("tab")[0]);
+  const restored = await screen.findByTestId("secret-key-password");
+  expect(within(restored).getByRole("button", { name: "Reveal" })).toBeTruthy();
+  expect(screen.queryByText("never-store-this-value")).toBeNull();
 });

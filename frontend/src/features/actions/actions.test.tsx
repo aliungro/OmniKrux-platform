@@ -1,3 +1,4 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/actions/actions.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -636,6 +637,67 @@ describe("changes from the details", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("delete from the details pins the row's uid, like bulk delete", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan({ action: "delete", apply_label: "Delete", confirm_text: "web" }))],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Delete", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(calls.find((c) => c.url === "/api/actions/plan")?.body).toMatchObject({
+      action: "delete", params: { expected_uid: "d-1" },
+    });
+  });
+
+  it("a review closed without applying is closed on the server too", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [
+        ok(plan({ plan_id: "first", action: "delete", apply_label: "Delete", confirm_text: "web" })),
+        ok(plan({ plan_id: "second", action: "delete", apply_label: "Delete", confirm_text: "web" })),
+      ],
+      "DELETE /api/actions/first": [ok({})],
+      "DELETE /api/actions/second": [ok({})],
+    });
+    const view = wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Delete", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Cancel", dialog()));
+    await waitFor(() => expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual(["/api/actions/first"]));
+    // A review still open when the page leaves is closed as well.
+    fireEvent.click(button("Delete", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    view.unmount();
+    await waitFor(() => expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual(["/api/actions/first", "/api/actions/second"]));
+  });
+
+  it("an applied review is not closed again", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan())],
+      "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Restarted.", job_id: null, audit_id: 1 })],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Restart", tools()));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Restart", dialog()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+  });
+
   it("tool keys work in the details but not in a field", async () => {
     const calls = serve({
       [DESCRIBE]: [ok(resourceDescribe())],
@@ -668,7 +730,7 @@ describe("tool keys on rows", () => {
   afterEach(() => vi.restoreAllMocks());
 
   const territory = {
-    cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", original_server: null, provider: "aks" as const,
+    cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks" as const,
       region: null, environment: "development" as const, state: "ready" as const, message: null },
     state: "ready" as const, message: null, rows: [deployment()], total: 1, failing: 0, pending: 0,
   };
@@ -719,6 +781,27 @@ describe("late plans", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it("drops a plan response when its still-visible pane is no longer active", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return new Promise<Response>((resolve) => { answer = resolve; });
+      return json(resourceDescribe());
+    }));
+    const row = deployment();
+    const ui = (paneActive: boolean) => (
+      <ActionsProvider>
+        <Inspector row={row} provider="aks" kindKey="deployments.apps" verbs={VERBS} paneActive={paneActive} />
+      </ActionsProvider>
+    );
+    const view = wrap(ui(true));
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    view.rerender(ui(false));
+    await act(async () => answer(await json(plan())));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    view.rerender(ui(true));
+    expect((screen.getByRole("button", { name: "Restart" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it.each([["Escape"], ["ArrowDown"]])("a plan that comes back after %s left its details never opens", async (away) => {
     let answer!: (r: Response) => void;
     vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {
@@ -726,7 +809,7 @@ describe("late plans", () => {
       return json(resourceDescribe());
     }));
     const territory = {
-      cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", original_server: null, provider: "aks" as const,
+      cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks" as const,
         region: null, environment: "development" as const, state: "ready" as const, message: null },
       state: "ready" as const, message: null, rows: [deployment(), deployment({ uid: "d-2", name: "worker" })], total: 2, failing: 0, pending: 0,
     };

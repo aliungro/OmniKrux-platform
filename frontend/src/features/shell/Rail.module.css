@@ -1,0 +1,9 @@
+.rail { background:#100e18; border-right:1px solid var(--rule); display:flex; flex-direction:column; align-items:stretch; min-height:0; }
+.mark { height:64px; display:grid; place-items:center; color:var(--focus); font-size:28px; }
+.item { position:relative; border:0; background:transparent; color:var(--ink-2); min-height:64px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; font:inherit; font-size:10px; cursor:pointer; }
+.item[aria-current=page] { background:var(--surf); color:var(--focus); }
+.item[aria-current=page]::before { content:""; position:absolute; left:0; top:12px; bottom:12px; width:3px; background:var(--focus); }
+.item:focus-visible { outline:2px solid var(--focus); outline-offset:-3px; }
+.bottom { margin-top:auto; }
+.tip { display:none; position:absolute; z-index:5; left:68px; top:50%; transform:translateY(-50%); background:var(--surf-2); border:1px solid var(--rule); border-radius:7px; padding:8px; color:var(--ink); white-space:nowrap; font-size:12px; }
+.item:hover .tip,.item:focus-visible .tip { display:block; }

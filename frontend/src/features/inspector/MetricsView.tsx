@@ -70,7 +70,7 @@ export function MetricsView({ clusterId, ns, name }: { clusterId: string; ns: st
   }
   const staleTitle = `Measured ${formatAge(m.at, new Date(now))} ago; metrics-server has nothing newer.`;
   return (
-    <div className={k.mv}>
+    <div className={`${k.mv} ${k.pod}`}>
       <table className={k.t}>
         <thead>
           <tr><th scope="col">Container</th><th scope="col">CPU</th><th scope="col">Memory</th></tr>

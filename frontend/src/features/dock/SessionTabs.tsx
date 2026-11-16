@@ -48,9 +48,9 @@ export function SessionTabs({
 }) {
   const refs = useRef(new Map<string, HTMLButtonElement>());
 
-  // A newly opened or chosen tab is never left hidden past the end of a full strip.
+  // Reveal the full session, including its close button, when it is opened or selected.
   useEffect(() => {
-    if (focused) refs.current.get(focused)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (focused) refs.current.get(focused)?.parentElement?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [focused]);
 
   // Left/right move between tabs, Home/End jump to the ends, as a tablist should.
@@ -71,14 +71,20 @@ export function SessionTabs({
 
   return (
     <div className={s.bar}>
-      <div role="tablist" aria-label="Sessions" className={s.tabs} onKeyDown={onKey}>
+      <div role="tablist" aria-label="Logs and shells" className={s.tabs} onKeyDown={onKey}>
         {sessions.map((x) => {
           const on = x.id === focused;
           const provider = knownProvider(x.cluster.provider);
           const tag = tagOf(x);
           const where = identity(x);
           return (
-            <div key={x.id} className={`${s.sess} ${pc[provider]}${on ? ` ${s.on}` : ""}`} data-provider={provider}>
+            <div
+              key={x.id}
+              className={`${s.sess} ${pc[provider]}${on ? ` ${s.on}` : ""}`}
+              data-provider={provider}
+              onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+              onAuxClick={(e) => { if (e.button === 1) onClose(x.id); }}
+            >
               <button
                 ref={(el) => {
                   if (el) refs.current.set(x.id, el);
@@ -87,6 +93,7 @@ export function SessionTabs({
                 type="button"
                 role="tab"
                 id={tabId(base, x.id)}
+                aria-label={`${KIND_LABEL[x.kind]}${tag ? ` ${tag}` : ""}: ${where}`}
                 aria-selected={on}
                 aria-controls={panelId(base, x.id)}
                 tabIndex={on ? 0 : -1}
@@ -116,7 +123,14 @@ export function SessionTabs({
           );
         })}
       </div>
-      <button type="button" className={s.lay} aria-pressed={layout === "split"} onClick={onToggleLayout}>
+      <button
+        type="button"
+        className={s.lay}
+        aria-pressed={layout === "split"}
+        aria-disabled={sessions.length < 2}
+        title={sessions.length < 2 ? "Open a second log or shell to see two side by side." : undefined}
+        onClick={() => { if (sessions.length >= 2) onToggleLayout(); }}
+      >
         Side by side<span className={k.k} aria-hidden="true">{capsOf("layout")[0]}</span>
       </button>
     </div>

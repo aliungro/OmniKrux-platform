@@ -8,6 +8,10 @@
   grid-template-columns: minmax(0, 1fr) 290px;
 }
 
+@container (max-width: 920px) {
+  .grid.three, .grid.two { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Fields wrap in pairs so a dt and its dd stay in the key/value grid. */
 .pair {
   display: contents;

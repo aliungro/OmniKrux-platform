@@ -57,6 +57,15 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 PLAN_TTL_SECONDS = 300
+# The browser selects at most MAX_DELETE_SELECTION resources to delete at once.
+MAX_DELETE_SELECTION = 50
+# The server holds at most this many open delete reviews per actor: room for two full selections,
+# so a review left open elsewhere (another tab, a discard that didn't arrive) never blocks one.
+MAX_OPEN_DELETE_PLANS = 2 * MAX_DELETE_SELECTION
+OPEN_DELETES_LIMIT = (
+    f"{MAX_OPEN_DELETE_PLANS} delete reviews are already open. Close the delete dialogs open in "
+    "other browser tabs, or wait 5 minutes for unused reviews to expire, then try again."
+)
 CONFLICT_STATUS = 409
 
 EXPIRED = "This change expired or was already applied. Review it again."
@@ -86,7 +95,7 @@ TYPED_ACTIONS = frozenset({"delete", "drain"})
 _TEST_FAILED = re.compile(r"\btest(?:ing value \S+)? failed")
 
 ActionName = Literal[
-    "edit", "scale", "restart", "rollback", "delete", "cordon", "uncordon", "drain"
+    "edit", "scale", "restart", "rollback", "delete", "cordon", "uncordon", "drain", "evict"
 ]
 
 
@@ -252,14 +261,37 @@ class PlanStore:
         self._plans: dict[str, tuple[float, StoredPlan]] = {}  # id -> (deadline, plan)
         self._lock = threading.Lock()
 
-    def put(self, plan: StoredPlan) -> str:
+    def put(self, plan: StoredPlan, *, limit: int | None = None) -> str | None:
+        """Keep the plan; None (nothing kept) when the actor already has `limit` open plans of
+        that action."""
         plan_id = secrets.token_urlsafe(16)
         with self._lock:
             now = self._clock()
             for old in [k for k, (deadline, _) in self._plans.items() if deadline <= now]:
                 del self._plans[old]
+            if limit is not None and self._open(plan.actor, plan.action) >= limit:
+                return None
             self._plans[plan_id] = (now + self.ttl, plan)
         return plan_id
+
+    def open_count(self, actor: str, action: str) -> int:
+        with self._lock:
+            return self._open(actor, action)
+
+    def _open(self, actor: str, action: str) -> int:
+        now = self._clock()
+        return sum(
+            1
+            for deadline, plan in self._plans.values()
+            if deadline > now and plan.actor == actor and plan.action == action
+        )
+
+    def discard(self, plan_id: str, actor: str) -> None:
+        """Drop the actor's unused plan (the browser closed its review); others are kept."""
+        with self._lock:
+            entry = self._plans.get(plan_id)
+            if entry is not None and entry[1].actor == actor:
+                del self._plans[plan_id]
 
     def peek(self, plan_id: str) -> StoredPlan | None:
         """The plan, without using it up; None when missing or expired."""
@@ -440,6 +472,9 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         raise HTTPException(status_code=422, detail=problem)
     actor = actor_of(request)
     await _authorize(actor, body.action, target)
+    limit = MAX_OPEN_DELETE_PLANS if body.action == "delete" else None
+    if limit is not None and state.plans.open_count(actor, body.action) >= limit:
+        raise HTTPException(status_code=429, detail=OPEN_DELETES_LIMIT)
     try:
         info = await state.registry.get(target.cluster_id)
         spec: KindSpec = await state.catalog.spec(target.cluster_id, target.kind_key)
@@ -480,7 +515,9 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         actor=actor,
     )
     plans: PlanStore = state.plans
-    plan_id = plans.put(stored)
+    plan_id = plans.put(stored, limit=limit)
+    if plan_id is None:  # other reviews filled the last places while this one was made
+        raise HTTPException(status_code=429, detail=OPEN_DELETES_LIMIT)
     return PlanOut(
         plan_id=plan_id,
         action=body.action,
@@ -496,6 +533,12 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         apply_label=planned.apply_label,
         expires_at=datetime.now(UTC) + timedelta(seconds=plans.ttl),
     )
+
+
+@router.delete("/api/actions/{plan_id}", status_code=204)
+async def discard_plan(plan_id: str, request: Request) -> None:
+    """The browser closed a review it won't apply; an unknown or used plan is fine too."""
+    request.app.state.plans.discard(plan_id, actor_of(request))
 
 
 @router.post("/api/actions/{plan_id}/apply")

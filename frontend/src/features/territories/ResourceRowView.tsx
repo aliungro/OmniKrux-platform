@@ -1,8 +1,9 @@
 import type { KindInfo, Provider, ResourceRow } from "../../api/types";
 import type { MetricsLookup } from "../../api/useMetrics";
 import { Cell } from "./cells";
-import { rowKey } from "./model";
+import { rowKey, textColumn } from "./model";
 import { knownProvider } from "./ProviderBadge";
+import { SelectionCheckbox } from "./SelectionCheckbox";
 import s from "./ResourceRowView.module.css";
 import pc from "./provider.module.css";
 
@@ -20,6 +21,7 @@ export function ResourceRowView({
   podCounts,
   metrics = null,
   onActivate,
+  bulk,
 }: {
   row: ResourceRow;
   kind: KindInfo;
@@ -38,6 +40,7 @@ export function ResourceRowView({
   /** Live CPU and memory for this kind's rows (pods and nodes); null where none are polled. */
   metrics?: MetricsLookup | null;
   onActivate?: (row: ResourceRow) => void;
+  bulk?: { checked: boolean; onToggle?: () => void };
 }) {
   const at = now ?? new Date();
   const nodePods = podCounts?.get(row.cluster_id);
@@ -50,10 +53,16 @@ export function ResourceRowView({
       aria-selected={onActivate ? selected : undefined}
       aria-expanded={onActivate ? expanded : undefined}
       data-row-key={rowKey(row.cluster_id, row.uid)}
+      data-bulk-selected={bulk?.checked || undefined}
       tabIndex={focusable ? 0 : -1}
       onClick={onActivate ? () => onActivate(row) : undefined}
       className={`${s.row} ${pc[knownProvider(provider)]}${last ? ` ${s.last}` : ""}${selected ? ` ${s.sel}` : ""}${onActivate ? ` ${s.active}` : ""}`}
     >
+      {bulk && <span role="gridcell">
+        <SelectionCheckbox aria-label={`Select ${row.name}`} checked={bulk.checked}
+          disabled={!bulk.onToggle} tabIndex={focusable ? 0 : -1}
+          onChange={bulk.onToggle} onClick={event => event.stopPropagation()} />
+      </span>}
       {kind.columns.map((c) => (
         <Cell
           key={c.key}
@@ -62,6 +71,7 @@ export function ResourceRowView({
           now={at}
           podsOnNode={c.type === "pods" ? podsOnNode : null}
           live={metrics && (c.type === "cpu" || c.type === "memory") ? metrics.usage(row.cluster_id, metricsKey) : null}
+          nodeSize={row.kind === "Pod" && (c.type === "cpu" || c.type === "memory") ? metrics?.nodeSize(row.cluster_id, textColumn(row, "node") ?? "") ?? null : null}
           nowMs={metrics?.now}
         />
       ))}

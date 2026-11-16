@@ -15,6 +15,12 @@
   border-right: 0;
 }
 
+@container (max-width: 920px) {
+  .desc { grid-template-columns: minmax(0, 1fr); }
+  .col { border-right: 0; }
+  .col + .col { border-top: 1px solid var(--rule); }
+}
+
 .h {
   margin: 0 0 10px;
   font-size: 13px;
@@ -69,7 +75,7 @@
   text-underline-offset: 2px;
 }
 
-/* Conditions: ✓ for True, ✕ for False, ? for Unknown. */
+/* Resource conditions can supply a semantic tone. Pod chips use their raw status. */
 .conds,
 .tags {
   display: flex;
@@ -101,16 +107,19 @@
   color: var(--ok);
 }
 
-.cond[data-status="False"] {
+.cond[data-tone="bad"],
+.cond:not([data-tone])[data-status="False"] {
   border-color: color-mix(in srgb, var(--bad) 40%, transparent);
   color: color-mix(in srgb, var(--bad) 60%, var(--ink));
 }
 
-.cond[data-status="False"] .mark {
+.cond[data-tone="bad"] .mark,
+.cond:not([data-tone])[data-status="False"] .mark {
   color: var(--bad);
 }
 
-.cond[data-status="Unknown"] .mark {
+.cond[data-tone="warn"] .mark,
+.cond:not([data-tone])[data-status="Unknown"] .mark {
   color: var(--warn);
 }
 
@@ -294,8 +303,14 @@
   font-weight: 600;
 }
 
+.envDetails {
+  display: grid;
+  gap: 2px;
+}
+
 .envValue {
   color: var(--ink-2);
+  white-space: pre-wrap;
 }
 
 .envSource {

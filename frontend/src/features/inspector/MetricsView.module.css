@@ -3,27 +3,43 @@
   gap: 10px;
 }
 
+.pod {
+  box-sizing: border-box;
+  max-inline-size: var(--inspector-inline-size, 100%);
+  padding: 8px 16px 12px 18px;
+  overflow-x: auto;
+}
+
 .t {
   width: 100%;
   border-collapse: collapse;
 }
 
+.t th,
+.t td {
+  padding-inline: 0 16px;
+  text-align: start;
+}
+
 .t th {
-  padding: 4px 16px 6px 0;
+  padding-block: 4px 6px;
   color: var(--ink-3);
   font-size: 12px;
   font-weight: 500;
-  text-align: left;
 }
 
 .t td {
-  padding: 7px 16px 7px 0;
+  padding-block: 7px;
   vertical-align: middle;
   border-top: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
 }
 
 .name {
   font-weight: 600;
+}
+
+.pod .name {
+  overflow-wrap: anywhere;
 }
 
 /* Request and limit sit under the meter, quieter than the usage itself. */

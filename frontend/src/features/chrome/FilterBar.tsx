@@ -1,4 +1,9 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import type { Cluster, ColumnSpec } from "../../api/types";
+import { chipLabel, filterUiFor, type ColumnFilter } from "../territories/columnFilters";
+import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
+import { ColumnFilterMenu } from "../territories/ColumnFilterMenu";
+import type { Territory } from "../territories/model";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { ChipDef, FilterCounts, Filters } from "../territories/model";
 import { capsOf, pageKey, pressed } from "./shortcuts";
 import k from "./key.module.css";
@@ -119,12 +124,69 @@ function NamespacePicker({
   );
 }
 
+interface ClusterScopeProps {
+  clusters: Cluster[];
+  scope: string[] | null;
+  onScope: (scope: string[] | null) => void;
+}
+
+function ClusterScope({ clusters, scope, onScope }: ClusterScopeProps) {
+  const control = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!restoreFocus.current) return;
+    restoreFocus.current = false;
+    control.current?.focus();
+  }, [scope]);
+  const changeScope = (next: string[] | null) => {
+    if (scope?.length === 1 || next?.length === 1) restoreFocus.current = true;
+    onScope(next);
+  };
+
+  const singleId = scope?.length === 1 ? scope[0] : clusters.length === 1 ? clusters[0].id : undefined;
+  if (singleId !== undefined) {
+    const cluster = clusters.find(c => c.id === singleId);
+    return <>
+      <span className={s.scope}>
+        {cluster && <ProviderBadge provider={knownProvider(cluster.provider)} />}
+        {cluster?.name ?? singleId}
+      </span>
+      {clusters.length > 1 && <button
+        ref={control}
+        type="button"
+        className={s.fchip}
+        onClick={() => changeScope(null)}
+      >Show all clusters</button>}
+    </>;
+  }
+  return clusters.length > 1 ? <ClusterPicker clusters={clusters} scope={scope} onScope={changeScope} button={control} /> : null;
+}
+
+function ClusterPicker({ clusters, scope, onScope, button }: ClusterScopeProps & { button: RefObject<HTMLButtonElement | null> }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const label = scope === null ? "All clusters" : `${scope.length} clusters`;
+  return <div className={s.pick} ref={box} onKeyDown={e => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
+    <button ref={button} type="button" aria-label="Clusters" aria-expanded={open} className={`${s.fchip}${scope !== null ? ` ${s.on}` : ""}`} onClick={() => setOpen(!open)}>{label}<i className={s.caret} aria-hidden="true" /></button>
+    {open && <div className={s.menu} role="group" aria-label="Cluster scope">
+      <button type="button" className={s.addOption} onClick={() => { onScope(null); setOpen(false); button.current?.focus(); }}>All clusters</button>
+      {clusters.map(c => <label className={s.option} key={c.id}><input type="checkbox" checked={scope === null || scope.includes(c.id)} onChange={e => { const next = scope === null ? (e.target.checked ? [c.id] : clusters.filter(x => x.id !== c.id).map(x => x.id)) : e.target.checked ? [...scope, c.id] : scope.filter(id => id !== c.id); onScope(next.length === 0 || next.length === clusters.length ? null : next); }} /><ProviderBadge provider={knownProvider(c.provider)} />{c.name}</label>)}
+    </div>}
+  </div>;
+}
+
 export function FilterBar({
   value,
   onChange,
   chips,
   counts,
-  namespaces,
+  namespaces, columns = [], pickSource = [], clusters, scope = null, onScope, paneActive = true,
 }: {
   value: Filters;
   onChange: (f: Filters) => void;
@@ -133,10 +195,34 @@ export function FilterBar({
   counts: FilterCounts;
   /** Namespaces to pick from; null for a kind without namespaces (no chip). */
   namespaces: string[] | null;
+  columns?: ColumnSpec[];
+  pickSource?: Territory[];
+  clusters?: Cluster[];
+  scope?: string[] | null;
+  onScope?: (scope: string[] | null) => void;
+  paneActive?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [menu, setMenu] = useState<"add" | { column: string } | null>(null);
+  const adding = menu === "add";
+  const openColumn = typeof menu === "object" ? menu?.column : undefined;
+  const filterMenu = useRef<HTMLDivElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const menuTrigger = useRef<HTMLElement | null>(null);
+  const closeColumn = () => { setMenu(null); menuTrigger.current?.focus(); };
+  const updateColumn = (key: string, f: ColumnFilter | null) => onChange({ ...value, columns: [...value.columns.filter(x => x.key !== key), ...(f ? [f] : [])] });
 
   useEffect(() => {
+    if (menu === null) return;
+    const outside = (e: PointerEvent) => {
+      if (e.target instanceof Node && !filterMenu.current?.contains(e.target)) setMenu(null);
+    };
+    document.addEventListener("pointerdown", outside, true);
+    return () => document.removeEventListener("pointerdown", outside, true);
+  }, [menu]);
+
+  useEffect(() => {
+    if (!paneActive) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!pressed("filter", e) || !pageKey(e)) return;
       e.preventDefault();
@@ -144,7 +230,7 @@ export function FilterBar({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  }, [paneActive]);
 
   const onInputKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Escape") return;
@@ -167,13 +253,55 @@ export function FilterBar({
   );
 
   return (
-    <div className={s.filters} role="group" aria-label="Filter rows">
+    <div className={s.filters} role="group" aria-label="Filter rows" data-page-keys>
+      {clusters && onScope && <ClusterScope clusters={clusters} scope={scope} onScope={onScope} />}
       {chips.length > 0 && chip("all", "All")}
       {/* No number until a cluster has reported one: never a made-up 0. */}
       {chips.map((c) => chip(c.status, counts[c.status] === undefined ? c.label : `${c.label} ${counts[c.status]}`, c.icon))}
       {namespaces !== null && (
         <NamespacePicker value={value.namespace} namespaces={namespaces} onPick={(namespace) => onChange({ ...value, namespace })} />
       )}
+      {value.columns.map(f => {
+        const col = columns.find(c => c.key === f.key);
+        if (!col) return null;
+        const label = chipLabel(f, col);
+        const editing = openColumn === f.key;
+        return <div className={s.pick} key={f.key} ref={editing ? filterMenu : undefined}>
+          <span className={`${s.fchip} ${s.on}`}>
+            <button type="button" className={s.chipButton} aria-expanded={editing} onClick={e => {
+              menuTrigger.current = e.currentTarget;
+              setMenu(editing ? null : { column: f.key });
+            }}>{label}</button>
+            <button type="button" className={s.chipButton} aria-label={`Remove filter ${label}`} onClick={() => {
+              if (editing) setMenu(null);
+              updateColumn(f.key, null);
+            }}>×</button>
+          </span>
+          {editing && <ColumnFilterMenu col={col} filter={f} source={pickSource} onApply={next => updateColumn(f.key, next)} onClose={closeColumn} />}
+        </div>;
+      })}
+      {value.columns.length >= 2 && <button type="button" className={s.fchip} onClick={() => onChange({...value, columns: []})}>Clear all</button>}
+      {columns.some(c => filterUiFor(c)) && <div className={s.pick}
+        ref={adding || (openColumn && !value.columns.some(f => f.key === openColumn)) ? filterMenu : undefined}
+        onKeyDown={e => {
+          if (!adding || e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu(null);
+          addButton.current?.focus();
+        }}>
+        <button ref={addButton} type="button" className={s.fchip} aria-expanded={adding} onClick={() => setMenu(adding ? null : "add")}>Add filter</button>
+        {adding && <div className={s.menu}>{columns.filter(c => filterUiFor(c)).map(c => (
+          <button type="button" className={s.addOption} key={c.key} onClick={() => {
+            menuTrigger.current = addButton.current;
+            setMenu({ column: c.key });
+          }}>{c.label}</button>
+        ))}</div>}
+        {openColumn && !value.columns.some(f => f.key === openColumn) && (() => {
+          const col = columns.find(c => c.key === openColumn);
+          return col && <ColumnFilterMenu col={col} source={pickSource} onApply={f => updateColumn(col.key, f)} onClose={closeColumn} />;
+        })()}
+      </div>}
       <label className={s.search}>
         <span className={k.k} aria-hidden="true">{capsOf("filter")[0]}</span>
         <input
@@ -183,6 +311,7 @@ export function FilterBar({
           placeholder={PLACEHOLDER}
           aria-label={PLACEHOLDER}
           aria-keyshortcuts="/"
+          maxLength={500}
           spellCheck={false}
           autoComplete="off"
           value={value.text}

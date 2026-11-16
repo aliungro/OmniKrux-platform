@@ -6,6 +6,91 @@ def test_auto_import_on_startup_and_no_secrets_in_response(app_with_kubeconfig):
     assert "token" not in client.get("/api/clusters").text
 
 
+async def test_kubeconfig_cluster_version_from_discovery(tmp_settings, fake_api):
+    import httpx
+    import yaml
+
+    from omnikrux.main import create_app
+    from tests.fakekube import VERSION, kubeconfig_for
+
+    app = create_app(tmp_settings)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client,
+    ):
+        imported = await client.post(
+            "/api/clusters/kubeconfig",
+            json={"kubeconfig": yaml.safe_dump(kubeconfig_for(fake_api))},
+        )
+        assert imported.status_code == 200
+        [initial] = imported.json()
+        assert initial["source"] == "upload" and initial["kubernetes_version"] is None
+        assert "/version" not in fake_api.paths
+        assert (await client.get("/api/kinds")).status_code == 200
+        paths = list(fake_api.paths)
+        [listed] = (await client.get("/api/clusters")).json()
+        assert listed["kubernetes_version"] == VERSION["gitVersion"]
+        assert fake_api.paths == paths
+
+
+def test_delete_cluster_audited_and_refused_without_audit(app_with_kubeconfig, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from omnikrux.audit.store import AuditUnavailable
+
+    client, _ = app_with_kubeconfig
+    [cluster] = client.get("/api/clusters").json()
+    path = f"/api/clusters/{cluster['id']}"
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            client.app.state.audit, "begin", AsyncMock(side_effect=AuditUnavailable("offline"))
+        )
+        blocked = client.delete(path)
+    assert blocked.status_code == 503
+    assert blocked.json() == {
+        "detail": "Nothing was changed: the audit log can't be written (offline)."
+    }
+    assert client.get("/api/clusters").json() == [cluster]
+    assert client.delete(path).status_code == 204
+    assert client.delete(path).status_code == 404
+    [record] = client.get("/api/audit").json()["records"]
+    assert record["action"] == "cluster_remove" and record["outcome"] == "succeeded"
+    assert record["cluster_id"] == cluster["id"] and record["name"] == cluster["name"]
+    assert record["kind"] == "clusters" and record["cluster_name"] == cluster["name"]
+
+
+def test_list_clusters_hides_cloud_endpoint(app_with_kubeconfig):
+    from omnikrux.cloud.store import CloudAccountStore
+    from omnikrux.security.secrets import SecretBox
+    from tests.cloud.test_store import account, add, found
+    from tests.clusters.test_kubeconfig import kc
+
+    client, _ = app_with_kubeconfig
+    state = client.app.state
+
+    async def seed_cloud_cluster():
+        store = CloudAccountStore(state.sessionmaker, SecretBox.from_settings(state.settings))
+        owner = await account(store)
+        return await add(state.registry, owner, found(), ca_data="synthetic-ca")
+
+    cloud = client.portal.call(seed_cloud_cluster)
+    upload_server = "https://upload.example.test"
+    response = client.post(
+        "/api/clusters/kubeconfig",
+        json={"kubeconfig": kc([("uploaded", upload_server, None)])},
+    )
+    assert response.status_code == 200
+    response = client.get("/api/clusters")
+    by_name = {cluster["name"]: cluster for cluster in response.json()}
+    assert by_name[cloud.name]["server"] is None
+    assert by_name["kind-omnikrux-dev"]["server"] == "https://127.0.0.1:6443"
+    assert by_name["uploaded"]["server"] == upload_server
+    assert cloud.server not in response.text
+    assert "synthetic-ca" not in response.text
+
+
 def test_post_bad_kubeconfig_is_422(app_with_kubeconfig):
     client, _ = app_with_kubeconfig
     r = client.post("/api/clusters/kubeconfig", json={"kubeconfig": "::: nope"})

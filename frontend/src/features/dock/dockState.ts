@@ -31,8 +31,8 @@ export interface DockState {
   sessions: Session[];
   /** The tab that's selected; null when there are none. */
   focused: string | null;
-  /** The last-focused session of each kind; split layout shows these two side by side. */
-  last: Record<SessionKind, string | null>;
+  /** The open session focused just before the current one. */
+  previous: string | null;
   layout: DockLayout;
   /** The dock's chosen height in pixels while it has sessions; drawn at most 70% of the window. */
   height: number;
@@ -45,6 +45,7 @@ export type DockAction =
    */
   | { type: "open"; session: Session; focus?: boolean }
   | { type: "close"; id: string }
+  | { type: "closeCluster"; clusterId: string }
   | { type: "focus"; id: string }
   /**
    * Puts a new session where an old one was (a node shell started again makes a new pod). If the
@@ -92,7 +93,7 @@ export function saveHeight(height: number): void {
 }
 
 export function initialDockState(): DockState {
-  return { sessions: [], focused: null, last: { logs: null, shell: null }, layout: "single", height: loadHeight() };
+  return { sessions: [], focused: null, previous: null, layout: "single", height: loadHeight() };
 }
 
 /** Two sessions are the same when they'd show the same thing. */
@@ -110,12 +111,12 @@ function sameTarget(a: Session, b: Session): boolean {
 }
 
 function focusOn(state: DockState, s: Session): DockState {
-  return { ...state, focused: s.id, last: { ...state.last, [s.kind]: s.id } };
+  return state.focused === s.id ? state : { ...state, focused: s.id, previous: state.focused };
 }
 
-/** The newest remaining session of a kind, for when the last-focused one closes. */
-function newestOf(sessions: Session[], kind: SessionKind): string | null {
-  for (let i = sessions.length - 1; i >= 0; i--) if (sessions[i].kind === kind) return sessions[i].id;
+/** The newest other open session, when the previous one is no longer available. */
+function newestOther(sessions: Session[], focused: string | null): string | null {
+  for (let i = sessions.length - 1; i >= 0; i--) if (sessions[i].id !== focused) return sessions[i].id;
   return null;
 }
 
@@ -127,28 +128,30 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
       if (existing) return quiet ? state : focusOn(state, existing);
       const added = { ...state, sessions: [...state.sessions, action.session] };
       if (!quiet) return focusOn(added, action.session);
-      const kind = action.session.kind;
-      return added.last[kind] === null ? { ...added, last: { ...added.last, [kind]: action.session.id } } : added;
+      return added;
     }
     case "close": {
       const at = state.sessions.findIndex((s) => s.id === action.id);
       if (at < 0) return state;
       const gone = state.sessions[at];
       const sessions = state.sessions.filter((s) => s.id !== action.id);
-      const last = { ...state.last };
-      if (last[gone.kind] === gone.id) last[gone.kind] = newestOf(sessions, gone.kind);
       let focused = state.focused;
       if (focused === gone.id) {
         // The neighbour takes over, as closing a browser tab does.
         const next = sessions[Math.min(at, sessions.length - 1)];
         focused = next?.id ?? null;
-        if (next) last[next.kind] = next.id;
       }
-      return { ...state, sessions, focused, last };
+      const previous = state.previous === focused || state.previous === gone.id
+        ? newestOther(sessions, focused)
+        : state.previous;
+      return { ...state, sessions, focused, previous };
     }
+    case "closeCluster":
+      return state.sessions.reduce((next, session) => session.cluster.id === action.clusterId
+        ? dockReducer(next, { type: "close", id: session.id }) : next, state);
     case "focus": {
       const s = state.sessions.find((x) => x.id === action.id);
-      if (!s || (state.focused === s.id && state.last[s.kind] === s.id)) return state;
+      if (!s) return state;
       return focusOn(state, s);
     }
     case "replace": {
@@ -156,12 +159,16 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
       if (at < 0) return dockReducer(state, { type: "open", session: action.session, focus: action.focus });
       const sessions = state.sessions.slice();
       sessions[at] = action.session;
-      const last = { ...state.last };
-      for (const k of ["logs", "shell"] as const) if (last[k] === action.id) last[k] = action.session.id;
-      const next = { ...state, sessions, last };
+      const next = {
+        ...state,
+        sessions,
+        focused: state.focused === action.id ? action.session.id : state.focused,
+        previous: state.previous === action.id ? action.session.id : state.previous,
+      };
       return action.focus === false && state.focused !== action.id ? next : focusOn(next, action.session);
     }
     case "toggleLayout":
+      if (state.sessions.length < 2) return state;
       return { ...state, layout: state.layout === "single" ? "split" : "single" };
     case "resize":
       return { ...state, height: clampHeight(action.height, action.viewport) };
@@ -169,16 +176,15 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
 }
 
 /**
- * What's on screen: one pane, or in split layout the last logs and the last shell side by side,
- * when there are both (the focused one is always among them).
+ * One pane, or the focused and previously focused sessions side by side, in tab order.
  */
 export function visibleSessions(state: DockState): Session[] {
   const focused = state.sessions.find((s) => s.id === state.focused);
   if (!focused) return [];
   if (state.layout === "single") return [focused];
-  const logs = state.sessions.find((s) => s.id === state.last.logs);
-  const shell = state.sessions.find((s) => s.id === state.last.shell);
-  return logs && shell ? [logs, shell] : [focused];
+  const previous = state.sessions.find((s) => s.id === state.previous && s.id !== focused.id)
+    ?? state.sessions.find((s) => s.id !== focused.id);
+  return state.sessions.filter((s) => s.id === focused.id || s.id === previous?.id);
 }
 
 export function toLogSession(s: Session): LogSession {

@@ -7,6 +7,7 @@ export const ACTION_LABELS: readonly (readonly [action: string, label: string])[
   ["rollback", "Rolled back"],
   ["edit", "Edited"],
   ["delete", "Deleted"],
+  ["evict", "Requested an eviction"],
   ["cordon", "Cordoned"],
   ["uncordon", "Uncordoned"],
   ["drain", "Drained"],
@@ -15,6 +16,10 @@ export const ACTION_LABELS: readonly (readonly [action: string, label: string])[
   ["node_shell", "Started a node shell"],
   ["port_forward", "Port-forwarded"],
   ["secret_reveal", "Revealed a secret key"],
+  ["cluster_add", "Added a cluster"],
+  ["cluster_remove", "Removed a cluster"],
+  ["cloud_account_add", "Connected a cloud account"],
+  ["cloud_account_remove", "Removed a cloud account"],
 ];
 
 const BY_ACTION = new Map(ACTION_LABELS);
@@ -40,6 +45,7 @@ export function kindWord(key: string): string {
  * that was opened is the node, which the record keeps in its details.
  */
 export function whatOf(r: Pick<AuditRecord, "action" | "kind" | "name" | "details">): { kind: string | null; name: string } {
+  if (r.kind === "cloud-account") return { kind: "Cloud account", name: r.name ?? "" };
   if (r.action === "node_shell") {
     const node = r.details?.node;
     if (typeof node === "string" && node !== "") return { kind: null, name: `Node ${node}` };

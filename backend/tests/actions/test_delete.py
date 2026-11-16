@@ -6,6 +6,11 @@ re-created object of the same name answers with the conflict copy."""
 import base64
 from dataclasses import replace
 
+from omnikrux.actions.pipeline import (
+    MAX_DELETE_SELECTION,
+    MAX_OPEN_DELETE_PLANS,
+    OPEN_DELETES_LIMIT,
+)
 from tests.actions.clusters import apply, deployment, plan, records
 from tests.fakekube import CRDS_KEY
 
@@ -281,6 +286,22 @@ async def test_delete_needs_typed_name_for_namespace_and_production(env):
     assert r.json()["confirm_text"] is None
 
 
+async def test_delete_plan_cannot_retarget_a_replaced_selected_pod(env):
+    fake = env.fakes["dev-a"]
+    fake.pods[("demo", "selected")] = pod("selected", uid="new-uid")
+    rejected = await plan(
+        env, "delete", kind_key="pods", name="selected", params={"expected_uid": "old-uid"}
+    )
+    assert rejected.status_code == 409
+    assert "Select it again" in rejected.json()["detail"]
+    assert fake.pods[("demo", "selected")]["metadata"]["uid"] == "new-uid"
+
+    reviewed = await plan(
+        env, "delete", kind_key="pods", name="selected", params={"expected_uid": "new-uid"}
+    )
+    assert reviewed.status_code == 200
+
+
 async def test_delete_uses_uid_precondition(env):
     fake = env.fakes["dev-a"]
 
@@ -322,3 +343,35 @@ async def test_delete_uses_uid_precondition(env):
         "body": {"propagationPolicy": "Background", "preconditions": {"uid": "u1"}},
     }
     assert ("demo", "web-1") not in fake.pods
+
+
+async def test_a_full_bulk_selection_fits_beside_a_leftover_review(env):
+    """A review left open elsewhere (another tab, a lost discard) never blocks a full selection."""
+    fake = env.fakes["dev-a"]
+    fake.pods[("demo", "selected")] = pod("selected", uid="u-selected")
+    leftover = await plan(env, "delete", kind_key="pods", name="selected")
+    assert leftover.status_code == 200, leftover.text
+    for _ in range(MAX_DELETE_SELECTION):
+        r = await plan(env, "delete", kind_key="pods", name="selected")
+        assert r.status_code == 200, r.text
+
+
+async def test_open_delete_reviews_are_limited_like_the_bulk_selection(env):
+    """The browser selects at most 50 resources to delete; the server holds the same line."""
+    fake = env.fakes["dev-a"]
+    fake.pods[("demo", "selected")] = pod("selected", uid="u-selected")
+    reviews = []
+    for _ in range(MAX_OPEN_DELETE_PLANS):
+        r = await plan(env, "delete", kind_key="pods", name="selected")
+        assert r.status_code == 200, r.text
+        reviews.append(r.json()["plan_id"])
+    gets = len(fake.requests)
+    refused = await plan(env, "delete", kind_key="pods", name="selected")
+    assert refused.status_code == 429
+    assert refused.json()["detail"] == OPEN_DELETES_LIMIT
+    assert len(fake.requests) == gets  # refused before the cluster is asked
+    # Another action isn't counted, and a closed review frees its place.
+    assert (await plan(env, "scale", params={"replicas": 2})).status_code == 200
+    assert (await env.client.delete(f"/api/actions/{reviews[0]}")).status_code == 204
+    assert (await plan(env, "delete", kind_key="pods", name="selected")).status_code == 200
+    assert (await apply(env, reviews[0], {"confirm_text": "selected"})).status_code == 404

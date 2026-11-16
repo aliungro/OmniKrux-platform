@@ -9,12 +9,15 @@ failing make the whole cluster unavailable.
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 from kubernetes_asyncio.client import ApiClient
 
 from omnikrux.kube.client import ClusterUnavailable
+from omnikrux.kube.connections import cloud_kube_error
 from omnikrux.kube.http import status_message
+from omnikrux.kube.tokens import CloudClusterUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,7 @@ REQUIRED_VERBS = frozenset({"list", "watch"})
 CRD_GROUP = "apiextensions.k8s.io"
 CRDS_PATH = f"/apis/{CRD_GROUP}/v1/customresourcedefinitions"
 UNEXPECTED = "The cluster's API discovery failed: it answered with something unexpected"
+_DNS_LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,7 @@ class Discovery:
     failed_groups: dict[str, str]  # group -> why its kinds are missing, in plain words
     # (group, plural) -> the preferred version's additionalPrinterColumns, for CRDs that have any
     printer_columns: dict[tuple[str, str], list[dict]]
+    version: str | None = None
 
 
 class _Refused(Exception):
@@ -56,7 +61,9 @@ class _Unexpected(Exception):
     """The answer was 2xx but not the JSON document asked for (an HTML login page, say)."""
 
 
-async def discover(api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS) -> Discovery:
+async def discover(
+    api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS, cloud: bool = False
+) -> Discovery:
     """Discover what the cluster serves, within one deadline `timeout` seconds from now.
 
     Raises `ClusterUnavailable` (in words) when the core or group list can't be read; connection
@@ -65,9 +72,13 @@ async def discover(api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
     deadline = asyncio.get_running_loop().time() + timeout
     try:
         async with asyncio.timeout_at(deadline):
-            core = _resources("", "v1", await _get(api, "/api/v1", timeout))
-            versions = _preferred_versions(await _get(api, "/apis", timeout))
+            core = _resources("", "v1", await _get(api, "/api/v1", timeout, cloud=cloud))
+            versions = _preferred_versions(
+                await _get(api, "/apis", timeout, cloud=cloud), cloud=cloud
+            )
     except TimeoutError as exc:
+        if cloud:
+            raise cloud_kube_error("read the cluster's API list", exc=exc) from None
         raise ClusterUnavailable(f"The cluster API did not respond within {timeout:g} s") from exc
     except _Refused as exc:
         if exc.status == 401:
@@ -78,6 +89,8 @@ async def discover(api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
             message = f"The cluster's API discovery failed: {exc.status} {exc.message}"
         raise ClusterUnavailable(message) from exc
     except _Unexpected as exc:
+        if cloud:
+            raise cloud_kube_error("read the cluster's API list") from None
         raise ClusterUnavailable(UNEXPECTED) from exc
 
     limit = asyncio.Semaphore(MAX_CONCURRENT_GROUPS)
@@ -85,10 +98,12 @@ async def discover(api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
     async def group_resources(group: str, version: str) -> list[ApiResource] | str:
         try:
             async with asyncio.timeout_at(deadline), limit:  # waiting for a slot counts too
-                body = await _get(api, f"/apis/{group}/{version}", timeout)
+                body = await _get(api, f"/apis/{group}/{version}", timeout, cloud=cloud)
             return _resources(group, version, body)
         except TimeoutError:
             why = f"The {group} API didn't answer within {timeout:g} s"
+        except CloudClusterUnavailable as exc:
+            return exc.message
         except _Refused as exc:
             if exc.status == 403:
                 return f"Not allowed to read the {group} API: {exc.message}"
@@ -100,9 +115,10 @@ async def discover(api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
             why = f"The {group} API couldn't be read ({type(exc).__name__})"
         return f"{why}; its kinds are hidden until it does."
 
-    results, printer = await asyncio.gather(
+    results, printer, version = await asyncio.gather(
         asyncio.gather(*(group_resources(g, v) for g, v in versions.items())),
-        _crd_printer_columns(api, versions, timeout, deadline),
+        _crd_printer_columns(api, versions, timeout, deadline, cloud=cloud),
+        _server_version(api, timeout, deadline, cloud=cloud),
     )
     resources, failed = list(core), {}
     for group, result in zip(versions, results, strict=True):
@@ -110,10 +126,23 @@ async def discover(api: ApiClient, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
             failed[group] = result
         else:
             resources.extend(result)
-    return Discovery(resources=resources, failed_groups=failed, printer_columns=printer)
+    return Discovery(
+        resources=resources, failed_groups=failed, printer_columns=printer, version=version
+    )
 
 
-async def _get(api: ApiClient, path: str, timeout: float = DISCOVERY_TIMEOUT_SECONDS) -> dict:
+async def _server_version(
+    api: ApiClient, timeout: float, deadline: float, *, cloud: bool
+) -> str | None:
+    try:
+        async with asyncio.timeout_at(deadline):
+            version = (await _get(api, "/version", timeout, cloud=cloud)).get("gitVersion")
+    except Exception:  # noqa: BLE001 (the version is optional)
+        return None
+    return version if isinstance(version, str) and version else None
+
+
+async def _get(api: ApiClient, path: str, timeout: float, *, cloud: bool = False) -> dict:
     resp = await api.call_api(
         path,
         "GET",
@@ -124,6 +153,8 @@ async def _get(api: ApiClient, path: str, timeout: float = DISCOVERY_TIMEOUT_SEC
         _request_timeout=(timeout, timeout),
     )
     try:
+        if cloud and not 200 <= resp.status < 300:
+            raise cloud_kube_error("read the cluster's API", status=resp.status)
         body = await resp.read()
     finally:
         resp.release()
@@ -167,7 +198,7 @@ def _resources(group: str, version: str, body: dict) -> list[ApiResource]:
     return found
 
 
-def _preferred_versions(body: dict) -> dict[str, str]:
+def _preferred_versions(body: dict, *, cloud: bool = False) -> dict[str, str]:
     """group -> its preferred version, from an APIGroupList."""
     groups = body.get("groups")
     if not isinstance(groups, list):
@@ -176,17 +207,30 @@ def _preferred_versions(body: dict) -> dict[str, str]:
     for group in groups:
         if not isinstance(group, dict) or not isinstance(name := group.get("name"), str):
             continue
-        preferred = (group.get("preferredVersion") or {}).get("version")
+        if cloud and (len(name) > 253 or not all(_DNS_LABEL.fullmatch(p) for p in name.split("."))):
+            continue
+        preferred_version = group.get("preferredVersion") or {}
+        if cloud and not isinstance(preferred_version, dict):
+            preferred_version = {}
+        preferred = preferred_version.get("version")
         if not preferred:
-            listed = [v.get("version") for v in group.get("versions") or [] if isinstance(v, dict)]
-            preferred = next((v for v in listed if v), None)
-        if isinstance(preferred, str) and preferred:
+            listed = group.get("versions") or []
+            if cloud and not isinstance(listed, list):
+                listed = []
+            preferred = next(
+                (v["version"] for v in listed if isinstance(v, dict) and v.get("version")), None
+            )
+        if (
+            isinstance(preferred, str)
+            and preferred
+            and (not cloud or _DNS_LABEL.fullmatch(preferred))
+        ):
             versions[name] = preferred
     return versions
 
 
 async def _crd_printer_columns(
-    api: ApiClient, versions: dict[str, str], timeout: float, deadline: float
+    api: ApiClient, versions: dict[str, str], timeout: float, deadline: float, *, cloud: bool
 ) -> dict[tuple[str, str], list[dict]]:
     """Each CRD's printer columns for the version discovery uses; {} when they can't be read by
     the deadline (the CRDs then keep generic columns)."""
@@ -194,9 +238,10 @@ async def _crd_printer_columns(
         return {}
     try:
         async with asyncio.timeout_at(deadline):
-            body = await _get(api, CRDS_PATH, timeout)
+            body = await _get(api, CRDS_PATH, timeout, cloud=cloud)
     except Exception as exc:  # noqa: BLE001 (printer columns are optional)
-        logger.info("CRD printer columns not read (%s); CRDs keep generic columns", exc)
+        why = cloud_kube_error("read CRD printer columns", exc=exc).message if cloud else exc
+        logger.info("CRD printer columns not read (%s); CRDs keep generic columns", why)
         return {}
     items = body.get("items")
     columns = {}

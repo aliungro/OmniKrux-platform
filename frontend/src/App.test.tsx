@@ -2,11 +2,15 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { FILE_CLUSTER_METADATA } from "./test/clusters";
+import userEvent from "@testing-library/user-event";
 import { applyMessage, emptyWatchState, type WatchState } from "./api/watchState";
 import type { WatchOptions } from "./api/useWatch";
 import { FakeWebSocket } from "./features/logs/fakeWebSocket";
-import { Console } from "./App";
+import { Shell as Console } from "./features/shell/Shell";
+import { seedPodsWorkspace } from "./test/seedWorkspace";
 import { KINDS } from "./test/kinds";
+import { container } from "./test/describe";
 
 // The dock imports the terminal; jsdom has no canvas for it, and these tests open no shell.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
@@ -45,12 +49,17 @@ vi.mock("./features/territories/TerritoryTable", async (importOriginal) => {
   };
 });
 
-const cluster = { id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443", original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null };
+const cluster = { ...FILE_CLUSTER_METADATA, id: "c1", name: "kind-omnikrux-dev", context_name: "kind-omnikrux-dev", server: "https://127.0.0.1:6443", original_server: null, provider: "kind", region: null, environment: "development", state: "ready", message: null };
 const pod = (uid: string, status: string, cls: string) => ({ uid, cluster_id: "c1", kind: "Pod", namespace: "default", name: uid, created_at: null, labels: {}, columns: { status, status_class: cls, node: "n1", last_restart_at: null } });
 
 /** Answers /api/kinds with the test kinds and everything else with `other`. */
 function routes(other: (url: string) => unknown) {
-  return vi.fn((url: string) => (url.startsWith("/api/kinds") ? json(KINDS) : url === "/api/port-forwards" ? json([]) : json(other(url))));
+  return vi.fn((url: string) => {
+    if (url.startsWith("/api/kinds")) return json(KINDS);
+    if (url === "/api/port-forwards" || url.startsWith("/api/cloud/")) return json([]);
+    if (url === "/api/settings") return json({ encryption: { source: "environment", path: null }, discovery_interval_s: 600 });
+    return json(other(url));
+  });
 }
 const clusterCalls = (fetch: { mock: { calls: unknown[][] } }) => fetch.mock.calls.filter(([url]) => url === "/api/clusters").length;
 
@@ -63,7 +72,29 @@ function renderConsole() {
   return render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
 }
 
+it("edit pinned kinds opens settings at the section and changes the live row", async () => {
+  vi.stubGlobal("fetch", routes(() => [cluster]));
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype,"scrollIntoView",{configurable:true,value:scroll});
+  try {
+    renderConsole();
+    const tab = await screen.findByRole("tab",{name:"Pods"});
+    fireEvent.contextMenu(tab);
+    fireEvent.click(screen.getByRole("menuitem",{name:"Edit pinned kinds…"}));
+    expect(screen.getByRole("heading",{name:"Settings",level:1})).toBeTruthy();
+    expect(scroll).toHaveBeenCalled();
+    expect(location.hash).toBe("#/settings");
+    fireEvent.click(screen.getByRole("button",{name:"Remove Services"}));
+    fireEvent.click(screen.getByRole("button",{name:"Kubernetes"}));
+    expect(screen.queryByRole("tab",{name:"Services"})).toBeNull();
+    expect(screen.getByRole("tab",{name:"Pods"})).toBeTruthy();
+  } finally {
+    delete (HTMLElement.prototype as {scrollIntoView?: unknown}).scrollIntoView;
+  }
+});
+
 beforeEach(() => {
+  seedPodsWorkspace();
   watch.state = emptyWatchState();
   watch.side = emptyWatchState();
   watch.opts = undefined;
@@ -113,11 +144,11 @@ describe("Audit log route", () => {
     vi.stubGlobal("fetch", routes((url) => (url.startsWith("/api/audit") ? { records: [], next_before: null } : [cluster])));
     renderConsole();
     fireEvent.click(await screen.findByRole("button", { name: "Audit log" }));
-    expect(window.location.hash).toBe("#audit");
+    expect(window.location.hash).toBe("#/audit");
     expect(await screen.findByText("Nothing has been changed from Omnikrux yet.")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Pods" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Back to resources" }));
-    expect(window.location.hash).toBe("#kind=pods");
+    fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
+    expect(window.location.hash).toMatch(/^#\/kubernetes\//);
     expect(await screen.findByRole("tab", { name: "Pods" })).toBeTruthy();
   });
 });
@@ -132,7 +163,7 @@ describe("Console wiring", () => {
     renderConsole();
     const token = await screen.findByTestId("scope-token");
     expect(token.textContent).toBe("KINDkind-omnikrux-dev1 failing");
-    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Pods3");
+    expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Pods3");
     expect(screen.getByRole("button", { name: "Failing 1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Pending 1" })).toBeTruthy();
     expect(screen.getByRole("grid", { name: "Pods by cluster" })).toBeTruthy();
@@ -147,7 +178,7 @@ describe("Console wiring", () => {
 });
 
 describe("Console follows cluster changes", () => {
-  it("passes the known cluster ids and reloads the list for an unknown or removed cluster", async () => {
+  it("passes the known cluster ids and reloads the list for an unknown cluster", async () => {
     const fetch = routes(() => [cluster]);
     vi.stubGlobal("fetch", fetch);
     renderConsole();
@@ -156,8 +187,6 @@ describe("Console follows cluster changes", () => {
     expect(clusterCalls(fetch)).toBe(1);
     watch.opts?.onUnknownCluster?.("c2");
     await waitFor(() => expect(clusterCalls(fetch)).toBe(2));
-    watch.opts?.onClusterRemoved?.("c1");
-    await waitFor(() => expect(clusterCalls(fetch)).toBe(3));
   });
 });
 
@@ -183,7 +212,7 @@ describe("Shortcut bar", () => {
     fireEvent.keyDown(document.body, { key: "?" });
     const all = screen.getByRole("dialog", { name: "All shortcuts" });
     expect(all.textContent).toContain("Previous logs");
-    expect(all.textContent).toContain("Switch between one pane and side by side");
+    expect(all.textContent).toContain("Switch the bottom dock between one pane and side by side");
     fireEvent.keyDown(all, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "All shortcuts" })).toBeNull();
   });
@@ -193,10 +222,10 @@ describe("Console dock wiring", () => {
   const describeBody = {
     pod: { name: "crasher-1", namespace: "default", status: "CrashLoopBackOff", status_class: "bad", node: "n1", pod_ip: null, host_ip: null, qos: null, service_account: null, owner: null, started_at: null, resource_version: "1" },
     containers: [
-      { name: "sidecar", state: "Running", state_class: "ok" },
-      { name: "app", state: "Waiting: CrashLoopBackOff", state_class: "bad" },
+      container({ name: "sidecar", state: "Running", state_class: "ok", restarts: 0, limit_hit: [] }),
+      container({ name: "app", state: "Waiting: CrashLoopBackOff", state_class: "bad" }),
     ],
-    init_containers: [{ name: "init", state: "Terminated: Completed (exit 0)", state_class: "done" }],
+    init_containers: [container({ name: "init", state: "Terminated: Completed (exit 0)", state_class: "done" })],
     ephemeral_containers: [], volumes: [],
     conditions: [], labels: {}, annotations: {}, events: [], events_error: null,
   };
@@ -218,13 +247,141 @@ describe("Console dock wiring", () => {
     vi.stubGlobal("fetch", routes((url) => (url.endsWith("/describe") ? describeBody : [cluster])));
   });
 
+  it("row keys work on load without a click", async () => {
+    watch.state = applyMessage(watch.state!, { type: "snapshot", cluster_id: "c1", part: 0, last: true,
+      rows: [pod("alpha", "Running", "ok"), pod("beta", "Running", "ok"), pod("gamma", "Running", "ok")] });
+    renderConsole();
+    const first = (await screen.findByText("alpha")).closest<HTMLElement>('[role="row"]')!;
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: "ArrowDown" });
+    expect(first.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "l" });
+    expect(await within(await screen.findByRole("tablist", { name: "Logs and shells" })).findByRole("tab")).toBeTruthy();
+    await waitFor(() => expect(FakeWebSocket.last.params.get("pod")).toBe("alpha"));
+  });
+
+  it("row keys act on the selected row while a kind tab has focus", async () => {
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.click(row);
+    const tab = within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { name: /^Pods/ });
+    fireEvent.click(tab);
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "d" });
+    expect(screen.queryByRole("region", { name: "Details for crasher-1" })).toBeNull();
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "d" });
+    expect(screen.getByRole("region", { name: "Details for crasher-1" })).toBeTruthy();
+    expect(document.activeElement).toBe(row);
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "l" });
+    expect(await within(await screen.findByRole("tablist", { name: "Logs and shells" })).findByRole("tab")).toBeTruthy();
+  });
+
+  it("row shortcuts work after switching apps without clicking the view", async () => {
+    renderConsole();
+    await screen.findByText("crasher-1");
+    fireEvent.keyDown(document.body, {key:"8",code:"Digit8",altKey:true});
+    fireEvent.keyDown(document.body, {key:"1",code:"Digit1",altKey:true});
+    const main=screen.getByRole("main");
+    await waitFor(()=>expect(document.activeElement).toBe(main));
+    fireEvent.keyDown(main,{key:"ArrowDown"});
+    fireEvent.keyDown(document.activeElement!,{key:"l"});
+    expect(await within(await screen.findByRole("tablist",{name:"Logs and shells"})).findByRole("tab")).toBeTruthy();
+  });
+
+  it("row shortcuts work after activating a workspace tab", async () => {
+    renderConsole();
+    await screen.findByText("crasher-1");
+    fireEvent.click(screen.getByRole("button",{name:"New tab"}));
+    fireEvent.click(screen.getByRole("tab",{name:"Pods · all clusters"}));
+    const main=screen.getByRole("main");
+    await waitFor(()=>expect(document.activeElement).toBe(main));
+    await screen.findByText("crasher-1");
+    fireEvent.keyDown(main,{key:"ArrowDown"});
+    fireEvent.keyDown(document.activeElement!,{key:"l"});
+    expect(await within(await screen.findByRole("tablist",{name:"Logs and shells"})).findByRole("tab")).toBeTruthy();
+  });
+
+  it("switching tabs and apps keeps dock sessions", async () => {
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.keyDown(row, { key: "l" });
+    const sessions = await screen.findByRole("tablist", { name: "Logs and shells" });
+    expect(within(sessions).getAllByRole("tab")).toHaveLength(1);
+    const targetSocket = () => FakeWebSocket.instances.find(ws =>
+      new URL(ws.url).pathname === "/api/logs" && ws.params.get("cluster") === "c1" &&
+      ws.params.get("namespace") === "default" && ws.params.get("pod") === "crasher-1");
+    await waitFor(() => expect(targetSocket()).toBeDefined());
+    const socket = targetSocket()!;
+    expect(socket.closedByClient).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Audit log" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
+    expect(within(screen.getByRole("tablist", { name: "Logs and shells" })).getAllByRole("tab")).toHaveLength(1);
+    expect(socket.closedByClient).toBe(false);
+  });
+
+  it("row keys are not taken from the dock or a dialog", async () => {
+    const user = userEvent.setup();
+    watch.state = applyMessage(watch.state!, { type: "snapshot", cluster_id: "c1", part: 0, last: true,
+      rows: [pod("crasher-1", "CrashLoopBackOff", "bad"), pod("other", "Running", "ok")] });
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.keyDown(row, { key: "l" });
+    const sessions = await screen.findByRole("tablist", { name: "Logs and shells" });
+    const tab = await within(sessions).findByRole("tab");
+    tab.focus();
+    await user.keyboard("lp"); // p would create a distinct previous-logs session
+    expect(within(sessions).getAllByRole("tab")).toHaveLength(1);
+    expect(document.activeElement).toBe(tab);
+    fireEvent.keyDown(document.body, { key: "?" });
+    const dialog = screen.getByRole("dialog", { name: "All shortcuts" });
+    fireEvent.keyDown(dialog, { key: "ArrowDown" });
+    expect(row.getAttribute("aria-selected")).toBe("true");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("typed keys in a field never act on rows", async () => {
+    const user = userEvent.setup();
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.click(row);
+    const input = screen.getByPlaceholderText("Filter by name, label or image");
+    await user.type(input, "l");
+    expect((input as HTMLInputElement).value).toBe("l");
+    expect(screen.queryByRole("tablist", { name: "Logs and shells" })).toBeNull();
+  });
+
+  it("enter on a chrome button still activates it", async () => {
+    const user = userEvent.setup();
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    fireEvent.keyDown(row, { key: "l" }); // select without opening details
+    const button = screen.getByRole("button", { name: "Commands and kinds" });
+    button.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("dialog", { name: "Commands" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Details for crasher-1" })).toBeNull();
+  });
+
+  it("closing the palette opened from the page puts focus on the table row", async () => {
+    renderConsole();
+    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: ":" });
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(document.activeElement).toBe(row);
+  });
+
   it("l opens the selected pod's logs, p its previous run, both labelled with the cluster", async () => {
     renderConsole();
     expect(await screen.findByText("Open logs (l) or a shell (s) from a pod")).toBeTruthy();
     const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
     row.focus();
     fireEvent.keyDown(row, { key: "l" });
-    const sessions = () => within(screen.getByRole("tablist", { name: "Sessions" })).getAllByRole("tab");
+    const sessions = () => within(screen.getByRole("tablist", { name: "Logs and shells" })).getAllByRole("tab");
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const [tab] = sessions();
     expect(tab.textContent).toContain("KIND");
@@ -241,24 +398,6 @@ describe("Console dock wiring", () => {
     fireEvent.keyDown(row, { key: "p" });
     await waitFor(() => expect(sessions()).toHaveLength(2));
     expect(FakeWebSocket.last.params.get("previous")).toBe("true");
-  });
-
-  it("the dock and its sessions stay when the last cluster goes", async () => {
-    let clusters = [cluster];
-    vi.stubGlobal("fetch", routes((url) => (url.endsWith("/describe") ? describeBody : clusters)));
-    renderConsole();
-    const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
-    row.focus();
-    fireEvent.keyDown(row, { key: "l" });
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    const ws = FakeWebSocket.last;
-
-    clusters = [];
-    watch.opts?.onClusterRemoved?.("c1");
-    expect(await screen.findByText("No clusters yet. Mount your kubeconfig at /kube/config and restart the console.")).toBeTruthy();
-    expect(within(screen.getByRole("tablist", { name: "Sessions" })).getAllByRole("tab")).toHaveLength(1);
-    expect(ws.closedByClient).toBe(false);
-    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
   it("dock dispatch does not re-render the table", async () => {
@@ -294,14 +433,14 @@ describe("Console kinds", () => {
     expect(watch.kind).toBe("pods");
     fireEvent.click(await screen.findByRole("tab", { name: "Deployments" }));
     expect(watch.kind).toBe("deployments.apps");
-    expect(window.location.hash).toBe("#kind=deployments.apps");
-    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Deployments");
+    expect(window.location.hash).toMatch(/^#\/kubernetes\//);
+    expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Deployments");
     expect(screen.getByRole("grid", { name: "Deployments by cluster" })).toBeTruthy();
     expect(screen.getByPlaceholderText("Filter by name, label or image")).toBeTruthy();
     // Back goes to the previous kind.
     window.history.back();
     await waitFor(() => expect(watch.kind).toBe("pods"));
-    expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Pods");
+    expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Pods");
   });
 
   it("selected kind survives reload via hash", async () => {
@@ -309,7 +448,7 @@ describe("Console kinds", () => {
     vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
     expect(watch.kind).toBe("events");
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Events"));
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Events"));
     // No cluster has reported events yet: the chip has no number rather than a made-up 0.
     expect(screen.getByRole("button", { name: "Warnings" })).toBeTruthy();
   });
@@ -355,7 +494,7 @@ describe("Console kinds", () => {
     vi.stubGlobal("fetch", fetch);
     renderConsole();
     expect(await screen.findByText("This cluster doesn't serve certificates.cert-manager.io.")).toBeTruthy();
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Certificates"));
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Certificates"));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(fetch.mock.calls.map(([u]) => u)).toContain("/api/clusters/c1/retry"));
     const urls = fetch.mock.calls.map(([u]) => u);

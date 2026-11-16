@@ -75,3 +75,66 @@ def test_bad_port_forward_bind_plain_startup_error(tmp_path, value):
         "Omnikrux can't start: OMNIKRUX_PORT_FORWARD_BIND must be an IP address like 127.0.0.1 "
         f"or 0.0.0.0, not {value!r}."
     )
+
+
+def test_bad_override_stops_startup_plain(tmp_path, monkeypatch):
+    monkeypatch.setenv("OMNIKRUX_CLOUD_ENDPOINTS", '{"azure_arm":"https://evil.example"}')
+    with pytest.raises(SystemExit) as stopped:
+        create_app(Settings(data_dir=tmp_path, kubeconfig=""))
+    assert str(stopped.value) == (
+        "Omnikrux can't start: OMNIKRUX_CLOUD_ENDPOINTS may only point at this machine "
+        "(127.0.0.1, localhost, [::1] or host.docker.internal): it exists for testing "
+        "against fake clouds, not https://evil.example."
+    )
+
+
+def test_cloud_dirs_defaults_host_and_container(tmp_path, monkeypatch):
+    for cloud in ("AZURE", "AWS", "GCLOUD", "OCI"):
+        monkeypatch.delenv(f"OMNIKRUX_{cloud}_DIR")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+
+    host = Settings(in_container=False).cloud_dirs
+    assert host.azure == tmp_path / "home" / ".azure"
+    assert host.aws == tmp_path / "home" / ".aws"
+    assert host.oci == tmp_path / "home" / ".oci"
+    if os.name == "nt":
+        assert host.gcloud == tmp_path / "appdata" / "gcloud"
+    else:
+        assert host.gcloud == tmp_path / "home" / ".config" / "gcloud"
+
+    monkeypatch.setenv("CLOUDSDK_CONFIG", str(tmp_path / "custom-gcloud"))
+    assert Settings(in_container=False).cloud_dirs.gcloud == tmp_path / "custom-gcloud"
+
+    container = Settings(in_container=True).cloud_dirs
+    assert container.azure == Path("/cloud/azure")
+    assert container.aws == Path("/cloud/aws")
+    assert container.gcloud == Path("/cloud/gcloud")
+    assert container.oci == Path("/cloud/oci")
+
+
+def test_cloud_dirs_honor_explicit_environment_overrides(tmp_path, monkeypatch):
+    for cloud in ("azure", "aws", "gcloud", "oci"):
+        monkeypatch.setenv(f"OMNIKRUX_{cloud.upper()}_DIR", str(tmp_path / cloud))
+    dirs = Settings(in_container=True).cloud_dirs
+    assert (dirs.azure, dirs.aws, dirs.gcloud, dirs.oci) == tuple(
+        tmp_path / cloud for cloud in ("azure", "aws", "gcloud", "oci")
+    )
+
+
+def test_discovery_interval_minimum(tmp_path, monkeypatch):
+    monkeypatch.delenv("OMNIKRUX_CLOUD_DISCOVERY_SECONDS", raising=False)
+    assert Settings().cloud_discovery_seconds == 600
+    monkeypatch.setenv("OMNIKRUX_CLOUD_DISCOVERY_SECONDS", "60")
+    assert (
+        create_app(
+            Settings(data_dir=tmp_path, kubeconfig="")
+        ).state.settings.cloud_discovery_seconds
+        == 60
+    )
+    monkeypatch.setenv("OMNIKRUX_CLOUD_DISCOVERY_SECONDS", "59")
+    with pytest.raises(SystemExit) as stopped:
+        create_app(Settings(data_dir=tmp_path, kubeconfig=""))
+    assert str(stopped.value) == (
+        "Omnikrux can't start: OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be at least 60, not 59."
+    )

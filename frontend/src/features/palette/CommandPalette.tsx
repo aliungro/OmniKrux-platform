@@ -3,9 +3,10 @@ import type { Cluster, KindInfo, ResourceRow } from "../../api/types";
 import { rowActions, type RowAction } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
 import { capsOf, pageKey, pressed } from "../chrome/shortcuts";
+import { usePinnedKinds } from "../settings/pinnedKinds";
 import { rowTitle } from "../territories/model";
 import { ProviderBadge } from "../territories/ProviderBadge";
-import { GROUP_ORDER, KIND_GROUPS, MAX_RESULTS, buildCommands, rankCommands, type Command, type CommandGroup } from "./commands";
+import { KIND_GROUPS, MAX_RESULTS, buildCommands, rankCommands, type Command, type CommandGroup } from "./commands";
 import k from "../chrome/key.module.css";
 import s from "./CommandPalette.module.css";
 
@@ -67,15 +68,15 @@ function Empty({ kindsOnly, query, loading, error }: { kindsOnly: boolean; query
   return <p className={s.empty} role="status">{`Nothing matches “${query}”. Try a kind's short name, like deploy or svc.`}</p>;
 }
 
-/** The ranked commands in groups, each group where its best match ranks, best first inside it. */
+/** Consecutive group headings preserve command ranking and pinned order across kind groups. */
 function inGroups(ranked: Command[]): [CommandGroup, Command[]][] {
-  const groups = new Map<CommandGroup, Command[]>();
+  const groups: [CommandGroup, Command[]][] = [];
   for (const c of ranked) {
-    const list = groups.get(c.group);
-    if (list) list.push(c);
-    else groups.set(c.group, [c]);
+    const last = groups.at(-1);
+    if (last?.[0] === c.group) last[1].push(c);
+    else groups.push([c.group, [c]]);
   }
-  return [...groups];
+  return groups;
 }
 
 /**
@@ -91,7 +92,7 @@ export function CommandPalette({
   selection,
   onKind,
   onRowAction,
-  onAudit,
+  onAudit, onSettings, onNewTab, onCloseTab,
   onForwards,
   onClose,
   onFocusLost,
@@ -105,6 +106,7 @@ export function CommandPalette({
   onKind: (key: string) => void;
   onRowAction: (action: RowAction) => void;
   onAudit: () => void;
+  onSettings?: () => void; onNewTab?: () => void; onCloseTab?: () => void;
   onForwards?: () => void;
   onClose: () => void;
   /**
@@ -113,6 +115,7 @@ export function CommandPalette({
    */
   onFocusLost?: () => void;
 }) {
+  const { pinned } = usePinnedKinds();
   const base = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -131,31 +134,29 @@ export function CommandPalette({
         workloadLogs: true,
       }),
     };
-    return buildCommands({ kinds: kinds ?? NO_KINDS, onKind, selected, onRowAction, onAudit, onForwards });
-  }, [kinds, selection, canChange, onKind, onRowAction, onAudit, onForwards]);
+    return buildCommands({ pinned, kinds: kinds ?? NO_KINDS, onKind, selected, onRowAction, onAudit, onSettings, onNewTab, onCloseTab, onForwards });
+  }, [pinned, kinds, selection, canChange, onKind, onRowAction, onAudit, onSettings, onNewTab, onCloseTab, onForwards]);
 
   const split = splitQuery(query);
   const kindsOnly = mode === "kinds" || split.kindsOnly;
   const pool = useMemo(() => (kindsOnly ? commands.filter((c) => KIND_GROUPS.has(c.group)) : commands), [kindsOnly, commands]);
   const ranked = useMemo(() => rankCommands(split.q, pool), [split.q, pool]);
-  const sections = useMemo(() => {
-    const groups = inGroups(ranked);
-    // Nothing typed: the groups in their usual order (actions first); typed: where each best matches.
-    return split.q.trim() === "" ? groups.sort((a, b) => GROUP_ORDER.indexOf(a[0]) - GROUP_ORDER.indexOf(b[0])) : groups;
-  }, [ranked, split.q]);
+  const sections = useMemo(() => inGroups(ranked), [ranked]);
   const ordered = useMemo(() => sections.flatMap(([, cmds]) => cmds), [sections]);
   const at = ordered.length === 0 ? -1 : Math.min(active, ordered.length - 1);
+  const suggestion = kindsOnly && split.q.trim() ? ordered[at] : undefined;
   const optionId = (i: number) => `${base}-o${i}`;
 
   // Focus the field on open; give focus back to where it was on close, or, when that has gone,
   // wherever the page says (the kind you jumped to).
+  const changedView = useRef(false);
   const focusLost = useRef(onFocusLost);
   focusLost.current = onFocusLost;
   useEffect(() => {
     const back = document.activeElement;
     inputRef.current?.focus();
     return () => {
-      if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
+      if (!changedView.current && back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
       else focusLost.current?.();
     };
   }, []);
@@ -167,6 +168,7 @@ export function CommandPalette({
 
   const run = (c: Command | undefined) => {
     if (!c) return;
+    changedView.current = c.id.startsWith("view:") || c.id.startsWith("kind:");
     onClose();
     c.run();
   };
@@ -184,7 +186,13 @@ export function CommandPalette({
       e.preventDefault();
       run(ordered[at]);
     } else if (e.key === "Tab") {
-      e.preventDefault(); // one field: focus stays in it
+      e.preventDefault();
+      if (suggestion && !e.shiftKey && !e.nativeEvent.isComposing) {
+        const ambiguous = pool.some(c => c.id !== suggestion.id && c.label.toLowerCase() === suggestion.label.toLowerCase());
+        const completed = (ambiguous ? suggestion.hint ?? suggestion.label : suggestion.label).toLowerCase();
+        setQuery(split.kindsOnly ? `:${completed}` : completed);
+        setActive(0);
+      }
     }
   };
 
@@ -230,10 +238,10 @@ export function CommandPalette({
           <span className={k.k} aria-hidden="true">Esc</span>
         </div>
         <div id={`${base}-list`} role="listbox" aria-label={title} className={s.list}>
-          {sections.map(([group, cmds]) => {
-            const head = `${base}-g-${group}`;
+          {sections.map(([group, cmds], sectionIndex) => {
+            const head = `${base}-g-${sectionIndex}`;
             return (
-              <div key={group} role="group" aria-labelledby={head} className={s.group}>
+              <div key={`${group}-${sectionIndex}`} role="group" aria-labelledby={head} className={s.group}>
                 <div id={head} className={s.groupTitle}>
                   {group}
                   {group === "Actions" && selection && (
@@ -277,6 +285,7 @@ export function CommandPalette({
         <div className={s.foot}>
           <span><span className={k.k}>↑</span><span className={k.k}>↓</span> choose</span>
           <span><span className={k.k}>Enter</span> {kindsOnly ? "jump" : "run"}</span>
+          {suggestion && <span><span className={k.k}>Tab</span> complete</span>}
           {mode === "all" && !kindsOnly && <span><span className={k.k}>{capsOf("kinds")[0]}</span> kinds only</span>}
           {capped && <span className={s.more}>{`Showing ${MAX_RESULTS} of ${total}. Type to narrow.`}</span>}
         </div>

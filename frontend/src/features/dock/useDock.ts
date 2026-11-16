@@ -1,8 +1,10 @@
-import { useCallback, useMemo, useReducer, useRef, useState, type Dispatch } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { clusterLifecycle } from "../../api/clusterLifecycle";
 import { failure, postJson } from "../../api/http";
-import type { Cluster, DebugContainer, NodeShellPod, OwnerRef, PodDescribe, ResourceRow } from "../../api/types";
+import type { Cluster, ContainerInfo, DebugContainer, NodeShellPod, OwnerRef, PodDescribe, ResourceRow } from "../../api/types";
 import { describeQuery, podPath } from "../inspector/useDescribe";
+import { isContainerStates } from "../territories/ContainerBullets";
 import { textColumn } from "../territories/model";
 import { dockReducer, initialDockState, type DockAction, type DockState, type Session, type SessionKind } from "./dockState";
 import { prefetchShellPane } from "./lazyShell";
@@ -29,9 +31,19 @@ export interface Ask {
   run: () => Promise<void>;
 }
 
+export type ShellChoice = {
+  request: number;
+  cluster: Cluster;
+  where: string;
+} & (
+  | { stage: "loading" }
+  | { stage: "choose"; containers: ContainerInfo[]; selected: string; open: (container: string) => void }
+  | { stage: "error"; error: string; retry: () => void; openDefault: (() => void) | null }
+);
+
 export interface DockApi {
   state: DockState;
-  /** A focus or close through here is your choice: no open still on its way takes focus after it. */
+  /** A focus choice or closing the focused tab cancels pending opens' focus. */
   dispatch: Dispatch<DockAction>;
   /** Logs (optionally the previous run) or a shell for a pod row. */
   openPod: (row: ResourceRow, kind: SessionKind, opts?: { previous?: boolean }) => void;
@@ -48,6 +60,7 @@ export interface DockApi {
   /** Start again for a shell: a node shell gets a new node-shell pod (the old one was deleted). */
   askRestart: (session: Session) => void;
   ask: Ask | null;
+  shellChoice: ShellChoice | null;
   confirm: () => void;
   cancel: () => void;
 }
@@ -69,23 +82,50 @@ function logsContainer(d: PodDescribe): string | null {
   return d.containers.find((c) => c.state_class === "bad")?.name ?? defaultContainer(d);
 }
 
+function regularContainerCount(row: ResourceRow): number {
+  const states = row.columns.containers;
+  if (isContainerStates(states) && states.length > 0) return states.filter((c) => !c.init).length;
+  // Ready counts reported statuses, which may be incomplete while a pod is starting.
+  const reported = Number(textColumn(row, "ready")?.match(/^\d+\/(\d+)$/)?.[1]);
+  return reported > 1 ? reported : 0;
+}
+
 /** The dock's sessions, and the flows that open them (some ask first, then call the server). */
 export function useDock(clusters: Cluster[]): DockApi {
   const [state, dispatchNow] = useReducer(dockReducer, undefined, initialDockState);
   const [ask, setAsk] = useState<Ask | null>(null);
+  const [shellChoice, setShellChoice] = useState<ShellChoice | null>(null);
   const queryClient = useQueryClient();
+  const lifecycle = clusterLifecycle(queryClient);
   const nextId = useRef(0);
   /**
    * The newest open request, or focus choice of yours. Opens wait for the pod's describe (or the
-   * server), so they can finish out of order; one takes focus only if nothing newer happened
+   * server), so they can finish out of order. A superseded shell lookup is discarded, while logs
+   * can still open in the background. An open takes focus only if nothing newer happened
    * meanwhile (another open, a confirmed node shell or debug container, a tab you clicked or
-   * closed), or a slow one would pull your keystrokes to another pod (or cluster).
+   * closed while focused), or a slow one would pull your keystrokes to another pod (or cluster).
    */
   const latestOpen = useRef(0);
-  const dispatch = useCallback((action: DockAction) => {
-    if (action.type === "focus" || action.type === "close") latestOpen.current += 1;
-    dispatchNow(action);
+  const shellPending = useRef<string | null>(null);
+  const nextOpen = useCallback(() => {
+    if (shellPending.current) {
+      shellPending.current = null;
+      setShellChoice(null);
+    }
+    return ++latestOpen.current;
   }, []);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const dispatch = useCallback((action: DockAction) => {
+    if ((action.type === "open" || action.type === "replace") && lifecycle.isRemoved(action.session.cluster.id)) return;
+    if (action.type === "focus" || (action.type === "close" && action.id === stateRef.current.focused)) nextOpen();
+    dispatchNow(action);
+  }, [lifecycle, nextOpen]);
+  useEffect(() => lifecycle.subscribe(id => {
+    if (shellPending.current === id) nextOpen();
+    dispatchNow({ type: "closeCluster", clusterId: id });
+    setAsk(current => current?.cluster.id === id ? null : current);
+  }), [lifecycle, nextOpen]);
   const newId = useCallback(() => `s${++nextId.current}`, []);
   const clustersRef = useRef(clusters);
   clustersRef.current = clusters;
@@ -93,37 +133,95 @@ export function useDock(clusters: Cluster[]): DockApi {
 
   /** The pod's containers, from the inspector's cached describe when it has one. */
   const containersOf = useCallback(
-    async (row: ResourceRow): Promise<PodDescribe | null> => {
+    (row: ResourceRow): Promise<PodDescribe> => {
       const rv = textColumn(row, "resource_version") ?? "";
-      try {
-        return await queryClient.ensureQueryData(describeQuery(row.cluster_id, row.namespace ?? "", row.name, rv));
-      } catch {
-        return null; // the session still opens; the server picks the first container
-      }
+      return queryClient.ensureQueryData(describeQuery(row.cluster_id, row.namespace ?? "", row.name, rv));
     },
     [queryClient],
   );
+
+  const openPodShell = useCallback((row: ResourceRow, cluster: Cluster) => {
+    const namespace = row.namespace ?? "";
+    const where = `${cluster.name} / ${namespace} / ${row.name}`;
+    const load = () => {
+      const request = nextOpen();
+      const current = () => request === latestOpen.current;
+      const context = { request, cluster, where };
+      const open = (container: string | null, containers: string[] = []) => {
+        if (!current()) return;
+        nextOpen();
+        dispatch({
+          type: "open",
+          session: { id: newId(), kind: "shell", cluster, namespace, pod: row.name, container, containers },
+        });
+      };
+      shellPending.current = cluster.id;
+      setShellChoice({ ...context, stage: "loading" });
+      void containersOf(row).then(
+        (d) => {
+          if (!current()) return;
+          const selected = defaultContainer(d);
+          const containers = allContainers(d);
+          if (!selected || d.containers.length < 2) {
+            open(selected, containers);
+            return;
+          }
+          setShellChoice({
+            ...context,
+            stage: "choose",
+            selected,
+            containers: d.containers,
+            open: (name) => {
+              if (d.containers.some((c) => c.name === name)) open(name, containers);
+            },
+          });
+        },
+        (err: unknown) => {
+          if (!current()) return;
+          const count = regularContainerCount(row);
+          if (count === 1) {
+            open(null);
+            return;
+          }
+          setShellChoice({
+            ...context,
+            stage: "error",
+            error: failure(err, "retry"),
+            retry: () => { if (current()) load(); },
+            openDefault: count === 0 ? () => open(null) : null,
+          });
+        },
+      );
+    };
+    load();
+  }, [containersOf, dispatch, newId, nextOpen]);
 
   const openPod = useCallback(
     (row: ResourceRow, kind: SessionKind, opts: { previous?: boolean } = {}) => {
       const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
       if (!cluster) return;
-      const request = ++latestOpen.current;
-      void containersOf(row).then((d) => {
+      if (kind === "shell") {
+        openPodShell(row, cluster);
+        return;
+      }
+      const request = nextOpen();
+      const started = lifecycle.startChange();
+      void containersOf(row).catch(() => null).then((d) => {
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         const session: Session = {
           id: newId(),
           kind,
           cluster,
           namespace: row.namespace ?? "",
           pod: row.name,
-          container: d ? (kind === "logs" ? logsContainer(d) : defaultContainer(d)) : null,
+          container: d ? logsContainer(d) : null,
           containers: d ? allContainers(d) : [],
         };
-        if (kind === "logs" && opts.previous) session.previous = true;
+        if (opts.previous) session.previous = true;
         dispatch({ type: "open", session, focus: request === latestOpen.current });
       });
     },
-    [containersOf, newId, dispatch],
+    [containersOf, newId, dispatch, lifecycle, nextOpen, openPodShell],
   );
 
   const openOwnerLogs = useCallback(
@@ -131,8 +229,10 @@ export function useDock(clusters: Cluster[]): DockApi {
       const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
       if (!cluster || !owner.selector) return;
       const selector = owner.selector;
-      const request = ++latestOpen.current;
-      void containersOf(row).then((d) => {
+      const request = nextOpen();
+      const started = lifecycle.startChange();
+      void containersOf(row).catch(() => null).then((d) => {
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         dispatch({
           type: "open",
           focus: request === latestOpen.current,
@@ -150,7 +250,7 @@ export function useDock(clusters: Cluster[]): DockApi {
         });
       });
     },
-    [containersOf, newId, dispatch],
+    [containersOf, newId, dispatch, lifecycle, nextOpen],
   );
 
   const openWorkloadLogs = useCallback(
@@ -158,7 +258,7 @@ export function useDock(clusters: Cluster[]): DockApi {
       const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
       if (!cluster) return;
       const focus = opts.focus ?? true;
-      if (focus) ++latestOpen.current;
+      if (focus) nextOpen();
       // Nothing to wait for: the server starts each pod on its first container.
       dispatch({
         type: "open",
@@ -166,11 +266,12 @@ export function useDock(clusters: Cluster[]): DockApi {
         session: { id: newId(), kind: "logs", cluster, namespace: row.namespace ?? "", pod: row.name, selector, container: null, containers: [] },
       });
     },
-    [newId, dispatch],
+    [newId, dispatch, nextOpen],
   );
 
   /** Shows the question; `act` runs on yes, and its failure stays in the dialog in plain words. */
   const confirmFirst = (question: Omit<Ask, "busy" | "error" | "run">, act: () => Promise<void>) => {
+    if (shellPending.current) nextOpen();
     setAsk({ ...question, busy: false, error: null, run: act });
   };
 
@@ -185,11 +286,14 @@ export function useDock(clusters: Cluster[]): DockApi {
         where: `${cluster.name} / ${node}`,
       },
       async () => {
-        const request = ++latestOpen.current;
+        const request = nextOpen();
+        const started = lifecycle.startChange();
         await prefetchShellPane(); // before the pod exists: a terminal that can't load stops here
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         const out = await postJson<NodeShellPod>(
           `/api/clusters/${encodeURIComponent(cluster.id)}/nodes/${encodeURIComponent(node)}/shell`,
         );
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         const session: Session = {
           id: newId(),
           kind: "shell",
@@ -223,11 +327,14 @@ export function useDock(clusters: Cluster[]): DockApi {
         where: `${s.cluster.name} / ${s.namespace} / ${s.pod}`,
       },
       async () => {
-        const request = ++latestOpen.current;
+        const request = nextOpen();
+        const started = lifecycle.startChange();
         await prefetchShellPane(); // before the container exists, as it can't be removed
+        if (lifecycle.wasRemovedSince(s.cluster.id, started)) return;
         const out = await postJson<DebugContainer>(`${podPath(s.cluster.id, s.namespace, s.pod)}/debug`, {
           target: s.container,
         });
+        if (lifecycle.wasRemovedSince(s.cluster.id, started)) return;
         dispatch({
           type: "open",
           focus: request === latestOpen.current,
@@ -253,20 +360,23 @@ export function useDock(clusters: Cluster[]): DockApi {
   const confirm = () => {
     const current = ask;
     if (!current || current.busy) return;
-    setAsk({ ...current, busy: true, error: null });
+    if (lifecycle.isRemoved(current.cluster.id)) return;
+    const busy = { ...current, busy: true, error: null };
+    setAsk(busy);
     current.run().then(
-      () => setAsk(null),
-      (err: unknown) => setAsk((a) => (a ? { ...a, busy: false, error: failure(err) } : a)),
+      () => setAsk(a => a === busy ? null : a),
+      (err: unknown) => setAsk(a => a === busy ? { ...a, busy: false, error: failure(err) } : a),
     );
   };
 
   // Once the request is on its way it can't be called back: the pod or container is being made,
   // and it needs its session (a node-shell pod is only deleted when its session ends).
-  const cancel = () => setAsk((a) => (a?.busy ? a : null));
+  const cancel = () => {
+    if (shellPending.current && !ask?.busy) nextOpen();
+    setAsk((a) => (a?.busy ? a : null));
+  };
 
-  // Everything but `state` and `ask` keeps its identity, and the API object below changes only with
-  // them: the callbacks Console hands the (memoized) table stay the same, so opening, focusing or
-  // resizing a session re-renders the dock, not the table.
+  // Keep the table's callbacks stable as the dock's sessions and dialogs change.
   const stable = useRef({ askNodeShell, askDebug, askRestart, confirm, cancel });
   stable.current = { askNodeShell, askDebug, askRestart, confirm, cancel };
   const fns = useMemo(
@@ -281,7 +391,7 @@ export function useDock(clusters: Cluster[]): DockApi {
   );
 
   return useMemo(
-    () => ({ state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, ...fns }),
-    [state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, fns],
+    () => ({ state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, shellChoice, ...fns }),
+    [state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, shellChoice, fns],
   );
 }

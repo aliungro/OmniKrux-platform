@@ -4,9 +4,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { KindsResponse, Plan } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
-import { Console } from "../../App";
+import { Shell as Console } from "../../features/shell/Shell";
+import { seedPodsWorkspace } from "../../test/seedWorkspace";
 import { describeBody } from "../../test/describe";
-import { KINDS, PODS } from "../../test/kinds";
+import { KINDS, PODS, SECRETS } from "../../test/kinds";
+import { CommandPalette } from "./CommandPalette";
 
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class {} }));
@@ -31,6 +33,7 @@ function json(body: unknown) {
 let calls: { url: string; method: string }[] = [];
 
 beforeEach(() => {
+  seedPodsWorkspace();
   window.history.replaceState(null, "", "/");
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
@@ -83,6 +86,23 @@ const label = (o: Element) => o.querySelector("[data-part=label]")?.textContent 
 const options = () => within(palette()!).queryAllByRole("option").map(label);
 const ctrlK = (target: Element = document.body) => fireEvent.keyDown(target, { key: "k", ctrlKey: true });
 
+it.each(["all", "kinds"] as const)("the rendered %s palette keeps pins across repeated group headings", mode => {
+  const flux={...KINDS.kinds.at(-1)!, key:"widgets.example.toolkit.fluxcd.io", kind:"Widget", plural_label:"widgets"};
+  localStorage.setItem("omnikrux.pinnedKinds",JSON.stringify({version:1,kinds:["certificates.cert-manager.io","pods",flux.key,"services"]}));
+  const onKind=vi.fn();
+  render(<CommandPalette mode={mode} kinds={[...KINDS.kinds,flux]} selection={null} onKind={onKind} onRowAction={()=>{}} onAudit={()=>{}} onClose={()=>{}}/>);
+  const kinds=options().filter(label=>label!=="Audit log");
+  expect(kinds.slice(0,4)).toEqual(["Certificates","Pods","Widgets","Services"]);
+  if(mode==="all") fireEvent.keyDown(input(),{key:"ArrowDown"});
+  fireEvent.keyDown(input(),{key:"ArrowDown"});
+  fireEvent.keyDown(input(),{key:"Enter"});
+  expect(onKind).toHaveBeenCalledWith("pods");
+  fireEvent.click(within(palette()!).getByRole("option",{name:"Widgets"}));
+  expect(onKind).toHaveBeenLastCalledWith(flux.key);
+  const heads=Array.from(palette()!.querySelectorAll('[role="group"]')).map(g=>g.getAttribute("aria-labelledby"));
+  expect(new Set(heads).size).toBe(heads.length);
+});
+
 describe("command palette", () => {
   it("ctrl k opens the palette and esc restores focus", async () => {
     await renderConsole();
@@ -121,10 +141,25 @@ describe("command palette", () => {
     expect(options()[0]).toBe("Deployments");
     fireEvent.keyDown(input(), { key: "Enter" });
     expect(palette()).toBeNull();
-    expect(window.location.hash).toBe("#kind=deployments.apps");
-    await waitFor(() => expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Deployments"));
+    expect(window.location.hash).toMatch(/^#\/kubernetes\//);
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }).textContent).toBe("Deployments"));
     // The row that had focus went with the pods; focus lands on the kind you jumped to.
-    expect(document.activeElement).toBe(screen.getByRole("tab", { selected: true }));
+    expect(document.activeElement).toBe(within(screen.getByRole("tablist", { name: "Kinds" })).getByRole("tab", { selected: true }));
+  });
+
+  it("Tab completes the kind in the field and Enter opens it", async () => {
+    kindsAnswer = () => json({ ...SERVED, kinds: [...SERVED.kinds, SECRETS] });
+    await renderConsole();
+    fireEvent.keyDown(document.body, { key: ":" });
+    fireEvent.change(input(), { target: { value: "sec" } });
+    fireEvent.keyDown(input(), { key: "Tab" });
+    expect((input() as HTMLInputElement).value).toBe("secrets");
+    expect(document.activeElement).toBe(input());
+    expect(within(palette()!).getByRole("option", { name: "Secrets", selected: true })).toBeTruthy();
+    expect(screen.getByRole("grid", { name: "Pods by cluster" })).toBeTruthy();
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(palette()).toBeNull();
+    expect(await screen.findByRole("grid", { name: "Secrets by cluster" })).toBeTruthy();
   });
 
   it("says when the kinds are still loading, and when they can't be loaded", async () => {

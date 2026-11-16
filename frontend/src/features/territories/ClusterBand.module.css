@@ -1,4 +1,5 @@
 .band {
+  container-type: inline-size;
   position: relative;
   box-sizing: border-box;
   height: 44px;
@@ -45,6 +46,13 @@
   outline-offset: -2px;
 }
 
+.name,
+.loc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .name {
   font-size: 16px;
   font-weight: 700;
@@ -52,10 +60,22 @@
 }
 
 .loc {
-  min-width: 0;
+  color: var(--ink-2);
+}
+
+.cell:has(.cloudNote) {
+  padding-bottom: 16px;
+}
+
+.cloudNote {
+  position: absolute;
+  inset-inline: 18px 16px;
+  bottom: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--ink-2);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 14px;
 }
 
 .env {
@@ -92,21 +112,22 @@
   font-weight: 600;
 }
 
-.error {
-  min-width: 0;
+.error,
+.absent {
+  /* Leave room for the reason when the name and location are long. */
+  min-width: 16ch;
   margin-left: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.error {
   color: color-mix(in srgb, var(--bad) 60%, var(--ink));
   font-weight: 600;
 }
 
 /* A kind this cluster doesn't have: a plain fact, quieter than an error. */
 .absent {
-  min-width: 0;
-  margin-left: 18px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   color: var(--ink-3);
 }
 
@@ -153,4 +174,27 @@
   text-overflow: ellipsis;
   color: var(--ink-3);
   white-space: nowrap;
+}
+
+@container (max-width: 430px) {
+  .cell {
+    gap: 4px;
+  }
+
+  .sum,
+  .error,
+  .absent,
+  .metricsNote {
+    margin-left: 0;
+  }
+
+  .error,
+  .absent {
+    min-width: 12ch;
+  }
+
+  .env,
+  .retry {
+    padding-inline: 6px;
+  }
 }

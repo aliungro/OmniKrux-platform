@@ -15,19 +15,22 @@ import logging
 import re
 from contextlib import AsyncExitStack
 from typing import Literal, NamedTuple, Protocol, Self
+from urllib.parse import urlsplit
 
 import aiohttp
 from kubernetes_asyncio.client import CoreV1Api
-from kubernetes_asyncio.client.exceptions import ApiException
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketDisconnected
 
-from omnikrux.kube.connections import ClusterConnections
+from omnikrux.kube.client import CloudWsApiClient
+from omnikrux.kube.connections import ClusterConnections, open_kube_websocket
+from omnikrux.kube.safe_status import redact
 
 log = logging.getLogger(__name__)
 
 STDIN, STDOUT, STDERR, STATUS, RESIZE = range(5)
 PROTOCOL = "v4.channel.k8s.io"
 CONNECT_SECONDS = 30  # for the exec handshake
+CLOSE_SECONDS = 5
 MAX_TERMINAL_SIDE = 10_000  # columns or rows; anything larger is not a terminal
 # The browser has gone: a send or close finds the socket closed.
 BROWSER_GONE = (WebSocketDisconnect, WebSocketDisconnected)
@@ -48,9 +51,21 @@ class ExecChannel(Protocol):
 class KubeExecChannel:
     """One exec stream, opened with `open` and owning its client; `close` releases both."""
 
-    def __init__(self, ws: aiohttp.ClientWebSocketResponse, resources: AsyncExitStack):
+    def __init__(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        resources: AsyncExitStack,
+        *,
+        cloud: bool = False,
+        secrets: tuple[str, ...] = (),
+        hosts: tuple[str, ...] = (),
+    ):
         self._ws = ws
         self._resources = resources
+        self.cloud = cloud
+        # What a cloud status message must never show: the token sent and the cluster's address.
+        self.secrets = secrets
+        self.hosts = hosts
 
     @classmethod
     async def open(
@@ -65,6 +80,7 @@ class KubeExecChannel:
         """Unknown cluster: KeyError. A refused handshake: ApiException with its status."""
         async with AsyncExitStack() as stack:
             api = await stack.enter_async_context(connections.ws_api(cluster))
+            cloud = isinstance(api, CloudWsApiClient)
             connecting = await CoreV1Api(api).connect_get_namespaced_pod_exec(
                 pod,
                 namespace,
@@ -77,12 +93,18 @@ class KubeExecChannel:
                 _preload_content=False,
                 _headers={"sec-websocket-protocol": PROTOCOL},
             )
-            try:
-                async with asyncio.timeout(CONNECT_SECONDS):
-                    ws = await stack.enter_async_context(connecting)
-            except aiohttp.WSServerHandshakeError as exc:  # no body: the status says enough
-                raise ApiException(status=exc.status, reason=exc.message) from exc
-            return cls(ws, stack.pop_all())
+            ws = await open_kube_websocket(
+                stack,
+                connecting,
+                action="open the shell connection",
+                cloud=cloud,
+                timeout=CONNECT_SECONDS,
+            )
+            configuration = api.configuration
+            secrets = tuple(v for v in configuration.api_key.values() if isinstance(v, str))
+            host = urlsplit(configuration.host or "").hostname
+            hosts = tuple(h for h in (host, configuration.tls_server_name) if h)
+            return cls(ws, stack.pop_all(), cloud=cloud, secrets=secrets, hosts=hosts)
 
     async def _send(self, channel: int, data: bytes) -> None:
         if self._ws.closed:
@@ -116,7 +138,17 @@ class KubeExecChannel:
                 return data[0], data[1:]
 
     async def close(self) -> None:
-        await self._resources.aclose()  # closes the socket, then the client; safe to repeat
+        # aiohttp starts its close-handshake timer after sending the close frame. A peer can
+        # stall that send under backpressure, so bound it as well. The stack still closes the
+        # API client when the socket exit is cancelled.
+        try:
+            async with asyncio.timeout(CLOSE_SECONDS):
+                await self._resources.aclose()
+        except TimeoutError:
+            self._ws._writer.transport.abort()
+        except asyncio.CancelledError:
+            self._ws._writer.transport.abort()
+            raise
 
 
 # Exit codes a shell gives when the command itself couldn't be started.
@@ -135,35 +167,58 @@ def _repeats_exit(reason: str, code: int) -> bool:
     return re.search(rf"exit(?: status| code)? {code}\b", reason) is not None
 
 
-def exit_from_status(raw: bytes | None, *, had_output: bool) -> ShellExit:
+def exit_from_status(
+    raw: bytes | None,
+    *,
+    had_output: bool,
+    cloud: bool = False,
+    secrets: tuple[str, ...] = (),
+    hosts: tuple[str, ...] = (),
+) -> ShellExit:
     """How the shell ended, from the status channel's `Status`. Exit 126 or 127 only means the
     command couldn't run when nothing was printed first: a working shell whose last command
-    failed exits that way too."""
+    failed exits that way too. A cloud cluster's message loses credentials and addresses
+    (`secrets`, `hosts` and safe_status's patterns) before it is used."""
     if raw is None:
         return ShellExit(None, "The shell ended without an exit status.", False)
     try:
         status = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         status = None
     if not isinstance(status, dict):
         return ShellExit(None, "The shell ended with a status the console couldn't read.", False)
     if status.get("status") == "Success":
         return ShellExit(0, None, False)
     message = status.get("message")
-    reason = message[:500] if isinstance(message, str) and message else None
-    for cause in (status.get("details") or {}).get("causes") or []:
-        if cause.get("reason") == "ExitCode":
-            try:
-                code = int(cause.get("message"))
-            except (TypeError, ValueError):
+    has_message = isinstance(message, str) and bool(message)
+    reason = None
+    if has_message:
+        reason = (redact(message, secrets=secrets, hosts=hosts) if cloud else message)[:500]
+    details = status.get("details")
+    causes = details.get("causes") if isinstance(details, dict) else None
+    for cause in causes if isinstance(causes, list) else ():
+        if not isinstance(cause, dict) or cause.get("reason") != "ExitCode":
+            continue
+        value = cause.get("message")
+        if cloud:
+            # Cloud error details are untrusted. Kubernetes reports POSIX exit codes as strings.
+            if not isinstance(value, str) or re.fullmatch(r"[0-9]{1,3}", value) is None:
                 break
-            if code not in CANNOT_RUN_CODES or had_output:
-                return ShellExit(code, None, False)
-            words = f"The command couldn't run in the container (exit {code}: "
-            words += CANNOT_RUN_CODES[code] + ")"
-            if reason and not _repeats_exit(reason, code):
-                return ShellExit(code, f"{words}: {reason}", True)
-            return ShellExit(code, f"{words}.", True)
+            code = int(value)
+            if code > 255 or str(code) != value:
+                break
+        else:
+            try:
+                code = int(value)
+            except (TypeError, ValueError, OverflowError):
+                break
+        if code not in CANNOT_RUN_CODES or had_output:
+            return ShellExit(code, None, False)
+        words = f"The command couldn't run in the container (exit {code}: "
+        words += CANNOT_RUN_CODES[code] + ")"
+        if reason and not _repeats_exit(reason, code):
+            return ShellExit(code, f"{words}: {reason}", True)
+        return ShellExit(code, f"{words}.", True)
     if reason:  # the runtime couldn't start the command at all (an InternalError)
         return ShellExit(None, f"The command couldn't run: {reason}", True)
     return ShellExit(None, "The shell ended with an error.", False)
@@ -199,8 +254,18 @@ def _side(value: object) -> bool:
 
 
 class ExecBridge:
-    def __init__(self, channel: ExecChannel):
+    def __init__(
+        self,
+        channel: ExecChannel,
+        *,
+        cloud: bool = False,
+        secrets: tuple[str, ...] = (),
+        hosts: tuple[str, ...] = (),
+    ):
         self._channel = channel
+        self._cloud = cloud
+        self._secrets = secrets
+        self._hosts = hosts
         self._had_output = False  # any stdout or stderr bytes reached the browser
 
     async def run(self, websocket: WebSocket) -> SessionEnd:
@@ -299,6 +364,12 @@ class ExecBridge:
                 status = data
         for channel, decoder in decoders.items():  # a character cut off at the very end
             await send(channel, decoder.decode(b"", final=True))
-        ended = exit_from_status(status, had_output=self._had_output)
+        ended = exit_from_status(
+            status,
+            had_output=self._had_output,
+            cloud=self._cloud,
+            secrets=self._secrets,
+            hosts=self._hosts,
+        )
         await websocket.send_text(json.dumps({"type": "exit", **ended._asdict()}))
         return 1000, session_end(ended)

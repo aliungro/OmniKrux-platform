@@ -66,7 +66,9 @@ class Env:
 
 
 @asynccontextmanager
-async def make_env(fake: FakeKubeApi, tmp_path, ports: range) -> AsyncIterator[Env]:
+async def make_env(
+    fake: FakeKubeApi, tmp_path, ports: range, *, kubeconfig: dict | None = None
+) -> AsyncIterator[Env]:
     settings = Settings(
         data_dir=tmp_path,
         kubeconfig="",
@@ -78,7 +80,9 @@ async def make_env(fake: FakeKubeApi, tmp_path, ports: range) -> AsyncIterator[E
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(app.router.lifespan_context(app))
         [info] = await app.state.registry.upsert_from_kubeconfig(
-            yaml.safe_dump(kubeconfig_for(fake)), rewrite_loopback=False, source=SOURCE_UPLOAD
+            yaml.safe_dump(kubeconfig if kubeconfig is not None else kubeconfig_for(fake)),
+            rewrite_loopback=False,
+            source=SOURCE_UPLOAD,
         )
         transport = httpx.ASGITransport(app=app)
         client = await stack.enter_async_context(

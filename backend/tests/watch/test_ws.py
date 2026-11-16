@@ -1,12 +1,16 @@
 import asyncio
 import json
+import logging
 import time
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import aiohttp
 import pytest
 import yaml
+from aiohttp import web
 from fastapi.testclient import TestClient
+from kubernetes_asyncio.client import ApiClient
 from starlette.websockets import WebSocketDisconnect
 
 from omnikrux.clusters.registry import SOURCE_UPLOAD
@@ -15,7 +19,7 @@ from omnikrux.main import create_app
 from omnikrux.watch.api import watch
 from omnikrux.watch.hub import WatchHub
 from tests.clusters.test_kubeconfig import kc
-from tests.fakekube import kubeconfig_for
+from tests.fakekube import kubeconfig_for, status_body
 from tests.watch.fakes import FakeSource
 from tests.watch.test_cache import p
 
@@ -249,3 +253,148 @@ async def test_watch_a_kind_the_cluster_does_not_serve_says_absent(fake_api, tmp
             await asyncio.wait_for(handler, 5)
     assert msgs[1]["state"] == "absent"
     assert msgs[1]["message"] == "This cluster doesn't serve certificates.cert-manager.io."
+
+
+@pytest.mark.parametrize("cloud_cluster", ["azure", "aws", "gcp", "oci"], indirect=True)
+async def test_cloud_cluster_watch_with_cloud_token(cloud_cluster, cloud_pods_watch):
+    _, cluster, _ = cloud_cluster
+    states = []
+    async with cloud_pods_watch() as queue:
+        async with asyncio.timeout(5):
+            while True:
+                message = await queue.get()
+                if message["type"] == "cluster_status":
+                    states.append(message["state"])
+                    assert message["state"] != "error", message
+                if message["type"] == "snapshot":
+                    break
+    assert states == ["syncing", "ready"]
+    [row] = message["rows"]
+    assert (row["cluster_id"], row["namespace"], row["name"]) == (cluster.id, "demo", "web-1")
+
+
+async def test_cloud_watch_relists_after_expired_http_response(
+    cloud_pods_watch, fake_api, monkeypatch
+):
+    route = fake_api._route
+    expired = False
+
+    async def expire_once(request):
+        nonlocal expired
+        if not expired and request.path == "/api/v1/pods" and request.query.get("watch") == "true":
+            expired = True
+            return web.json_response(
+                status_body(410, "Expired", "resource version expired"), status=410
+            )
+        return await route(request)
+
+    monkeypatch.setattr(fake_api, "_route", expire_once)
+    snapshots = 0
+    async with cloud_pods_watch() as queue:
+        async with asyncio.timeout(5):
+            while True:
+                message = await queue.get()
+                assert message.get("state") != "error", message
+                snapshots += message["type"] == "snapshot"
+                if message["type"] == "upsert":
+                    break
+    assert expired and snapshots == 2
+
+
+@pytest.mark.parametrize(
+    "failure", ["connector", "discovery-body", "list-body", "watch-event", "provider-body"]
+)
+async def test_cloud_watch_diagnostics_hide_private_endpoint_and_auth_data(
+    failure,
+    cloud_cluster,
+    cloud_http_client,
+    cloud_pods_watch,
+    fake_cloud,
+    fake_api,
+    monkeypatch,
+    caplog,
+):
+    _, cluster, _ = cloud_cluster
+    host = "private-oke-api.example.test"
+    sentinel = "synthetic-sensitive-cluster-credential"
+    upstream = f"Failed to authenticate to https://{host}:6443 with {sentinel}"
+    injected = []
+
+    if failure == "connector":
+        call_api = ApiClient.call_api
+
+        async def fail_discovery(api, path, method, *args, **kwargs):
+            if path == "/api/v1" and api.configuration.host == fake_api.url:
+                injected.append(path)
+                connection = SimpleNamespace(host=host, port=6443, ssl=True)
+                raise aiohttp.ClientConnectorError(connection, OSError(upstream))
+            return await call_api(api, path, method, *args, **kwargs)
+
+        monkeypatch.setattr(ApiClient, "call_api", fail_discovery)
+    elif failure == "provider-body":
+        fake_cloud.fail[r"^/google/oauth/token$"] = (403, upstream)
+    else:
+        route = fake_api._route
+
+        async def refuse(request):
+            if failure == "discovery-body" and request.path == "/api/v1":
+                injected.append(request.path)
+                return web.json_response(status_body(401, "Unauthorized", upstream), status=401)
+            if request.path == "/api/v1/pods":
+                is_watch = request.query.get("watch") == "true"
+                if failure == "list-body" and not is_watch:
+                    injected.append(request.path)
+                    return web.json_response(status_body(403, "Forbidden", upstream), status=403)
+                if failure == "watch-event" and is_watch:
+                    injected.append(request.path)
+                    event = {"type": "ERROR", "object": status_body(403, "Forbidden", upstream)}
+                    return web.Response(text=json.dumps(event) + "\n")
+            return await route(request)
+
+        monkeypatch.setattr(fake_api, "_route", refuse)
+
+    async with cloud_pods_watch() as queue:
+        async with asyncio.timeout(5):
+            while (status := await queue.get()).get("state") != "error":
+                pass
+        response = await cloud_http_client.get("/api/clusters")
+    assert response.status_code == 200, response.text
+    public = next(item for item in response.json() if item["id"] == cluster.id)
+    assert public["state"] == "error"
+    assert public["message"] == status["message"]
+    assert public["message"]
+    assert public["server"] is None and public["original_server"] is None
+    for sensitive in (host, sentinel, fake_api.url):
+        assert sensitive not in json.dumps(status)
+        assert sensitive not in response.text
+    assert host not in caplog.text and sentinel not in caplog.text
+    if failure == "provider-body":
+        assert any(r.path == "/google/oauth/token" for r in fake_cloud.requests)
+    else:
+        assert injected, "the watch failed before reaching the injected error"
+
+
+async def test_cloud_kinds_keeps_partial_discovery_and_omits_raw_diagnostics(
+    cloud_cluster, cloud_http_client, fake_api, monkeypatch, caplog
+):
+    _, cluster, _ = cloud_cluster
+    sentinel = "synthetic-private-catalog-credential"
+    route = fake_api._route
+
+    async def refuse(request):
+        if request.path in {
+            "/apis/apps/v1",
+            "/apis/apiextensions.k8s.io/v1/customresourcedefinitions",
+        }:
+            return web.json_response(status_body(403, "Forbidden", sentinel), status=403)
+        return await route(request)
+
+    monkeypatch.setattr(fake_api, "_route", refuse)
+    with caplog.at_level(logging.INFO):
+        response = await cloud_http_client.get("/api/kinds")
+    assert response.status_code == 200, response.text
+    catalog = response.json()
+    entry = catalog["clusters"][cluster.id]
+    assert entry["state"] == "ok" and entry["failed_groups"]["apps"]
+    assert "pods" in {kind["key"] for kind in catalog["kinds"]}
+    assert sentinel not in response.text and sentinel not in caplog.text

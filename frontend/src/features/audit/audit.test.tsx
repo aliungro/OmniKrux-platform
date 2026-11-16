@@ -1,4 +1,7 @@
+import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/audit/audit.test.tsx
+import { useState } from "react";
+import { NO_AUDIT_FILTER } from "./useAudit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -25,7 +28,7 @@ const json = (body: unknown, status = 200) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 
 const cluster = (id: string, name: string, provider: Cluster["provider"]): Cluster => ({
-  id, name, context_name: name, server: "https://x", original_server: null, provider, region: null,
+  id, name, context_name: name, server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider, region: null,
   environment: "development", state: "ready", message: null,
 });
 const CLUSTERS = [cluster("c1", "prod-gke", "gke"), cluster("c2", "dev-aks", "aks")];
@@ -47,9 +50,10 @@ function serve(pages: (url: URL) => { records: AuditRecord[]; next_before: numbe
   return urls;
 }
 
+function AuditFixture() { const [filters,setFilters]=useState(NO_AUDIT_FILTER); return <AuditView filters={filters} onFilters={setFilters}/>; }
 function show() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><AuditView onBack={() => {}} /></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><AuditFixture /></QueryClientProvider>);
 }
 
 describe("audit view", () => {
@@ -170,4 +174,20 @@ describe("audit view", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("The audit log can't be read right now. Try again.");
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
+});
+
+it("audit shows cluster and account verbs", async () => {
+  serve(() => ({ records: [
+    record(4, { action: "cloud_account_remove", cluster_id: "", cluster_name: "Engineering", provider: "eks", namespace: null, kind: "cloud-account", name: "Engineering", message: null }),
+    record(3, { action: "cloud_account_add", cluster_id: "", cluster_name: "Engineering", provider: "eks", namespace: null, kind: "cloud-account", name: "Engineering", message: null }),
+    record(2, { action: "cluster_remove", namespace: null, kind: "clusters", name: "prod-gke", message: null }),
+    record(1, { action: "cluster_add", cluster_id: "", namespace: null, kind: "clusters", name: "prod-gke", message: null }),
+  ], next_before: null }));
+  show();
+
+  for (const verb of ["Added a cluster", "Removed a cluster", "Connected a cloud account", "Removed a cloud account"]) {
+    expect(await screen.findByRole("row", { name: new RegExp(verb) })).toBeTruthy();
+  }
+  const connected = await screen.findByRole("row", { name: /Connected a cloud account/ });
+  expect(within(connected).getByText("Cloud account")).toBeTruthy();
 });

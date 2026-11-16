@@ -31,7 +31,11 @@ function validationWords(detail: unknown): string | undefined {
     const field = Array.isArray(loc) ? loc.filter((p, i) => !(i === 0 && (p === "body" || p === "query" || p === "path"))).join(".") : "";
     return [field ? `${field}: ${msg}` : msg];
   });
-  return parts.length > 0 ? `The console's server refused the request: ${parts.join("; ")}.` : undefined;
+  if (parts.length === 0) return undefined;
+  // The console's own messages are sentences; pydantic's raw ones aren't.
+  const sentence = (part: string) => /[.!?]$/.test(part);
+  const text = parts.reduce((all, part, i) => (i === 0 ? part : `${all}${sentence(parts[i - 1]) ? " " : "; "}${part}`), "");
+  return `The console's server refused the request: ${text}${sentence(text) ? "" : "."}`;
 }
 
 async function fail(res: Response): Promise<never> {
@@ -46,28 +50,29 @@ async function fail(res: Response): Promise<never> {
   throw new HttpError(res.status, detail ?? `${res.status} ${res.statusText}`.trim());
 }
 
-export async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await (signal ? fetch(path, { signal }) : fetch(path));
   if (!res.ok) return fail(res);
   return (await res.json()) as T;
 }
 
-export async function postEmpty(path: string): Promise<void> {
-  const res = await fetch(path, { method: "POST" });
+export async function postEmpty(path: string, body?: unknown): Promise<void> {
+  const res = await fetch(path, jsonPost(body));
   if (!res.ok) return fail(res);
 }
 
-/**
- * POSTs JSON (or nothing) and reads JSON back; the server's `detail` becomes the error's words.
- * `opts` passes a `signal` (to drop an answer nobody waits for) and a request `cache` mode.
- */
-export async function postJson<T>(path: string, body?: unknown, opts: Pick<RequestInit, "signal" | "cache"> = {}): Promise<T> {
+function jsonPost(body?: unknown, opts: Pick<RequestInit, "signal" | "cache"> = {}): RequestInit {
   const init: RequestInit = { method: "POST", ...opts };
   if (body !== undefined) {
     init.headers = { "content-type": "application/json" };
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(path, init);
+  return init;
+}
+
+/** POSTs JSON (or nothing) and reads JSON back; the server's `detail` becomes the error's words. */
+export async function postJson<T>(path: string, body?: unknown, opts: Pick<RequestInit, "signal" | "cache"> = {}): Promise<T> {
+  const res = await fetch(path, jsonPost(body, opts));
   if (!res.ok) return fail(res);
   return (await res.json()) as T;
 }

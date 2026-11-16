@@ -8,7 +8,7 @@ export interface Cluster {
   id: string;
   name: string;
   context_name: string;
-  server: string;
+  server: string | null;
   /** The kubeconfig's own address when the console rewrote `server` (e.g. 127.0.0.1 → host.docker.internal). */
   original_server: string | null;
   provider: Provider;
@@ -16,7 +16,95 @@ export interface Cluster {
   environment: Environment;
   state: ClusterState;
   message: string | null;
+  source: "file" | "upload" | "cloud";
+  kubernetes_version: string | null;
+  /** null: the cloud couldn't list them (unknown, not none). */
+  node_pools: NodePool[] | null;
+  node_count: number | null;
+  cloud: CloudLink | null;
+  cloud_note: string | null;
 }
+
+export interface NodePool {
+  name: string;
+  count: number | null;
+  machine_type: string | null;
+  version: string | null;
+}
+
+export interface CloudLink {
+  account_id: string;
+  account_name: string;
+  resource_id: string;
+}
+
+export type CloudProvider = "azure" | "aws" | "gcp" | "oci";
+export type CloudKubeProvider = Extract<Provider, "aks" | "eks" | "gke" | "oke">;
+
+export interface CloudAccount {
+  id: string;
+  provider: CloudProvider;
+  kube_provider: CloudKubeProvider;
+  name: string;
+  source: "cli" | "entered" | "workload";
+  scope: string;
+  principal: string;
+  regions: string[];
+  profile: string | null;
+  has_secret: boolean;
+  check: {
+    state: "never" | "ok" | "error";
+    checked_at: string | null;
+    message: string | null;
+    problems: string[];
+  };
+  counts: { found: number; added: number; new: number };
+}
+
+export interface CliLogin {
+  provider: CloudProvider;
+  path: string;
+  state: "found" | "missing" | "unreadable";
+  note: string | null;
+  choices: { value: string; label: string }[];
+}
+
+export interface Discovered {
+  id: string;
+  account_id: string;
+  account_name: string;
+  provider: CloudKubeProvider;
+  name: string;
+  region: string | null;
+  kubernetes_version: string | null;
+  /** null: the cloud couldn't list them (unknown, not none). */
+  node_pools: NodePool[] | null;
+  node_count: number | null;
+  environment: Environment;
+  private: boolean;
+  why_not: string | null;
+  state: "new" | "added" | "dismissed";
+  cluster_id: string | null;
+  first_seen: string;
+  last_seen: string;
+  missing_since: string | null;
+}
+
+export interface SettingsInfo {
+  encryption: { source: "environment" | "file"; path: string | null };
+  discovery_interval_s: number;
+}
+
+export type AccountIn =
+  | { provider: CloudProvider; source: "workload" }
+  | { provider: "azure"; source: "cli"; subscription_id: string }
+  | { provider: "azure"; source: "entered"; subscription_id: string; tenant_id: string; client_id: string; client_secret: string }
+  | { provider: "aws"; source: "cli"; profile: string; regions?: string[] }
+  | { provider: "aws"; source: "entered"; access_key_id: string; secret_access_key: string; regions: string[] }
+  | { provider: "gcp"; source: "cli"; project_id: string }
+  | { provider: "gcp"; source: "entered"; project_id: string; service_account_key: string }
+  | { provider: "oci"; source: "cli"; profile?: string; regions?: string[] }
+  | { provider: "oci"; source: "entered"; tenancy_ocid: string; user_ocid: string; fingerprint: string; private_key: string; passphrase?: string; regions: string[] };
 
 export interface ResourceRow {
   uid: string;
@@ -27,6 +115,14 @@ export interface ResourceRow {
   created_at: string | null;
   columns: Record<string, unknown>;
   labels: Record<string, string>;
+}
+
+export interface ContainerState {
+  name: string;
+  init: boolean;
+  state: "ready" | "running" | "waiting" | "failing" | "done";
+  reason: string | null;
+  restarts: number;
 }
 
 /* Kinds — mirrors backend/omnikrux/resources/catalog.py (GET /api/kinds). */
@@ -60,6 +156,7 @@ export interface ServedKind {
   sort: "status" | "recent";
   builtin: boolean;
   verbs: string[];
+  verbs_by_cluster?: Record<string, string[]>;
   /** The clusters that serve it. */
   clusters: string[];
 }
@@ -135,7 +232,7 @@ export interface PodInfo {
 
 export interface EnvVar {
   name: string;
-  /** Always null for anything read from a Secret (or any other reference); `source` names it. */
+  /** A declared literal or the pod namespace for `metadata.namespace`. Other references are null. */
   value: string | null;
   source: string | null;
   /** The ConfigMap or Secret it is read from. */
@@ -372,12 +469,18 @@ export interface Usage {
   stale: boolean;
 }
 
+export interface NodeSize {
+  cpu_m: number | null;
+  memory_b: number | null;
+}
+
 export interface ClusterMetrics {
   state: MetricsState;
   message: string | null;
   fetched_at: string | null;
   /** "ns/name" for pods, "name" for nodes; empty unless `state` is ok. */
   items: Record<string, Usage>;
+  nodes?: Record<string, NodeSize>;
 }
 
 export interface MetricsOut {
@@ -420,7 +523,7 @@ export interface NodeMetrics {
 
 /* Actions — mirrors backend/omnikrux/actions (pipeline.py PlanIn / PlanOut / ApplyOut, jobs.py JobOut, workloads.py Revision). */
 
-export type ActionName = "edit" | "scale" | "restart" | "rollback" | "delete" | "cordon" | "uncordon" | "drain";
+export type ActionName = "edit" | "scale" | "restart" | "rollback" | "delete" | "cordon" | "uncordon" | "drain" | "evict";
 
 /** What a change acts on; a null namespace is a cluster-scoped kind. */
 export interface ActionTarget {
@@ -543,11 +646,16 @@ export type AuditAction =
   | "cordon"
   | "uncordon"
   | "drain"
+  | "evict"
   | "shell"
   | "debug_container"
   | "node_shell"
   | "port_forward"
-  | "secret_reveal";
+  | "secret_reveal"
+  | "cluster_add"
+  | "cluster_remove"
+  | "cloud_account_add"
+  | "cloud_account_remove";
 
 export type AuditOutcome = "started" | "succeeded" | "failed" | "ended" | "unknown";
 

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useClusters } from "../../api/useClusters";
 import { failure } from "../../api/http";
-import type { ForwardOut, Provider } from "../../api/types";
+import type { ContainerInfo, ForwardOut, Provider } from "../../api/types";
 import { DialogShell } from "../dock/ConfirmDialog";
 import { describeQuery } from "../inspector/useDescribe";
 import { useResourceDescribe } from "../inspector/useResourceDescribe";
@@ -17,7 +17,7 @@ export interface PortChoice {
   port: number;
   /** "8080/TCP" */
   label: string;
-  /** The container or service port it belongs to ("http"), when it has a name. */
+  /** The declaring containers, or the name of the Service port. */
   hint: string | null;
 }
 
@@ -30,19 +30,26 @@ export interface ForwardTarget {
   version: string;
 }
 
-/** The container ports of a pod, once each, as its describe lists them ("8080/TCP"). */
-export function podPorts(containers: readonly { name: string; ports: readonly string[] }[]): PortChoice[] {
-  const seen = new Set<number>();
-  const out: PortChoice[] = [];
+type PodPortContainer = Readonly<Pick<ContainerInfo, "name"> & { ports: readonly string[] }>;
+
+function validPort(port: number): boolean {
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+/** A TCP port belongs to the pod even when several containers declare it. */
+export function podPorts(containers: readonly PodPortContainer[], selected = ""): PortChoice[] {
+  const declaring = new Map<number, Set<string>>();
   for (const container of containers) {
+    if (selected && container.name !== selected) continue;
     for (const label of container.ports) {
-      const port = Number(label.split("/")[0]);
-      if (!Number.isInteger(port) || seen.has(port)) continue;
-      seen.add(port);
-      out.push({ port, label, hint: container.name });
+      const port = Number(label.match(/^(\d+)\/TCP$/)?.[1]);
+      if (!validPort(port)) continue;
+      const names = declaring.get(port) ?? new Set<string>();
+      names.add(container.name);
+      declaring.set(port, names);
     }
   }
-  return out;
+  return Array.from(declaring, ([port, names]) => ({ port, label: `${port}/TCP`, hint: [...names].join(", ") }));
 }
 
 /** The ports of a service, from the "Ports" section of its describe (columns Name, Port, ..., Protocol). */
@@ -77,13 +84,23 @@ interface Props {
 export function ForwardDialog(props: Props) {
   // Drawn on the body: the details sit in a transformed, clipped table row, which would hold a
   // fixed dialog inside the row instead of centring it on the page.
-  return createPortal(props.target.kind === "pod" ? <PodForward {...props} /> : <ServiceForward {...props} />, document.body);
+  const { clusterId, namespace, kind, name } = props.target;
+  return createPortal(
+    kind === "pod" ? <PodForward key={`${clusterId}/${namespace}/${name}`} {...props} /> : <ServiceForward {...props} />,
+    document.body,
+  );
 }
 
 function PodForward(props: Props) {
   const { clusterId, namespace, name, version } = props.target;
   const q = useQuery(describeQuery(clusterId, namespace, name, version));
-  return <ForwardForm {...props} ports={q.data ? podPorts(q.data.containers) : null} portsError={q.isError ? failure(q.error) : null} />;
+  return (
+    <ForwardForm
+      {...props}
+      podContainers={q.isError ? null : q.data?.containers ?? null}
+      portsError={q.isError ? failure(q.error) : null}
+    />
+  );
 }
 
 function ServiceForward(props: Props) {
@@ -94,7 +111,9 @@ function ServiceForward(props: Props) {
 
 const CUSTOM = "custom";
 
-function ForwardForm({ target, onCancel, onStarted, ports, portsError }: Props & { ports: PortChoice[] | null; portsError: string | null }) {
+function ForwardForm({
+  target, onCancel, onStarted, ports: serviceChoices = null, podContainers, portsError,
+}: Props & { ports?: PortChoice[] | null; podContainers?: readonly PodPortContainer[] | null; portsError: string | null }) {
   const id = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const clusters = useClusters();
@@ -102,15 +121,27 @@ function ForwardForm({ target, onCancel, onStarted, ports, portsError }: Props &
   const provider: Provider = cluster?.provider ?? "onprem";
   const { start } = usePortForwards();
 
-  // The first declared port is the default until you pick another.
+  const [container, setContainer] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const [custom, setCustom] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const chosen = picked ?? (ports && ports.length > 0 ? String(ports[0].port) : CUSTOM);
+  const selectedContainer = podContainers?.some((item) => item.name === container) ? container : "";
+  const ports = podContainers === undefined ? serviceChoices : podContainers && podPorts(podContainers, selectedContainer);
+  // A choice from an earlier filter or describe is valid only while it remains in the current list.
+  const pickedAvailable = picked !== null && (picked === CUSTOM || ports?.some((item) => String(item.port) === picked));
+  const defaultChoice = ports?.length ? String(ports[0].port) : CUSTOM;
+  const chosen = pickedAvailable ? picked : defaultChoice;
   const number = chosen === CUSTOM ? Number(custom) : Number(chosen);
-  const valid = Number.isInteger(number) && number >= 1 && number <= 65535 && (chosen !== CUSTOM || /^\d+$/.test(custom));
+  const valid = validPort(number) && (chosen !== CUSTOM || /^\d+$/.test(custom));
+
+  const pickContainer = (name: string) => {
+    setContainer(name);
+    if (picked !== null && picked !== CUSTOM && !podPorts(podContainers ?? [], name).some((item) => String(item.port) === picked)) {
+      setPicked(null);
+    }
+  };
 
   const go = async () => {
     if (!valid || busy) return;
@@ -150,12 +181,27 @@ function ForwardForm({ target, onCancel, onStarted, ports, portsError }: Props &
       </div>
       <h2 id={`${id}-t`} className={c.title}>Port-forward {noun} {target.name}</h2>
       <p id={`${id}-b`} className={c.body}>
-        Opens a port on this computer that reaches the {noun}. Nothing in the cluster changes; the start is written to the audit log.
+        {noun === "pod"
+          ? "Opens a local port that reaches a TCP port shared by the pod’s containers. The start is written to the audit log."
+          : "Opens a port on this computer that reaches the service. Nothing in the cluster changes; the start is written to the audit log."}
       </p>
+      {podContainers && podContainers.length > 0 && (
+        <label className={s.container}>
+          <span>Container</span>
+          <select value={selectedContainer} disabled={busy} onChange={(e) => pickContainer(e.target.value)}>
+            <option value="">All containers</option>
+            {podContainers.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+          </select>
+        </label>
+      )}
       <div className={s.ports} role="radiogroup" aria-label="Port to forward">
         {ports === null && !portsError && <p className={s.note} role="status">Reading the ports…</p>}
         {portsError && <p className={s.note}>The ports couldn't be read ({portsError}). Type one below.</p>}
-        {ports?.length === 0 && <p className={s.note}>This {noun} declares no ports. Type the one to forward below.</p>}
+        {ports?.length === 0 && (
+          <p className={s.note}>
+            {selectedContainer ? "This container" : `This ${noun}`} declares no {noun === "pod" && "TCP "}ports. Type the one to forward below.
+          </p>
+        )}
         {ports?.map((p) => (
           <label key={p.port} className={s.choice} data-on={chosen === String(p.port)}>
             <input

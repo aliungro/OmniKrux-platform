@@ -1,9 +1,12 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from omnikrux.actions.jobs import JobRunner
@@ -11,6 +14,13 @@ from omnikrux.actions.pipeline import PlanStore
 from omnikrux.actions.pipeline import router as actions_router
 from omnikrux.audit.api import router as audit_router
 from omnikrux.audit.store import AuditLog
+from omnikrux.cloud.adapters import make_adapters
+from omnikrux.cloud.api import router as cloud_router
+from omnikrux.cloud.discovery import CloudDiscovery
+from omnikrux.cloud.exec_bridge import ExecBridge
+from omnikrux.cloud.http import CloudHttp
+from omnikrux.cloud.store import CloudAccountStore
+from omnikrux.cloud.tokens import CloudServices, TokenBroker
 from omnikrux.clusters.api import router as clusters_router
 from omnikrux.clusters.kubeconfig import (
     ParsedContext,
@@ -21,7 +31,8 @@ from omnikrux.clusters.registry import SOURCE_FILE, ClusterRegistry
 from omnikrux.config import Settings, get_settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.exec.api import router as exec_router
-from omnikrux.kube.connections import ClusterConnections
+from omnikrux.kube.client import CloudApiClient
+from omnikrux.kube.connections import ClusterConnections, cloud_kube_error
 from omnikrux.kube.source import KubeResourceSource
 from omnikrux.logs.api import router as logs_router
 from omnikrux.metrics.api import router as metrics_router
@@ -32,6 +43,8 @@ from omnikrux.resources.api import router as resources_router
 from omnikrux.resources.catalog import KindCatalog
 from omnikrux.resources.kinds_api import router as kinds_router
 from omnikrux.security.secrets import SecretBox
+from omnikrux.stream_sessions import StreamSessions
+from omnikrux.validation import validation_error
 from omnikrux.watch.api import router as watch_router
 from omnikrux.watch.hub import WatchHub
 from omnikrux.web import mount_spa
@@ -145,10 +158,28 @@ async def _mark_interrupted(audit: AuditLog) -> None:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    settings = settings if settings is not None else get_settings()
+    if settings is None:
+        try:
+            settings = get_settings()
+        except ValidationError as exc:
+            fields = {
+                error["loc"] for error in exc.errors(include_input=False, include_context=False)
+            }
+            if ("cloud_discovery_seconds",) in fields:
+                raise SystemExit(
+                    "Omnikrux can't start: OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be a whole "
+                    "number of at least 60."
+                ) from None
+            raise
     try:
         forward_ports = settings.forward_ports
         forward_bind = settings.forward_bind
+        endpoints = settings.endpoints
+        if settings.cloud_discovery_seconds < 60:
+            raise ValueError(
+                "OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be at least 60, "
+                f"not {settings.cloud_discovery_seconds}."
+            )
     except ValueError as exc:  # said in plain words, without a traceback
         raise SystemExit(f"Omnikrux can't start: {exc}") from None
 
@@ -157,30 +188,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = make_engine(settings.db_url)
         await init_db(engine)
         sessionmaker = make_sessionmaker(engine)
-        registry = ClusterRegistry(sessionmaker, SecretBox.from_settings(settings))
+        box = SecretBox.from_settings(settings)
+        registry = ClusterRegistry(sessionmaker, box, endpoints=endpoints)
 
-        connections = ClusterConnections(registry)
-        catalog = KindCatalog(connections, registry)
+        http = CloudHttp()
+        store = CloudAccountStore(sessionmaker, box)
+        dirs = settings.cloud_dirs
+        adapters = make_adapters(http, endpoints, dirs)
+        broker = TokenBroker(registry, store, adapters)
+        bridge = ExecBridge(dirs, endpoints, http)
+        connections = ClusterConnections(
+            registry, tokens_for=broker.tokens_for, exec_resolver=bridge.resolve
+        )
+        catalog = KindCatalog(connections, registry, is_cloud=registry.is_cloud)
 
         async def source_for(cluster_id: str, kind_key: str) -> KubeResourceSource:
             spec = await catalog.spec(cluster_id, kind_key)  # KindNotServed: the cache says so
-            api = await connections.open_api(cluster_id)
-            return KubeResourceSource(api, spec)  # owns `api` and closes it
+            cloud = await registry.is_cloud(cluster_id)
+            try:
+                api = await connections.open_api(cluster_id)
+            except Exception as exc:
+                if not cloud:
+                    raise
+                raise cloud_kube_error("open the cluster connection", exc=exc) from None
+            return KubeResourceSource(api, spec, cloud=cloud or isinstance(api, CloudApiClient))
 
         audit = AuditLog(sessionmaker, registry)
         forwards = PortForwardManager(
             connections, registry, audit, ports=forward_ports, bind=forward_bind
         )
+        streams = StreamSessions(registry)
 
         async def on_forget(cluster_id: str) -> None:
             catalog.forget(cluster_id)
-            await forwards.stop_cluster(cluster_id)
+            connections.forget(cluster_id)
+            broker.forget(cluster_id)
+            await asyncio.gather(
+                forwards.stop_cluster(cluster_id),
+                streams.stop_cluster(cluster_id),
+                app.state.jobs.stop_cluster(cluster_id),
+            )
 
         hub = WatchHub(registry, source_for, on_forget=on_forget)
+        discovery = CloudDiscovery(
+            store, adapters, registry, hub, broker, interval=settings.cloud_discovery_seconds
+        )
         await _mark_interrupted(audit)
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.registry = registry
+        app.state.cloud = CloudServices(store, adapters, broker, http, discovery)
         app.state.connections = connections
         app.state.catalog = catalog
         app.state.hub = hub
@@ -189,19 +246,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.plans = PlanStore()
         jobs = app.state.jobs = JobRunner(audit)
         app.state.forwards = forwards
+        app.state.streams = streams
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
+            discovery.start()
             yield
         finally:
+            await discovery.close()
             await jobs.close()  # first: a stopped drain still writes its audit record
             await forwards.close()  # likewise: every forward's record is finished
+            await streams.close()
             await hub.close()
             await metrics.close()
             await catalog.close()
+            await broker.close()
+            await bridge.close()
+            await http.close()
             await engine.dispose()
 
     app = FastAPI(title="Omnikrux", lifespan=lifespan)
+    app.add_exception_handler(RequestValidationError, validation_error)
     app.state.settings = settings
     # No login yet, so no session cookie to check either: refuse writes that another site's
     # page sends (it could otherwise start a node shell or delete a cluster).
@@ -211,6 +276,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts, www_redirect=False
     )
     app.include_router(clusters_router)
+    app.include_router(cloud_router)
     app.include_router(watch_router)
     app.include_router(resources_router)
     app.include_router(kinds_router)

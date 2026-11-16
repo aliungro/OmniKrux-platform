@@ -1,13 +1,15 @@
 """PortForwardChannel against the fake API's port-forward WebSocket."""
 
 import asyncio
+import logging
 
 import pytest
+from aiohttp import web
 from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.portforward.channel import ForwardError, PortForwardChannel
-from tests.fakekube import kubeconfig_for
+from tests.fakekube import kubeconfig_for, status_body
 from tests.portforward.conftest import SECONDS, until
 
 REFUSED = (
@@ -93,3 +95,58 @@ async def test_channel_open_refused_for_missing_pod_or_cluster(fake_api):
     assert missing.value.status == 404
     with pytest.raises(KeyError):
         await open_channel(fake_api, cluster="other")
+
+
+@pytest.mark.parametrize("result", ["data", "handshake", "error-frame"])
+async def test_cloud_port_forward_errors_hide_echoed_bearer(
+    result, cloud_cluster, fake_api, monkeypatch, caplog
+):
+    app, cluster, _ = cloud_cluster
+    host = "private-forward-api.example.test"
+    tokens = []
+    route = fake_api._route
+
+    async def forward(request):
+        if request.path.endswith("/portforward"):
+            bearer = request.headers["Authorization"]
+            assert bearer.startswith("Bearer ")
+            tokens.append(bearer.removeprefix("Bearer "))
+            message = f"https://{host} refused {bearer}"
+            if result == "handshake":
+                return web.json_response(status_body(422, "Invalid", message), status=422)
+            if result == "error-frame":
+                fake_api.forward_fail = message
+        return await route(request)
+
+    monkeypatch.setattr(fake_api, "_route", forward)
+
+    async def open_cloud():
+        return await PortForwardChannel.open(
+            app.state.connections, cluster.id, "demo", "web-1", 8080
+        )
+
+    with caplog.at_level(logging.DEBUG):
+        if result == "handshake":
+            with pytest.raises(ApiException) as exc_info:
+                await open_cloud()
+            assert exc_info.value.status == 422
+            assert exc_info.value.__cause__ is None
+            published = str(exc_info.value)
+        else:
+            channel = await open_cloud()
+            try:
+                if result == "error-frame":
+                    with pytest.raises(ForwardError) as exc_info:
+                        await asyncio.wait_for(channel.read(), SECONDS)
+                    published = exc_info.value.message
+                else:
+                    await channel.write(b"workload bytes")
+                    assert await asyncio.wait_for(channel.read(), SECONDS) == b"workload bytes"
+                    published = ""
+            finally:
+                await channel.close()
+
+    assert tokens
+    for sensitive in [*tokens, host]:
+        assert sensitive not in published
+        assert sensitive not in caplog.text

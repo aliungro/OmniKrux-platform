@@ -31,7 +31,12 @@ def kind_kubeconfig(tmp_path):
 @pytest.fixture
 def client(tmp_path, kind_kubeconfig):
     app = create_app(
-        Settings(data_dir=tmp_path, kubeconfig=str(kind_kubeconfig), in_container=False)
+        Settings(
+            data_dir=tmp_path,
+            kubeconfig=str(kind_kubeconfig),
+            in_container=False,
+            port_forward_ports="30100-30119",
+        )
     )
     with TestClient(app) as test_client:
         yield test_client

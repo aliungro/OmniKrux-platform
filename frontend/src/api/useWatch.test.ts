@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { useWatch } from "./useWatch";
 
 class FakeSocket {
@@ -50,11 +50,56 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
 });
 afterEach(() => {
+  cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("useWatch", () => {
+  it("shares a kind's snapshot and connection until its last consumer leaves", () => {
+    const a = renderHook(() => useWatch("pods"));
+    const pods = FakeSocket.instances[0];
+    act(() => pods.serverMessage({ type: "snapshot", cluster_id: "c", rows: [row("a")], part: 0, last: true }));
+    frame();
+    const b = renderHook(() => useWatch("pods"));
+    const nodes = renderHook(() => useWatch("nodes"));
+    expect(FakeSocket.instances.map((socket) => new URL(socket.url).searchParams.get("kind"))).toEqual(["pods", "nodes"]);
+    expect(b.result.current).toBe(a.result.current);
+    expect(b.result.current.rows.c.has("a")).toBe(true);
+
+    a.unmount();
+    expect(pods.closed).toBe(false);
+    act(() => pods.serverMessage({ type: "upsert", cluster_id: "c", row: row("b") }));
+    frame();
+    expect([...b.result.current.rows.c.keys()]).toEqual(["a", "b"]);
+    expect(nodes.result.current.rows.c).toBeUndefined();
+    b.unmount();
+    expect(pods.closed).toBe(true);
+    expect(FakeSocket.instances[1].closed).toBe(false);
+
+    const reopened = renderHook(() => useWatch("pods"));
+    expect(reopened.result.current.rows.c).toBeUndefined();
+    expect(FakeSocket.instances).toHaveLength(3);
+  });
+
+  it("keeps cluster notifications local to each consumer of a shared kind", () => {
+    const unknown = vi.fn();
+    const removed = vi.fn();
+    const auxiliary = renderHook(() => useWatch("pods"));
+    const pods = FakeSocket.instances[0];
+    act(() => pods.serverMessage(status));
+    frame();
+    renderHook(() => useWatch("pods", {
+      knownClusterIds: new Set(),
+      onUnknownCluster: unknown,
+      onClusterRemoved: removed,
+    }));
+    expect(unknown.mock.calls).toEqual([["c"]]);
+    auxiliary.unmount();
+    act(() => pods.serverMessage({ type: "cluster_removed", cluster_id: "c" }));
+    expect(removed.mock.calls).toEqual([["c"]]);
+  });
+
   it("builds the url from window.location and applies messages", () => {
     const { result } = renderHook(() => useWatch("pods"));
     expect(FakeSocket.instances[0].url).toBe(`ws://${window.location.host}/api/watch?kind=pods`);
@@ -239,7 +284,7 @@ describe("useWatch cluster changes", () => {
     expect(onUnknownCluster).toHaveBeenCalledWith("new");
   });
 
-  it("calls again for an id that was removed and came back, never for known ids or without a known set", () => {
+  it("reports an unknown id once and ignores late frames after removal", () => {
     const onUnknownCluster = vi.fn();
     const { rerender } = renderHook(
       ({ known }) => useWatch("pods", { onUnknownCluster, knownClusterIds: known }),
@@ -254,7 +299,7 @@ describe("useWatch cluster changes", () => {
     act(() => sock.serverMessage({ type: "cluster_status", cluster_id: "x", state: "syncing", message: null }));
     act(() => sock.serverMessage(status));
     frame();
-    expect(onUnknownCluster.mock.calls).toEqual([["x"], ["x"]]);
+    expect(onUnknownCluster.mock.calls).toEqual([["x"]]);
   });
 
   it("reports removed clusters and drops them from state", () => {

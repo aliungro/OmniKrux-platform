@@ -1,10 +1,12 @@
-import type { ColumnSpec, ObjectColumn, ResourceRow } from "../../api/types";
+import type { ColumnSpec, NodeSize, ObjectColumn, ResourceRow } from "../../api/types";
 import type { Live } from "../../api/useMetrics";
 import { formatCpu, formatMemory, formatWindow, fraction, HOT_AT } from "../metrics/format";
+import { usageBasis } from "../metrics/basis";
 import { Meter } from "../metrics/Meter";
 import { LinkButton, useGoTo } from "../navigation/navigation";
 import { formatAge, formatAgo, statusClass, textColumn, titleColumn } from "./model";
 import { Status } from "./Status";
+import { ContainerBullets, isContainerStates } from "./ContainerBullets";
 import s from "./ResourceRowView.module.css";
 
 export const UNKNOWN = "—";
@@ -14,15 +16,30 @@ const isMeter = (c: ColumnSpec) => c.type === "cpu" || c.type === "memory";
 const METER_WIDTH = "minmax(150px, 1fr)";
 
 /** One grid template for the header and every row, from the columns' widths. */
-export function gridTemplate(columns: readonly ColumnSpec[]): string {
+export function gridTemplate(columns: readonly ColumnSpec[], titleKey: string = "name"): string {
+  // The built-in pod schema has restarts; other kinds keep their existing status width.
+  const podColumns = columns.some((c) => c.key === "restarts");
   return columns
-    .map((c) => (c.key === "name" ? "minmax(200px, 2fr)" : isMeter(c) ? METER_WIDTH : c.width === "s" ? "70px" : c.width === "l" ? "2fr" : "1fr"))
+    .map((c) => {
+      if (c.key === titleKey) return "minmax(200px, 2fr)";
+      if (c.key === "name") return "1fr";
+      if (podColumns && c.key === "status") return "minmax(180px, 1fr)";
+      if (isMeter(c)) return METER_WIDTH;
+      return c.width === "s" ? "70px" : c.width === "l" ? "2fr" : "1fr";
+    })
     .join(" ");
 }
 
 /** Wide enough that every column keeps a readable share; the table scrolls sideways below it. */
-export function minTableWidth(columns: readonly ColumnSpec[]): number {
-  const cols = columns.reduce((w, c) => w + (c.key === "name" ? 200 : isMeter(c) ? 150 : c.width === "s" ? 70 : c.width === "l" ? 180 : 100), 0);
+export function minTableWidth(columns: readonly ColumnSpec[], titleKey: string = "name"): number {
+  const podColumns = columns.some((c) => c.key === "restarts");
+  const cols = columns.reduce((w, c) => {
+    if (c.key === titleKey) return w + 200;
+    if (c.key === "name") return w + 100;
+    if (podColumns && c.key === "status") return w + 180;
+    if (isMeter(c)) return w + 150;
+    return w + (c.width === "s" ? 70 : c.width === "l" ? 180 : 100);
+  }, 0);
   // Column gaps, the row's own padding and the table's.
   return cols + 12 * (columns.length - 1) + 32 + 32;
 }
@@ -55,6 +72,7 @@ export function Cell({
   now,
   podsOnNode = null,
   live = null,
+  nodeSize = null,
   nowMs,
 }: {
   col: ColumnSpec;
@@ -63,6 +81,7 @@ export function Cell({
   podsOnNode?: number | null;
   /** The row's live usage, or why there is none; null where metrics aren't polled. */
   live?: Live | null;
+  nodeSize?: NodeSize | null;
   /** The moment `live` was judged at, for "measured X ago". */
   nowMs?: number;
 }) {
@@ -82,9 +101,13 @@ export function Cell({
   switch (col.type) {
     case "status": {
       const label = col.key === "status" ? textColumn(row, "status") : typeof v === "string" ? v : null;
+      const podStatus = row.kind === "Pod" && col.key === "status";
+      const containers = podStatus && isContainerStates(row.columns.containers)
+        ? row.columns.containers : null;
       return (
-        <span role="gridcell" className={s.cell}>
-          <Status label={label ?? "Unknown"} cls={statusClass(row)} />
+        <span role="gridcell" className={`${s.cell} ${s.status}`}>
+          {containers && <ContainerBullets containers={containers} />}
+          <Status label={label ?? "Unknown"} cls={statusClass(row)} showShape={!podStatus} />
         </span>
       );
     }
@@ -100,7 +123,7 @@ export function Cell({
     case "memory":
       return (
         <span role="gridcell" className={`${s.cell} ${s.num}${live?.usage ? "" : ` ${s.zero}`}`}>
-          <UsageMeter col={col} row={row} live={live} nowMs={nowMs ?? Date.now()} />
+          <UsageMeter col={col} row={row} live={live} nodeSize={nodeSize} nowMs={nowMs ?? Date.now()} />
         </span>
       );
     case "pods":
@@ -154,23 +177,29 @@ function ObjectLink({ row, target, kindKey }: { row: ResourceRow; target: Object
 }
 
 /** CPU or memory of a pod or node row; a dash (with the reason as its title) whenever it is not live. */
-function UsageMeter({ col, row, live, nowMs }: { col: ColumnSpec; row: ResourceRow; live: Live | null; nowMs: number }) {
+function UsageMeter({ col, row, live, nodeSize, nowMs }: { col: ColumnSpec; row: ResourceRow; live: Live | null; nodeSize: NodeSize | null; nowMs: number }) {
   const u = live?.usage;
   if (!u) return <span title={live?.why ?? undefined}>{UNKNOWN}</span>;
-  const num = (k: string) => {
-    const x = row.columns[k];
-    return typeof x === "number" && x > 0 ? x : null;
-  };
   const cpu = col.type === "cpu";
-  // Pods: against the limit, else the request. Nodes: against what they can allocate.
-  const limit = cpu ? (num("cpu_limit_m") ?? num("allocatable_cpu_m")) : (num("memory_limit_b") ?? num("allocatable_memory_b"));
-  const request = cpu ? num("cpu_request_m") : num("memory_request_b");
+  const basis = usageBasis(row, cpu ? "cpu" : "memory", nodeSize);
   const used = cpu ? u.cpu_m : u.memory_b;
-  const basis = limit ?? request;
-  const frac = fraction(used, basis);
-  const text = cpu ? formatCpu(used) : formatMemory(used, limit);
-  const title = u.stale
+  const frac = fraction(used, basis?.of);
+  // Preserve the existing memory text: show a denominator only for a limit or allocatable.
+  const against = basis?.basis === "limit" || basis?.basis === "allocatable" ? basis.of : null;
+  const text = cpu ? formatCpu(used) : formatMemory(used, against);
+  let comparison = "No limit, request or node size to compare with.";
+  if (basis && frac !== null) {
+    const pct = Math.round(frac * 100);
+    const amount = cpu ? formatCpu(basis.of) : formatMemory(basis.of);
+    switch (basis.basis) {
+      case "limit": comparison = `${pct}% of its limit (${amount})`; break;
+      case "request": comparison = `${pct}% of its request (${amount}); no limit set`; break;
+      case "node": comparison = `${pct}% of node ${textColumn(row, "node") ?? ""} (${amount} allocatable); no request or limit set`; break;
+      case "allocatable": comparison = `${pct}% of what the node can allocate (${amount})`; break;
+    }
+  }
+  const measured = u.stale
     ? `Measured ${formatAge(u.at, new Date(nowMs))} ago; metrics-server has nothing newer.`
     : `Measured over ${formatWindow(u.window_s)}`;
-  return <Meter text={text} frac={frac} hot={limit !== null && frac !== null && frac >= HOT_AT} stale={u.stale} title={title} />;
+  return <Meter text={text} frac={frac} hot={basis !== null && basis.basis !== "request" && frac !== null && frac >= HOT_AT} stale={u.stale} title={`${comparison}\n${measured}`} />;
 }

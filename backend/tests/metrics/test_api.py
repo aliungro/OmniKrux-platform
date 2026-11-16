@@ -38,6 +38,34 @@ async def test_metrics_for_every_cluster(client, fake_api):
     assert (await http.get("/api/metrics/widgets")).status_code == 422
 
 
+async def test_pod_metrics_carry_node_sizes(client, fake_api):
+    http, cluster_id, _ = client
+    fake_api.pod_metrics[("demo", "web-1")] = pod_metric()
+    fake_api.objects["nodes"][("", "worker")] = {
+        "metadata": {"name": "worker"},
+        "status": {"allocatable": {"cpu": "4", "memory": "8Gi"}},
+    }
+    fake_api.objects["nodes"][("", "other")] = {
+        "metadata": {"name": "other"},
+        "status": {"allocatable": {"cpu": "2", "memory": "4Gi"}},
+    }
+    got = (await http.get("/api/metrics/pods")).json()["clusters"][cluster_id]
+    assert got["state"] == "ok" and got["items"]
+    assert got["nodes"] == {
+        "worker": {"cpu_m": 4000, "memory_b": 8589934592},
+        "other": {"cpu_m": 2000, "memory_b": 4294967296},
+    }
+
+
+async def test_node_list_failure_keeps_pod_metrics(client, fake_api):
+    http, cluster_id, _ = client
+    fake_api.pod_metrics[("demo", "web-1")] = pod_metric()
+    fake_api.forbidden_kinds.add("nodes")
+    got = (await http.get("/api/metrics/pods")).json()["clusters"][cluster_id]
+    assert got["state"] == "ok" and got["items"]["demo/web-1"]["cpu_m"] == 250
+    assert got["nodes"] == {}
+
+
 async def test_slow_cluster_gets_error_the_others_answer(client, fake_api):
     http, cluster_id, app = client
     fake_api.pod_metrics[("demo", "web-1")] = pod_metric()

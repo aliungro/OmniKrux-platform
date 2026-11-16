@@ -7,8 +7,10 @@ import aiohttp
 from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 
+from omnikrux.kube.tokens import ClusterUnavailable
+
 # What a Kubernetes call can raise for the cluster's (or the network's) reasons.
-KUBE_ERRORS = (ApiException, aiohttp.ClientError, TimeoutError)
+KUBE_ERRORS = (ApiException, aiohttp.ClientError, TimeoutError, ClusterUnavailable)
 
 
 async def read_json(call: Awaitable) -> dict:

@@ -16,7 +16,7 @@ from omnikrux.resources import catalog as catalog_mod
 from omnikrux.resources.catalog import KindCatalog, KindNotServed
 from omnikrux.resources.kinds import HELM_RELEASES, KINDS, is_kind_key, kind_key
 from tests.conftest import _cluster
-from tests.fakekube import kubeconfig_for, serve_fake_api
+from tests.fakekube import VERSION, kubeconfig_for, serve_fake_api
 
 WIDGETS = "widgets.example.omnikrux.dev"
 
@@ -41,6 +41,17 @@ def catalog_for(servers: dict, **kwargs) -> KindCatalog:
 
 def discoveries(server) -> int:
     return server.paths.count("/apis")
+
+
+async def test_cached_version_never_fetches(fake_api):
+    catalog = catalog_for({"c1": fake_api})
+    assert catalog.cached_version("c1") is None and not fake_api.paths
+    await catalog.cluster("c1")
+    requests = list(fake_api.paths)
+    assert catalog.cached_version("c1") == VERSION["gitVersion"]
+    assert catalog.cached_version("missing") is None and fake_api.paths == requests
+    catalog.forget("c1")
+    assert catalog.cached_version("c1") is None and fake_api.paths == requests
 
 
 def test_kind_key_rules():
@@ -78,6 +89,7 @@ async def test_union_lists_clusters_serving_each_kind():
     pods = kinds["pods"]
     assert pods.builtin is True and pods.kind == "Pod" and pods.short_names == ["po"]
     assert "watch" in pods.verbs and pods.verbs == sorted(pods.verbs)
+    assert pods.verbs_by_cluster == {"one": pods.verbs, "two": pods.verbs}
     assert pods.columns[0].key == "name"
     widget = kinds[WIDGETS]
     assert widget.builtin is False
@@ -238,6 +250,7 @@ async def test_kinds_route_lists_union_and_cluster_errors(tmp_path):
                     "sort",
                     "builtin",
                     "verbs",
+                    "verbs_by_cluster",
                     "clusters",
                 }
                 assert kinds["pods"]["columns"][0] == {

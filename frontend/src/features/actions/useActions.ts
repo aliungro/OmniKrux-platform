@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo } from "react";
 import { useQuery, useQueryClient, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { getJson, HttpError, postJson } from "../../api/http";
+import { deleteEmpty, getJson, HttpError, postJson } from "../../api/http";
 import type { ApplyResult, Job, Plan, PlanRequest, Revision } from "../../api/types";
 
 /** What a successful apply can have changed: the audit log and the details of the object. */
@@ -39,6 +39,15 @@ export function useActions(): Actions {
     [queryClient],
   );
   return useMemo(() => ({ plan, apply }), [plan, apply]);
+}
+
+/**
+ * Closes reviews that won't be applied, so they don't count against the server's limit of open
+ * delete reviews. Best effort: an unknown or already used plan is fine, and a lost request only
+ * keeps the review until it expires.
+ */
+export function discardPlans(planIds: Iterable<string>): void {
+  for (const planId of planIds) void deleteEmpty(`/api/actions/${encodeURIComponent(planId)}`).catch(() => {});
 }
 
 function jobPath(jobId: string): string {

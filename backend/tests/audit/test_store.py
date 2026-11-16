@@ -49,6 +49,19 @@ def entry(cluster_id: str, **overrides) -> AuditEntry:
     return AuditEntry(**(values | overrides))
 
 
+async def test_audit_entry_overrides_snapshot(setup):
+    audit, info, _ = setup
+    await audit.begin(entry(info.id, cluster_name="Override", provider="aks"))
+    await audit.begin(entry("", action="cloud_account_add", kind="cloud-account", provider="eks"))
+    account, overridden = (await audit.list()).records
+    assert (account.cluster_id, account.cluster_name, account.provider) == ("", "", "eks")
+    assert (overridden.cluster_id, overridden.cluster_name, overridden.provider) == (
+        info.id,
+        "Override",
+        "aks",
+    )
+
+
 async def test_audit_begin_finish_and_list_newest_first(setup, caplog):
     audit, info, _ = setup
     first = await audit.begin(
