@@ -12,6 +12,7 @@ import { MetricsView, NodeMetricsView } from "./MetricsView";
 import { ResourceDescribeView } from "./ResourceDescribeView";
 import tableStyles from "./ResizableInspectorTable.module.css";
 import { componentCss } from "../../test/css";
+import { fakeColumnLayout } from "../../test/layout";
 
 afterEach(() => {
   cleanup();
@@ -41,6 +42,23 @@ function wrap(ui: ReactNode) {
     client,
     rerender: (next: ReactNode) => out.rerender(<QueryClientProvider client={client}>{next}</QueryClientProvider>),
   };
+}
+
+
+/**
+ * The events table as Chrome draws a column `column` px wide: its label needs 80, and each row's
+ * cell what `byRow` says for the reason in that row.
+ */
+function eventWidths(byRow: Record<string, number>, column = 80) {
+  fakeColumnLayout({
+    box: (el) => el.matches("th, td") ? column : el.matches("[data-column-label]") ? 80 : undefined,
+    content: (el) => {
+      if (el.matches("[data-column-label]")) return 80;
+      if (el.tagName !== "TD") return undefined;
+      const text = el.closest("tr")?.textContent ?? "";
+      return Object.entries(byRow).find(([key]) => text.includes(key))?.[1];
+    },
+  });
 }
 
 describe("describe view", () => {
@@ -594,17 +612,29 @@ describe("inspector table column widths", () => {
     render(<EventsTable events={two} error={null} />);
     const table = screen.getByRole("table");
     const handle = within(table).getByRole("separator", { name: "Resize Event" });
-    // The header measures 80; the two rows' cells 150 and 210, so the widest cell must win.
-    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) {
-      if (this.tagName !== "TD") return 80;
-      const text = this.closest("tr")?.textContent ?? "";
-      return text.includes("Pulled") ? 210 : 150;
-    });
+    // The header measures 80; the two rows' cells 150 and 210 (plus a cell's 1px padding each
+    // side), so the widest cell must win.
+    eventWidths({ Pulled: 210, Scheduled: 150 });
     fireEvent.doubleClick(handle);
-    expect((table.querySelectorAll("col")[1] as HTMLElement).style.width).toBe("210px");
-    expect(savedWidths()["inspector:events"]).toEqual({ event: 210 });
+    expect((table.querySelectorAll("col")[1] as HTMLElement).style.width).toBe("212px");
+    expect(savedWidths()["inspector:events"]).toEqual({ event: 212 });
     fireEvent.keyDown(handle, { key: "Enter" });
     expect(savedWidths()["inspector:events"]).toBeUndefined();
+  });
+
+  it("fit shrinks a wide events column in its fixed layout", () => {
+    const two = [{ ...events[0], reason: "Scheduled" }, { ...events[0], reason: "Pulled" }];
+    render(<EventsTable events={two} error={null} />);
+    const table = screen.getByRole("table");
+    const handle = within(table).getByRole("separator", { name: "Resize Event" });
+    // Drawn 300px wide in a fixed layout, a cell keeps its column's width whatever its style.
+    eventWidths({ Pulled: 150, Scheduled: 100 }, 300);
+    fireEvent.doubleClick(handle);
+    expect(table.style.tableLayout).toBe("fixed");
+    // The widest cell's contents and its 1px padding each side.
+    expect((table.querySelectorAll("col")[1] as HTMLElement).style.width).toBe("152px");
+    expect(savedWidths()["inspector:events"]).toEqual({ event: 152 });
+    fireEvent.keyDown(handle, { key: "Enter" });
   });
 
   it("inspector headers keep 10px of end padding so the handle clears the label", () => {

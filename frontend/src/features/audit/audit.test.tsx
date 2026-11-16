@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AuditRecord, Cluster } from "../../api/types";
 import { AuditView } from "./AuditView";
+import { fakeColumnLayout } from "../../test/layout";
 
 beforeEach(() => {
   // jsdom has no layout; give everything a size so the virtualizer renders rows.
@@ -60,6 +61,22 @@ function show(View = AuditView) {
   return render(<QueryClientProvider client={client}><AuditFixture View={View} /></QueryClientProvider>);
 }
 
+
+/**
+ * The audit grid as Chrome draws a column `column` px wide: its label needs 80, and each row's cell
+ * what `byRow` says for the first key found in that row's text.
+ */
+function auditWidths(byRow: Record<string, number>, column = 80) {
+  fakeColumnLayout({
+    box: (el) => el.matches('[role="columnheader"], [role="gridcell"]') ? column : el.matches("[data-column-label]") ? 80 : undefined,
+    content: (el) => {
+      if (el.matches("[data-column-label]")) return 80;
+      const text = el.closest('[role="row"]')?.textContent ?? "";
+      return Object.entries(byRow).find(([key]) => text.includes(key))?.[1];
+    },
+  });
+}
+
 describe("audit view", () => {
   it("resizes and resets all seven columns without moving row focus or toggling details", async () => {
     serve(() => ({ records: [record(2, { outcome: "failed", details: { replicas: 3 } }), record(1)], next_before: null }));
@@ -105,15 +122,25 @@ describe("audit view", () => {
     const grid = screen.getByRole("grid");
     const defaults = grid.style.getPropertyValue("--audit-cols");
     // The header measures 80; the two rows' cells 150 and 210, so the widest cell must win.
-    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) {
-      const text = this.closest('[role="row"]')?.textContent ?? "";
-      return text.includes("web-2") ? 210 : text.includes("web-1") ? 150 : 80;
-    });
+    auditWidths({ "web-2": 210, "web-1": 150 });
     const handle = within(grid).getByRole("separator", { name: "Resize Action" });
     fireEvent.doubleClick(handle);
     expect(grid.style.getPropertyValue("--audit-cols").split(/ (?![^()]*\))/)[2]).toBe("210px");
     fireEvent.keyDown(handle, { key: "Enter" });
     expect(grid.style.getPropertyValue("--audit-cols")).toBe(defaults);
+  });
+
+  it("fit shrinks a wide audit column to its header and cells", async () => {
+    serve(() => ({ records: [record(2), record(1)], next_before: null }));
+    show();
+    await screen.findByRole("row", { name: /web-1/ });
+    const grid = screen.getByRole("grid");
+    // A 400px column whose cells need 120 and 90: the header's free space is not content.
+    auditWidths({ "web-2": 120, "web-1": 90 }, 400);
+    const handle = within(grid).getByRole("separator", { name: "Resize Action" });
+    fireEvent.doubleClick(handle);
+    expect(grid.style.getPropertyValue("--audit-cols").split(/ (?![^()]*\))/)[2]).toBe("120px");
+    fireEvent.keyDown(handle, { key: "Enter" });
   });
 
   it("persists the Message width from a drag while keeping filters, details, and the page cursor", async () => {

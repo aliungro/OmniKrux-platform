@@ -19,6 +19,7 @@ import bulletStyles from "./ContainerBullets.module.css";
 import bandStyles from "./ClusterBand.module.css";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { componentCss } from "../../test/css";
+import { fakeColumnLayout } from "../../test/layout";
 
 const rowCss = componentCss(import.meta.url, "./ResourceRowView.module.css", rowStyles);
 const statusCss = componentCss(import.meta.url, "./Status.module.css", statusStyles);
@@ -515,7 +516,7 @@ describe("kinds in the table", () => {
       act(() => vi.advanceTimersToNextFrame());
       expect(grid.style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 115px 70px");
       expect(save).toHaveBeenCalledTimes(1);
-      vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(150);
+      fakeColumnLayout({ content: () => 150 });
       fireEvent.doubleClick(handle);
       expect(grid.style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 150px 70px");
       expect(save).toHaveBeenCalledTimes(2);
@@ -527,11 +528,16 @@ describe("kinds in the table", () => {
     }
   });
 
-  /** Header parts measure 80; each row's cells measure what the table says for that row's key. */
-  const stubWidths = (byRow: Record<string, number>) =>
-    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) {
-      const key = this.closest("[data-row-key]")?.getAttribute("data-row-key") ?? "";
-      return byRow[key] ?? 80;
+  /**
+   * The column as Chrome draws it `column` px wide: the header label needs 80, the filter icon 12,
+   * and each row's cell what the table says for that row's key.
+   */
+  const stubWidths = (byRow: Record<string, number>, column = 80) =>
+    fakeColumnLayout({
+      box: (el) => el.matches('[role="columnheader"], [role="gridcell"]') ? column
+        : el.matches("[data-column-label]") ? 80 : el.matches('[aria-label^="Filter by"]') ? 12 : undefined,
+      content: (el) => el.matches("[data-column-label]") ? 80
+        : byRow[el.closest("[data-row-key]")?.getAttribute("data-row-key") ?? ""],
     });
 
   it("double-click fits a pod column to its content", () => {
@@ -549,6 +555,18 @@ describe("kinds in the table", () => {
     fireEvent.keyDown(handle, { key: "Enter" });
     expect(grid.style.getPropertyValue("--cols")).toBe(template);
     expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("fit shrinks a wide pod column to its header and cells", () => {
+    layout();
+    render(<Table territories={[terr({ rows: [pod(), pod({ uid: "u2", name: "payments-api-2" })], total: 2 })]} kind={PODS} onRetry={() => {}} />);
+    const grid = screen.getByRole("grid");
+    const handle = within(grid).getByRole("separator", { name: "Resize Namespace" });
+    // A 300px column whose cells need 100 and 60: the header's free space is not content.
+    stubWidths({ "c1/u1": 100, "c1/u2": 60 }, 300);
+    fireEvent.doubleClick(handle);
+    expect(grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/)[1]).toBe("100px");
+    fireEvent.keyDown(handle, { key: "Enter" });
   });
 
   it("dragging shows a guide and a width tooltip, then removes them", () => {
