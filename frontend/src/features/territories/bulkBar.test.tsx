@@ -3,7 +3,7 @@
 // the count once, and names its controls.
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Plan, PlanRequest, ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
@@ -151,4 +151,40 @@ it("bulk delete confirms with ctrl+enter and keeps focus on cancel", async () =>
   // Done: Ctrl+Enter has nothing more to confirm.
   fireEvent.keyDown(dialog.getByRole("button", { name: "Close" }), { key: "Enter", ctrlKey: true });
   expect(applies).toHaveLength(2);
+});
+
+it("ctrl+enter on a bulk delete whose review is still loading sends nothing", async () => {
+  const applies: string[] = [];
+  const plans: Array<() => void> = [];
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+    if (url === "/api/actions/plan") {
+      const req = JSON.parse(String(init?.body)) as PlanRequest;
+      // The review answers only when the test says so.
+      return new Promise<Response>((resolve) => plans.push(() => resolve(json({
+        plan_id: `plan-${req.target.name}`, action: "delete", target: req.target, kind: "Pod",
+        cluster: { id: "c1", name: "big", provider: "gke", environment: "development" },
+        title: `Delete Pod ${req.target.name}`, summary: [], warnings: [], blocked: [], diff: null, confirm_text: null,
+        apply_label: "Delete", expires_at: "",
+      } satisfies Plan))));
+    }
+    if (url.endsWith("/apply")) {
+      applies.push(url);
+      return Promise.resolve(json({ outcome: "succeeded", message: "Deleted.", job_id: null, audit_id: 1 }));
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  }));
+  renderTable(3);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select pod-0" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+  const dialog = within(screen.getByRole("dialog", { name: "Delete 1 resource" }));
+  await waitFor(() => expect(plans).toHaveLength(1));
+  const cancel = dialog.getByRole("button", { name: "Cancel" });
+  expect(fireEvent.keyDown(cancel, { key: "Enter", ctrlKey: true })).toBe(false);
+  expect(fireEvent.keyDown(cancel, { key: "Enter", metaKey: true })).toBe(false);
+  // The review arrives: the earlier presses were not kept for it.
+  await act(async () => plans[0]());
+  await waitFor(() => expect(dialog.getByRole<HTMLButtonElement>("button", { name: "Delete 1 resource" }).disabled).toBe(false));
+  expect(applies).toEqual([]);
+  expect(screen.getByRole("dialog", { name: "Delete 1 resource" })).toBeTruthy();
 });

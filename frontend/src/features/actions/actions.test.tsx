@@ -414,6 +414,36 @@ describe("action dialog", () => {
   });
 });
 
+describe("ctrl+enter never applies past its review", () => {
+  it("two ctrl+enters in one act send one apply", () => {
+    // In one act nothing re-renders between the presses, so only the `applying` guard can stop the second.
+    const fetch = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetch);
+    wrap(<ActionDialog plan={plan()} onDone={vi.fn()} onReview={vi.fn()} />);
+    act(() => {
+      fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true });
+      fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true });
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ctrl+enter on a blocked review sends nothing", async () => {
+    const fetch = vi.fn(() => json({}));
+    vi.stubGlobal("fetch", fetch);
+    const onDone = vi.fn();
+    wrap(<ActionDialog plan={plan({ blocked: ["Nothing changes: web already runs 3 replicas."] })} onDone={onDone} onReview={vi.fn()} />);
+    const cancel = button("Cancel", dialog());
+    expect(document.activeElement).toBe(cancel);
+    // Prevented (Cancel is never pressed by it) and refused.
+    expect(fireEvent.keyDown(cancel, { key: "Enter", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(dialog(), { key: "Enter", metaKey: true })).toBe(false);
+    await act(async () => {});
+    expect(fetch).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(dialog()).toBeTruthy();
+  });
+});
+
 describe("changes from the details", () => {
   it("edit review shows diff and applies", async () => {
     const before = "kind: Deployment\nmetadata:\n  name: web\n  resourceVersion: \"100\"\nspec:\n  replicas: 3\n";
