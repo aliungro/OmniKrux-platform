@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { ResourceRow } from "../../api/types";
-import type { WatchState } from "../../api/watchState";
+import { emptyWatchState, type WatchState } from "../../api/watchState";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import type { RowRef } from "../territories/model";
 import type { DockState, FollowHold, Session } from "./dockState";
@@ -14,9 +14,9 @@ const pod = (name: string, uid = name): ResourceRow => ({
 const ref = (row: ResourceRow): RowRef => ({ clusterId: row.cluster_id, uid: row.uid });
 
 const watchOf = (rows: ResourceRow[]): WatchState => ({
+  ...emptyWatchState(),
   clusters: { c1: { state: "ready", message: null } },
   rows: { c1: new Map(rows.map((r) => [r.uid, r])) },
-  pending: {},
 });
 
 function followOn(name: string, hold?: FollowHold): Session {
