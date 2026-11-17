@@ -68,6 +68,14 @@ export function isNotRunning(message: string | null): boolean {
 }
 
 /**
+ * The server's sentence for a shell that ended with no exit code (backend `exec/session.py`):
+ * it already says the shell ended, so the pane shows it alone.
+ */
+function endedInWords(message: string | null): boolean {
+  return message !== null && message.startsWith("The shell ended");
+}
+
+/**
  * An interactive shell for one session. The header and the 2px top border always name and colour
  * the session's own cluster, so you can see where your keystrokes go.
  * `active`: whether the terminal takes keyboard focus (the dock passes it for the focused tab).
@@ -214,13 +222,18 @@ export function ShellPane({
 
       {exec.status === "exited" && (
         <div className={s.note} role="status">
-          <span>
-            {"Shell ended."}
-            {/* A shell that couldn't run: the server's words already carry its code. */}
-            {exec.exitCode !== null && exec.exitCode !== 0 && !exec.cannotRun ? ` Exit code ${exec.exitCode}.` : ""}
-            {exec.message ? ` ${exec.message}` : ""}
-            {exec.cannotRun && onStartDebug ? " A debug container brings its own shell." : ""}
-          </span>
+          {endedInWords(exec.message) ? (
+            // An end with no code: the server's sentence already says the shell ended.
+            <span>{exec.message}</span>
+          ) : (
+            <span>
+              {"Shell ended."}
+              {/* A shell that couldn't run: the server's words already carry its code. */}
+              {exec.exitCode !== null && exec.exitCode !== 0 && !exec.cannotRun ? ` Exit code ${exec.exitCode}.` : ""}
+              {exec.message ? ` ${exec.message}` : ""}
+              {exec.cannotRun && onStartDebug ? " A debug container brings its own shell." : ""}
+            </span>
+          )}
           {onClose && <span className={s.keys}>Enter closes this tab · Alt ↑ back to the table</span>}
           {exec.cannotRun && onStartDebug && (
             <button type="button" className={s.btn} onClick={onStartDebug}>Start a debug container</button>
