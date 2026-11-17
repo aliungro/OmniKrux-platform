@@ -156,11 +156,11 @@ Keyboard shortcuts depend on where the keyboard is:
 
 | Zone | Keys |
 |---|---|
-| Table | `↑` `↓` move · `l` follow log · `Shift L` pin a log · `p` previous logs · `s` shell · `Alt ↓` into the logs · `Ctrl Del` / `⌘ ⌫` delete (reviewed first) |
+| Table | `↑` `↓` move · `l` follow log · `Shift L` pin a log · `p` previous logs · `s` shell · `Alt ↓` into the logs · `Ctrl Del` / `⌘ ⌫` delete (reviewed first) · `1`–`4` detail tabs while the details are open |
 | Logs | `↑` `↓` `PgUp` `PgDn` scroll · `Home` / `End` top and live end (`G` too) · `←` `→` switch tab · `Ctrl F` search · `Shift L` pin this log · `Ctrl Del` / `⌘ ⌫` close the tab · `Esc` / `Alt ↑` back to the table |
-| Shell | every key is the shell's, `Esc` included; `Alt ↑` back to the table |
+| Shell | every key is the shell's, `Esc` included; `Alt ↑` back to the table; once the shell has ended (`exit`, `Ctrl D`), `Enter` closes its tab; `Ctrl Del` (`⌘ ⌫`) on the shell's tab closes it |
 
-`Enter` details, `Ctrl \` layout, `/` filter and `?` all shortcuts work as before.
+`Enter` details, `Ctrl \` layout, `/` filter and `?` all shortcuts work as before. In the details, `←` `→` and `Home` / `End` move between the Describe, YAML, Events and Metrics tabs.
 
 Things worth knowing before you use them:
 
@@ -179,6 +179,8 @@ Every kind a cluster serves is listed, custom resource definitions (CRDs) includ
 
 Press `:` to jump to any kind, or `Ctrl K` for the command palette: kinds, views and the actions of the selected row. Neither works while you type in a field, the YAML editor or a terminal. `?` shows every shortcut for the kind you're on.
 
+In the YAML editor, `Ctrl Enter` (`⌘ Enter`) reviews your changes, `Esc` leaves the editor onto Review changes, and `←` `→` move between Review changes and Discard.
+
 Keys on a selected row, by kind (`Enter` or `d` opens the details and `y` the YAML on every kind; `e` edits the YAML and `Ctrl D` deletes only on kinds that allow it (`Ctrl Del` (`⌘ ⌫`) deletes too), and Secrets can't be edited):
 
 | Kind | Keys |
@@ -196,6 +198,7 @@ Keys on a selected row, by kind (`Enter` or `d` opens the details and `y` the YA
 
 Every change follows the same steps: Omnikrux shows what it will do, you confirm, the change is written to the audit log, and only then is it applied.
 
+- A review opens with its action button focused (Cancel for Delete, Drain and Evict), so `Enter` confirms; `Ctrl Enter` (`⌘ Enter` on macOS) confirms any review.
 - The review shows the cluster, the object and a diff. What you apply is exactly what you reviewed: it is kept on the server for 300 seconds and used once. If the object changed in the meantime you read "{Kind} {name} changed since you reviewed this change. Review it again."
 - On a production cluster the review says so. Deleting or draining on a production cluster asks you to type the object's name. So does deleting a namespace, PersistentVolume, PersistentVolumeClaim or custom resource definition, or deleting or draining a node, on any cluster.
 - No audit, no change: if the audit log can't be written, nothing is applied.
@@ -210,7 +213,7 @@ Until explicitly revealed, secret values stay on the server. Rows, the details, 
 
 Use a column header's filter control for text, pick-list, number or age filters, depending on the column. For example, Events' Last seen can be filtered to "within 1 h". Active filters appear as chips; remove a chip to remove its filter. Filters combine with the main text, namespace and status filters. Click a sortable column heading to cycle ascending, descending and unsorted; sorting stays within each cluster. Filters and sort belong to the workspace tab and return after reload.
 
-Drag the divider between two headers to resize a column (a guide shows the width); double-click it to fit the column to its content; `←` `→` on a focused divider resize it and `Enter` resets it.
+Drag the divider between two headers to resize a column (a guide shows the width); double-click it to fit the column to its content; `←` `→` on a focused divider resize it and `Enter` resets it. After a mouse drag the keyboard goes back to the row it was on.
 
 Pods show one bullet per container beside their status, including init containers. A green dot means running and ready; an amber dot means running but not ready, or waiting; a rose diamond means failing; a muted hollow ring means finished. Hover a bullet for its container name, reason and restart count (finished containers show their completion reason). At most six bullets are shown; `+n` holds the remaining containers' details.
 
