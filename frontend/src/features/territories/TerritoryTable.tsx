@@ -21,7 +21,7 @@ import { BulkDeleteDialog, type DeleteSelection } from "../actions/BulkDeleteDia
 import { canDelete, rowActions, TOOL_LABEL, type RowAction, type ToolId } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
 import { isDeleteKey, isEditable, pageKey, pressed, rowShortcut, type ShortcutId } from "../chrome/shortcuts";
-import { routesPageKeys } from "../chrome/pageKeys";
+import { routesKindKeys, routesPageKeys } from "../chrome/pageKeys";
 import { ContextMenu, isMenuKey, menuAnchor, type MenuAnchor, type MenuItem } from "../chrome/ContextMenu";
 import { Inspector, type WorkloadLogs } from "../inspector/Inspector";
 import type { ToolIntent } from "../inspector/Tools";
@@ -270,8 +270,24 @@ export const TerritoryTable = memo(function TerritoryTable({
    * shells, or, through the details, the YAML tab and the change tools, each reviewed first. The
    * logs keep the keyboard where it is: on the table.
    */
+  /**
+   * Ruling R41: the open details hold an unsaved YAML edit, so nothing may close them or move the
+   * selection away. True when that is so; the details then say why (once per press, not per repeat).
+   * One query of the rendered rows, made only for a key that would leave the details.
+   */
+  const keepUnsavedEdit = (repeat = false): boolean => {
+    if (!open || selectedKey === null || !scrollRef.current?.querySelector("[data-unsaved-edit]")) return false;
+    if (!repeat) {
+      const key = selectedKey;
+      setIntent((prev) => ({ key, tool: "unsaved", seq: (prev?.seq ?? 0) + 1 }));
+    }
+    return true;
+  };
+
   const act = (row: ResourceRow, action: RowAction, from: "key" | "menu" | "palette") => {
     const ref = { clusterId: row.cluster_id, uid: row.uid };
+    // Another row (by a key, a row menu or the palette) would take the selection from the edit.
+    if (rowKey(row.cluster_id, row.uid) !== selectedKey && keepUnsavedEdit()) return;
     switch (action) {
       case "details":
         if (from === "key") toggle(row);
@@ -374,13 +390,7 @@ export const TerritoryTable = memo(function TerritoryTable({
     if (pressed("close", e)) {
       if (!open) return;
       e.preventDefault();
-      if (e.repeat) return;
-      if (selectedKey !== null && scrollRef.current?.querySelector("[data-unsaved-edit]")) {
-        const key = selectedKey;
-        setIntent((prev) => ({ key, tool: "unsaved", seq: (prev?.seq ?? 0) + 1 }));
-      } else {
-        close();
-      }
+      if (!keepUnsavedEdit(e.repeat) && !e.repeat) close();
       return;
     }
     if (at === undefined) return;
@@ -404,6 +414,8 @@ export const TerritoryTable = memo(function TerritoryTable({
     e.preventDefault();
     // Holding a log key, reveal or delete performs it once: one stream, one review.
     if (e.repeat && HELD_ONCE.has(id)) return;
+    // Enter would close the details, and the arrows move the selection, over an unsaved edit (R41).
+    if ((id === "move" || id === "details") && keepUnsavedEdit(e.repeat)) return;
     if (fromPage) {
       const key = rowKey(it.row.cluster_id, it.row.uid);
       const el = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])
@@ -472,6 +484,21 @@ export const TerritoryTable = memo(function TerritoryTable({
     }
     runRowKey(e, at, true);
   };
+  // Ruling R41: the kind arrows (on a row or the page) never switch away from an unsaved edit. The
+  // kind strip listens on the document too; this runs first (capture) and prevents the key, which
+  // the strip then ignores.
+  const onKindKey = (e: globalThis.KeyboardEvent) => {
+    if (!open || !paneActive || e.shiftKey || !pressed("moveKind", e) || !pageKey(e) || !routesKindKeys(e.target)) return;
+    if (keepUnsavedEdit(e.repeat)) e.preventDefault();
+  };
+  const kindKeyRef = useRef(onKindKey);
+  kindKeyRef.current = onKindKey;
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => kindKeyRef.current(e);
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+
   const pageKeyRef = useRef(onPageKey);
   pageKeyRef.current = onPageKey;
   useEffect(() => {

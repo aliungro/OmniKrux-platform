@@ -22,6 +22,7 @@ export function YamlEditor({
   busy,
   error,
   notice = null,
+  onChanged,
   onReview,
   onDiscard,
 }: {
@@ -31,12 +32,20 @@ export function YamlEditor({
   error: string | null;
   /** A plain line under the bar, shown while the text is changed (why the details stayed open). */
   notice?: string | null;
+  /** Told whether the text now differs from the YAML editing began with (false once it goes). */
+  onChanged?: (changed: boolean) => void;
   onReview: (text: string) => void;
   onDiscard: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const text = useRef(yaml);
   const [changed, setChanged] = useState(false);
+  const changedTo = useRef(onChanged);
+  changedTo.current = onChanged;
+  useEffect(() => {
+    changedTo.current?.(changed);
+  }, [changed]);
+  useEffect(() => () => changedTo.current?.(false), []);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const box = useRef<HTMLDivElement>(null);
   const editorRef = useRef<MountedEditor | null>(null);

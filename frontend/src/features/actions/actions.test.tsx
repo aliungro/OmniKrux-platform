@@ -9,6 +9,7 @@ import type { Job, Plan, ResourceRow } from "../../api/types";
 import { resourceDescribe } from "../../test/describe";
 import { DEPLOYMENTS } from "../../test/kinds";
 import { Table } from "../../test/table";
+import type { RowRequest } from "../territories/TerritoryTable";
 import { Inspector } from "../inspector/Inspector";
 import { ActionDialog, ActionsProvider, reviewFocus } from "./ActionDialog";
 import { DrainProgress } from "./DrainProgress";
@@ -1450,6 +1451,188 @@ describe("tool keys on rows", () => {
     fireEvent.keyDown(row(), { key: "Enter", repeat: true });
     fireEvent.keyDown(row(), { key: "Enter", repeat: true });
     expect(detailsShown()).toBe(true);
+  });
+});
+
+describe("an unsaved edit and the row (Ruling R41, extended)", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const UNSAVED = "Unsaved YAML edit: review or discard it first.";
+  const EDITED = "kind: Deployment\nspec: {}\n";
+  const editPlan = () => ok(plan({ action: "edit", title: "Edit Deployment web", apply_label: "Save", diff: { before: "a\n", after: "b\n" } }));
+  const territory = {
+    cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks" as const,
+      region: null, environment: "development" as const, state: "ready" as const, message: null },
+    state: "ready" as const, message: null, rows: [deployment(), deployment({ uid: "d-2", name: "worker" })], total: 2, failing: 0, pending: 0,
+  };
+  const rowNamed = (name: string) =>
+    Array.from(document.querySelectorAll<HTMLElement>("[data-row-key]")).find((r) => r.textContent?.includes(name))!;
+  const web = () => rowNamed("web");
+  const selected = (el: HTMLElement) => el.getAttribute("aria-selected") === "true";
+  const detailsFor = (name: string) => screen.queryByRole("region", { name: "Details for " + name }) !== null;
+  let offDocument = () => {};
+  afterEach(() => offDocument());
+
+  /** The table (rows opted in to the kind arrows, as in the console) with web's YAML being edited. */
+  async function editingOnTheRow({ edit = true, routes = {} as Record<string, unknown[]> } = {}) {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })], ...routes });
+    // What a document listener (the kind strip's) sees: the key, and whether it was prevented.
+    const documentKeys = vi.fn();
+    const onDocument = (e: KeyboardEvent) => documentKeys(e.key, e.defaultPrevented);
+    document.addEventListener("keydown", onDocument);
+    offDocument = () => document.removeEventListener("keydown", onDocument);
+    const ui = (request: RowRequest | null) => (
+      <ActionsProvider>
+        <div style={{ height: 600 }} data-kind-row-keys="">
+          <Table territories={[territory]} kind={{ ...DEPLOYMENTS, verbs: VERBS }} onRetry={() => {}} request={request} />
+        </div>
+      </ActionsProvider>
+    );
+    const view = wrap(ui(null));
+    let seq = 0;
+    /** The palette asks for `action` on the row with `uid`. */
+    const ask = (action: RowRequest["action"], uid: string) => view.rerender(ui({ key: "c1/" + uid, action, seq: ++seq }));
+    act(() => web().focus());
+    fireEvent.keyDown(web(), { key: "e" });
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    if (edit) fireEvent.input(area, { target: { value: EDITED } });
+    act(() => web().focus());
+    return { calls, area, documentKeys, ask };
+  }
+
+  it("enter on the row keeps the details and the edit, and says why", async () => {
+    const { area } = await editingOnTheRow();
+    expect(fireEvent.keyDown(web(), { key: "Enter" })).toBe(false);
+    expect(fireEvent.keyDown(web(), { key: "d" })).toBe(false);
+    expect(detailsFor("web")).toBe(true);
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+  });
+
+  it("down on the row keeps the selection and the edit, and says why", async () => {
+    const { area } = await editingOnTheRow();
+    expect(fireEvent.keyDown(web(), { key: "ArrowDown" })).toBe(false);
+    fireEvent.keyDown(web(), { key: "ArrowDown", repeat: true });
+    fireEvent.keyDown(web(), { key: "ArrowUp" });
+    expect(selected(web())).toBe(true);
+    expect(selected(rowNamed("worker"))).toBe(false);
+    expect(detailsFor("web")).toBe(true);
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    expect(document.activeElement).toBe(web());
+  });
+
+  it("page, home and end keys on the row never move the selection", async () => {
+    const { area } = await editingOnTheRow();
+    for (const key of ["PageDown", "PageUp", "End", "Home"]) fireEvent.keyDown(web(), { key });
+    expect(selected(web())).toBe(true);
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("a tool key on the row keeps the edit, and says why", async () => {
+    const { calls, area } = await editingOnTheRow();
+    fireEvent.keyDown(web(), { key: "s" });
+    fireEvent.keyDown(web(), { key: "r" });
+    fireEvent.keyDown(web(), { key: "d", ctrlKey: true });
+    await act(async () => {});
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    expect(calls.filter((c) => c.url === "/api/actions/plan")).toEqual([]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+  });
+
+  it("the palette asking for another row keeps the selection and the edit, and says why", async () => {
+    const { area, ask } = await editingOnTheRow();
+    ask("details", "d-2");
+    expect(selected(web())).toBe(true);
+    expect(detailsFor("worker")).toBe(false);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    // On the edited row itself it is not a move: the YAML tab stays, and so does the edit.
+    ask("yaml", "d-1");
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("the kind arrows on the row never switch kinds away from the edit", async () => {
+    const { documentKeys } = await editingOnTheRow();
+    fireEvent.keyDown(web(), { key: "ArrowRight" });
+    // The kind strip listens on the document and ignores a prevented key (`pageKey`).
+    expect(documentKeys).toHaveBeenCalledWith("ArrowRight", true);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+  });
+
+  it("after discard, the arrows, down and enter work as before", async () => {
+    const { area, documentKeys } = await editingOnTheRow();
+    fireEvent.keyDown(area, { key: "Escape" });
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(document.activeElement).toBe(button("Discard"));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    act(() => web().focus());
+    fireEvent.keyDown(web(), { key: "ArrowRight" });
+    expect(documentKeys).toHaveBeenCalledWith("ArrowRight", false);
+    fireEvent.keyDown(web(), { key: "ArrowDown" });
+    await waitFor(() => expect(selected(rowNamed("worker"))).toBe(true));
+    expect(detailsFor("worker")).toBe(true);
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+    act(() => rowNamed("worker").focus());
+    fireEvent.keyDown(rowNamed("worker"), { key: "Enter" });
+    expect(detailsFor("worker")).toBe(false);
+  });
+
+  it("with the editor unchanged, enter closes the details", async () => {
+    await editingOnTheRow({ edit: false });
+    fireEvent.keyDown(web(), { key: "Enter" });
+    expect(detailsFor("web")).toBe(false);
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+  });
+
+  it("with the editor unchanged, down moves the selection", async () => {
+    await editingOnTheRow({ edit: false });
+    fireEvent.keyDown(web(), { key: "ArrowDown" });
+    await waitFor(() => expect(selected(rowNamed("worker"))).toBe(true));
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+  });
+
+  it("after an applied review, down moves the selection", async () => {
+    const { area } = await editingOnTheRow({
+      routes: {
+        "POST /api/actions/plan": [editPlan()],
+        "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Saved Deployment demo/web.", job_id: null, audit_id: 3 })],
+      },
+    });
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Save", dialog()));
+    await screen.findByText("Saved Deployment demo/web.");
+    act(() => web().focus());
+    fireEvent.keyDown(web(), { key: "ArrowDown" });
+    await waitFor(() => expect(selected(rowNamed("worker"))).toBe(true));
+  });
+
+  it("a cancelled review leaves the edit unsaved, so down still keeps it", async () => {
+    const { area } = await editingOnTheRow({ routes: { "POST /api/actions/plan": [editPlan()] } });
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Cancel", dialog()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    act(() => web().focus());
+    fireEvent.keyDown(web(), { key: "ArrowDown" });
+    expect(selected(web())).toBe(true);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
   });
 });
 

@@ -75,6 +75,8 @@ export function useTools({
   const said = useRef<HTMLParagraphElement>(null);
   /** What had focus when the open form or editor was asked for: where focus goes back when it closes. */
   const opener = useRef<Element | null>(null);
+  /** The editor's text differs from the YAML editing began with. */
+  const unsaved = useRef(false);
   /** Esc asked to close the details over an unsaved edit: say why it didn't (Ruling R41). */
   const [unsavedNote, setUnsavedNote] = useState(false);
 
@@ -130,6 +132,11 @@ export function useTools({
 
   const run = (tool: ToolId) => {
     if (!paneActive || busy !== null || !tools.includes(tool)) return;
+    // Every other tool would replace the editor and its unsaved text: say why not (Ruling R41).
+    if (open === "edit" && unsaved.current && tool !== "edit" && tool !== "nodeShell") {
+      setUnsavedNote(true);
+      return;
+    }
     setError(null);
     setOutcome(null);
     if (tool === "edit" || tool === "scale" || tool === "rollback") opener.current = document.activeElement;
@@ -297,6 +304,9 @@ export function useTools({
         busy={busy === "edit"}
         error={error}
         notice={unsavedNote ? UNSAVED_EDIT : null}
+        onChanged={(changed) => {
+          unsaved.current = changed;
+        }}
         onDiscard={close}
         onReview={(text) => {
           setUnsavedNote(false);
