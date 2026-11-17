@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ShellSession } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 
@@ -125,14 +125,94 @@ describe("ShellPane", () => {
     expect(screen.queryByText("Disconnected")).toBeNull();
   });
 
-  it("exit shows code and start again", () => {
+  it("a failed exit says its code", () => {
     render(<ShellPane session={session()} />);
     const { ws } = open();
     act(() => ws.emit({ type: "exit", code: 130, message: null }));
     act(() => ws.drop(1000));
-    expect(screen.getByText("Session ended (exit 130)")).toBeTruthy();
+    expect(screen.getByText("Shell ended. Exit code 130.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start again" }));
     expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("an ended shell says so and enter closes the tab", () => {
+    const onClose = vi.fn();
+    render(<ShellPane session={session()} onClose={onClose} />);
+    const { ws } = open();
+    const handler = FakeTerminal.last.keyHandler!;
+    const enter = (init: KeyboardEventInit = {}) =>
+      handler(new KeyboardEvent("keydown", { key: "Enter", cancelable: true, ...init }));
+    // While the shell runs, Enter is the shell's.
+    expect(enter()).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => ws.emit({ type: "exit", code: 0, message: null }));
+    act(() => ws.drop(1000));
+    const note = screen.getByRole("status");
+    expect(within(note).getByText("Shell ended.")).toBeTruthy();
+    expect(within(note).getByText("Enter closes this tab · Alt ↑ back to the table")).toBeTruthy();
+    const press = new KeyboardEvent("keydown", { key: "Enter", cancelable: true });
+    expect(handler(press)).toBe(false);
+    expect(press.defaultPrevented).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // Held, it closes once.
+    expect(enter({ repeat: true })).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // With a modifier, or mid-composition, or on key up, it is not a close.
+    expect(enter({ shiftKey: true })).toBe(true);
+    expect(enter({ ctrlKey: true })).toBe(true);
+    expect(enter({ isComposing: true })).toBe(true);
+    expect(handler(new KeyboardEvent("keyup", { key: "Enter" }))).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("enter closes through the latest onClose", () => {
+    const first = vi.fn();
+    const latest = vi.fn();
+    const { rerender } = render(<ShellPane session={session()} onClose={first} />);
+    const { ws } = open();
+    rerender(<ShellPane session={session()} onClose={latest} />);
+    act(() => ws.emit({ type: "exit", code: 0, message: null }));
+    expect(FakeTerminal.last.keyHandler!(new KeyboardEvent("keydown", { key: "Enter" }))).toBe(false);
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledTimes(1);
+  });
+
+  it("without onClose an ended shell offers no enter hint", () => {
+    render(<ShellPane session={session()} />);
+    const { ws } = open();
+    act(() => ws.emit({ type: "exit", code: 0, message: null }));
+    expect(screen.getByRole("status").textContent).not.toContain("Enter closes this tab");
+  });
+
+  it("alt+up still leaves an ended shell", () => {
+    const onClose = vi.fn();
+    render(<ShellPane session={session()} onClose={onClose} />);
+    const { ws } = open();
+    act(() => ws.emit({ type: "exit", code: 0, message: null }));
+    const handler = FakeTerminal.last.keyHandler!;
+    expect(handler(new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true }))).toBe(false);
+    expect(handler(new KeyboardEvent("keydown", { key: "Escape" }))).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("enter after a disconnect is not a close", () => {
+    const onClose = vi.fn();
+    render(<ShellPane session={session()} onClose={onClose} />);
+    const { ws } = open();
+    act(() => ws.drop(1006));
+    expect(screen.getByText("Disconnected")).toBeTruthy();
+    expect(FakeTerminal.last.keyHandler!(new KeyboardEvent("keydown", { key: "Enter" }))).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText("Shell ended.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+  });
+
+  it("enter after an error is not a close", () => {
+    const onClose = vi.fn();
+    render(<ShellPane session={session()} onClose={onClose} />);
+    act(() => FakeWebSocket.last.emit({ type: "error", message: "Pod gone." }));
+    expect(FakeTerminal.last.keyHandler!(new KeyboardEvent("keydown", { key: "Enter" }))).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("opens the terminal only once Geist Mono has loaded, so cells get its width", async () => {
@@ -234,8 +314,9 @@ describe("ShellPane", () => {
     act(() => ws.emit({ type: "exit", code: 126, message: msg, cannot_run: true }));
     act(() => ws.drop(1000));
     const note = screen.getByRole("status");
-    expect(note.textContent).toContain(msg);
-    expect(note.textContent).toContain("A debug container brings its own shell.");
+    // It never ran: the server's words carry the code, so the line doesn't repeat it.
+    expect(within(note).getByText(`Shell ended. ${msg} A debug container brings its own shell.`)).toBeTruthy();
+    expect(note.textContent).not.toContain("Exit code");
     fireEvent.click(screen.getByRole("button", { name: "Start a debug container" }));
     expect(onStartDebug).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Start again" })).toBeTruthy();
@@ -245,6 +326,7 @@ describe("ShellPane", () => {
     render(<ShellPane session={session()} onStartDebug={() => {}} />);
     const { ws } = open();
     act(() => ws.emit({ type: "exit", code: 127, message: null, cannot_run: false }));
+    expect(screen.getByText("Shell ended. Exit code 127.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Start a debug container" })).toBeNull();
   });
 

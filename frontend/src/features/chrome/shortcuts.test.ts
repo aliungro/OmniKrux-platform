@@ -57,6 +57,10 @@ describe("shortcut registry", () => {
     ]);
   });
 
+  it("the shell bar says alt up goes back", () => {
+    expect(barFor("pods", "shell", false).map((b) => [b.keys.join(" "), b.text])).toEqual([["Alt ↑", "back to the table"]]);
+  });
+
   it("the pods table bar reads short words", () => {
     const texts = barFor("pods", "table", false).map((b) => b.text);
     const order = ["logs", "pin a log", "previous logs", "into the logs", "delete"];

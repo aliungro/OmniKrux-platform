@@ -125,7 +125,8 @@ function plain(e: KeyboardEvent<HTMLElement>): boolean {
  *
  * The logs keyboard zone: Esc and Alt+Up go back to the table (`onFocusWorkspace`) and never close
  * anything; left and right on a log switch tabs; Ctrl+Del (Cmd+Backspace) closes the tab that has
- * the focus; Shift+L in the follow log pins its pod. Inside a terminal only Alt+Up is the dock's.
+ * the focus; Shift+L in the follow log pins its pod. Inside a terminal only Alt+Up is the dock's,
+ * and Enter once the shell has ended, which closes its tab (the shell pane's `onClose`).
  */
 export const Dock = memo(function Dock({
   dock,
@@ -250,8 +251,21 @@ export const Dock = memo(function Dock({
 
   /** Focus another session once it is shown, keeping a shell's terminal from taking the keyboard. */
   const moveTo = (id: string) => {
-    if (state.sessions.find((x) => x.id === id)?.kind === "shell") setAutofocusSuppressedTab(tabId(base, id));
+    if (stateRef.current.sessions.find((x) => x.id === id)?.kind === "shell") setAutofocusSuppressedTab(tabId(base, id));
     pendingFocus.current = id;
+  };
+
+  /**
+   * Close a session from the keyboard and move on: to the session that takes its place, or back to
+   * the table when none is left. Reads the dock as it is now, since an ended shell's Enter can come
+   * from a handler attached long before.
+   */
+  const closeAndMove = (id: string) => {
+    const action = { type: "close", id } as const;
+    const next = dockReducer(stateRef.current, action).focused;
+    if (next) moveTo(next);
+    dispatch(action);
+    if (!next) backToWorkspace.current();
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
@@ -286,13 +300,7 @@ export const Dock = memo(function Dock({
         dispatch({ type: "focus", id: next.id });
       };
     } else if (isDeleteKey(e) && (onLog || onTab) && !isEditable(target)) {
-      act = () => {
-        const action = { type: "close", id: session.id } as const;
-        const next = dockReducer(state, action).focused;
-        if (next) moveTo(next);
-        dispatch(action);
-        if (!next) onFocusWorkspace();
-      };
+      act = () => closeAndMove(session.id);
     } else if (session.follow && (onLog || onTab) && pressed("pinFollow", e)) {
       act = dock.pinFollow;
     }
@@ -394,6 +402,7 @@ export const Dock = memo(function Dock({
                 onStartDebug={x.debug || x.node ? undefined : () => dock.askDebug(x)}
                 onRestart={x.node ? () => dock.askRestart(x) : undefined}
                 note={shellNote(x)}
+                onClose={() => closeAndMove(x.id)}
               />
             )}
           </div>

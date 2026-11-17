@@ -239,8 +239,9 @@ export function Shell() {
               <AuditView filters={ws.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />
             ) : <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection} />}
           </main>
-          <Dock ref={dockRef} dock={dock} zoneActive={zone === "logs"} onFocusWorkspace={focusWorkspaceFromDock} />
-          {(kind || zone === "logs") && <ShortcutBar kind={kind} zone={zone ?? "table"} onOpen={() => setHelp(true)} />}
+          {/* A shell is in the dock: the dock keeps its outline, the bar says how to leave the terminal. */}
+          <Dock ref={dockRef} dock={dock} zoneActive={zone === "logs" || zone === "shell"} onFocusWorkspace={focusWorkspaceFromDock} />
+          {(kind || zone === "logs" || zone === "shell") && <ShortcutBar kind={kind} zone={zone ?? "table"} onOpen={() => setHelp(true)} />}
         </div>
       </div>
       {help && <AllShortcuts groups={allGroups(kind)} onClose={() => setHelp(false)} />}

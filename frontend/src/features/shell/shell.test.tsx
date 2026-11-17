@@ -692,6 +692,20 @@ it("alt+up from a shell returns to the table", async () => {
   expect(screen.getByRole("tab", { name: new RegExp(`^Shell.*${pods[0].name}`) })).toBeTruthy();
 });
 
+it("in a shell the bar says alt up goes back to the table", async () => {
+  await renderPods();
+  const first = startAtFirstPod();
+  fireEvent.keyDown(first, { key: "s" });
+  await waitFor(() => expect(document.activeElement).toBe(terminalOf()));
+  const strip = await screen.findByRole("navigation", { name: "Keyboard shortcuts: shell" });
+  expect(within(strip).getAllByRole("listitem")[0].textContent).toBe("Alt ↑ back to the table");
+  expect(strip.textContent).not.toContain("Esc");
+  expect(zoneDock().getAttribute("data-keyboard-zone")).toBe("logs");
+  fireEvent.keyDown(terminalOf()!, { key: "ArrowUp", altKey: true });
+  await screen.findByRole("navigation", { name: "Keyboard shortcuts: table" });
+  expect(screen.queryByRole("navigation", { name: "Keyboard shortcuts: shell" })).toBeNull();
+});
+
 it("alt+up leaves a terminal that stops the key on its textarea, at once and unsent", async () => {
   await renderPods();
   const first = startAtFirstPod();

@@ -81,17 +81,28 @@
 .note {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 6px 12px;
   padding: 7px 14px;
   border-top: 1px solid var(--rule);
   background: var(--surf);
   color: var(--ink-2);
 }
 
+/* The words take the room; in a narrow pane the hint and buttons wrap under them rather than
+   squeezing them to nothing. */
 .note > span {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 14em;
+}
+
+/* What the keyboard can do with an ended shell: quieter than the status, never broken in two. */
+.note > .keys {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .warn {

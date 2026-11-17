@@ -554,6 +554,16 @@ describe("keyboard zone", () => {
     expect(keyboardZone(screen.getByLabelText("filter"))).toBeNull();
     expect(keyboardZone(screen.getByText("in dialog"))).toBeNull();
   });
+  it("keyboard zone is shell inside a terminal", () => {
+    render(
+      <section data-dock data-page-keys="off">
+        <div role="tablist"><button role="tab">shell tab</button></div>
+        <div className="xterm"><textarea aria-label="terminal input" /></div>
+      </section>,
+    );
+    expect(keyboardZone(screen.getByLabelText("terminal input"))).toBe("shell");
+    expect(keyboardZone(screen.getByRole("tab", { name: "shell tab" }))).toBe("logs");
+  });
   it("a modal dialog inside the dock is not the logs zone", () => {
     render(<section data-dock><div aria-modal="true"><button>confirm</button></div></section>);
     expect(keyboardZone(screen.getByText("confirm"))).toBeNull();

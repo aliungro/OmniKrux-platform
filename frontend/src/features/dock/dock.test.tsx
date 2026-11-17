@@ -17,15 +17,18 @@ vi.mock("@xterm/xterm", () => ({
     cols = 80;
     rows = 24;
     input = document.createElement("textarea");
+    handler: ((e: KeyboardEvent) => boolean) | null = null;
     loadAddon() {}
-    // As xterm draws it: the helper textarea inside a .xterm root.
+    // As xterm draws it: the helper textarea inside a .xterm root. Like xterm, it listens for keys
+    // on its textarea and asks the custom key handler first.
     open(host: HTMLElement) {
       const root = document.createElement("div");
       root.className = "xterm";
       root.append(this.input);
       host.append(root);
+      this.input.addEventListener("keydown", (e) => { this.handler?.(e); }, true);
     }
-    attachCustomKeyEventHandler() {}
+    attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean) { this.handler = handler; }
     focus() { this.input.focus(); }
     write() {}
     reset() {}
@@ -1177,6 +1180,88 @@ it("ctrl+delete in the log search or a terminal never closes", async () => {
   expect(screen.getAllByRole("tab")).toHaveLength(2);
   expect(document.activeElement).toBe(terminal);
   expect(FakeWebSocket.instances.every((w) => !w.closedByClient)).toBe(true);
+});
+
+/** The shell's socket: the one that asked /api/exec for this pod. */
+const execSocket = (pod: string) => FakeWebSocket.instances.find((w) => w.url.includes("/api/exec") && w.params.get("pod") === pod)!;
+const terminalIn = (id: string) => document.querySelector<HTMLTextAreaElement>(`[data-dock-session="${id}"] .xterm textarea`)!;
+/** The server opens the shell's session (what it is sent is not looked at here). */
+function startShell(pod: string) {
+  const ws = execSocket(pod);
+  (ws as unknown as { send: (s: string) => void }).send = () => {};
+  act(() => ws.onopen?.({}));
+  return ws;
+}
+/** The shell's session ends on the server's side, as an exited shell's does. */
+function endShell(pod: string) {
+  const ws = startShell(pod);
+  act(() => ws.emit({ type: "exit", code: 0, message: null }));
+  act(() => ws.drop(1000));
+}
+
+it("enter in an ended shell closes its tab and focus moves on", async () => {
+  renderDock();
+  openKeyboardTestLog("api");
+  await openShell(shell("sh", { pod: "sh-pod" }));
+  await waitFor(() => expect(document.activeElement).toBe(terminalIn("sh")));
+  endShell("sh-pod");
+  expect(screen.getByText("Enter closes this tab · Alt ↑ back to the table")).toBeTruthy();
+  expect(fireEvent.keyDown(terminalIn("sh"), { key: "Enter" })).toBe(false);
+  expect(dock.state.sessions.map((x) => x.id)).toEqual(["api"]);
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(document.activeElement).toBe(logIn("api"));
+  expect(returns).toBe(0);
+});
+
+it("enter in an ended shell that was alone goes back to the workspace", async () => {
+  renderDock();
+  await openShell(shell("sh", { pod: "sh-pod" }));
+  await waitFor(() => expect(document.activeElement).toBe(terminalIn("sh")));
+  endShell("sh-pod");
+  fireEvent.keyDown(terminalIn("sh"), { key: "Enter" });
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(returns).toBe(1);
+  expect(document.activeElement).toBe(workspaceButton());
+  await act(async () => {});
+  expect(document.activeElement).not.toBe(document.body);
+});
+
+it("enter in an ended shell opened before a log lands on that log", async () => {
+  renderDock();
+  await openShell(shell("sh", { pod: "sh-pod" }));
+  openKeyboardTestLog("api");
+  fireEvent.click(screen.getByRole("tab", { name: /^Shell/ }));
+  act(() => terminalIn("sh").focus());
+  endShell("sh-pod");
+  fireEvent.keyDown(terminalIn("sh"), { key: "Enter" });
+  expect(dock.state.sessions.map((x) => x.id)).toEqual(["api"]);
+  expect(document.activeElement).toBe(logIn("api"));
+  expect(returns).toBe(0);
+});
+
+it("enter in a running or disconnected shell closes nothing", async () => {
+  renderDock();
+  await openShell(shell("sh", { pod: "sh-pod" }));
+  await waitFor(() => expect(document.activeElement).toBe(terminalIn("sh")));
+  const ws = startShell("sh-pod");
+  expect(fireEvent.keyDown(terminalIn("sh"), { key: "Enter" })).toBe(true);
+  act(() => ws.drop(1006));
+  expect(fireEvent.keyDown(terminalIn("sh"), { key: "Enter" })).toBe(true);
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(document.activeElement).toBe(terminalIn("sh"));
+});
+
+// A regression guard: the tab button's Ctrl+Del already closed a shell before Enter did.
+it("ctrl+delete on a focused shell tab closes it", async () => {
+  renderDock();
+  openKeyboardTestLog("api");
+  await openShell(shell("sh", { pod: "sh-pod" }));
+  const tab = screen.getByRole("tab", { name: /^Shell/ });
+  tab.focus();
+  expect(fireEvent.keyDown(tab, { key: "Delete", ctrlKey: true })).toBe(false);
+  expect(dock.state.sessions.map((x) => x.id)).toEqual(["api"]);
+  expect(execSocket("sh-pod").closedByClient).toBe(true);
+  expect(document.activeElement).toBe(logIn("api"));
 });
 
 it("shift+L in the follow log pins its pod", async () => {

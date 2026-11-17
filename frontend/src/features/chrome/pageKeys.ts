@@ -1,4 +1,4 @@
-import { isEditable, type KeyboardZone } from "./shortcuts";
+import { inTerminal, isEditable, type KeyboardZone } from "./shortcuts";
 
 /** The page and its chrome hand row keys to the table; nested keyboard owners keep theirs. */
 export function routesPageKeys(target: EventTarget | null): boolean {
@@ -29,12 +29,12 @@ export function focusTableRow(root: ParentNode = document, { selectedOnly = fals
 
 /**
  * Which keyboard zone has the focus: the table (and the page around it), the logs (anything in the
- * dock, even its search box), or neither (a field, a dialog, a menu).
+ * dock, even its search box), a shell (a terminal in the dock), or neither (a field, a dialog, a menu).
  */
 export function keyboardZone(active: Element | null): KeyboardZone | null {
   if (active === null || active === document.body || active === document.documentElement) return "table";
   if (active.closest('[aria-modal="true"]')) return null;
-  if (active.closest("[data-dock]")) return "logs";
+  if (active.closest("[data-dock]")) return inTerminal(active) ? "shell" : "logs";
   if (isEditable(active)) return null;
   if (active.closest('[role="dialog"], dialog, [role="listbox"], [role="menu"]')) return null;
   if (active.closest('[role="grid"]') || routesPageKeys(active)) return "table";

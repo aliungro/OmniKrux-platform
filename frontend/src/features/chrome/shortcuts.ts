@@ -150,7 +150,8 @@ export function shortcutsFor(kindKey: string): Shortcut[] {
   return SHORTCUTS.filter((s) => appliesTo(s, kindKey));
 }
 
-export type KeyboardZone = "table" | "logs";
+/** Where the keyboard is: the table, the dock (logs and its controls), or a shell's terminal. */
+export type KeyboardZone = "table" | "logs" | "shell";
 
 export interface BarItem { id: ShortcutId; keys: readonly string[]; text: string }
 
@@ -169,9 +170,11 @@ const item = (id: ShortcutId, mac: boolean, text: string, keys?: readonly string
 
 /**
  * The strip along the bottom for a keyboard zone. Table: this kind's keys, into the logs, delete,
- * then the page's own. Logs: what works inside the dock.
+ * then the page's own. Logs: what works inside the dock. Shell: only the way out, since every
+ * other key (Esc too) is the terminal's.
  */
 export function barFor(kindKey: string | undefined, zone: KeyboardZone, mac: boolean = isMac()): BarItem[] {
+  if (zone === "shell") return [item("leaveLogs", mac, "back to the table")];
   if (zone === "logs") {
     return [
       item("scrollLog", mac, "scroll"),
