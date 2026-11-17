@@ -228,7 +228,7 @@ export function Shell() {
                 <div className={ws.split ? s.split : s.single}>
                   {visible.map((tab) => (
                     <KubePane key={tab.id} tab={tab} title={tabLabel(tab.view, { clusters, kinds })} history={history}
-                      active={tab.id === activeId} zoneActive={zone === "table" && tab.id === activeId} split={ws.split !== undefined} onFocusPane={focusPane}
+                      active={tab.id === activeId} zoneActive={zone === "table" && tab.id === activeId && tab.view.page === "kind"} split={ws.split !== undefined} onFocusPane={focusPane}
                       reportScope={reportScope} reportTarget={reportTarget}
                       dock={dock} closed={closed} onReopen={(index) => dispatch({ type: "reopenClosed", index })}
                       loadProblem={loadProblem} onDismissLoadProblem={dismissLoadProblem} onEditPinned={editPinned} onOpenView={openView} />

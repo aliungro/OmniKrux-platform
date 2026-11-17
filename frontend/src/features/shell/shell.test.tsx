@@ -881,6 +881,12 @@ it("the lilac outline moves with the keyboard", async () => {
   expect(zoneDock().hasAttribute("data-keyboard-zone")).toBe(false);
 });
 
+it("a Home tab's pane has no keyboard zone outline", () => {
+  renderShell();
+  expect(screen.getByRole("heading", { name: "Where do you want to look?" })).toBeTruthy();
+  expect(zonePane().hasAttribute("data-keyboard-zone")).toBe(false);
+});
+
 it("the logs bar shows outside kubernetes too", async () => {
   await renderPods();
   const first = startAtFirstPod();
