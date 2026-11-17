@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { failure, HttpError } from "../../api/http";
 import type { Plan, PlanRequest } from "../../api/types";
+import { isMac } from "../chrome/shortcuts";
 import { DialogShell } from "../dock/ConfirmDialog";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import cd from "../dock/ConfirmDialog.module.css";
@@ -14,8 +15,18 @@ import s from "./ActionDialog.module.css";
 export const PRODUCTION = "This is a production cluster.";
 export const typeToConfirm = (name: string) => `Type ${name} to confirm`;
 
-/** Applies that take something away get the danger colour on their button. */
+/** Applies that take something away get the danger colour on their button, and open on Cancel. */
 const DESTRUCTIVE = new Set(["delete", "drain", "evict"]);
+
+/**
+ * Where a review's focus starts: Cancel for what takes something away and for a review that can't
+ * be applied, the name field where the name must be typed, the action button otherwise.
+ */
+export function reviewFocus(plan: Pick<Plan, "action" | "blocked" | "confirm_text">): "cancel" | "typed" | "apply" {
+  if (DESTRUCTIVE.has(plan.action) || plan.blocked.length > 0) return "cancel";
+  if (plan.confirm_text !== null) return "typed";
+  return "apply";
+}
 
 type Failure = { message: string; review: boolean };
 
@@ -39,6 +50,13 @@ export function ActionDialog({
   const id = useId();
   const actions = useActions();
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const applyRef = useRef<HTMLButtonElement>(null);
+  const typedRef = useRef<HTMLInputElement>(null);
+  // Read once, on open: a review planned again keeps the focus where it is.
+  const [focus] = useState(() => reviewFocus(plan));
+  const first = focus === "cancel" ? cancelRef : focus === "typed" ? typedRef : applyRef;
+  /** An apply on its way: a second confirm in the same moment never sends it twice. */
+  const applying = useRef(false);
   const [typed, setTyped] = useState("");
   const [phase, setPhase] = useState<"idle" | "applying" | "reviewing">("idle");
   const [error, setError] = useState<Failure | null>(null);
@@ -63,7 +81,8 @@ export function ActionDialog({
   const canApply = !busy && plan.blocked.length === 0 && typedOk && !error?.review;
 
   const apply = async () => {
-    if (!canApply) return;
+    if (!canApply || applying.current) return;
+    applying.current = true;
     setPhase("applying");
     setError(null);
     try {
@@ -78,6 +97,8 @@ export function ActionDialog({
       const review = err instanceof HttpError && (err.status === 409 || err.status === 404);
       setError({ message: failure(err), review });
       setPhase("idle");
+    } finally {
+      applying.current = false;
     }
   };
 
@@ -141,11 +162,13 @@ export function ActionDialog({
           <label className={s.typed}>
             <span>{typeToConfirm(plan.confirm_text)}</span>
             <input
+              ref={typedRef}
               className={s.input}
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                // Plain Enter only: Ctrl+Enter is the dialog's, and a held Enter never applies.
+                if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
                   e.preventDefault();
                   void apply();
                 }
@@ -172,10 +195,12 @@ export function ActionDialog({
             Cancel
           </button>
           <button
+            ref={applyRef}
             type="button"
             className={`${s.btn} ${DESTRUCTIVE.has(plan.action) ? s.danger : s.go}`}
             onClick={() => void apply()}
             disabled={!canApply}
+            aria-keyshortcuts={isMac() ? "Meta+Enter" : "Control+Enter"}
           >
             {phase === "applying" ? "Applying…" : plan.apply_label}
           </button>
@@ -190,7 +215,8 @@ export function ActionDialog({
       role="dialog"
       busy={busy}
       onCancel={close}
-      first={cancelRef}
+      onConfirm={started === null ? () => void apply() : undefined}
+      first={first}
       labelledBy={`${id}-t`}
       describedBy={plan.summary.length > 0 ? `${id}-b` : undefined}
       className={`${s.dialog}${plan.diff ? ` ${s.wide}` : ""}`}

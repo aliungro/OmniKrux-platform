@@ -3,13 +3,14 @@ import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import type { Job, Plan, ResourceRow } from "../../api/types";
 import { resourceDescribe } from "../../test/describe";
 import { DEPLOYMENTS } from "../../test/kinds";
 import { Table } from "../../test/table";
 import { Inspector } from "../inspector/Inspector";
-import { ActionDialog, ActionsProvider } from "./ActionDialog";
+import { ActionDialog, ActionsProvider, reviewFocus } from "./ActionDialog";
 import { DrainProgress } from "./DrainProgress";
 import { loadCodeMirror } from "./lazyCodeMirror";
 
@@ -267,12 +268,12 @@ describe("action dialog", () => {
     await waitFor(() => expect(onDone).toHaveBeenCalled());
   });
 
-  it("cancel takes first focus, applying says so and locks the dialog", async () => {
+  it("the action button takes first focus, applying says so and locks the dialog", async () => {
     let answer!: (r: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => { answer = r; })));
     const onDone = vi.fn();
     wrap(<ActionDialog plan={plan()} onDone={onDone} onReview={vi.fn()} />);
-    expect(document.activeElement).toBe(button("Cancel", dialog()));
+    expect(document.activeElement).toBe(button("Restart", dialog()));
     fireEvent.click(button("Restart", dialog()));
     expect(button("Applying…", dialog()).disabled).toBe(true);
     expect(button("Cancel", dialog()).disabled).toBe(true);
@@ -286,11 +287,117 @@ describe("action dialog", () => {
     wrap(<ActionDialog plan={plan({ confirm_text: "web" })} onDone={vi.fn()} onReview={vi.fn()} />);
     const cancel = button("Cancel", dialog());
     const input = screen.getByLabelText("Type web to confirm");
-    expect(document.activeElement).toBe(cancel);
-    fireEvent.keyDown(dialog(), { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(input); // Restart is off until the name is typed
+    expect(document.activeElement).toBe(input);
     fireEvent.keyDown(dialog(), { key: "Tab" });
     expect(document.activeElement).toBe(cancel);
+    fireEvent.keyDown(dialog(), { key: "Tab" });
+    expect(document.activeElement).toBe(input); // Restart is off until the name is typed
+  });
+
+  const applied = { outcome: "succeeded", message: "Done.", job_id: null, audit_id: 1 };
+  const applies = (calls: Call[]) => calls.filter((c) => c.method === "POST" && c.url.endsWith("/apply"));
+
+  it.each([
+    ["restart", "Restart"],
+    ["scale", "Scale"],
+    ["rollback", "Roll back"],
+    ["cordon", "Cordon"],
+    ["uncordon", "Uncordon"],
+    ["edit", "Save"],
+  ] as const)("a review opens on its action button and enter applies (%s)", async (action, label) => {
+    const calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+    const onDone = vi.fn();
+    const diff = action === "edit" ? { before: "a: 1\n", after: "a: 2\n" } : null;
+    wrap(<ActionDialog plan={plan({ action, apply_label: label, diff })} onDone={onDone} onReview={vi.fn()} />);
+    const go = button(label, dialog());
+    expect(document.activeElement).toBe(go);
+    expect(go.getAttribute("aria-keyshortcuts")).toBe("Control+Enter");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(applies(calls)).toEqual([{ url: "/api/actions/p1/apply", method: "POST", body: {} }]);
+  });
+
+  it("delete, drain and evict reviews keep focus on cancel", () => {
+    for (const [action, label] of [["delete", "Delete"], ["drain", "Drain"], ["evict", "Evict"]] as const) {
+      wrap(<ActionDialog plan={plan({ action, apply_label: label })} onDone={vi.fn()} onReview={vi.fn()} />);
+      expect(document.activeElement).toBe(button("Cancel", dialog()));
+      expect(button(label, dialog()).disabled).toBe(false);
+      cleanup();
+    }
+    expect(reviewFocus({ action: "delete", blocked: [], confirm_text: "web" })).toBe("cancel");
+  });
+
+  it("a blocked review opens on cancel and a typed one on its name field", () => {
+    const blocked = plan({ action: "scale", apply_label: "Scale", blocked: ["Nothing changes: web already runs 3 replicas."] });
+    wrap(<ActionDialog plan={blocked} onDone={vi.fn()} onReview={vi.fn()} />);
+    expect(document.activeElement).toBe(button("Cancel", dialog()));
+    cleanup();
+    wrap(<ActionDialog plan={plan({ confirm_text: "web" })} onDone={vi.fn()} onReview={vi.fn()} />);
+    expect(document.activeElement).toBe(screen.getByLabelText("Type web to confirm"));
+    expect(reviewFocus({ action: "restart", blocked: [], confirm_text: null })).toBe("apply");
+  });
+
+  it("ctrl+enter confirms any review", async () => {
+    let calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+    let onDone = vi.fn();
+    wrap(<ActionDialog plan={plan()} onDone={onDone} onReview={vi.fn()} />);
+    expect(fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true })).toBe(false);
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(applies(calls)).toHaveLength(1);
+
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }]) {
+      cleanup();
+      calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+      onDone = vi.fn();
+      wrap(<ActionDialog plan={plan({ action: "delete", apply_label: "Delete" })} onDone={onDone} onReview={vi.fn()} />);
+      const cancel = button("Cancel", dialog());
+      expect(document.activeElement).toBe(cancel);
+      // On Cancel, Ctrl+Enter confirms; it never presses Cancel.
+      expect(fireEvent.keyDown(cancel, { key: "Enter", ...mod })).toBe(false);
+      await waitFor(() => expect(onDone).toHaveBeenCalledWith({ message: "Done.", tone: "ok" }));
+      expect(applies(calls)).toEqual([{ url: "/api/actions/p1/apply", method: "POST", body: {} }]);
+    }
+  });
+
+  it("ctrl+enter does nothing until the name is typed", async () => {
+    const calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+    const onDone = vi.fn();
+    wrap(<ActionDialog plan={plan({ confirm_text: "web" })} onDone={onDone} onReview={vi.fn()} />);
+    const input = screen.getByLabelText("Type web to confirm");
+    expect(document.activeElement).toBe(input);
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(applies(calls)).toHaveLength(0);
+    await userEvent.type(input, "web");
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    // The field acts on plain Enter only, so Ctrl+Enter in it applies exactly once.
+    expect(applies(calls)).toEqual([{ url: "/api/actions/p1/apply", method: "POST", body: { confirm_text: "web" } }]);
+  });
+
+  it("a held enter never applies", () => {
+    const calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+    wrap(<ActionDialog plan={plan()} onDone={vi.fn()} onReview={vi.fn()} />);
+    const go = button("Restart", dialog());
+    expect(document.activeElement).toBe(go);
+    // The prevented keydown is what stops a held Enter from pressing the button (R31).
+    expect(fireEvent.keyDown(go, { key: "Enter", repeat: true })).toBe(false);
+    expect(fireEvent.keyDown(go, { key: "Enter", ctrlKey: true, repeat: true })).toBe(false);
+    expect(applies(calls)).toHaveLength(0);
+    expect(go.textContent).toBe("Restart");
+  });
+
+  it("ctrl+enter while applying does nothing more", async () => {
+    let answer!: (r: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>((r) => { answer = r; }));
+    vi.stubGlobal("fetch", fetch);
+    const onDone = vi.fn();
+    wrap(<ActionDialog plan={plan()} onDone={onDone} onReview={vi.fn()} />);
+    fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => answer(new Response(JSON.stringify(applied), { status: 200 })));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -516,6 +623,28 @@ describe("changes from the details", () => {
     fireEvent.click(edit);
     const area = await screen.findByLabelText("Edit Deployment YAML");
     await waitFor(() => expect(document.activeElement).toBe(area));
+  });
+
+  it("an enter held from the scale form never applies the review", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan({ action: "scale", title: "Scale Deployment web", apply_label: "Scale" }))],
+      "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Scaled.", job_id: null, audit_id: 1 })],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Scale", tools()));
+    const replicas = screen.getByLabelText("Replicas");
+    await userEvent.clear(replicas);
+    await userEvent.type(replicas, "2{Enter}");
+    await waitFor(() => expect(document.activeElement).toBe(button("Scale", dialog())));
+    // The same Enter, still held, repeats on the button that just took focus.
+    expect(fireEvent.keyDown(document.activeElement!, { key: "Enter", repeat: true })).toBe(false);
+    expect(calls.filter((c) => c.url.endsWith("/apply"))).toHaveLength(0);
+    expect(calls.find((c) => c.url === "/api/actions/plan")?.body).toMatchObject({ params: { replicas: 2 } });
   });
 
   it("scale form plans with replicas", async () => {

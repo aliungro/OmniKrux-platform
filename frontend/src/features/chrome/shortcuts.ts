@@ -39,7 +39,8 @@ export type ShortcutId =
   | "layout"
   | "pinLogs" | "enterLogs" | "deleteFocused" | "backToTable" | "scrollLog" | "logEnds" | "pinFollow"
   | "leaveLogs"
-  | "sessionTabs";
+  | "sessionTabs"
+  | "confirmReview";
 
 export interface Shortcut {
   id: ShortcutId;
@@ -112,6 +113,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "filter", scope: "global", keys: ["/"], match: ["/"], label: "Filter rows", bar: "filter" },
   { id: "help", scope: "global", keys: ["?"], match: ["?"], label: "Show all shortcuts" },
   { id: "deleteFocused", scope: "global", keys: ["Ctrl Del"], macKeys: ["⌘ ⌫"], label: "Delete what has the focus: a resource row (reviewed first) or a dock tab" },
+  // In an open review (a change, a bulk delete, a debug container or node shell ask).
+  { id: "confirmReview", scope: "global", keys: ["Ctrl Enter"], macKeys: ["⌘ Enter"], match: ["Enter"], ctrl: true, label: "Confirm the open review (Enter on its focused button too)" },
   // In the logs zone: a log pane, or anything else in the dock.
   { id: "scrollLog", scope: "logs", keys: ["↑ ↓", "PgUp PgDn"], label: "Scroll the log by a line or a page" },
   { id: "logEnds", scope: "logs", keys: ["Home", "End"], label: "Top of the log, or its live end (G too)" },

@@ -700,6 +700,17 @@ ${fixtureSecret("OciKey")}
   expect(again.dataset.masked).toBe("true");
 });
 
+it("a held enter in the pasted key still types new lines", async () => {
+  show();
+  const user = userEvent.setup();
+  const form = await openConnect(user);
+  await user.selectOptions(form.getByRole("combobox", { name: /provider/i }), form.getByRole("option", { name: "Oracle Cloud tenancy" }));
+  const pasted = form.getByLabelText<HTMLTextAreaElement>("Or paste the key");
+  // Not a review: the connect dialog keeps its keys as they were.
+  expect(fireEvent.keyDown(pasted, { key: "Enter", repeat: true })).toBe(true);
+  expect(fireEvent.keyDown(pasted, { key: "Enter", ctrlKey: true })).toBe(true);
+});
+
 it("connect conflict stays in the dialog in the server's words", async () => {
   const detail = "This AWS account is already connected.";
   serve({ write: () => json({ detail }, 409) });

@@ -457,6 +457,21 @@ describe("Dock", () => {
     expect(screen.getAllByRole("tab")).toHaveLength(1);
   });
 
+  it("ctrl+enter starts a node shell you were asked about", async () => {
+    const fetch = vi.fn(() => json({ namespace: "default", pod: "omnikrux-node-shell-a1b2c", container: "shell" }));
+    vi.stubGlobal("fetch", fetch);
+    renderDock();
+    fireEvent.click(screen.getByRole("button", { name: "node shell" }));
+    const dialog = screen.getByRole("alertdialog");
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(document.activeElement).toBe(cancel);
+    expect(fireEvent.keyDown(cancel, { key: "Enter", ctrlKey: true })).toBe(false);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith("/api/clusters/c1/nodes/aks-np1-03/shell", expect.objectContaining({ method: "POST" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
   it("escape cancels a confirm without a request", () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

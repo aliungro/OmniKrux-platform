@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allGroups, barFor, isDeleteKey, pressed, rowShortcut, SHORTCUTS } from "./shortcuts";
+import { allGroups, barFor, isDeleteKey, keysFor, pressed, rowShortcut, SHORTCUTS } from "./shortcuts";
 
 const base = { ctrlKey: false, metaKey: false, altKey: false, shiftKey: false };
 
@@ -76,6 +76,18 @@ describe("shortcut registry", () => {
 
   it("macOS keycaps show cmd backspace", () => {
     expect(barFor("pods", "table", true).find((b) => b.id === "deleteFocused")?.keys).toEqual(["⌘ ⌫"]);
+  });
+
+  it("help lists ctrl+enter for reviews", () => {
+    const anywhere = allGroups().find(([t]) => t === "Anywhere")![1];
+    const confirm = anywhere.find((s) => s.id === "confirmReview");
+    expect(confirm?.keys).toEqual(["Ctrl Enter"]);
+    expect(confirm?.label).toBe("Confirm the open review (Enter on its focused button too)");
+    expect(confirm?.bar).toBeUndefined();
+    expect(keysFor("confirmReview", true)).toEqual(["⌘ Enter"]);
+    expect(pressed("confirmReview", { ...base, key: "Enter", ctrlKey: true })).toBe(true);
+    expect(pressed("confirmReview", { ...base, key: "Enter", metaKey: true })).toBe(true);
+    expect(pressed("confirmReview", { ...base, key: "Enter" })).toBe(false);
   });
 
   it("help lists both zones", () => {
