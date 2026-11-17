@@ -607,6 +607,44 @@ describe("inspector table column widths", () => {
     for (const handle of handles) fireEvent.keyDown(handle, { key: "Enter" });
   });
 
+  it("every inspector table resizes", async () => {
+    const sample = { state: "ok", message: null, at: new Date().toISOString(), window_s: 15, stale: false };
+    const usage = { cpu_m: 100, memory_b: 1024 ** 2 };
+    vi.stubGlobal("fetch", (url: string) => json(url.includes("/pods/") ? {
+      ...sample,
+      containers: [{ name: "metrics-sidecar", ...usage, cpu_request_m: null, cpu_limit_m: null, memory_request_b: null, memory_limit_b: null }],
+    } : {
+      ...sample, ...usage, allocatable_cpu_m: 1500, capacity_cpu_m: 2000,
+      allocatable_memory_b: 4096 ** 2, capacity_memory_b: 4096 ** 2,
+    }));
+    const cols = { columns: ["Name", "Value"], rows: [[{ text: "a", link: null, cls: null }, { text: "b", link: null, cls: null }]], note: null };
+    wrap(<>
+      <EventsTable events={events} error={null} />
+      <MetricsView clusterId="c1" ns="payments" name="pod" />
+      <NodeMetricsView clusterId="c1" name="worker" />
+      <ResourceDescribeView clusterId="c1" data={resourceDescribe({ kind_key: "deployments.apps", sections: [{ title: "Members", ...cols }], events: [] })} />
+    </>);
+    await screen.findByText("metrics-sidecar");
+    await screen.findByRole("columnheader", { name: "Used" });
+    const press = (handle: Element, type: string, clientX: number) =>
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+    const tables = screen.getAllByRole("table");
+    expect(tables).toHaveLength(4);
+    for (const table of tables) {
+      const headers = within(table).getAllByRole("columnheader");
+      for (const header of headers) expect(within(header).getAllByRole("separator")).toHaveLength(1);
+      const header = headers[0];
+      const handle = within(header).getByRole("separator");
+      vi.spyOn(header, "getBoundingClientRect").mockReturnValue({ width: 100 } as DOMRect);
+      press(handle, "pointerdown", 100);
+      expect(document.querySelectorAll("[data-resize-guide],[data-resize-tip]")).toHaveLength(2);
+      press(handle, "pointerup", 130);
+      expect(document.querySelectorAll("[data-resize-guide],[data-resize-tip]")).toHaveLength(0);
+      expect((table.querySelectorAll("col")[0] as HTMLElement).style.width).toBe("130px");
+      fireEvent.keyDown(handle, { key: "Enter" });
+    }
+  });
+
   it("double-click fits an events column to its content", () => {
     const two = [{ ...events[0], reason: "Scheduled" }, { ...events[0], reason: "Pulled" }];
     render(<EventsTable events={two} error={null} />);

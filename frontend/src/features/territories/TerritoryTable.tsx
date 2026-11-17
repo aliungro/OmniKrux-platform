@@ -140,6 +140,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   paneActive = true,
 }: TerritoryTableProps) {
   const { selected, open } = selection;
+  const resizeKey = useMemo(() => JSON.stringify(menuView ?? null), [menuView]);
   const items = useMemo(() => flatten(territories, open ? selected : null), [territories, open, selected]);
   const indexByKey = useMemo(() => {
     const m = new Map<string, number>();
@@ -626,7 +627,7 @@ export const TerritoryTable = memo(function TerritoryTable({
             </span>}
             {columns.map((c) => <ColumnHeader key={`${kind.key}:${c.key}`} col={c}
               filter={columnFilters.find(f => f.key === c.key)} sort={sort} source={pickSource}
-              onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} resizeView={menuView} getGuideRect={getGuideRect}
+              onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} resizeView={resizeKey} getGuideRect={getGuideRect}
               onPreviewWidth={width => previewColumn(c.key, width)}
               onCommitWidth={width => commitWidth(c.key, width)} />)}
           </div>

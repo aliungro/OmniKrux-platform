@@ -7,7 +7,7 @@ import { ProviderBadge } from "./ProviderBadge";
 import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
 import { Status } from "./Status";
-import { CERTIFICATES, DEPLOYMENTS, EVENTS, HELM, NODES, PODS, SERVICES } from "../../test/kinds";
+import { CERTIFICATES, DEPLOYMENTS, EVENTS, HELM, NODES, PODS, SECRETS, SERVICES, STATEFULSETS } from "../../test/kinds";
 import { Cell, gridTemplate, minTableWidth } from "./cells";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { ContainerState, Usage } from "../../api/types";
@@ -346,6 +346,71 @@ describe("container status bullets", () => {
       expect(marks[4].borderStyle).toBe("solid");
       expect(marks[4].borderColor).toBe("rgb(119, 113, 143)");
     } finally { css.remove(); }
+  });
+});
+
+describe("column resizing on every table", () => {
+  const overlays = () => document.querySelectorAll("[data-resize-guide],[data-resize-tip]");
+  const press = (handle: Element, type: string, clientX: number) =>
+    fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+  const flushFrames = () => act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+  const dataHeaders = (grid: HTMLElement) =>
+    within(grid).getAllByRole("columnheader").filter(header => !header.querySelector("input"));
+
+  it.each([PODS, DEPLOYMENTS, STATEFULSETS, SERVICES, SECRETS, NODES, EVENTS, HELM, CERTIFICATES])(
+    "every column of $key resizes", async (kind) => {
+      layout();
+      localStorage.clear();
+      const save = vi.spyOn(Storage.prototype, "setItem");
+      render(<QueryClientProvider client={new QueryClient()}>
+        <Table territories={[terr({ rows: [], total: 0 })]} kind={kind} onRetry={() => {}} />
+      </QueryClientProvider>);
+      const grid = screen.getByRole("grid");
+      const headers = dataHeaders(grid);
+      expect(headers).toHaveLength(kind.columns.length);
+      for (const header of headers) {
+        const label = header.getAttribute("aria-label") ?? header.textContent ?? "";
+        expect(within(header).getAllByRole("separator").map(h => h.getAttribute("aria-label")))
+          .toEqual([expect.stringMatching(/^Resize \S/)]);
+        expect(label).not.toBe("");
+      }
+      const target = headers[1];
+      const handle = within(target).getByRole("separator");
+      vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+      act(() => handle.focus());
+      save.mockClear();
+      press(handle, "pointerdown", 100);
+      press(handle, "pointermove", 140);
+      await flushFrames();
+      expect(overlays()).toHaveLength(2);
+      press(handle, "pointerup", 140);
+      expect(overlays()).toHaveLength(0);
+      expect(grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/)[1]).toBe("240px");
+      const writes = save.mock.calls.filter(([key]) => key === "omnikrux.tableColumnWidths");
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(String(writes[0][1])).tables[`resource:${kind.key}`]).toBeTruthy();
+      fireEvent.keyDown(handle, { key: "Enter" });
+    });
+
+  it("a drag in the inactive split pane resizes its column", async () => {
+    layout();
+    localStorage.clear();
+    const ui = (view: object) => <QueryClientProvider client={new QueryClient()}>
+      <Table territories={[terr({ rows: [], total: 0 })]} kind={DEPLOYMENTS} onRetry={() => {}} menuView={view} />
+    </QueryClientProvider>;
+    const { rerender } = render(ui({ page: "kind", kind: "deployments.apps" }));
+    const grid = screen.getByRole("grid");
+    const target = dataHeaders(grid)[1];
+    const handle = within(target).getByRole("separator");
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+    press(handle, "pointerdown", 100);
+    // Pane activation re-renders the table with a new, equal view object.
+    rerender(ui({ page: "kind", kind: "deployments.apps" }));
+    expect(overlays()).toHaveLength(2);
+    press(handle, "pointerup", 140);
+    expect(overlays()).toHaveLength(0);
+    expect(grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/)[1]).toBe("240px");
+    fireEvent.keyDown(handle, { key: "Enter" });
   });
 });
 

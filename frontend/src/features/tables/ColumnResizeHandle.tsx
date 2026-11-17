@@ -25,14 +25,21 @@ interface Drag {
   width: number;
   frame: number | null;
   cancel: () => void;
+  commit: (clientX: number) => void;
   /** Moves the guide and tooltip; they only ever get `transform` and text writes. */
   paint: () => void;
 }
+
+/** The one drag and overlay alive anywhere: a new drag ends an older one that never got its end event. */
+let liveDrag: { cancel(): void } | null = null;
+let liveOverlay: { remove(): void } | null = null;
 
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : 0;
 
 /** The guide line and its width tooltip: plain body children, so a drag never renders a row. */
 function createOverlay(label: string, header: DOMRect | undefined, area: DOMRect | null, guideClass: string, tipClass: string) {
+  liveOverlay?.remove();
+  document.querySelectorAll("[data-resize-guide],[data-resize-tip]").forEach(node => node.remove());
   const top = finite(header?.top);
   const right = finite(header?.right);
   const line = document.createElement("div");
@@ -47,7 +54,7 @@ function createOverlay(label: string, header: DOMRect | undefined, area: DOMRect
   tip.setAttribute("aria-hidden", "true");
   tip.style.top = `${finite(header?.bottom) + 4}px`;
   document.body.append(line, tip);
-  return {
+  const overlay = {
     move(delta: number, width: number) {
       const x = right + delta;
       line.style.transform = `translateX(${x - 1}px)`;
@@ -58,8 +65,11 @@ function createOverlay(label: string, header: DOMRect | undefined, area: DOMRect
     remove() {
       line.remove();
       tip.remove();
+      if (liveOverlay === overlay) liveOverlay = null;
     },
   };
+  liveOverlay = overlay;
+  return overlay;
 }
 
 export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPreview, onCommit, onFit, guide, view }: ColumnResizeHandleProps) {
@@ -98,7 +108,10 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
     }
     element.focus({ preventScroll: true });
 
+    liveDrag?.cancel();
     const overlay = createOverlay(label, element.parentElement?.getBoundingClientRect(), guide?.() ?? null, s.guide, s.tip);
+
+    const self = { cancel: () => cancel() };
 
     function escape(event: globalThis.KeyboardEvent) {
       if (event.key !== "Escape") return;
@@ -107,11 +120,22 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
       cancel();
     }
 
+    function windowUp(event: globalThis.PointerEvent) {
+      if (event.pointerId === pointerId) commit(event.clientX);
+    }
+    function windowCancel() {
+      cancel();
+    }
+
     function cancel() {
       const current = drag.current;
       if (!current) return;
       drag.current = null;
+      if (liveDrag === self) liveDrag = null;
       document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("pointerup", windowUp, true);
+      window.removeEventListener("pointercancel", windowCancel, true);
+      window.removeEventListener("blur", windowCancel, true);
       if (current.frame !== null) cancelAnimationFrame(current.frame);
       overlay.remove();
       if (element.hasPointerCapture?.(pointerId)) element.releasePointerCapture(pointerId);
@@ -119,11 +143,26 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
       onPreview(null);
     }
 
+    /** The one commit: the handle's pointerup and the window fallback both come here. */
+    function commit(clientX: number) {
+      const current = drag.current;
+      if (!current) return;
+      const next = clamp(current.startWidth + (clientX - current.startX), current.upper);
+      cancel();
+      if (next !== current.startWidth) {
+        setWidth(next);
+        onCommit(next);
+      }
+    }
     const paint = () => overlay.move(current.width - startWidth, current.width);
-    const current: Drag = { pointerId, startX, startWidth, upper, width: startWidth, frame: null, cancel, paint };
+    const current: Drag = { pointerId, startX, startWidth, upper, width: startWidth, frame: null, cancel, commit, paint };
     drag.current = current;
+    liveDrag = self;
     paint();
     document.addEventListener("keydown", escape, true);
+    window.addEventListener("pointerup", windowUp, true);
+    window.addEventListener("pointercancel", windowCancel, true);
+    window.addEventListener("blur", windowCancel, true);
     setResizing(true);
   }
 
@@ -145,12 +184,7 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
     const current = drag.current;
     if (current?.pointerId !== event.pointerId) return;
     event.stopPropagation();
-    const next = clamp(current.startWidth + (event.clientX - current.startX), current.upper);
-    current.cancel();
-    if (next !== current.startWidth) {
-      setWidth(next);
-      onCommit(next);
-    }
+    current.commit(event.clientX);
   }
 
   function cancelPointer(event: PointerEvent<HTMLSpanElement>) {

@@ -115,6 +115,22 @@ describe("audit view", () => {
     expect(screen.getByLabelText("Details").textContent).toContain('"replicas": 3');
   });
 
+  it("the audit log removes its guide on release", async () => {
+    serve(() => ({ records: [record(1)], next_before: null }));
+    show();
+    await screen.findByRole("row", { name: /web-1/ });
+    const handle = screen.getByRole("separator", { name: "Resize Action" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+    const press = (type: string, clientX: number) =>
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+    press("pointerdown", 100);
+    expect(document.querySelectorAll("[data-resize-guide],[data-resize-tip]")).toHaveLength(2);
+    press("pointerup", 140);
+    expect(document.querySelectorAll("[data-resize-guide],[data-resize-tip]")).toHaveLength(0);
+    expect(screen.getByRole("grid").style.getPropertyValue("--audit-cols").split(/ (?![^()]*\))/)[2]).toBe("240px");
+    fireEvent.keyDown(handle, { key: "Enter" });
+  });
+
   it("double-click fits an audit column to its content", async () => {
     serve(() => ({ records: [record(2), record(1)], next_before: null }));
     show();
