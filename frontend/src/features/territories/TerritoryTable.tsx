@@ -107,8 +107,8 @@ const ROW_MENU_LABELS: Partial<Record<RowAction, string>> = {
   workloadLogs: "Logs", shell: "Shell", reveal: "Show secret keys",
 };
 
-/** Row keys that act once however long they're held. */
-const HELD_ONCE: ReadonlySet<ShortcutId> = new Set<ShortcutId>(["logs", "previousLogs", "pinLogs", "reveal", "delete"]);
+/** Row keys that act once however long they're held (a held Enter never toggles the details on and off). */
+const HELD_ONCE: ReadonlySet<ShortcutId> = new Set<ShortcutId>(["details", "logs", "previousLogs", "pinLogs", "reveal", "delete"]);
 
 function verbsFor(kind: KindInfo, row: ResourceRow): readonly string[] {
   return kind.verbs_by_cluster?.[row.cluster_id] ?? kind.verbs;

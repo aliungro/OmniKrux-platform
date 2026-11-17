@@ -1410,6 +1410,17 @@ describe("tool keys on rows", () => {
     expect(detailsShown()).toBe(false);
     expect(screen.queryByText(UNSAVED)).toBeNull();
   });
+
+  it("a held enter on a row neither opens nor closes the details", () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "Enter", repeat: true });
+    expect(detailsShown()).toBe(false);
+    fireEvent.keyDown(row(), { key: "Enter" });
+    expect(detailsShown()).toBe(true);
+    fireEvent.keyDown(row(), { key: "Enter", repeat: true });
+    fireEvent.keyDown(row(), { key: "Enter", repeat: true });
+    expect(detailsShown()).toBe(true);
+  });
 });
 
 describe("late plans", () => {
