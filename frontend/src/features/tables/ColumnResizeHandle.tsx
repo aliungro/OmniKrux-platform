@@ -171,7 +171,9 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
     function giveFocusBack() {
       if (startedOnHandle) return;
       const active = document.activeElement;
-      if (active && active !== element && active !== document.body) return;
+      /** The prevented mousedown leaves focus where it was; in another pane that is the wrong place to stay. */
+      const elsewhere = !!pane && active instanceof Node && active !== element && active !== document.body && !pane.contains(active);
+      if (active && active !== element && active !== document.body && !elsewhere) return;
       const target = returnTo?.isConnected ? returnTo : fallbackFocus(element);
       target?.focus({ preventScroll: true });
     }

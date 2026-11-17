@@ -97,8 +97,15 @@ describe("ColumnResizeHandle drag ends", () => {
     const handle = screen.getByRole("separator");
     act(() => screen.getByTestId("other").focus());
     pointer(handle, "pointerdown", 100);
-    act(() => handle.focus());
     pointer(handle, "pointerup", 140);
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+  });
+
+  it("unmounting while the divider has focus does not drop focus on the body", () => {
+    const ui = (shown: boolean) => <main tabIndex={-1}>{shown && <Handle onCommit={() => {}} />}</main>;
+    const { rerender } = render(ui(true));
+    act(() => screen.getByRole("separator").focus());
+    rerender(ui(false));
     expect(document.activeElement).toBe(screen.getByRole("main"));
   });
 

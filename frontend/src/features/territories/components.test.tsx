@@ -415,11 +415,9 @@ describe("column resizing on every table", () => {
 });
 
 describe("keyboard after a mouse resize", () => {
-  let handles: Element[] = [];
-  /** A committed width is stored; reset it so later tests start from the defaults. */
+  /** A committed width is stored; reset it through the live dividers so later tests start from the defaults. */
   afterEach(() => {
-    handles.forEach(handle => fireEvent.keyDown(handle, { key: "Enter" }));
-    handles = [];
+    document.querySelectorAll("[role=separator]").forEach(handle => fireEvent.keyDown(handle, { key: "Enter" }));
     localStorage.clear();
   });
   const press = (handle: Element, type: string, clientX: number) =>
@@ -434,7 +432,6 @@ describe("keyboard after a mouse resize", () => {
     const grid = screen.getByRole("grid");
     const handle = within(grid).getByRole("separator", { name: "Resize Namespace" });
     vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
-    handles.push(handle);
     const rowEls = () => Array.from(grid.querySelectorAll<HTMLElement>("[data-row-key]"));
     return { grid, handle, rowEls };
   };
