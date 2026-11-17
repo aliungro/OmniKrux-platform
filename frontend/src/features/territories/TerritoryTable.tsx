@@ -369,11 +369,18 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [request, indexByKey, items]);
 
   const runRowKey = (e: KeyboardEvent<HTMLDivElement> | globalThis.KeyboardEvent, at: number | undefined, fromPage = false) => {
-    // Escape closes the details from the row or from inside them.
+    // Escape closes the details from the row or from inside them, but never over an unsaved YAML
+    // edit: the details stay open and say why (Ruling R41).
     if (pressed("close", e)) {
       if (!open) return;
       e.preventDefault();
-      if (!e.repeat) close();
+      if (e.repeat) return;
+      if (selectedKey !== null && scrollRef.current?.querySelector("[data-unsaved-edit]")) {
+        const key = selectedKey;
+        setIntent((prev) => ({ key, tool: "unsaved", seq: (prev?.seq ?? 0) + 1 }));
+      } else {
+        close();
+      }
       return;
     }
     if (at === undefined) return;

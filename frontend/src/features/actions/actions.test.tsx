@@ -1173,6 +1173,60 @@ describe("focus after a tool closes", () => {
   });
 });
 
+describe("an unsaved edit in the details", () => {
+  const EDITED = "kind: Deployment\nspec: {}\n";
+  async function editing() {
+    serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })] });
+    const outside = vi.fn();
+    const onClose = vi.fn();
+    wrap(
+      <div onKeyDown={(e) => outside(e.key)}>
+        <ActionsProvider>
+          <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} onClose={onClose} />
+        </ActionsProvider>
+      </div>,
+    );
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.click(edit);
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: EDITED } });
+    return { area, outside, onClose };
+  }
+  const yamlTab = () => screen.getByRole("tab", { name: "YAML" });
+
+  it.each([["End"], ["Home"], ["ArrowRight"], ["ArrowLeft"]])("%s on the YAML tab keeps the edit", async (key) => {
+    const { area } = await editing();
+    yamlTab().focus();
+    expect(fireEvent.keyDown(yamlTab(), { key })).toBe(true);
+    expect(yamlTab().getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(yamlTab());
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("escape on a tool button keeps the details open with the edit", async () => {
+    const { area, outside, onClose } = await editing();
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.keyDown(edit, { key: "Escape" });
+    expect(outside).not.toHaveBeenCalledWith("Escape");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText("Unsaved YAML edit: review or discard it first.")).toBeTruthy();
+    expect(document.activeElement).toBe(edit);
+  });
+
+  it("escape on the YAML tab keeps the details open with the edit", async () => {
+    const { area, outside } = await editing();
+    yamlTab().focus();
+    fireEvent.keyDown(yamlTab(), { key: "Escape" });
+    expect(outside).not.toHaveBeenCalledWith("Escape");
+    expect(area.value).toBe(EDITED);
+  });
+});
+
 describe("tool keys on rows", () => {
   beforeEach(() => {
     // jsdom has no layout; give everything a size so the virtualizer renders rows.
@@ -1242,6 +1296,7 @@ describe("tool keys on rows", () => {
     return { calls, row };
   }
   const detailsShown = () => screen.queryByRole("region", { name: "Details for web" }) !== null;
+  const UNSAVED = "Unsaved YAML edit: review or discard it first.";
 
   it("discard after e on the row goes back to the row", async () => {
     const { row } = table();
@@ -1265,6 +1320,68 @@ describe("tool keys on rows", () => {
     expect(screen.queryByLabelText("Replicas")).toBeNull();
     expect(detailsShown()).toBe(true);
     expect(document.activeElement).toBe(row());
+  });
+
+  it("escape on the row keeps the details and an unsaved edit, and says why", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "e" });
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: "kind: Deployment\nspec: {}\n" } });
+    act(() => row().focus());
+    expect(fireEvent.keyDown(row(), { key: "Escape" })).toBe(false);
+    expect(detailsShown()).toBe(true);
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe("kind: Deployment\nspec: {}\n");
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    expect(document.activeElement).toBe(row());
+    // From the page too (focus on <main>'s stand-in: nothing focused).
+    act(() => (document.activeElement as HTMLElement).blur());
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(detailsShown()).toBe(true);
+    expect(area.value).toBe("kind: Deployment\nspec: {}\n");
+  });
+
+  it("the unsaved note goes once the edit is discarded", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "e" });
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    fireEvent.input(area, { target: { value: "kind: Deployment\nspec: {}\n" } });
+    act(() => row().focus());
+    fireEvent.keyDown(row(), { key: "Escape" });
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    fireEvent.click(button("Discard"));
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+    expect(detailsShown()).toBe(true);
+    // Nothing unsaved now: Esc closes the details as before.
+    act(() => row().focus());
+    fireEvent.keyDown(row(), { key: "Escape" });
+    expect(detailsShown()).toBe(false);
+  });
+
+  it("the unsaved note goes once the edit is reviewed", async () => {
+    const { calls, row } = table({
+      "POST /api/actions/plan": [ok(plan({ action: "edit", title: "Edit Deployment web", apply_label: "Save", diff: { before: "a\n", after: "b\n" } }))],
+    });
+    fireEvent.keyDown(row(), { key: "e" });
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    fireEvent.input(area, { target: { value: "kind: Deployment\nspec: {}\n" } });
+    act(() => row().focus());
+    fireEvent.keyDown(row(), { key: "Escape" });
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    fireEvent.click(button("Review changes"));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+    expect(calls.filter((c) => c.url.endsWith("/apply"))).toEqual([]);
+  });
+
+  it("escape on the row with the editor open but unchanged closes the details", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "e" });
+    await screen.findByLabelText("Edit Deployment YAML");
+    act(() => row().focus());
+    fireEvent.keyDown(row(), { key: "Escape" });
+    expect(detailsShown()).toBe(false);
+    expect(screen.queryByText(UNSAVED)).toBeNull();
   });
 });
 

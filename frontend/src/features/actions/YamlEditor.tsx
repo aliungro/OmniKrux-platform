@@ -21,6 +21,7 @@ export function YamlEditor({
   label,
   busy,
   error,
+  notice = null,
   onReview,
   onDiscard,
 }: {
@@ -28,6 +29,8 @@ export function YamlEditor({
   label: string;
   busy: boolean;
   error: string | null;
+  /** A plain line under the bar, shown while the text is changed (why the details stayed open). */
+  notice?: string | null;
   onReview: (text: string) => void;
   onDiscard: () => void;
 }) {
@@ -135,7 +138,8 @@ export function YamlEditor({
   const mac = isMac();
 
   return (
-    <div ref={box} className={s.box} onKeyDown={onKey}>
+    // `data-unsaved-edit` tells the details and the table that Esc must not close over this text.
+    <div ref={box} className={s.box} onKeyDown={onKey} data-unsaved-edit={changed ? "" : undefined}>
       <div className={s.bar} onKeyDown={onBarKey}>
         <span className={s.what}>{changed ? "Edited, not saved" : "Editing"}</span>
         <span className={s.hint}>
@@ -158,6 +162,7 @@ export function YamlEditor({
         </button>
       </div>
       {error && <p className={s.error} role="alert">{error}</p>}
+      {notice && changed && <p className={s.note} role="status">{notice}</p>}
       {state === "loading" && <p className={s.note} role="status">Loading the editor…</p>}
       {state === "failed" && <p className={`${s.note} ${s.error}`} role="alert">{EDITOR_UNAVAILABLE}</p>}
       <div ref={host} className={`${s.editor} mono`} hidden={state !== "ready"} />

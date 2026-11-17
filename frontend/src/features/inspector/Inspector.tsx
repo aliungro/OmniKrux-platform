@@ -190,7 +190,7 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
     </>
   );
   return (
-    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} editing={change.editing} returnFocus={change.opener} onClose={onClose}>
+    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} editing={change.editing} onUnsavedEscape={change.unsavedEscape} returnFocus={change.opener} onClose={onClose}>
       {tab === "Describe" && <Loaded q={describe}>{(d) => (
         <DescribeView
           data={d}
@@ -260,6 +260,7 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
       }
       onKey={change.onKey}
       editing={change.editing}
+      onUnsavedEscape={change.unsavedEscape}
       returnFocus={change.opener}
       onClose={onClose}
     >
@@ -316,6 +317,7 @@ function Frame({
   strip,
   onKey,
   editing,
+  onUnsavedEscape,
   returnFocus,
   onClose,
   children,
@@ -328,8 +330,13 @@ function Frame({
   tools?: ReactNode;
   strip?: ReactNode;
   onKey?: (e: KeyboardEvent<HTMLElement>) => void;
-  /** The YAML editor is open: digits must not switch away from it (Ruling R36). */
+  /**
+   * The YAML editor is open: no key may switch away from it or close the details around it
+   * (Rulings R36, R41); only Discard drops an edit.
+   */
   editing?: boolean;
+  /** Esc was kept from closing the details over an unsaved edit. */
+  onUnsavedEscape?: () => void;
   /** What opened the form or editor that is closing: where focus goes back to. */
   returnFocus?: RefObject<Element | null>;
   onClose?: () => void;
@@ -355,9 +362,11 @@ function Frame({
   });
 
   // Left/right, Home and End move between tabs, as a tablist should; Alt+arrows stay history.
+  // Never while the editor is open: it is shown only on the YAML tab.
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
+    if (editing) return;
     e.preventDefault();
     const at = tabs.indexOf(tab);
     const next =
@@ -369,6 +378,12 @@ function Frame({
   // 1-4 inside the details jump to that tab and focus it; never in a field, editor or terminal,
   // and never while the YAML editor is open.
   const onSectionKey = (e: KeyboardEvent<HTMLElement>) => {
+    // Esc never closes the details around the editor; over an unsaved edit it says why.
+    if (editing && e.key === "Escape") {
+      e.stopPropagation();
+      if (!e.repeat && e.currentTarget.querySelector("[data-unsaved-edit]")) onUnsavedEscape?.();
+      return;
+    }
     if (
       !editing && !e.defaultPrevented && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
       !isEditable(e.target) && /^[1-4]$/.test(e.key) && tabs[Number(e.key) - 1] !== undefined
