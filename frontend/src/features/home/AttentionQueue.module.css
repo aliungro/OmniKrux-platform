@@ -1,0 +1,14 @@
+.queue { min-width:0; }
+.queue button { font:inherit; font-size:13px; color:var(--ink); text-align:left; cursor:pointer; }
+.queue button:focus-visible, .queue h2:focus { outline:2px solid var(--focus); outline-offset:3px; }
+.connection { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; width:100%; padding:12px; background:var(--surf); border:0; border-left:3px solid var(--bad); margin-bottom:6px; border-radius:5px; overflow-wrap:anywhere; }
+.connection > span:last-child { margin-left:auto; color:var(--ink-3); }
+.disclosure, .all { background:none; border:1px solid var(--rule); padding:8px 12px; border-radius:5px; }
+.disclosure:hover, .all:hover, .pod:hover, .connection:hover { background:var(--surf-2); }
+.pods { margin-top:10px; }
+.pod { display:flex; flex-wrap:wrap; width:100%; gap:4px 12px; align-items:baseline; background:none; border:0; border-bottom:1px solid var(--rule); padding:10px 6px; overflow-wrap:anywhere; }
+.pod b { flex:1 1 160px; min-width:0; }
+.pod > span { color:var(--ink-3); }
+.pod .diamond { color:var(--bad); }
+.all { margin:10px 0; overflow-wrap:anywhere; }
+.note { color:var(--ink-3); font-size:13px; line-height:1.5; }

@@ -1,0 +1,57 @@
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { HttpError } from "../../api/http";
+import { hasCurrentSnapshot, type WatchState } from "../../api/watchState";
+import type { KubeView } from "../shell/workspace";
+import { describeQuery } from "../inspector/useDescribe";
+import { rowKey, textColumn } from "../territories/model";
+
+type Target = Extract<KubeView, { page: "kind" }>["fromAttention"];
+export function useAttentionLanding(target: Target, watch: WatchState, registered: boolean | undefined, paneActive: boolean) {
+  const client = useQueryClient();
+  const root = useRef<HTMLDivElement>(null);
+  const pane = useRef<HTMLElement | null>(null);
+  const ownsFocus = useRef(false);
+  const [proof, setProof] = useState<{ target: Target; state: "ready" | "missing" | "error" } | null>(null);
+  const [attempt, retry] = useState(0);
+  const current = !!target && hasCurrentSnapshot(watch, target.clusterId);
+  const row = target && current ? watch.rows[target.clusterId]?.get(target.uid) : undefined;
+  const name = row?.name;
+  const namespace = row?.namespace;
+  const rv = row ? textColumn(row, "resource_version") ?? "" : "";
+  useLayoutEffect(() => {
+    pane.current = root.current?.closest<HTMLElement>("[data-active-pane]") ?? null;
+    if (target && paneActive && (document.activeElement === document.body || pane.current === document.activeElement)) root.current?.focus();
+    ownsFocus.current = document.activeElement === root.current;
+    const track = () => { ownsFocus.current = document.activeElement === root.current; };
+    document.addEventListener("focusin", track);
+    return () => document.removeEventListener("focusin", track);
+  }, [target]); // Ownership is claimed only on entry, never on a late update.
+  useLayoutEffect(() => {
+    if (target && !root.current && paneActive && ownsFocus.current && document.activeElement === document.body) pane.current?.focus();
+  });
+  useEffect(() => {
+    let owned = true;
+    setProof(null);
+    if (!target) return;
+    if (registered === false || (current && (name === undefined || namespace !== target.namespace))) {
+      setProof({ target, state: "missing" });
+      return;
+    }
+    if (!current || name === undefined) return;
+    // staleTime zero forces a current read even after Back/Forward to a cached target.
+    void client.fetchQuery({ ...describeQuery(target.clusterId, namespace ?? "", name, rv, target.uid), staleTime: 0 }).then(
+      () => { if (owned) setProof({ target, state: "ready" }); },
+      error => { if (owned) setProof({ target, state: error instanceof HttpError && error.status === 404 ? "missing" : "error" }); },
+    );
+    return () => { owned = false; };
+  }, [target, current, registered, name, namespace, rv, client, attempt]);
+  const state = !target ? null : proof?.target === target ? proof.state : "waiting";
+  const ready = state === "ready" && current && !!row;
+  useEffect(() => {
+    if (!ready || !paneActive || document.activeElement !== root.current || !target) return;
+    const key = rowKey(target.clusterId, target.uid);
+    Array.from(root.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? []).find(el => el.dataset.rowKey === key)?.focus({ preventScroll: true });
+  }, [ready, paneActive, target]);
+  return { root, ready, state, retry: () => retry(n => n + 1) };
+}
