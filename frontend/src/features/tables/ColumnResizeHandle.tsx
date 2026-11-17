@@ -126,6 +126,10 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
     function windowCancel() {
       cancel();
     }
+    /** Capture sees every element's blur; only the window's own means the pointer left the page. */
+    function windowBlur(event: Event) {
+      if (!(event.target instanceof Node)) cancel();
+    }
 
     function cancel() {
       const current = drag.current;
@@ -135,7 +139,7 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
       document.removeEventListener("keydown", escape, true);
       window.removeEventListener("pointerup", windowUp, true);
       window.removeEventListener("pointercancel", windowCancel, true);
-      window.removeEventListener("blur", windowCancel, true);
+      window.removeEventListener("blur", windowBlur, true);
       if (current.frame !== null) cancelAnimationFrame(current.frame);
       overlay.remove();
       if (element.hasPointerCapture?.(pointerId)) element.releasePointerCapture(pointerId);
@@ -162,7 +166,7 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
     document.addEventListener("keydown", escape, true);
     window.addEventListener("pointerup", windowUp, true);
     window.addEventListener("pointercancel", windowCancel, true);
-    window.addEventListener("blur", windowCancel, true);
+    window.addEventListener("blur", windowBlur, true);
     setResizing(true);
   }
 

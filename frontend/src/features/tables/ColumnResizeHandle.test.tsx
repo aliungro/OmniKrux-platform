@@ -62,6 +62,22 @@ describe("ColumnResizeHandle drag ends", () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
+  it("an element losing focus when the drag starts does not cancel it", () => {
+    const onCommit = vi.fn();
+    render(<><button>row</button><Handle onCommit={onCommit} /></>);
+    const row = screen.getByRole("button");
+    const handle = screen.getByRole("separator");
+    act(() => row.focus());
+    pointer(handle, "pointerdown", 100);
+    // The press moves focus: the row blurs after the drag began (blur does not bubble, but captures).
+    act(() => handle.focus());
+    row.dispatchEvent(new FocusEvent("blur"));
+    expect(overlays()).toHaveLength(2);
+    window.dispatchEvent(Object.assign(new MouseEvent("pointerup", { clientX: 140 }), { pointerId: 1 }));
+    expect(overlays()).toHaveLength(0);
+    expect(onCommit).toHaveBeenCalledWith(140);
+  });
+
   it("unmounting mid-drag removes the guide", () => {
     const onCommit = vi.fn();
     const { unmount } = render(<Handle onCommit={onCommit} />);
