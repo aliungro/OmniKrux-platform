@@ -7,6 +7,7 @@ import { KINDS } from "../../test/kinds";
 import { removePinned } from "../../test/pinnedKinds";
 import { describeBody } from "../../test/describe";
 import userEvent from "@testing-library/user-event";
+import { EditorView } from "@codemirror/view";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import { Shell } from "../shell/Shell";
 import { defaultWorkspace, HOME, kindView, type KubeView } from "../shell/workspace";
@@ -45,6 +46,47 @@ function show() {
 const search = () => screen.getByRole("combobox", { name: "Search Kubernetes" });
 const failingPod: ResourceRow = { ...pod, columns: { status: "CrashLoopBackOff", status_class: "bad" } };
 const podLink = () => screen.getByRole("button", { name: /web-pod.*demo.*prod-east.*CrashLoopBackOff/ });
+it("same-UID watch updates preserve the queue Pod's pending YAML draft and focus", async () => {
+  // jsdom supplies DOM ranges but not browser layout measurements used by real CodeMirror.
+  const createRange = document.createRange.bind(document);
+  vi.spyOn(document, "createRange").mockImplementation(() => {
+    const range = createRange();
+    range.getClientRects = () => [] as unknown as DOMRectList;
+    range.getBoundingClientRect = () => new DOMRect();
+    return range;
+  });
+  const originalFetch = vi.mocked(fetch);
+  let updating = false;
+  let completeDescribe!: (response: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((url: string) => {
+    if (url.startsWith("/api/kinds")) return json({ ...KINDS, kinds: KINDS.kinds.map(k => k.key === "pods" ? { ...k, verbs: [...k.verbs, "update"] } : k) });
+    if (url.includes("/yaml")) return json({ yaml: "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-pod\n" });
+    if (url.includes("/describe") && updating) return new Promise<Response>(resolve => { completeDescribe = resolve; });
+    return originalFetch(url);
+  }));
+  show(); await ready([{ ...failingPod, columns: { ...failingPod.columns, resource_version: "1" } }]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" })); fireEvent.click(podLink());
+  await screen.findByRole("tab", { name: /Describe/ });
+  fireEvent.click(screen.getByRole("button", { name: /^Edit/ }));
+  const editor = await screen.findByRole("textbox", { name: "Edit Pod YAML" });
+  const cm = EditorView.findFromDOM(editor)!;
+  const draft = "# keep my unsaved change\n";
+  act(() => cm.dispatch({ changes: { from: 0, insert: draft } }));
+  editor.focus();
+  expect((screen.getByRole("button", { name: /Review changes/ }) as HTMLButtonElement).disabled).toBe(false);
+  updating = true;
+  act(() => FakeWebSocket.last.emit({ type: "upsert", cluster_id: "c1", row: { ...failingPod, columns: { ...failingPod.columns, resource_version: "2" } } }));
+  await waitFor(() => expect(completeDescribe).toBeTypeOf("function"));
+  expect(editor.isConnected).toBe(true);
+  expect(document.activeElement).toBe(editor);
+  expect(cm.state.doc.toString()).toContain(draft);
+  expect(screen.getByRole("tab", { name: /YAML/ }).getAttribute("aria-selected")).toBe("true");
+  expect((screen.getByRole("button", { name: /Review changes/ }) as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => completeDescribe(await json(describeBody())));
+  expect(screen.getByRole("textbox", { name: "Edit Pod YAML" })).toBe(editor);
+  expect(cm.state.doc.toString()).toContain(draft);
+  expect(document.activeElement).toBe(editor);
+});
 it("shows connections before the collapsed Pod queue and preserves discovery", async () => {
   clusters = [cluster, { ...cluster, id: "offline", name: "offline-cloud", source: "cloud", state: "error", message: "https://private.example:6443 refused" }];
   show(); await ready([failingPod]);

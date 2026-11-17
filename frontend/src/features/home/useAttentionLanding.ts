@@ -12,6 +12,7 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
   const root = useRef<HTMLDivElement>(null);
   const pane = useRef<HTMLElement | null>(null);
   const ownsFocus = useRef(false);
+  const established = useRef<Target>(undefined);
   const [proof, setProof] = useState<{ target: Target; state: "ready" | "missing" | "error" } | null>(null);
   const [attempt, retry] = useState(0);
   const current = !!target && hasCurrentSnapshot(watch, target.clusterId);
@@ -32,6 +33,10 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
   });
   useEffect(() => {
     let owned = true;
+    // Once this landing proved the UID, the mounted inspector owns version refreshes.
+    // Re-gating an ordinary same-UID update would unmount its editor and lose drafts.
+    if (target && established.current === target && current && registered !== false && name !== undefined && namespace === target.namespace) return;
+    established.current = undefined;
     setProof(null);
     if (!target) return;
     if (registered === false || (current && (name === undefined || namespace !== target.namespace))) {
@@ -41,7 +46,7 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
     if (!current || name === undefined) return;
     // staleTime zero forces a current read even after Back/Forward to a cached target.
     void client.fetchQuery({ ...describeQuery(target.clusterId, namespace ?? "", name, rv, target.uid), staleTime: 0 }).then(
-      () => { if (owned) setProof({ target, state: "ready" }); },
+      () => { if (owned) { established.current = target; setProof({ target, state: "ready" }); } },
       error => { if (owned) setProof({ target, state: error instanceof HttpError && error.status === 404 ? "missing" : "error" }); },
     );
     return () => { owned = false; };
