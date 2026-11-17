@@ -1068,6 +1068,111 @@ describe("yaml editor keys", () => {
   });
 });
 
+describe("focus after a tool closes", () => {
+  const REVISIONS = "GET /api/clusters/c1/deployments/demo/web/revisions";
+  const notLost = () => {
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.isConnected).toBe(true);
+  };
+  function details(routes: Record<string, unknown[]> = {}) {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })], ...routes });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    return calls;
+  }
+
+  it("discard from the keyboard goes back to the edit button", async () => {
+    details();
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.click(edit);
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Discard"));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(button("Edit", tools()));
+  });
+
+  it("discard after the YAML view's own edit button lands on the YAML tab", async () => {
+    details();
+    fireEvent.click(screen.getByRole("tab", { name: "YAML" }));
+    const panel = screen.getByRole("tabpanel");
+    const edit = await within(panel).findByRole("button", { name: "Edit" });
+    edit.focus();
+    fireEvent.click(edit);
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    fireEvent.keyDown(area, { key: "Escape" });
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "YAML" }));
+  });
+
+  it("escape in the scale form goes back to the scale button", async () => {
+    details();
+    const scale = button("Scale", tools());
+    scale.focus();
+    fireEvent.click(scale);
+    const replicas = screen.getByLabelText("Replicas");
+    await waitFor(() => expect(document.activeElement).toBe(replicas));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(button("Scale", tools()));
+  });
+
+  it("cancel in the scale form goes back to the scale button", async () => {
+    details();
+    const scale = button("Scale", tools());
+    scale.focus();
+    fireEvent.click(scale);
+    button("Cancel").focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(button("Scale", tools()));
+  });
+
+  it("cancel in the rollback form goes back to the roll back button", async () => {
+    details({ [REVISIONS]: [ok([{ revision: 2, created_at: null, images: ["web:2"], current: true }, { revision: 1, created_at: null, images: ["web:1"], current: false }])] });
+    const rollback = button("Roll back", tools());
+    rollback.focus();
+    fireEvent.click(rollback);
+    await screen.findByRole("radio", { name: /Revision 1/ });
+    button("Cancel").focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByRole("form", { name: "Roll back web" })).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(button("Roll back", tools()));
+  });
+
+  it("an applied edit still focuses what it did", async () => {
+    details({
+      "POST /api/actions/plan": [ok(plan({ action: "edit", title: "Edit Deployment web", apply_label: "Save", diff: { before: "a\n", after: "b\n" } }))],
+      "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Saved Deployment demo/web.", job_id: null, audit_id: 3 })],
+    });
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.click(edit);
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    fireEvent.input(area, { target: { value: "kind: Deployment\nspec: {}\n" } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(document.activeElement).toBe(button("Save", dialog())));
+    await userEvent.keyboard("{Enter}");
+    const said = await screen.findByText("Saved Deployment demo/web.");
+    await waitFor(() => expect(document.activeElement).toBe(said));
+  });
+});
+
 describe("tool keys on rows", () => {
   beforeEach(() => {
     // jsdom has no layout; give everything a size so the virtualizer renders rows.
@@ -1120,6 +1225,46 @@ describe("tool keys on rows", () => {
     const row = document.querySelector<HTMLElement>("[data-row-key]")!;
     fireEvent.keyDown(row, { key: "s" });
     expect(((await screen.findByLabelText("Replicas")) as HTMLInputElement).value).toBe("3");
+  });
+
+  /** The table with web's row focused; `routes` add to the describe and YAML. */
+  function table(routes: Record<string, unknown[]> = {}) {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })], ...routes });
+    wrap(
+      <ActionsProvider>
+        <div style={{ height: 600 }}>
+          <Table territories={[territory]} kind={{ ...DEPLOYMENTS, verbs: VERBS }} onRetry={() => {}} />
+        </div>
+      </ActionsProvider>,
+    );
+    const row = () => document.querySelector<HTMLElement>("[data-row-key]")!;
+    act(() => row().focus());
+    return { calls, row };
+  }
+  const detailsShown = () => screen.queryByRole("region", { name: "Details for web" }) !== null;
+
+  it("discard after e on the row goes back to the row", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "e" });
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Discard"));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(row());
+  });
+
+  it("escape in the scale form after s on the row goes back to the row", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "s" });
+    const replicas = await screen.findByLabelText("Replicas");
+    await waitFor(() => expect(document.activeElement).toBe(replicas));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    expect(detailsShown()).toBe(true);
+    expect(document.activeElement).toBe(row());
   });
 });
 

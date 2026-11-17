@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import type { Link, OwnerRef, Provider, ResourceDescribe, ResourceRow } from "../../api/types";
@@ -190,7 +190,7 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
     </>
   );
   return (
-    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} editing={change.editing} onClose={onClose}>
+    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} editing={change.editing} returnFocus={change.opener} onClose={onClose}>
       {tab === "Describe" && <Loaded q={describe}>{(d) => (
         <DescribeView
           data={d}
@@ -260,6 +260,7 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
       }
       onKey={change.onKey}
       editing={change.editing}
+      returnFocus={change.opener}
       onClose={onClose}
     >
       {tab === "Describe" && (
@@ -301,7 +302,9 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
 
 /**
  * The inspector's frame: the provider stripe, the tabs, the tools on the right, a form the tools
- * open (`strip`), and the panel.
+ * open (`strip`), and the panel. When what had focus inside it goes (Discard, a form's Cancel or
+ * Esc), focus is never left on the page's body: it goes to what a change said (`data-focus-after`),
+ * else back to what opened the form or editor, else to the selected tab.
  */
 function Frame({
   row,
@@ -313,6 +316,7 @@ function Frame({
   strip,
   onKey,
   editing,
+  returnFocus,
   onClose,
   children,
 }: {
@@ -326,11 +330,29 @@ function Frame({
   onKey?: (e: KeyboardEvent<HTMLElement>) => void;
   /** The YAML editor is open: digits must not switch away from it (Ruling R36). */
   editing?: boolean;
+  /** What opened the form or editor that is closing: where focus goes back to. */
+  returnFocus?: RefObject<Element | null>;
   onClose?: () => void;
   children: ReactNode;
 }) {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const id = useId();
+  const sectionRef = useRef<HTMLElement>(null);
+  /** The element inside the details that last had focus, until focus moves elsewhere on the page. */
+  const lastInside = useRef<Element | null>(null);
+
+  // Every render, two reads: focus that went with an element inside the details is put back.
+  useLayoutEffect(() => {
+    const last = lastInside.current;
+    if (!last || last.isConnected) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    lastInside.current = null;
+    const said = sectionRef.current?.querySelector<HTMLElement>("[data-focus-after]");
+    const opener = returnFocus?.current;
+    const back = opener instanceof HTMLElement && opener.isConnected ? opener : null;
+    (said ?? back ?? tabRefs.current[tabs.indexOf(tab)])?.focus({ preventScroll: true });
+  });
 
   // Left/right, Home and End move between tabs, as a tablist should; Alt+arrows stay history.
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -362,7 +384,19 @@ function Frame({
   };
 
   return (
-    <section className={`${s.insp} ${pc[knownProvider(provider)]}`} aria-label={`Details for ${rowTitle(row)}`} onKeyDown={onSectionKey}>
+    <section
+      ref={sectionRef}
+      className={`${s.insp} ${pc[knownProvider(provider)]}`}
+      aria-label={`Details for ${rowTitle(row)}`}
+      onKeyDown={onSectionKey}
+      onFocus={(e) => {
+        if (e.currentTarget.contains(e.target)) lastInside.current = e.target;
+      }}
+      onBlur={(e) => {
+        const to = e.relatedTarget;
+        if (to instanceof Node && !e.currentTarget.contains(to)) lastInside.current = null;
+      }}
+    >
       <div className={s.bar}>
         <div role="tablist" aria-label="Details" className={s.tabs} onKeyDown={onTabKey}>
           {tabs.map((t, i) => (

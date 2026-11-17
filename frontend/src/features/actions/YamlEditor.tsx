@@ -37,8 +37,10 @@ export function YamlEditor({
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const box = useRef<HTMLDivElement>(null);
   const editorRef = useRef<MountedEditor | null>(null);
-  // What had focus when editing began (the Edit button, or the row whose `e` started it).
-  const [trigger] = useState(() => document.activeElement);
+  // What had focus when editing began (the Edit button, or the row whose `e` started it), read once
+  // the details have settled: an Edit button that went with the YAML view has handed focus on
+  // (the details put it on the YAML tab) by then.
+  const trigger = useRef<Element | null>(null);
   const reviewButton = useRef<HTMLButtonElement>(null);
   const discardButton = useRef<HTMLButtonElement>(null);
 
@@ -88,15 +90,23 @@ export function YamlEditor({
     };
   }, [label, keys]);
 
+  useEffect(() => {
+    trigger.current = document.activeElement;
+  }, []);
+
   // Once shown, the editor takes focus, but only if focus is still where editing began (or inside
   // this box, or lost with the button that went): never pulled from wherever you moved meanwhile.
   useEffect(() => {
     if (state !== "ready") return;
     const active = document.activeElement;
     const stayed =
-      active === null || active === document.body || active === trigger || !active.isConnected || (box.current?.contains(active) ?? false);
+      active === null ||
+      active === document.body ||
+      active === trigger.current ||
+      !active.isConnected ||
+      (box.current?.contains(active) ?? false);
     if (stayed) editorRef.current?.focus();
-  }, [state, trigger]);
+  }, [state]);
 
   // Escape stays in the editor: it never closes the details with your edits in them. Ctrl+Enter
   // reviews from anywhere in it (the text handles its own first); held, it is still prevented, so

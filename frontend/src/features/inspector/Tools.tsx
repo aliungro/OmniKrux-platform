@@ -70,6 +70,8 @@ export function useTools({
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<ActionOutcome | null>(null);
   const said = useRef<HTMLParagraphElement>(null);
+  /** What had focus when the open form or editor was asked for: where focus goes back when it closes. */
+  const opener = useRef<Element | null>(null);
 
   // A plan that returns after a pane loses focus must not open a dialog over the active pane.
   const identity = `${row.cluster_id}\n${kindKey}\n${row.uid}`;
@@ -124,6 +126,7 @@ export function useTools({
     if (!paneActive || busy !== null || !tools.includes(tool)) return;
     setError(null);
     setOutcome(null);
+    if (tool === "edit" || tool === "scale" || tool === "rollback") opener.current = document.activeElement;
     switch (tool) {
       case "edit":
         setOpen("edit");
@@ -153,6 +156,12 @@ export function useTools({
   };
   const runRef = useRef(run);
   runRef.current = run;
+
+  // Once the form or editor has gone, `Frame` has already used the opener (a child's layout effect
+  // runs first): a later loss of focus is not sent back to it.
+  useLayoutEffect(() => {
+    if (open === null) opener.current = null;
+  }, [open]);
 
   // A tool's key pressed on the row: run it once the details are open.
   useEffect(() => {
@@ -234,7 +243,7 @@ export function useTools({
     );
   } else if (outcome && open === null) {
     strip = (
-      <p ref={said} className={s.outcome} data-tone={outcome.tone} role="status" tabIndex={-1}>
+      <p ref={said} className={s.outcome} data-tone={outcome.tone} role="status" tabIndex={-1} data-focus-after="">
         {outcome.message}
       </p>
     );
@@ -294,5 +303,7 @@ export function useTools({
      * there, so the unsaved text would go with it). Ruling R36.
      */
     editing: open === "edit",
+    /** Where focus goes back when the open form or editor closes itself. */
+    opener,
   };
 }
