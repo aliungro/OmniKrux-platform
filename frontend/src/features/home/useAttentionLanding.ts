@@ -16,7 +16,13 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
   const [proof, setProof] = useState<{ target: Target; state: "ready" | "missing" | "error" } | null>(null);
   const [attempt, retry] = useState(0);
   const current = !!target && hasCurrentSnapshot(watch, target.clusterId);
-  const row = target && current ? watch.rows[target.clusterId]?.get(target.uid) : undefined;
+  // A ready-state relist retains committed rows. Only a previously proved landing may
+  // keep using them while the replacement snapshot is incomplete; new visits still wait.
+  const retained = !!target && established.current === target
+    && watch.clusters[target.clusterId]?.state === "ready"
+    && watch.nextSnapshotPart[target.clusterId] !== undefined;
+  const available = current || retained;
+  const row = target && available ? watch.rows[target.clusterId]?.get(target.uid) : undefined;
   const name = row?.name;
   const namespace = row?.namespace;
   const rv = row ? textColumn(row, "resource_version") ?? "" : "";
@@ -35,7 +41,7 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
     let owned = true;
     // Once this landing proved the UID, the mounted inspector owns version refreshes.
     // Re-gating an ordinary same-UID update would unmount its editor and lose drafts.
-    if (target && established.current === target && current && registered !== false && name !== undefined && namespace === target.namespace) return;
+    if (target && established.current === target && available && registered !== false && name !== undefined && namespace === target.namespace) return;
     established.current = undefined;
     setProof(null);
     if (!target) return;
@@ -50,9 +56,9 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
       error => { if (owned) setProof({ target, state: error instanceof HttpError && error.status === 404 ? "missing" : "error" }); },
     );
     return () => { owned = false; };
-  }, [target, current, registered, name, namespace, rv, client, attempt]);
+  }, [target, current, available, registered, name, namespace, rv, client, attempt]);
   const state = !target ? null : proof?.target === target ? proof.state : "waiting";
-  const ready = state === "ready" && current && !!row;
+  const ready = state === "ready" && available && !!row;
   useEffect(() => {
     if (!ready || !paneActive || document.activeElement !== root.current || !target) return;
     const key = rowKey(target.clusterId, target.uid);

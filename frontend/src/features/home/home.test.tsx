@@ -46,7 +46,7 @@ function show() {
 const search = () => screen.getByRole("combobox", { name: "Search Kubernetes" });
 const failingPod: ResourceRow = { ...pod, columns: { status: "CrashLoopBackOff", status_class: "bad" } };
 const podLink = () => screen.getByRole("button", { name: /web-pod.*demo.*prod-east.*CrashLoopBackOff/ });
-it("same-UID watch updates preserve the queue Pod's pending YAML draft and focus", async () => {
+it.each(["upsert", "multipart"] as const)("same-UID %s watch updates preserve the queue Pod's pending YAML draft and focus", async (update) => {
   // jsdom supplies DOM ranges but not browser layout measurements used by real CodeMirror.
   const createRange = document.createRange.bind(document);
   vi.spyOn(document, "createRange").mockImplementation(() => {
@@ -75,7 +75,21 @@ it("same-UID watch updates preserve the queue Pod's pending YAML draft and focus
   editor.focus();
   expect((screen.getByRole("button", { name: /Review changes/ }) as HTMLButtonElement).disabled).toBe(false);
   updating = true;
-  act(() => FakeWebSocket.last.emit({ type: "upsert", cluster_id: "c1", row: { ...failingPod, columns: { ...failingPod.columns, resource_version: "2" } } }));
+  const updated = { ...failingPod, columns: { ...failingPod.columns, resource_version: "2" } };
+  if (update === "multipart") {
+    act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: false, rows: [updated] }));
+    // Cross the shared watch's publication frame before checking mounted editor state.
+    await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+    expect(editor.isConnected).toBe(true);
+    expect(screen.getByRole("textbox", { name: "Edit Pod YAML" })).toBe(editor);
+    expect(document.activeElement).toBe(editor);
+    expect(cm.state.doc.toString()).toContain(draft);
+    expect(screen.getByRole("tab", { name: /YAML/ }).getAttribute("aria-selected")).toBe("true");
+    expect((screen.getByRole("button", { name: /Review changes/ }) as HTMLButtonElement).disabled).toBe(false);
+    act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 1, last: true, rows: [] }));
+  } else {
+    act(() => FakeWebSocket.last.emit({ type: "upsert", cluster_id: "c1", row: updated }));
+  }
   await waitFor(() => expect(completeDescribe).toBeTypeOf("function"));
   expect(editor.isConnected).toBe(true);
   expect(document.activeElement).toBe(editor);
@@ -154,6 +168,25 @@ it("a guarded landing waits for current completion and never selects a same-name
   expect(await screen.findByText("This Pod is no longer available")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
   expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/describe"))).toHaveLength(0);
+});
+it("an unresolved queue landing stays held through a multipart refresh and requires fresh proof", async () => {
+  const originalFetch = vi.mocked(fetch);
+  const reads: Array<(response: Response) => void> = [];
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe")
+    ? new Promise<Response>(resolve => reads.push(resolve)) : originalFetch(url)));
+  show(); await ready([failingPod]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" })); fireEvent.click(podLink());
+  await waitFor(() => expect(reads).toHaveLength(1));
+  act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: false, rows: [failingPod] }));
+  await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+  await act(async () => reads[0](await json(describeBody())));
+  expect(screen.getByText(/Opening Pod/)).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+  act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 1, last: true, rows: [] }));
+  await waitFor(() => expect(reads).toHaveLength(2));
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+  await act(async () => reads[1](await json(describeBody())));
+  expect(await screen.findByRole("tab", { name: /Describe/ })).toBeTruthy();
 });
 it("each queue visit rechecks identity and late proof preserves deliberate focus", async () => {
   const originalFetch = vi.mocked(fetch);
