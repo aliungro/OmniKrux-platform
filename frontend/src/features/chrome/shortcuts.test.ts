@@ -57,15 +57,21 @@ describe("shortcut registry", () => {
     ]);
   });
 
-  it("the pods table bar follows the prototype", () => {
+  it("the pods table bar reads short words", () => {
     const texts = barFor("pods", "table", false).map((b) => b.text);
-    const order = ["logs (they follow your row)", "pin a log", "previous logs", "into the logs", "delete (asks first)"];
+    const order = ["logs", "pin a log", "previous logs", "into the logs", "delete"];
     const at = order.map((t) => texts.indexOf(t));
     expect(at.every((i) => i >= 0)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(texts.some((t) => t.includes("("))).toBe(false);
     expect(texts).not.toContain("search logs");
     expect(texts.filter((t) => t === "into the logs")).toHaveLength(1);
     expect(barFor(undefined, "table", false).some((b) => b.id === "logs")).toBe(false);
+  });
+
+  it("the help sheet keeps the full sentences", () => {
+    expect(SHORTCUTS.find((e) => e.id === "logs")?.label).toBe("Logs of the selected pod (they follow the row you select)");
+    expect(SHORTCUTS.find((e) => e.id === "deleteFocused")?.label).toBe("Delete what has the focus: a resource row (reviewed first) or a dock tab");
   });
 
   it("macOS keycaps show cmd backspace", () => {

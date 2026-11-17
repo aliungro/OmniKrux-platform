@@ -356,11 +356,11 @@ describe("ShortcutBar per kind", () => {
   it("shortcut bar follows the active kind", () => {
     const { rerender } = render(<ShortcutBar kind="pods" />);
     expect(strip()).toEqual([
-      "↑↓ move", "Enter details", "l logs (they follow your row)", "Shift L pin a log", "p previous logs", "s shell", "f port-forward", "Alt ↓ into the logs", "Ctrl Del delete (asks first)", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
+      "↑↓ move", "Enter details", "l logs", "Shift L pin a log", "p previous logs", "s shell", "f port-forward", "Alt ↓ into the logs", "Ctrl Del delete", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
     ]);
     rerender(<ShortcutBar kind="deployments.apps" />);
     expect(strip()).toEqual([
-      "↑↓ move", "Enter details", "s scale", "r restart", "l logs", "Alt ↓ into the logs", "Ctrl Del delete (asks first)", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
+      "↑↓ move", "Enter details", "s scale", "r restart", "l logs", "Alt ↓ into the logs", "Ctrl Del delete", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
     ]);
     rerender(<ShortcutBar kind="nodes" />);
     expect(strip()).toEqual(expect.arrayContaining(["c cordon", "r drain", "s node shell"]));
@@ -368,7 +368,7 @@ describe("ShortcutBar per kind", () => {
     rerender(<ShortcutBar kind="secrets" />);
     expect(strip()).toContain("x reveal");
     rerender(<ShortcutBar kind="widgets.example.omnikrux.dev" />);
-    expect(strip()).toEqual(["↑↓ move", "Enter details", "Alt ↓ into the logs", "Ctrl Del delete (asks first)", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts"]);
+    expect(strip()).toEqual(["↑↓ move", "Enter details", "Alt ↓ into the logs", "Ctrl Del delete", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts"]);
   });
   it("the ? sheet lists the active kind's row keys and every other key", () => {
     render(<ShortcutBar kind="deployments.apps" />);
@@ -398,7 +398,7 @@ describe("ShortcutBar per kind", () => {
     render(<ShortcutBar kind="pods" zone="table" />);
     const text = screen.getByRole("navigation", { name: "Keyboard shortcuts: table" }).textContent;
     expect(text).toContain("Alt ↓ into the logs");
-    expect(text).toContain("Ctrl Del delete (asks first)");
+    expect(text).toContain("Ctrl Del delete");
   });
 
   it("the bar shows cmd backspace on a mac and ctrl delete elsewhere", () => {

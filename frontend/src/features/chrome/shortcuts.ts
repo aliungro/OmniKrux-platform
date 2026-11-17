@@ -90,7 +90,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "edit", scope: "row", keys: ["e"], match: ["e"], label: "Edit the YAML" },
   { id: "delete", scope: "row", keys: ["Ctrl D"], match: ["d", "D"], ctrl: true, label: "Delete" },
   // Rows: what each kind's keys mean.
-  { id: "logs", scope: "row", kinds: ["pods"], keys: ["l"], match: ["l"], label: "Logs of the selected pod (they follow the row you select)", bar: "logs (they follow your row)" },
+  { id: "logs", scope: "row", kinds: ["pods"], keys: ["l"], match: ["l"], label: "Logs of the selected pod (they follow the row you select)", bar: "logs" },
   { id: "pinLogs", scope: "row", kinds: ["pods"], keys: ["Shift L"], match: ["L", "l"], shift: true, label: "Pin the selected pod's log as its own tab", bar: "pin a log" },
   // Not a row action: Shell moves the keyboard into the logs.
   { id: "enterLogs", scope: "row", keys: ["Alt ↓"], match: ["ArrowDown"], alt: true, label: "Move the keyboard into the logs", bar: "into the logs" },
@@ -180,7 +180,7 @@ export function barFor(kindKey: string | undefined, zone: KeyboardZone, mac: boo
   return [
     ...rows.map((s) => item(s.id, mac, s.bar!)),
     item("enterLogs", mac, "into the logs"),
-    item("deleteFocused", mac, "delete (asks first)"),
+    item("deleteFocused", mac, "delete"),
     item("kinds", mac, "kinds"),
     item("palette", mac, "commands"),
     item("filter", mac, "filter"),
