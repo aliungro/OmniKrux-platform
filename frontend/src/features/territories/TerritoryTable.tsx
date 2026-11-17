@@ -379,6 +379,15 @@ export const TerritoryTable = memo(function TerritoryTable({
     if (at === undefined) return;
     const it = items[at];
     if (it.type !== "row") return;
+    // 1-4 show a detail tab while the details are open; focus stays where it is.
+    if (pressed("detailTab", e) && open && selectedKey === rowKey(it.row.cluster_id, it.row.uid)) {
+      e.preventDefault();
+      if (!e.repeat) {
+        const key = selectedKey;
+        setIntent((prev) => ({ key, tool: "tab", tab: Number(e.key), seq: (prev?.seq ?? 0) + 1 }));
+      }
+      return;
+    }
     // The key means what this kind gives it (`s`: a pod's shell, a deployment's scale, a node's
     // shell), among what this row offers (a node has the one of cordon and uncordon that applies).
     const id = rowShortcut(e, kind.key, rowActions(kind.key, verbsFor(kind, it.row), it.row, can));

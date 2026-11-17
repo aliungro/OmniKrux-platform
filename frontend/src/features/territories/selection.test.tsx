@@ -731,6 +731,46 @@ describe("keys per kind", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true"));
   });
 
+  it("1 to 4 jump to the detail tabs from the row and keep focus on it", async () => {
+    renderTable(3);
+    podRow("pod-0").focus();
+    fireEvent.keyDown(podRow("pod-0"), { key: "Enter" });
+    expect(inspector()).toBeTruthy();
+    const row = podRow("pod-0");
+    row.focus();
+    const selected = (name: string) => screen.getByRole("tab", { name }).getAttribute("aria-selected") === "true";
+    expect(fireEvent.keyDown(row, { key: "3" })).toBe(false);
+    await waitFor(() => expect(selected("Events")).toBe(true));
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(row, { key: "4" });
+    await waitFor(() => expect(selected("Metrics")).toBe(true));
+    fireEvent.keyDown(row, { key: "1" });
+    await waitFor(() => expect(selected("Describe")).toBe(true));
+    fireEvent.keyDown(row, { key: "y" });
+    await waitFor(() => expect(selected("YAML")).toBe(true));
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("4 on a kind without metrics does nothing", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe())));
+    renderKind(DEPLOYMENTS, asKind("Deployment", "web"));
+    const row = podRow("web-0");
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    fireEvent.keyDown(row, { key: "4" });
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Metrics" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Describe" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("digits do nothing while the details are closed", () => {
+    renderTable(3);
+    const row = podRow("pod-0");
+    row.focus();
+    expect(fireEvent.keyDown(row, { key: "3" })).toBe(true);
+    expect(inspector()).toBeNull();
+  });
+
   it("l on a workload opens the logs of all its pods", async () => {
     vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe({ pod_selector: "app=web" }))));
     const onWorkloadLogs = vi.fn();

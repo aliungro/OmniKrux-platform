@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, ty
 import type { UseQueryResult } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import type { Link, OwnerRef, Provider, ResourceDescribe, ResourceRow } from "../../api/types";
-import { capsOf, shortcutsFor } from "../chrome/shortcuts";
+import { capsOf, isEditable, shortcutsFor } from "../chrome/shortcuts";
 import { useGoTo } from "../navigation/navigation";
 import { rowTitle, textColumn } from "../territories/model";
 import { DescribeView } from "./DescribeView";
@@ -67,13 +67,14 @@ interface Props {
 function useViewIntent(
   intent: ToolIntent | null | undefined,
   onIntentDone: (() => void) | undefined,
-  on: { yaml: () => void; workloadLogs?: () => void; reveal?: () => void },
+  on: { yaml: () => void; tab: (n: number) => void; workloadLogs?: () => void; reveal?: () => void },
 ) {
   const onRef = useRef(on);
   onRef.current = on;
   useEffect(() => {
     if (!intent) return;
     if (intent.tool === "yaml") onRef.current.yaml();
+    else if (intent.tool === "tab") onRef.current.tab(intent.tab ?? 0);
     else if (intent.tool === "workloadLogs") onRef.current.workloadLogs?.();
     else if (intent.tool === "reveal") onRef.current.reveal?.();
     else return;
@@ -172,7 +173,10 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
   const describe = useDescribe(row.cluster_id, ns, row.name, rv);
   const yaml = usePodYaml(row.cluster_id, ns, row.name, rv, tab === "YAML");
   const change = useTools({ row, kindKey: "pods", verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone, paneActive });
-  useViewIntent(intent, onIntentDone, { yaml: () => setTab("YAML") });
+  useViewIntent(intent, onIntentDone, {
+    yaml: () => setTab("YAML"),
+    tab: (n) => { if (!change.editing && WITH_METRICS[n - 1]) setTab(WITH_METRICS[n - 1]); },
+  });
   const editor = change.editor(yaml.data);
   const tools = (
     <>
@@ -186,7 +190,7 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
     </>
   );
   return (
-    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} onClose={onClose}>
+    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} editing={change.editing} onClose={onClose}>
       {tab === "Describe" && <Loaded q={describe}>{(d) => (
         <DescribeView
           data={d}
@@ -224,6 +228,10 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
   const keysFocused = useCallback(() => setKeysAsk(null), []);
   useViewIntent(intent, onIntentDone, {
     yaml: () => setTab("YAML"),
+    tab: (n) => {
+      const shown = nodes ? WITH_METRICS : BASE_TABS;
+      if (!change.editing && shown[n - 1]) setTab(shown[n - 1]);
+    },
     workloadLogs: logs.open,
     reveal: () => {
       setTab("Describe");
@@ -251,6 +259,7 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
         </>
       }
       onKey={change.onKey}
+      editing={change.editing}
       onClose={onClose}
     >
       {tab === "Describe" && (
@@ -303,6 +312,7 @@ function Frame({
   tools,
   strip,
   onKey,
+  editing,
   onClose,
   children,
 }: {
@@ -314,24 +324,45 @@ function Frame({
   tools?: ReactNode;
   strip?: ReactNode;
   onKey?: (e: KeyboardEvent<HTMLElement>) => void;
+  /** The YAML editor is open: digits must not switch away from it (Ruling R36). */
+  editing?: boolean;
   onClose?: () => void;
   children: ReactNode;
 }) {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const id = useId();
 
-  // Left/right move between tabs, as a tablist should.
+  // Left/right, Home and End move between tabs, as a tablist should; Alt+arrows stay history.
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
     e.preventDefault();
     const at = tabs.indexOf(tab);
-    const next = (at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+    const next =
+      e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
     onTab(tabs[next]);
     tabRefs.current[next]?.focus();
   };
 
+  // 1-4 inside the details jump to that tab and focus it; never in a field, editor or terminal,
+  // and never while the YAML editor is open.
+  const onSectionKey = (e: KeyboardEvent<HTMLElement>) => {
+    if (
+      !editing && !e.defaultPrevented && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+      !isEditable(e.target) && /^[1-4]$/.test(e.key) && tabs[Number(e.key) - 1] !== undefined
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      const i = Number(e.key) - 1;
+      onTab(tabs[i]);
+      tabRefs.current[i]?.focus();
+      return;
+    }
+    onKey?.(e);
+  };
+
   return (
-    <section className={`${s.insp} ${pc[knownProvider(provider)]}`} aria-label={`Details for ${rowTitle(row)}`} onKeyDown={onKey}>
+    <section className={`${s.insp} ${pc[knownProvider(provider)]}`} aria-label={`Details for ${rowTitle(row)}`} onKeyDown={onSectionKey}>
       <div className={s.bar}>
         <div role="tablist" aria-label="Details" className={s.tabs} onKeyDown={onTabKey}>
           {tabs.map((t, i) => (

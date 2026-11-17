@@ -19,11 +19,13 @@ import s from "./Inspector.module.css";
 export interface ToolIntent {
   tool: ToolId | ViewIntent;
   seq: number;
+  /** For `tool: "tab"`: the detail tab to show, 1-based. */
+  tab?: number;
 }
 
 /** What a row's key asks of the details themselves rather than of a change tool. */
-export type ViewIntent = "yaml" | "workloadLogs" | "reveal";
-const VIEW_INTENTS: ReadonlySet<string> = new Set<ViewIntent>(["yaml", "workloadLogs", "reveal"]);
+export type ViewIntent = "yaml" | "workloadLogs" | "reveal" | "tab";
+const VIEW_INTENTS: ReadonlySet<string> = new Set<ViewIntent>(["yaml", "workloadLogs", "reveal", "tab"]);
 
 /** The count a workload runs at, from its row's Ready column ("2/3" → 3); 1 when it can't tell. */
 export function desiredReplicas(row: ResourceRow): number {

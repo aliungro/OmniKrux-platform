@@ -90,6 +90,12 @@ describe("shortcut registry", () => {
     expect(pressed("confirmReview", { ...base, key: "Enter" })).toBe(false);
   });
 
+  it("help lists the detail tab keys", () => {
+    const table = allGroups("pods").find(([title]) => title === "Table")![1];
+    expect(table.find((s) => s.id === "detailTab")?.keys).toEqual(["1–4"]);
+    expect(rowShortcut({ ...base, key: "2" }, "pods", ["logs", "shell"])).toBeUndefined();
+  });
+
   it("help lists both zones", () => {
     const groups = allGroups("pods");
     expect(groups.map(([t]) => t)).toEqual(["Apps and tabs", "Table", "Logs", "Anywhere", "Dock"]);

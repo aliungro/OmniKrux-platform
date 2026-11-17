@@ -1145,3 +1145,38 @@ describe("secret values", () => {
     expect(fetch.mock.calls.some(([u]) => u.endsWith("/reveal"))).toBe(false);
   });
 });
+
+describe("detail tabs from the keyboard", () => {
+  const open = () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(describeBody())));
+    wrap(<Inspector row={row()} provider="gke" />);
+    return screen.getByRole("tab", { name: "Describe" });
+  };
+  const selected = (name: string) => screen.getByRole("tab", { name }).getAttribute("aria-selected") === "true";
+
+  it("digits inside the details switch tabs and focus the tab", () => {
+    const describeTab = open();
+    describeTab.focus();
+    expect(fireEvent.keyDown(describeTab, { key: "3" })).toBe(false);
+    expect(selected("Events")).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Events" }));
+  });
+
+  it("home and end go to the first and last detail tab", () => {
+    const describeTab = open();
+    describeTab.focus();
+    expect(fireEvent.keyDown(describeTab, { key: "End" })).toBe(false);
+    expect(selected("Metrics")).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Metrics" }));
+    expect(fireEvent.keyDown(document.activeElement!, { key: "Home" })).toBe(false);
+    expect(selected("Describe")).toBe(true);
+    expect(document.activeElement).toBe(describeTab);
+  });
+
+  it("alt+arrows on a detail tab are not tab switches", () => {
+    const describeTab = open();
+    describeTab.focus();
+    expect(fireEvent.keyDown(describeTab, { key: "ArrowRight", altKey: true })).toBe(true);
+    expect(selected("Describe")).toBe(true);
+  });
+});

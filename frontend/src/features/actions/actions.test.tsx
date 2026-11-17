@@ -956,6 +956,51 @@ describe("yaml editor keys", () => {
     expect(area.value).toBe(EDITED);
   });
 
+  it("digits do not leave the YAML tab while the editor is open", async () => {
+    const { area } = await openEditor();
+    const yamlTab = () => screen.getByRole("tab", { name: "YAML" });
+    // Ruling R36: after Esc focus sits on the (non-editable) button bar; a digit there keeps the edit.
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Review changes"));
+    expect(fireEvent.keyDown(document.activeElement!, { key: "1" })).toBe(true);
+    expect(yamlTab().getAttribute("aria-selected")).toBe("true");
+    expect(area.isConnected).toBe(true);
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("digits never act in an input, the editor or a terminal", async () => {
+    const section = () => screen.getByRole("region", { name: /^Details for/ });
+    const tabSelected = (name: string) => screen.getByRole("tab", { name }).getAttribute("aria-selected") === "true";
+    const press = (el: Element) => {
+      const ev = new KeyboardEvent("keydown", { key: "2", bubbles: true, cancelable: true });
+      act(() => { el.dispatchEvent(ev); });
+      return ev.defaultPrevented;
+    };
+    // The scale form's number input.
+    serve({ [DESCRIBE]: [ok(resourceDescribe())] });
+    const first = wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Scale", tools()));
+    expect(press(screen.getByLabelText("Replicas"))).toBe(false);
+    expect(tabSelected("Describe")).toBe(true);
+    // A terminal inside the details.
+    const term = document.createElement("div");
+    term.className = "xterm";
+    const input = document.createElement("textarea");
+    term.append(input);
+    section().append(term);
+    expect(press(input)).toBe(false);
+    expect(tabSelected("Describe")).toBe(true);
+    first.unmount();
+    // The YAML editor's own field.
+    const { area } = await openEditor();
+    expect(press(area)).toBe(false);
+    expect(tabSelected("YAML")).toBe(true);
+  });
+
   it("with nothing changed escape lands on discard", async () => {
     const { area, outside } = await openEditor({ edit: false });
     fireEvent.keyDown(area, { key: "Escape" });

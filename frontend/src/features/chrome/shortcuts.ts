@@ -14,6 +14,7 @@ export type ShortcutId =
   | "details"
   | "close"
   | "yaml"
+  | "detailTab"
   | "edit"
   | "reviewEdit"
   | "delete"
@@ -89,6 +90,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "details", scope: "row", keys: ["Enter"], match: ["Enter", "d"], label: "Open or close the details (d too)", bar: "details" },
   { id: "close", scope: "row", keys: ["Esc"], match: ["Escape"], label: "Close the details" },
   { id: "yaml", scope: "row", keys: ["y"], match: ["y"], label: "Open the details on the YAML tab" },
+  { id: "detailTab", scope: "row", keys: ["1–4"], match: ["1", "2", "3", "4"], label: "While the details are open: Describe, YAML, Events or Metrics (y opens YAML too)" },
   { id: "edit", scope: "row", keys: ["e"], match: ["e"], label: "Edit the YAML" },
   { id: "reviewEdit", scope: "row", keys: ["Ctrl Enter"], macKeys: ["⌘ Enter"], match: ["Enter"], ctrl: true, label: "In the YAML editor: review the changes (Esc leaves the editor; ← → between Review changes and Discard)" },
   { id: "delete", scope: "row", keys: ["Ctrl D"], match: ["d", "D"], ctrl: true, label: "Delete" },
