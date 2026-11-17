@@ -12,11 +12,17 @@ export interface MountedEditor extends MountedView {
   focus: () => void;
 }
 
+/** The editor's own keys: Mod-Enter reviews the changes, Escape leaves the editor. */
+export interface EditorKeys {
+  onSubmit(): void;
+  onLeave(): void;
+}
+
 export interface CodeMirrorKit {
   /** A read-only side-by-side diff, before on the left, after on the right. */
   mergeView: (parent: HTMLElement, before: string, after: string) => MountedView;
   /** A YAML editor; `onChange` gets the whole text after every change. */
-  editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string) => MountedEditor;
+  editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string, keys: EditorKeys) => MountedEditor;
 }
 
 export const EDITOR_UNAVAILABLE = "Couldn't load the editor. Reload the page.";

@@ -2,16 +2,36 @@
  * The CodeMirror kit itself: imported only by `loadCodeMirror`, so neither CodeMirror nor this
  * setup is part of the page's first load.
  */
-import { EditorState } from "@codemirror/state";
-import { EditorView, drawSelection, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
+import { EditorState, Prec } from "@codemirror/state";
+import {
+  EditorView,
+  drawSelection,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+  type KeyBinding,
+} from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { yaml } from "@codemirror/lang-yaml";
 import { MergeView } from "@codemirror/merge";
 import { tags } from "@lezer/highlight";
-import type { CodeMirrorKit } from "./lazyCodeMirror";
+import type { CodeMirrorKit, EditorKeys } from "./lazyCodeMirror";
 
 const MONO = '"Geist Mono", ui-monospace, monospace';
+
+/**
+ * The editor's own keys, ahead of CodeMirror's: Mod-Enter (Ctrl, or Cmd on macOS) reviews the
+ * changes and Escape leaves the editor. Both are always handled, so Mod-Enter never inserts a line
+ * and Escape never falls through to `simplifySelection`.
+ */
+export function editorKeymap(keys: EditorKeys): KeyBinding[] {
+  return [
+    { key: "Mod-Enter", run: () => { keys.onSubmit(); return true; } },
+    { key: "Escape", run: () => { keys.onLeave(); return true; } },
+  ];
+}
 
 export function buildKit(): CodeMirrorKit {
   // The console's palette (tokens.css), so the editor reads as part of the details, not a widget.
@@ -84,7 +104,7 @@ export function buildKit(): CodeMirrorKit {
       });
       return { destroy: () => merge.destroy() };
     },
-    editor(parent, doc, onChange, label) {
+    editor(parent, doc, onChange, label, keys) {
       const editor = new EditorView({
         parent,
         state: EditorState.create({
@@ -97,6 +117,7 @@ export function buildKit(): CodeMirrorKit {
             indentOnInput(),
             bracketMatching(),
             history(),
+            Prec.highest(keymap.of(editorKeymap(keys))),
             // No Tab binding: Tab moves focus on, so the keyboard is never trapped in the editor.
             keymap.of([...defaultKeymap, ...historyKeymap]),
             EditorState.tabSize.of(2),

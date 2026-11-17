@@ -287,5 +287,10 @@ export function useTools({
     onKey,
     canEdit: tools.includes("edit"),
     edit: () => run("edit"),
+    /**
+     * The YAML editor is open: nothing may switch away from the YAML tab by key (it is shown only
+     * there, so the unsaved text would go with it). Ruling R36.
+     */
+    editing: open === "edit",
   };
 }

@@ -12,7 +12,7 @@ import { Table } from "../../test/table";
 import { Inspector } from "../inspector/Inspector";
 import { ActionDialog, ActionsProvider, reviewFocus } from "./ActionDialog";
 import { DrainProgress } from "./DrainProgress";
-import { loadCodeMirror } from "./lazyCodeMirror";
+import { loadCodeMirror, type EditorKeys } from "./lazyCodeMirror";
 
 // CodeMirror itself doesn't run in jsdom: a stand-in kit draws both sides of a diff as text and
 // the editor as a textarea, and tells the tests when (and whether) it was loaded.
@@ -27,11 +27,21 @@ const kit = vi.hoisted(() => ({
     parent.append(a, b);
     return { destroy: () => parent.replaceChildren() };
   },
-  editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string) => {
+  editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string, keys: EditorKeys) => {
     const area = document.createElement("textarea");
     area.value = doc;
     area.setAttribute("aria-label", label);
     area.addEventListener("input", () => onChange(area.value));
+    // Mirrors `editorKeymap`: CodeMirror runs it on the content before the page sees the key.
+    area.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        keys.onSubmit();
+      } else if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        keys.onLeave();
+      }
+    });
     parent.append(area);
     return { focus: () => area.focus(), destroy: () => area.remove() };
   },
@@ -867,6 +877,149 @@ describe("changes from the details", () => {
     expect(calls.filter((c) => c.url === "/api/actions/plan").map((c) => c.body)).toEqual([
       expect.objectContaining({ action: "delete", params: { expected_uid: deployment().uid } }),
     ]);
+  });
+});
+
+describe("yaml editor keys", () => {
+  const BEFORE = "kind: Deployment\nspec:\n  replicas: 3\n";
+  const EDITED = BEFORE.replace("replicas: 3", "replicas: 4");
+  const editPlan = () =>
+    ok(plan({ action: "edit", title: "Edit Deployment web", apply_label: "Save", diff: { before: "replicas: 3\n", after: "replicas: 4\n" } }));
+  const plans = (calls: Call[]) => calls.filter((c) => c.url === "/api/actions/plan");
+
+  /** The details on the YAML tab, editing; `edit` types a change. Keys that reach past the details are recorded. */
+  async function openEditor({ edit = true } = {}) {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: BEFORE })], "POST /api/actions/plan": [editPlan()] });
+    const outside = vi.fn();
+    const onClose = vi.fn();
+    wrap(
+      <div onKeyDown={(e) => outside(e.key)}>
+        <ActionsProvider>
+          <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} onClose={onClose} />
+        </ActionsProvider>
+      </div>,
+    );
+    const start = button("Edit", tools());
+    start.focus();
+    fireEvent.click(start);
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    if (edit) fireEvent.input(area, { target: { value: EDITED } });
+    return { calls, area, outside, onClose };
+  }
+
+  async function reviewsWith(mod: { ctrlKey: true } | { metaKey: true }) {
+    const { calls, area } = await openEditor();
+    expect(fireEvent.keyDown(area, { key: "Enter", ...mod })).toBe(false);
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(plans(calls).map((c) => c.body)).toEqual([
+      { action: "edit", target: { cluster_id: "c1", kind_key: "deployments.apps", namespace: "demo", name: "web" }, params: { yaml: EDITED } },
+    ]);
+    // The normal review, opened on its action button: nothing is applied from the editor.
+    await waitFor(() => expect(document.activeElement).toBe(button("Save", dialog())));
+    expect(calls.filter((c) => c.url.endsWith("/apply"))).toEqual([]);
+  }
+
+  it("ctrl+enter in the editor reviews the changes", async () => {
+    await reviewsWith({ ctrlKey: true });
+  });
+
+  it("cmd+enter works too", async () => {
+    await reviewsWith({ metaKey: true });
+  });
+
+  it("review changes names its key, and the bar says how to leave", async () => {
+    await openEditor();
+    expect(button("Review changes").getAttribute("aria-keyshortcuts")).toBe("Control+Enter");
+    expect(screen.getByText((_, el) => el?.textContent ==="Ctrl Enter reviews · Esc leaves the editor")).toBeTruthy();
+  });
+
+  it("ctrl+enter with nothing changed does nothing", async () => {
+    const { calls, area } = await openEditor({ edit: false });
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(area, { key: "Enter", metaKey: true });
+    await act(async () => {});
+    expect(plans(calls)).toEqual([]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(area);
+  });
+
+  it("escape leaves the editor onto review changes", async () => {
+    const { area, outside, onClose } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Review changes"));
+    // Esc stops at the editor: the details stay open with the edit in them.
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(outside).not.toHaveBeenCalledWith("Escape");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(area.isConnected).toBe(true);
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("with nothing changed escape lands on discard", async () => {
+    const { area, outside } = await openEditor({ edit: false });
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Discard"));
+    expect(outside).not.toHaveBeenCalledWith("Escape");
+  });
+
+  it("left and right move between review changes and discard", async () => {
+    const { area } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    const review = button("Review changes");
+    const discard = button("Discard");
+    expect(fireEvent.keyDown(review, { key: "ArrowLeft" })).toBe(false);
+    expect(document.activeElement).toBe(discard);
+    expect(fireEvent.keyDown(discard, { key: "ArrowRight" })).toBe(false);
+    expect(document.activeElement).toBe(review);
+    // Alt+arrows stay history: not prevented, focus stays.
+    expect(fireEvent.keyDown(review, { key: "ArrowLeft", altKey: true })).toBe(true);
+    expect(document.activeElement).toBe(review);
+  });
+
+  it("escape and arrows never discard", async () => {
+    const { area } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(button("Discard"));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    // Only a press discards.
+    expect(document.activeElement).toBe(button("Discard"));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    expect(await screen.findByTestId("yaml")).toBeTruthy();
+  });
+
+  it("ctrl+enter on discard never discards", async () => {
+    const { calls, area } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    const discard = button("Discard");
+    expect(document.activeElement).toBe(discard);
+    // Held: prevented (so the button is never pressed) and nothing reviewed.
+    expect(fireEvent.keyDown(discard, { key: "Enter", ctrlKey: true, repeat: true })).toBe(false);
+    expect(fireEvent.keyDown(discard, { key: "Enter", metaKey: true, repeat: true })).toBe(false);
+    await act(async () => {});
+    expect(plans(calls)).toEqual([]);
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    // Pressed once: it reviews the changes, from anywhere in the editor.
+    expect(fireEvent.keyDown(discard, { key: "Enter", ctrlKey: true })).toBe(false);
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(plans(calls)).toHaveLength(1);
+  });
+
+  it("a digit after leaving the editor keeps the edit", async () => {
+    const { area } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Review changes"));
+    await userEvent.keyboard("1");
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true");
   });
 });
 

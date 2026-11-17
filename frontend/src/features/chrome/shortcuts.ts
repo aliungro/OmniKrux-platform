@@ -15,6 +15,7 @@ export type ShortcutId =
   | "close"
   | "yaml"
   | "edit"
+  | "reviewEdit"
   | "delete"
   | "logs"
   | "previousLogs"
@@ -89,6 +90,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "close", scope: "row", keys: ["Esc"], match: ["Escape"], label: "Close the details" },
   { id: "yaml", scope: "row", keys: ["y"], match: ["y"], label: "Open the details on the YAML tab" },
   { id: "edit", scope: "row", keys: ["e"], match: ["e"], label: "Edit the YAML" },
+  { id: "reviewEdit", scope: "row", keys: ["Ctrl Enter"], macKeys: ["⌘ Enter"], match: ["Enter"], ctrl: true, label: "In the YAML editor: review the changes (Esc leaves the editor; ← → between Review changes and Discard)" },
   { id: "delete", scope: "row", keys: ["Ctrl D"], match: ["d", "D"], ctrl: true, label: "Delete" },
   // Rows: what each kind's keys mean.
   { id: "logs", scope: "row", kinds: ["pods"], keys: ["l"], match: ["l"], label: "Logs of the selected pod (they follow the row you select)", bar: "logs" },
