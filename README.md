@@ -115,7 +115,9 @@ Run the command without the live opt-in to verify that the live checks are skipp
 
 ## Finding your way
 
-The left rail switches between Kubernetes, Audit and Settings. Kubernetes starts on Home, with a search for clusters, kinds and pods and a live card for each cluster. Open a cluster card to browse its pods; Home health reports failing pods in rose and pods needing attention in amber. A connection problem is shown with its cause rather than a healthy result.
+The left rail switches between Kubernetes, Audit and Settings. Kubernetes starts on Home, with a search for clusters, kinds and pods and a live card for each cluster. Open a cluster card to browse its pods; Home health reports failing pods in rose and pods needing attention in amber. Connection issues appear first under **Problems right now**, with **Open cluster** to inspect that cluster. Cloud connection messages use safe retry guidance. Clusters that are updating or unavailable do not count as healthy; **Partial coverage** means only some clusters have current Pod status.
+
+Failing Pods start collapsed under **Show N failing Pods**. Expand to see up to five per cluster, with each Pod's name, namespace, cluster and status; **View all N failing Pods** opens that cluster with the failing filter. Open a Pod entry to select that exact Pod and show its details in the active pane. The usual `1`–`4` detail tabs and existing tools remain available. If the Pod disappears or is replaced, Omnikrux does not open a same-name replacement. **Back** returns to Home with the list expanded as before and restores focus to the entry when it still exists, otherwise to the problems heading or search.
 
 The workspace tabs above Kubernetes each hold their own kind, cluster scope, filters, sort, selected row, scroll position and back/forward history. Use `+` to open a fresh Home tab and `×` to close a tab. Back and Forward step through the active tab's views; the browser's Back and Forward buttons work too. Switching to Audit or Settings and back returns to the same Kubernetes tab. Only the active tab's view is live; background tabs do not keep their own watches or open details.
 
@@ -203,6 +205,7 @@ Every change follows the same steps: Omnikrux shows what it will do, you confirm
 - On a production cluster the review says so. Deleting or draining on a production cluster asks you to type the object's name. So does deleting a namespace, PersistentVolume, PersistentVolumeClaim or custom resource definition, or deleting or draining a node, on any cluster.
 - No audit, no change: if the audit log can't be written, nothing is applied.
 - Edit, scale, restart, roll back (deployments), delete, cordon, uncordon and drain all work this way. Drain runs as a job you can watch and cancel; the node stays cordoned if it stops.
+- In Audit, switch between **All activity** and **Failed only**. **Failed only** finds failed records across the stored history, including older pages, and combines with the cluster, action and text filters. Switching views starts at the newest matching records; **Load older** continues in the chosen view. The selected view survives reload.
 - The audit log is the Audit app (Audit in the left rail). It records what was done, on which cluster, when and how it ended (Omnikrux has no login yet, so it doesn't record who), and is kept in the data volume next to your clusters. Exec, debug containers, node shells, port-forwards and secret reveals write a row too.
 
 ### Secrets
