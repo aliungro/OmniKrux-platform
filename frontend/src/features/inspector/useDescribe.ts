@@ -7,17 +7,27 @@ export function podPath(clusterId: string, ns: string, name: string): string {
 }
 
 /** The describe query, shared by the inspector and the dock (which reads the pod's containers). */
-export function describeQuery(clusterId: string, ns: string, name: string, resourceVersion: string) {
+export function describeQuery(
+  clusterId: string,
+  ns: string,
+  name: string,
+  resourceVersion: string,
+  expectedUid?: string,
+) {
+  const key = ["describe", clusterId, ns, name, resourceVersion];
+  const path = `${podPath(clusterId, ns, name)}/describe`;
   return queryOptions({
-    queryKey: ["describe", clusterId, ns, name, resourceVersion],
-    queryFn: () => getJson<PodDescribe>(`${podPath(clusterId, ns, name)}/describe`),
+    queryKey: expectedUid === undefined ? key : [...key, expectedUid],
+    queryFn: () => getJson<PodDescribe>(
+      expectedUid === undefined ? path : `${path}?expected_uid=${encodeURIComponent(expectedUid)}`,
+    ),
     retry: false,
   });
 }
 
 /**
  * The pod's describe, keyed on its resource version so it reloads whenever the watch reports a change.
- * The previous answer stays on screen while the new one loads, so a busy pod doesn't flicker.
+ * Guarded requests keep the previous answer across resource versions of the same Pod UID.
  * No automatic retries: the backend's error is already in plain words, and the view offers Retry.
  */
 export function useDescribe(
@@ -25,8 +35,23 @@ export function useDescribe(
   ns: string,
   name: string,
   resourceVersion: string,
+  expectedUid?: string,
 ): UseQueryResult<PodDescribe> {
-  return useQuery({ ...describeQuery(clusterId, ns, name, resourceVersion), placeholderData: keepPreviousData });
+  return useQuery({
+    ...describeQuery(clusterId, ns, name, resourceVersion, expectedUid),
+    placeholderData: (previousData, previousQuery) => {
+      const [, previousCluster, previousNs, previousName, , previousUid] = previousQuery?.queryKey ?? [];
+      if (expectedUid === undefined && previousUid === undefined) return previousData;
+      if (
+        previousCluster === clusterId
+        && previousNs === ns
+        && previousName === name
+        && previousUid === expectedUid
+      ) {
+        return previousData;
+      }
+    },
+  });
 }
 
 /** The pod's manifest as YAML; only fetched while the YAML tab is open. */
