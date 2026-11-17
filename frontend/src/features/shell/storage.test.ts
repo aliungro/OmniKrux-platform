@@ -116,8 +116,21 @@ it("round trips tabs, histories, closed tabs and audit filters", () => {
   ws.kubernetes.tabs.push({id:"b",view:{page:"home"},back:[v],forward:[],scrollTop:2});
   ws.kubernetes.active="b";
   ws.kubernetes.closed=[{tab:{id:"c",view:v,back:[{page:"home"}],forward:[],scrollTop:3},closedAt:123}];
-  ws.audit.filters={cluster:"c",action:"scale",text:"needle"}; ws.app="audit";
+  ws.audit.filters={cluster:"c",action:"scale",text:"needle",outcome:"failed"}; ws.app="audit";
   expect(parseWorkspace(serializeWorkspace(ws)).workspace).toEqual(ws);
+});
+it("legacy and invalid Audit outcome values preserve other filters", () => {
+  const otherFilters = { cluster: "c", action: "scale", text: "needle" };
+  for (const outcome of [undefined, "succeeded", "Failed", null, 1]) {
+    const input = JSON.parse(raw([tab(kind)]));
+    input.app = "audit";
+    input.audit.filters = { ...otherFilters, outcome };
+    const { workspace, problem } = parseWorkspace(JSON.stringify(input));
+    expect(problem).toBeNull();
+    expect(workspace.app).toBe("audit");
+    expect(workspace.audit.filters).toEqual({ ...otherFilters, outcome: "" });
+    expect(parseWorkspace(serializeWorkspace(workspace)).workspace).toEqual(workspace);
+  }
 });
 it("preserves UI pick values longer than the user-entered text limit", () => {
   const picked={...kind,filters:{...kind.filters,columns:[{key:"node",op:"oneOf",values:["x".repeat(501)]}]}};

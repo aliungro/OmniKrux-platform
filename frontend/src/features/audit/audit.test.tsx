@@ -1,13 +1,13 @@
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/audit/audit.test.tsx
-import { useState } from "react";
-import { NO_AUDIT_FILTER } from "./useAudit";
+import { useReducer } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AuditRecord, Cluster } from "../../api/types";
 import { AuditView } from "./AuditView";
 import { fakeColumnLayout } from "../../test/layout";
+import { defaultWorkspace, workspaceReducer } from "../shell/workspace";
 
 beforeEach(() => {
   // jsdom has no layout; give everything a size so the virtualizer renders rows.
@@ -52,8 +52,8 @@ function serve(pages: (url: URL) => { records: AuditRecord[]; next_before: numbe
 }
 
 function AuditFixture({ View }: { View: typeof AuditView }) {
-  const [filters, setFilters] = useState(NO_AUDIT_FILTER);
-  return <View filters={filters} onFilters={setFilters} />;
+  const [workspace, dispatch] = useReducer(workspaceReducer, undefined, defaultWorkspace);
+  return <View filters={workspace.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />;
 }
 
 function show(View = AuditView) {
@@ -330,6 +330,116 @@ describe("audit view", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Action" }), { target: { value: "scale" } });
     await waitFor(() => expect(urls.at(-1)!.searchParams.get("action")).toBe("scale"));
     expect(urls.at(-1)!.searchParams.get("cluster")).toBe("c2");
+  });
+
+  it("Failed only starts at page one with the existing filters", async () => {
+    const failed = (id: number) => record(id, { outcome: "failed" });
+    const urls = serve(({ searchParams }) => {
+      const outcome = searchParams.get("outcome");
+      const before = searchParams.get("before");
+      if (outcome === "failed") {
+        return before === "6"
+          ? { records: [failed(4)], next_before: null }
+          : { records: [failed(6)], next_before: 6 };
+      }
+      return before === "9"
+        ? { records: [record(8)], next_before: null }
+        : { records: [record(9)], next_before: 9 };
+    });
+    show();
+    await screen.findByRole("row", { name: /web-9/ });
+    fireEvent.change(screen.getByLabelText("Cluster"), { target: { value: "c2" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Action" }), { target: { value: "scale" } });
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "web" } });
+    await waitFor(() => expect(urls.at(-1)!.searchParams.get("q")).toBe("web"));
+    fireEvent.click(await screen.findByRole("button", { name: "Load older" }));
+    fireEvent.click(await screen.findByRole("row", { name: /web-8/ }));
+    expect(screen.getByRole("row", { name: "Change details" })).toBeTruthy();
+
+    const failedOnly = screen.getByRole("button", { name: "Failed only", pressed: false });
+    const all = screen.getByRole("button", { name: "All activity", pressed: true });
+    const activate = (button: HTMLElement) => {
+      act(() => button.focus());
+      fireEvent.click(button);
+    };
+    const params = () => Object.fromEntries(urls.at(-1)!.searchParams);
+    const filters = { cluster: "c2", action: "scale", q: "web", limit: "100" };
+
+    activate(failedOnly);
+    await screen.findByRole("row", { name: /web-6/ });
+    expect(params()).toEqual({ ...filters, outcome: "failed" });
+    expect(document.activeElement).toBe(failedOnly);
+    expect(screen.queryByRole("row", { name: /web-[89]/ })).toBeNull();
+    expect(screen.queryByRole("row", { name: "Change details" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByRole("row", { name: /web-4/ });
+    expect(params()).toEqual({ ...filters, outcome: "failed", before: "6" });
+
+    activate(all);
+    await screen.findByRole("row", { name: /web-9/ });
+    expect(params()).toEqual(filters);
+    expect(document.activeElement).toBe(all);
+    expect(screen.queryByRole("row", { name: /web-[468]/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByRole("row", { name: /web-8/ });
+    expect(params()).toEqual({ ...filters, before: "9" });
+
+    activate(failedOnly);
+    await screen.findByRole("row", { name: /web-6/ });
+    expect(params()).toEqual({ ...filters, outcome: "failed" });
+    expect(screen.queryByRole("row", { name: /web-4/ })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "pending search" } });
+    activate(all);
+    await screen.findByRole("row", { name: /web-9/ });
+    expect(params()).toEqual({ ...filters, q: "pending search" });
+    expect(document.activeElement).toBe(all);
+  });
+
+  it("empty Failed only has the filtered empty message", async () => {
+    serve(({ searchParams }) => ({
+      records: searchParams.has("outcome") ? [] : [record(1)],
+      next_before: null,
+    }));
+    show();
+    await screen.findByRole("row", { name: /web-1/ });
+    fireEvent.click(screen.getByRole("button", { name: "Failed only" }));
+    expect(await screen.findByText("No records match these filters.")).toBeTruthy();
+  });
+
+  it("keeps a late older page in its own outcome and resets only the destination", async () => {
+    let finishOlder!: (response: Response) => void;
+    let olderSignal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (url === "/api/clusters") return json(CLUSTERS);
+      const params = new URL(url, "http://x").searchParams;
+      if (params.get("before") === "9") {
+        olderSignal = init?.signal ?? undefined;
+        return new Promise<Response>((resolve) => { finishOlder = resolve; });
+      }
+      return json(params.has("outcome")
+        ? { records: [record(6, { outcome: "failed" })], next_before: null }
+        : { records: [record(9)], next_before: 9 });
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const other = ["audit", "other-cluster", "", "", ""] as const;
+    const otherPages = { pages: [{ records: [record(50)], next_before: 50 }, { records: [record(49)], next_before: null }], pageParams: [undefined, 50] };
+    render(<QueryClientProvider client={client}><AuditFixture View={AuditView} /></QueryClientProvider>);
+    await screen.findByRole("row", { name: /web-9/ });
+    client.setQueryData(other, otherPages);
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(finishOlder).toBeTypeOf("function"));
+    const failedOnly = screen.getByRole("button", { name: "Failed only" });
+    act(() => failedOnly.focus());
+    fireEvent.click(failedOnly);
+    await screen.findByRole("row", { name: /web-6/ });
+    expect(olderSignal?.aborted).toBe(true);
+    await act(async () => { finishOlder(await json({ records: [record(8)], next_before: null })); });
+    expect(screen.queryByRole("row", { name: /web-[89]/ })).toBeNull();
+    expect(document.activeElement).toBe(failedOnly);
+    fireEvent.click(screen.getByRole("button", { name: "All activity" }));
+    await screen.findByRole("row", { name: /web-9/ });
+    expect(screen.queryByRole("row", { name: /web-8/ })).toBeNull();
+    expect(client.getQueryData(other)).toEqual(otherPages);
   });
 
   it("filters by text", async () => {

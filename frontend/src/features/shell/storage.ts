@@ -24,7 +24,10 @@ function tab(x: unknown): Tab<KubeView> | null {
   const history=(v:unknown): KubeView[] => Array.isArray(v) ? v.map(view).filter((item): item is KubeView => item!==null).slice(-MAX_BACK) : [];
   return {id:x.id,view:v,back:history(x.back),forward:history(x.forward),scrollTop:typeof x.scrollTop === "number" && Number.isFinite(x.scrollTop) && x.scrollTop>=0 ? x.scrollTop : 0};
 }
-function audit(x: unknown): AuditFilters { return record(x) && text(x.cluster) && text(x.action) && text(x.text) ? {cluster:x.cluster,action:x.action,text:x.text} : {...NO_AUDIT_FILTER}; }
+function audit(x: unknown): AuditFilters {
+  if (!record(x) || !text(x.cluster) || !text(x.action) || !text(x.text)) return { ...NO_AUDIT_FILTER };
+  return { cluster: x.cluster, action: x.action, text: x.text, outcome: x.outcome === "failed" ? "failed" : "" };
+}
 export function parseWorkspace(raw: string | null): {workspace:Workspace;problem:Problem|null} {
   if (raw===null) return {workspace:defaultWorkspace(),problem:null};
   let value: unknown; try { value=JSON.parse(raw); } catch { return {workspace:defaultWorkspace(),problem:{text:"they aren't valid JSON",reset:true}}; }

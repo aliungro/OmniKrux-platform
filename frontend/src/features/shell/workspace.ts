@@ -42,7 +42,12 @@ export function prepareWorkspaceAction(action: WorkspaceAction): PreparedWorkspa
 }
 export function workspaceReducer(ws: Workspace, action: PreparedWorkspaceAction): Workspace {
   if (action.type === "switchApp") return ws.app===action.app ? ws : {...ws,app:action.app};
-  if (action.type === "auditFilters") { const a=ws.audit.filters,b=action.filters; return a.cluster===b.cluster && a.action===b.action && a.text===b.text ? ws : {...ws,audit:{filters:b}}; }
+  if (action.type === "auditFilters") {
+    const a = ws.audit.filters, b = action.filters;
+    return a.cluster === b.cluster && a.action === b.action && a.text === b.text && a.outcome === b.outcome
+      ? ws
+      : { ...ws, audit: { filters: b } };
+  }
   const k=ws.kubernetes, activeIndex=k.tabs.findIndex(t=>t.id===k.active);
   if (action.type === "closeSplit") return ws.split ? {...ws, split: undefined} : ws;
   if (action.type === "splitTab") {
