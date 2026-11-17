@@ -119,7 +119,7 @@ The left rail switches between Kubernetes, Audit and Settings. Kubernetes starts
 
 The workspace tabs above Kubernetes each hold their own kind, cluster scope, filters, sort, selected row, scroll position and back/forward history. Use `+` to open a fresh Home tab and `×` to close a tab. Back and Forward step through the active tab's views; the browser's Back and Forward buttons work too. Switching to Audit or Settings and back returns to the same Kubernetes tab. Only the active tab's view is live; background tabs do not keep their own watches or open details.
 
-Settings lets you reorder, add or remove pinned kinds (including Secrets), or reset the kind row to its defaults. Tabs and pinned kinds are saved in this browser only, never shared with another browser or person. To start fresh, clear this site's data in your browser; this resets tabs and preferences, not clusters in the server's data volume. If browser storage is blocked, full or unreadable, Omnikrux explains the problem and keeps working in memory. Workspace and pinned-kind storage problems can have separate notices.
+Settings lets you reorder, add or remove pinned kinds (including Secrets), or reset the kind row to its defaults. Drag a pinned kind (or focus it and press `Alt ↑` / `Alt ↓`); Move up, Move down and Remove are in its ⋯ menu. Tabs and pinned kinds are saved in this browser only, never shared with another browser or person. To start fresh, clear this site's data in your browser; this resets tabs and preferences, not clusters in the server's data volume. If browser storage is blocked, full or unreadable, Omnikrux explains the problem and keeps working in memory. Workspace and pinned-kind storage problems can have separate notices.
 
 | Shortcut | Action |
 | --- | --- |
@@ -133,7 +133,7 @@ Settings lets you reorder, add or remove pinned kinds (including Secrets), or re
 | `:` / `Ctrl K` | Jump to a kind / open commands |
 | `?` | Show all shortcuts, including this kind's row actions |
 
-Row keys work as soon as a kind view opens, without clicking the table: press `↓`, then `l` on Pods to open logs. Keys typed in a field, YAML editor or terminal belong there; page shortcuts pause under a modal dialog. AltGr does not switch apps or tabs.
+Row keys work as soon as a kind view opens, without clicking the table: press `↓`, then `l` on Pods: a follow log opens in the dock and follows the pod you select, while the keyboard stays on the table. Keys typed in a field, YAML editor or terminal belong there; page shortcuts pause under a modal dialog. AltGr does not switch apps or tabs.
 
 ### Upgrading from Plan 3
 
@@ -146,9 +146,21 @@ You can work a problem from the pod list without leaving Omnikrux.
 - Describe, YAML and events open inline under the row (press Enter on a pod). Events show why a container was killed or can't start.
 - Logs are live and searchable. Open the previous run's logs for a container that keeps restarting, or open every pod's logs for a workload in one view (each line says which pod it came from). At most 50,000 lines are kept in the browser; Omnikrux says when older ones were dropped.
 - Shells open in a pod's container. If a container can't run a shell, start a debug container next to it. Node shells open on a node.
-- The bottom dock holds your log and shell sessions as tabs, each labelled with its cluster, namespace and pod, so you can see which cluster your keystrokes go to. "Side by side" (or `Ctrl \`) shows two open logs or shells together. Open a second session to enable it; with only one, the button explains why it is disabled. The dock stays available when you switch apps or workspace tabs.
+- The dock is one row of tabs sized to their names, each labelled with its cluster, namespace and pod, so you can see which cluster your keystrokes go to. When the tabs don't fit, "{n} open" lists every session, with a search box.
+- The follow log (◉ follows row) shows the pod you select. It waits a quarter second after you stop moving, keeps the last pod and says why when the selected row isn't a pod, and says when the pod is gone. It reads the pod's default container, with a picker for the others.
+- Pinned logs (`Shift L`, 📌) never follow the row.
+- `Esc` never closes a log. `Ctrl Del` (`⌘ ⌫` on macOS) closes a dock tab, or deletes the focused resource after the usual review.
+- "Side by side" (or `Ctrl \`) shows two open logs or shells together. Open a second session to enable it; with only one, the button explains why it is disabled. The dock stays available when you switch apps or workspace tabs. Scrollbars are thin and plum, lighter on hover.
 
-Keyboard shortcuts: `↑` `↓` move, `Enter` details, `l` logs, `p` previous logs, `s` shell, `Ctrl F` search logs, `Ctrl \` layout, `/` filter, `?` all shortcuts.
+Keyboard shortcuts depend on where the keyboard is:
+
+| Zone | Keys |
+|---|---|
+| Table | `↑` `↓` move · `l` follow log · `Shift L` pin a log · `p` previous logs · `s` shell · `Alt ↓` into the logs · `Ctrl Del` / `⌘ ⌫` delete (reviewed first) |
+| Logs | `↑` `↓` `PgUp` `PgDn` scroll · `Home` / `End` top and live end (`G` too) · `←` `→` switch tab · `Ctrl F` search · `Shift L` pin this log · `Ctrl Del` / `⌘ ⌫` close the tab · `Esc` / `Alt ↑` back to the table |
+| Shell | every key is the shell's, `Esc` included; `Alt ↑` back to the table |
+
+`Enter` details, `Ctrl \` layout, `/` filter and `?` all shortcuts work as before.
 
 Things worth knowing before you use them:
 
@@ -167,11 +179,11 @@ Every kind a cluster serves is listed, custom resource definitions (CRDs) includ
 
 Press `:` to jump to any kind, or `Ctrl K` for the command palette: kinds, views and the actions of the selected row. Neither works while you type in a field, the YAML editor or a terminal. `?` shows every shortcut for the kind you're on.
 
-Keys on a selected row, by kind (`Enter` or `d` opens the details and `y` the YAML on every kind; `e` edits the YAML and `Ctrl D` deletes only on kinds that allow it, and Secrets can't be edited):
+Keys on a selected row, by kind (`Enter` or `d` opens the details and `y` the YAML on every kind; `e` edits the YAML and `Ctrl D` deletes only on kinds that allow it (`Ctrl Del` (`⌘ ⌫`) deletes too), and Secrets can't be edited):
 
 | Kind | Keys |
 | --- | --- |
-| Pods | `l` logs, `p` previous logs, `s` shell, `f` port-forward |
+| Pods | `l` follow log, `Shift L` pin a log, `p` previous logs, `s` shell, `f` port-forward |
 | Deployments | `s` scale, `r` restart, `l` logs of all its pods (rollback is in the details) |
 | StatefulSets | `s` scale, `r` restart, `l` logs of all its pods |
 | ReplicaSets | `s` scale |
@@ -197,6 +209,8 @@ Until explicitly revealed, secret values stay on the server. Rows, the details, 
 ### Column filters, sorting and container status
 
 Use a column header's filter control for text, pick-list, number or age filters, depending on the column. For example, Events' Last seen can be filtered to "within 1 h". Active filters appear as chips; remove a chip to remove its filter. Filters combine with the main text, namespace and status filters. Click a sortable column heading to cycle ascending, descending and unsorted; sorting stays within each cluster. Filters and sort belong to the workspace tab and return after reload.
+
+Drag the divider between two headers to resize a column (a guide shows the width); double-click it to fit the column to its content; `←` `→` on a focused divider resize it and `Enter` resets it.
 
 Pods show one bullet per container beside their status, including init containers. A green dot means running and ready; an amber dot means running but not ready, or waiting; a rose diamond means failing; a muted hollow ring means finished. Hover a bullet for its container name, reason and restart count (finished containers show their completion reason). At most six bullets are shown; `+n` holds the remaining containers' details.
 
