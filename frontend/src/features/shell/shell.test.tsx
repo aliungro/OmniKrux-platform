@@ -881,9 +881,13 @@ it("the lilac outline moves with the keyboard", async () => {
   expect(zoneDock().hasAttribute("data-keyboard-zone")).toBe(false);
 });
 
-it("a Home tab's pane has no keyboard zone outline", () => {
+it("a Home tab's pane has no keyboard zone outline", async () => {
   renderShell();
   expect(screen.getByRole("heading", { name: "Where do you want to look?" })).toBeTruthy();
+  const main = screen.getByRole("main");
+  main.focus();
+  expect(document.activeElement).toBe(main);
+  await act(async () => { await Promise.resolve(); });
   expect(zonePane().hasAttribute("data-keyboard-zone")).toBe(false);
 });
 
