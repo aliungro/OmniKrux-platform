@@ -414,6 +414,89 @@ describe("column resizing on every table", () => {
   });
 });
 
+describe("keyboard after a mouse resize", () => {
+  let handles: Element[] = [];
+  /** A committed width is stored; reset it so later tests start from the defaults. */
+  afterEach(() => {
+    handles.forEach(handle => fireEvent.keyDown(handle, { key: "Enter" }));
+    handles = [];
+    localStorage.clear();
+  });
+  const press = (handle: Element, type: string, clientX: number) =>
+    fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+  const two = () => [pod({ uid: "u1", name: "pod-a" }), pod({ uid: "u2", name: "pod-b" })];
+  const mount = (rows: any[], wrap: (node: React.ReactElement) => React.ReactElement = node => node) => {
+    layout();
+    localStorage.clear();
+    render(wrap(<QueryClientProvider client={new QueryClient()}>
+      <Table territories={[terr({ rows, total: rows.length })]} kind={PODS} onRetry={() => {}} />
+    </QueryClientProvider>));
+    const grid = screen.getByRole("grid");
+    const handle = within(grid).getByRole("separator", { name: "Resize Namespace" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+    handles.push(handle);
+    const rowEls = () => Array.from(grid.querySelectorAll<HTMLElement>("[data-row-key]"));
+    return { grid, handle, rowEls };
+  };
+
+  it("a mouse drag returns focus to the row it started from", () => {
+    const { grid, handle, rowEls } = mount(two());
+    const [first, second] = rowEls();
+    act(() => first.focus());
+    press(handle, "pointerdown", 100);
+    act(() => handle.focus());
+    press(handle, "pointermove", 140);
+    press(handle, "pointerup", 140);
+    expect(document.activeElement).toBe(first);
+    const cols = grid.style.getPropertyValue("--cols");
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(second);
+    expect(grid.style.getPropertyValue("--cols")).toBe(cols);
+  });
+
+  it("a press on the divider never takes focus", () => {
+    const { handle } = mount(two());
+    expect(fireEvent.mouseDown(handle)).toBe(false);
+  });
+
+  it("with nothing focused before, focus lands on the selected row, or main when there are none", () => {
+    const withRows = mount(two(), node => <main tabIndex={-1}>{node}</main>);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    press(withRows.handle, "pointerdown", 100);
+    press(withRows.handle, "pointerup", 140);
+    expect(document.activeElement).toBe(withRows.grid.querySelector('[data-row-key][tabindex="0"]'));
+    cleanup();
+    const empty = mount([], node => <main tabIndex={-1}>{node}</main>);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    press(empty.handle, "pointerdown", 100);
+    press(empty.handle, "pointerup", 140);
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+  });
+
+  it.each([
+    ["escape", (handle: Element) => fireEvent.keyDown(handle, { key: "Escape" })],
+    ["lost capture", (handle: Element) => press(handle, "lostpointercapture", 100)],
+  ])("%s returns focus too", (_name, end) => {
+    const { handle, rowEls } = mount(two());
+    const [first] = rowEls();
+    act(() => first.focus());
+    press(handle, "pointerdown", 100);
+    act(() => handle.focus());
+    end(handle);
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("keyboard resizing keeps focus on the divider", () => {
+    const { grid, handle } = mount(two());
+    const before = grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/);
+    act(() => handle.focus());
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(handle);
+    expect(grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/)[1]).toBe("208px");
+    expect(before[1]).not.toBe("208px");
+  });
+});
+
 function layout() {
   // jsdom has no layout; give everything a size so the virtualizer renders rows.
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
@@ -517,7 +600,8 @@ describe("kinds in the table", () => {
 
       pointer("pointerdown", 100);
       pointer("pointerup", 140);
-      expect(document.activeElement).toBe(handle);
+      expect(document.activeElement).toBe(resourceRow);
+      act(() => handle.focus());
       fireEvent.keyDown(handle, { key: "Enter" });
       fireEvent.keyDown(handle, { key: "ArrowDown" });
       fireEvent.keyDown(handle, { key: "ArrowLeft", altKey: true });

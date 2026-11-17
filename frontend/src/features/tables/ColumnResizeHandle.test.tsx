@@ -78,6 +78,39 @@ describe("ColumnResizeHandle drag ends", () => {
     expect(onCommit).toHaveBeenCalledWith(140);
   });
 
+  it("a drag started from the focused divider keeps focus there", () => {
+    render(<><button>row</button><Handle onCommit={() => {}} /></>);
+    const handle = screen.getByRole("separator");
+    act(() => handle.focus());
+    pointer(handle, "pointerdown", 100);
+    pointer(handle, "pointerup", 140);
+    expect(document.activeElement).toBe(handle);
+  });
+
+  it("focus goes back only within the pane the drag was in", () => {
+    render(<>
+      <main tabIndex={-1}>
+        <section data-active-pane="false"><button data-testid="other" tabIndex={0}>other</button></section>
+        <section data-active-pane="true"><Handle onCommit={() => {}} /></section>
+      </main>
+    </>);
+    const handle = screen.getByRole("separator");
+    act(() => screen.getByTestId("other").focus());
+    pointer(handle, "pointerdown", 100);
+    act(() => handle.focus());
+    pointer(handle, "pointerup", 140);
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+  });
+
+  it("an element focused before the drag is restored on release", () => {
+    render(<><button>row</button><Handle onCommit={() => {}} /></>);
+    const row = screen.getByRole("button");
+    act(() => row.focus());
+    pointer(screen.getByRole("separator"), "pointerdown", 100);
+    pointer(screen.getByRole("separator"), "pointerup", 140);
+    expect(document.activeElement).toBe(row);
+  });
+
   it("unmounting mid-drag removes the guide", () => {
     const onCommit = vi.fn();
     const { unmount } = render(<Handle onCommit={onCommit} />);

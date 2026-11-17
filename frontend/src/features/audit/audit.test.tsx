@@ -131,6 +131,22 @@ describe("audit view", () => {
     fireEvent.keyDown(handle, { key: "Enter" });
   });
 
+  it("a mouse drag on the audit log returns focus to its row", async () => {
+    serve(() => ({ records: [record(1)], next_before: null }));
+    show();
+    const row = await screen.findByRole("row", { name: /web-1/ });
+    const handle = screen.getByRole("separator", { name: "Resize Action" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+    const press = (type: string, clientX: number) =>
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+    act(() => row.focus());
+    press("pointerdown", 100);
+    act(() => handle.focus());
+    press("pointerup", 140);
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(handle, { key: "Enter" });
+  });
+
   it("double-click fits an audit column to its content", async () => {
     serve(() => ({ records: [record(2), record(1)], next_before: null }));
     show();

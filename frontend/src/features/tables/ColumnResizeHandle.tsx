@@ -34,6 +34,12 @@ interface Drag {
 let liveDrag: { cancel(): void } | null = null;
 let liveOverlay: { remove(): void } | null = null;
 
+/** Where the keyboard goes when the pointer leaves it nowhere: the selected row, else the page's main. */
+function fallbackFocus(handle: HTMLElement): HTMLElement | null {
+  return handle.closest('[role="grid"]')?.querySelector<HTMLElement>('[data-row-key][tabindex="0"], [role="row"][tabindex="0"]')
+    ?? handle.closest<HTMLElement>("main");
+}
+
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : 0;
 
 /** The guide line and its width tooltip: plain body children, so a drag never renders a row. */
@@ -92,7 +98,15 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
     return () => observer.disconnect();
   }, [measure]);
 
-  useLayoutEffect(() => () => drag.current?.cancel(), [view, minWidth, maxWidth]);
+  useLayoutEffect(() => () => {
+    drag.current?.cancel();
+  }, [view, minWidth, maxWidth]);
+
+  /** Unmounting while the divider holds focus must not drop it on the body. */
+  useLayoutEffect(() => () => {
+    const element = handle.current;
+    if (element && document.activeElement === element) fallbackFocus(element)?.focus({ preventScroll: true });
+  }, []);
 
   function start(event: PointerEvent<HTMLSpanElement>) {
     if (event.button !== 0 || drag.current) return;
@@ -106,7 +120,12 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
     } catch {
       return;
     }
-    element.focus({ preventScroll: true });
+    const startedOnHandle = document.activeElement === element;
+    const pane = element.closest("[data-active-pane]") ?? element.closest("main");
+    const before = document.activeElement;
+    /** Only a place in the same pane (or the same main) gets the keyboard back; never the other pane. */
+    const returnTo = !startedOnHandle && before instanceof HTMLElement && before !== document.body
+      && before.isConnected && (!pane || pane.contains(before)) ? before : null;
 
     liveDrag?.cancel();
     const overlay = createOverlay(label, element.parentElement?.getBoundingClientRect(), guide?.() ?? null, s.guide, s.tip);
@@ -145,6 +164,16 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
       if (element.hasPointerCapture?.(pointerId)) element.releasePointerCapture(pointerId);
       setResizing(false);
       onPreview(null);
+      giveFocusBack();
+    }
+
+    /** The press never focuses the divider, so the keyboard goes back to where it was. */
+    function giveFocusBack() {
+      if (startedOnHandle) return;
+      const active = document.activeElement;
+      if (active && active !== element && active !== document.body) return;
+      const target = returnTo?.isConnected ? returnTo : fallbackFocus(element);
+      target?.focus({ preventScroll: true });
     }
 
     /** The one commit: the handle's pointerup and the window fallback both come here. */
@@ -236,6 +265,7 @@ export function ColumnResizeHandle({ label, minWidth, maxWidth, readWidth, onPre
     data-resizing={resizing || undefined}
     onFocus={measure}
     onKeyDown={keyDown}
+    onMouseDown={event => event.preventDefault()}
     onPointerDown={start}
     onPointerMove={move}
     onPointerUp={release}
