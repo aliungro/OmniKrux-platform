@@ -10,6 +10,7 @@ import { FakeWebSocket } from "./features/logs/fakeWebSocket";
 import { Shell as Console } from "./features/shell/Shell";
 import { seedPodsWorkspace } from "./test/seedWorkspace";
 import { KINDS } from "./test/kinds";
+import { removePinned } from "./test/pinnedKinds";
 import { container } from "./test/describe";
 
 // The dock imports the terminal; jsdom has no canvas for it, and these tests open no shell.
@@ -84,7 +85,7 @@ it("edit pinned kinds opens settings at the section and changes the live row", a
     expect(screen.getByRole("heading",{name:"Settings",level:1})).toBeTruthy();
     expect(scroll).toHaveBeenCalled();
     expect(location.hash).toBe("#/settings");
-    fireEvent.click(screen.getByRole("button",{name:"Remove Services"}));
+    removePinned("Services");
     fireEvent.click(screen.getByRole("button",{name:"Kubernetes"}));
     expect(screen.queryByRole("tab",{name:"Services"})).toBeNull();
     expect(screen.getByRole("tab",{name:"Pods"})).toBeTruthy();
@@ -194,16 +195,18 @@ describe("Shortcut bar", () => {
   it("shortcut bar lists the keys", async () => {
     vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
-    const bar = await screen.findByRole("navigation", { name: "Keyboard shortcuts" });
+    const bar = await screen.findByRole("navigation", { name: /^Keyboard shortcuts/ });
     const items = Array.from(bar.querySelectorAll("li")).map((li) => li.textContent);
     expect(items).toEqual([
       "↑↓ move",
       "Enter details",
       "l logs",
+      "Shift L pin a log",
       "p previous logs",
       "s shell",
       "f port-forward",
-      "Ctrl F search logs",
+      "Alt ↓ into the logs",
+      "Ctrl Del delete",
       ": kinds",
       "Ctrl K commands",
       "/ filter",
@@ -385,9 +388,10 @@ describe("Console dock wiring", () => {
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const [tab] = sessions();
     expect(tab.textContent).toContain("KIND");
-    expect(tab.textContent).toContain("Logs");
-    // The failing container is the one shown first; the picker offers every container.
-    expect(FakeWebSocket.last.params.get("container")).toBe("app");
+    expect(tab.textContent).toContain("◉ follows row");
+    // L follows the pod on its default container (the first, no annotation); the picker offers
+    // every container.
+    expect(FakeWebSocket.last.params.get("container")).toBe("sidecar");
     expect(screen.getByRole("combobox", { name: "Container" }).textContent).toBe("initsidecarapp");
     const pane = screen.getAllByRole("tabpanel").find((p) => !p.hidden)!;
     expect(pane.textContent).toContain("kind-omnikrux-dev / default / crasher-1");
@@ -398,6 +402,8 @@ describe("Console dock wiring", () => {
     fireEvent.keyDown(row, { key: "p" });
     await waitFor(() => expect(sessions()).toHaveLength(2));
     expect(FakeWebSocket.last.params.get("previous")).toBe("true");
+    // p still opens on the failing container, since that's the one worth reading.
+    expect(FakeWebSocket.last.params.get("container")).toBe("app");
   });
 
   it("dock dispatch does not re-render the table", async () => {
@@ -544,7 +550,7 @@ describe("Console kinds, more", () => {
     window.location.hash = "#kind=services";
     vi.stubGlobal("fetch", routes(() => [cluster]));
     renderConsole();
-    const bar = await screen.findByRole("navigation", { name: "Keyboard shortcuts" });
+    const bar = await screen.findByRole("navigation", { name: /^Keyboard shortcuts/ });
     expect(bar.textContent).not.toContain("previous logs");
     expect(bar.textContent).not.toContain("shell");
     expect(bar.textContent).toContain("move");

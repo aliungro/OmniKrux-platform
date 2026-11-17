@@ -93,7 +93,7 @@ describe("buildCommands", () => {
     const pods = { ...PODS, verbs: VERBS };
     const p = buildCommands(ctx({ selected: { row: pod, kind: pods, clusterName: "kind-dev", actions: rowActions("pods", VERBS, pod, ALL) } }));
     expect(p.filter((x) => x.group === "Actions").map((x) => x.label)).toEqual([
-      "Details of api-1", "YAML of api-1", "Logs of api-1", "Previous logs of api-1", "Shell in api-1", "Edit api-1…", "Port-forward api-1…", "Evict api-1…", "Delete api-1…",
+      "Details of api-1", "YAML of api-1", "Logs of api-1", "Pin logs of api-1", "Previous logs of api-1", "Shell in api-1", "Edit api-1…", "Port-forward api-1…", "Evict api-1…", "Delete api-1…",
     ]);
     // A Secret's row: its keys (Ruling R38), never a reveal straight from the palette.
     const secret = row({ kind: "Secret", name: "db" });
@@ -102,6 +102,22 @@ describe("buildCommands", () => {
     expect(sc.filter((x) => x.group === "Actions").map((x) => x.label)).toEqual(["Details of db", "YAML of db", "Keys of db", "Delete db…"]);
     // Nothing selected: no actions.
     expect(buildCommands(ctx()).some((x) => x.group === "Actions")).toBe(false);
+  });
+
+  it("the palette offers pin logs on a pod", () => {
+    const pod = row({ kind: "Pod", name: "web-1" });
+    const pods = { ...PODS, verbs: VERBS };
+    const c = ctx({ selected: { row: pod, kind: pods, clusterName: "kind-dev", actions: rowActions("pods", VERBS, pod, ALL) } });
+    const pin = buildCommands(c).find((x) => x.id === "action:pinLogs")!;
+    expect(pin.label).toBe("Pin logs of web-1");
+    expect(pin.keys).toEqual(["Shift L"]);
+    pin.run();
+    expect(c.onRowAction).toHaveBeenCalledWith("pinLogs");
+    // Only pods have it: a deployment's logs are all of its pods'.
+    const web = row({});
+    const deployments = { ...DEPLOYMENTS, verbs: VERBS };
+    const d = buildCommands(ctx({ selected: { row: web, kind: deployments, clusterName: "kind-dev", actions: rowActions(deployments.key, VERBS, web, ALL) } }));
+    expect(d.some((x) => x.id === "action:pinLogs")).toBe(false);
   });
 
   it("views: the audit log always, port-forwards while one exists", () => {

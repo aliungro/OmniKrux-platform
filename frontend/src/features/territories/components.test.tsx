@@ -7,30 +7,24 @@ import { ProviderBadge } from "./ProviderBadge";
 import { ClusterBand } from "./ClusterBand";
 import { ResourceRowView } from "./ResourceRowView";
 import { Status } from "./Status";
-import { CERTIFICATES, DEPLOYMENTS, EVENTS, HELM, NODES, PODS, SERVICES } from "../../test/kinds";
+import { CERTIFICATES, DEPLOYMENTS, EVENTS, HELM, NODES, PODS, SECRETS, SERVICES, STATEFULSETS } from "../../test/kinds";
 import { Cell, gridTemplate, minTableWidth } from "./cells";
 import type { MetricsLookup } from "../../api/useMetrics";
 import type { ContainerState, Usage } from "../../api/types";
 import { Table } from "../../test/table";
 import { describeBody } from "../../test/describe";
-import { readFileSync } from "node:fs";
 import rowStyles from "./ResourceRowView.module.css";
 import statusStyles from "./Status.module.css";
 import bulletStyles from "./ContainerBullets.module.css";
 import bandStyles from "./ClusterBand.module.css";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
+import { componentCss } from "../../test/css";
+import { fakeColumnLayout } from "../../test/layout";
 
-// Vitest stubs CSS imports. Apply real rules to their module class names for
-// computed-style integration checks; pixel layout remains a browser check.
-function componentCss(file: string, classes: Record<string, string>) {
-  return readFileSync(new URL(file, import.meta.url), "utf8").replace(/\.([a-zA-Z][\w-]*)/g,
-    (selector, name: string) => classes[name] ? `.${classes[name].split(" ")[0]}` : selector);
-}
-
-const rowCss = componentCss("./ResourceRowView.module.css", rowStyles);
-const statusCss = componentCss("./Status.module.css", statusStyles);
-const bulletsCss = componentCss("./ContainerBullets.module.css", bulletStyles);
-const tokensCss = componentCss("../../design/tokens.css", {});
+const rowCss = componentCss(import.meta.url, "./ResourceRowView.module.css", rowStyles);
+const statusCss = componentCss(import.meta.url, "./Status.module.css", statusStyles);
+const bulletsCss = componentCss(import.meta.url, "./ContainerBullets.module.css", bulletStyles);
+const tokensCss = componentCss(import.meta.url, "../../design/tokens.css", {});
 
 afterEach(() => {
   cleanup();
@@ -130,7 +124,7 @@ describe("cluster band copy", () => {
     const region = "region-".repeat(30);
     const loc = `AWS · ${region}`;
     const css = document.createElement("style");
-    css.textContent = componentCss("./ClusterBand.module.css", bandStyles);
+    css.textContent = componentCss(import.meta.url, "./ClusterBand.module.css", bandStyles);
     document.head.append(css);
     try {
       render(<ClusterBand t={terr({ cluster: cloud({ name, region }) })} kind={PODS} onRetry={() => {}} />);
@@ -154,7 +148,7 @@ describe("cluster band copy", () => {
     const name = "production-cluster-".repeat(30);
     const region = "region-".repeat(30);
     const css = document.createElement("style");
-    css.textContent = componentCss("./ClusterBand.module.css", bandStyles);
+    css.textContent = componentCss(import.meta.url, "./ClusterBand.module.css", bandStyles);
     document.head.append(css);
     try {
       const node_pools = [{ name: "system", count: 1, machine_type: "m7i.large", version: "1.31.3" }];
@@ -355,6 +349,151 @@ describe("container status bullets", () => {
   });
 });
 
+describe("column resizing on every table", () => {
+  const overlays = () => document.querySelectorAll("[data-resize-guide],[data-resize-tip]");
+  const press = (handle: Element, type: string, clientX: number) =>
+    fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+  const flushFrames = () => act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+  const dataHeaders = (grid: HTMLElement) =>
+    within(grid).getAllByRole("columnheader").filter(header => !header.querySelector("input"));
+
+  it.each([PODS, DEPLOYMENTS, STATEFULSETS, SERVICES, SECRETS, NODES, EVENTS, HELM, CERTIFICATES])(
+    "every column of $key resizes", async (kind) => {
+      layout();
+      localStorage.clear();
+      const save = vi.spyOn(Storage.prototype, "setItem");
+      render(<QueryClientProvider client={new QueryClient()}>
+        <Table territories={[terr({ rows: [], total: 0 })]} kind={kind} onRetry={() => {}} />
+      </QueryClientProvider>);
+      const grid = screen.getByRole("grid");
+      const headers = dataHeaders(grid);
+      expect(headers).toHaveLength(kind.columns.length);
+      for (const header of headers) {
+        const label = header.getAttribute("aria-label") ?? header.textContent ?? "";
+        expect(within(header).getAllByRole("separator").map(h => h.getAttribute("aria-label")))
+          .toEqual([expect.stringMatching(/^Resize \S/)]);
+        expect(label).not.toBe("");
+      }
+      const target = headers[1];
+      const handle = within(target).getByRole("separator");
+      vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+      act(() => handle.focus());
+      save.mockClear();
+      press(handle, "pointerdown", 100);
+      press(handle, "pointermove", 140);
+      await flushFrames();
+      expect(overlays()).toHaveLength(2);
+      press(handle, "pointerup", 140);
+      expect(overlays()).toHaveLength(0);
+      expect(grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/)[1]).toBe("240px");
+      const writes = save.mock.calls.filter(([key]) => key === "omnikrux.tableColumnWidths");
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(String(writes[0][1])).tables[`resource:${kind.key}`]).toBeTruthy();
+      fireEvent.keyDown(handle, { key: "Enter" });
+    });
+
+  it("a drag in the inactive split pane resizes its column", async () => {
+    layout();
+    localStorage.clear();
+    const ui = (view: object) => <QueryClientProvider client={new QueryClient()}>
+      <Table territories={[terr({ rows: [], total: 0 })]} kind={DEPLOYMENTS} onRetry={() => {}} menuView={view} />
+    </QueryClientProvider>;
+    const { rerender } = render(ui({ page: "kind", kind: "deployments.apps" }));
+    const grid = screen.getByRole("grid");
+    const target = dataHeaders(grid)[1];
+    const handle = within(target).getByRole("separator");
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+    press(handle, "pointerdown", 100);
+    // Pane activation re-renders the table with a new, equal view object.
+    rerender(ui({ page: "kind", kind: "deployments.apps" }));
+    expect(overlays()).toHaveLength(2);
+    press(handle, "pointerup", 140);
+    expect(overlays()).toHaveLength(0);
+    expect(grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/)[1]).toBe("240px");
+    fireEvent.keyDown(handle, { key: "Enter" });
+  });
+});
+
+describe("keyboard after a mouse resize", () => {
+  /** A committed width is stored; reset it through the live dividers so later tests start from the defaults. */
+  afterEach(() => {
+    document.querySelectorAll("[role=separator]").forEach(handle => fireEvent.keyDown(handle, { key: "Enter" }));
+    localStorage.clear();
+  });
+  const press = (handle: Element, type: string, clientX: number) =>
+    fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+  const two = () => [pod({ uid: "u1", name: "pod-a" }), pod({ uid: "u2", name: "pod-b" })];
+  const mount = (rows: any[], wrap: (node: React.ReactElement) => React.ReactElement = node => node) => {
+    layout();
+    localStorage.clear();
+    render(wrap(<QueryClientProvider client={new QueryClient()}>
+      <Table territories={[terr({ rows, total: rows.length })]} kind={PODS} onRetry={() => {}} />
+    </QueryClientProvider>));
+    const grid = screen.getByRole("grid");
+    const handle = within(grid).getByRole("separator", { name: "Resize Namespace" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect").mockReturnValue({ width: 200 } as DOMRect);
+    const rowEls = () => Array.from(grid.querySelectorAll<HTMLElement>("[data-row-key]"));
+    return { grid, handle, rowEls };
+  };
+
+  it("a mouse drag returns focus to the row it started from", () => {
+    const { grid, handle, rowEls } = mount(two());
+    const [first, second] = rowEls();
+    act(() => first.focus());
+    press(handle, "pointerdown", 100);
+    act(() => handle.focus());
+    press(handle, "pointermove", 140);
+    press(handle, "pointerup", 140);
+    expect(document.activeElement).toBe(first);
+    const cols = grid.style.getPropertyValue("--cols");
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(second);
+    expect(grid.style.getPropertyValue("--cols")).toBe(cols);
+  });
+
+  it("a press on the divider never takes focus", () => {
+    const { handle } = mount(two());
+    expect(fireEvent.mouseDown(handle)).toBe(false);
+  });
+
+  it("with nothing focused before, focus lands on the selected row, or main when there are none", () => {
+    const withRows = mount(two(), node => <main tabIndex={-1}>{node}</main>);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    press(withRows.handle, "pointerdown", 100);
+    press(withRows.handle, "pointerup", 140);
+    expect(document.activeElement).toBe(withRows.grid.querySelector('[data-row-key][tabindex="0"]'));
+    cleanup();
+    const empty = mount([], node => <main tabIndex={-1}>{node}</main>);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    press(empty.handle, "pointerdown", 100);
+    press(empty.handle, "pointerup", 140);
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+  });
+
+  it.each([
+    ["escape", (handle: Element) => fireEvent.keyDown(handle, { key: "Escape" })],
+    ["lost capture", (handle: Element) => press(handle, "lostpointercapture", 100)],
+  ])("%s returns focus too", (_name, end) => {
+    const { handle, rowEls } = mount(two());
+    const [first] = rowEls();
+    act(() => first.focus());
+    press(handle, "pointerdown", 100);
+    act(() => handle.focus());
+    end(handle);
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("keyboard resizing keeps focus on the divider", () => {
+    const { grid, handle } = mount(two());
+    const before = grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/);
+    act(() => handle.focus());
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(handle);
+    expect(grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/)[1]).toBe("208px");
+    expect(before[1]).not.toBe("208px");
+  });
+});
+
 function layout() {
   // jsdom has no layout; give everything a size so the virtualizer renders rows.
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
@@ -458,7 +597,8 @@ describe("kinds in the table", () => {
 
       pointer("pointerdown", 100);
       pointer("pointerup", 140);
-      expect(document.activeElement).toBe(handle);
+      expect(document.activeElement).toBe(resourceRow);
+      act(() => handle.focus());
       fireEvent.keyDown(handle, { key: "Enter" });
       fireEvent.keyDown(handle, { key: "ArrowDown" });
       fireEvent.keyDown(handle, { key: "ArrowLeft", altKey: true });
@@ -522,12 +662,100 @@ describe("kinds in the table", () => {
       act(() => vi.advanceTimersToNextFrame());
       expect(grid.style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 115px 70px");
       expect(save).toHaveBeenCalledTimes(1);
+      fakeColumnLayout({ content: () => 150 });
       fireEvent.doubleClick(handle);
-      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(grid.style.getPropertyValue("--cols")).toBe("minmax(200px, 2fr) 1fr 150px 70px");
       expect(save).toHaveBeenCalledTimes(2);
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(grid.style.getPropertyValue("--cols")).toBe(template);
+      expect(save).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * The column as Chrome draws it `column` px wide: the header label needs 80, the filter icon 12,
+   * and each row's cell what the table says for that row's key.
+   */
+  const stubWidths = (byRow: Record<string, number>, column = 80) =>
+    fakeColumnLayout({
+      box: (el) => el.matches('[role="columnheader"], [role="gridcell"]') ? column
+        : el.matches("[data-column-label]") ? 80 : el.matches('[aria-label^="Filter by"]') ? 12 : undefined,
+      content: (el) => el.matches("[data-column-label]") ? 80
+        : byRow[el.closest("[data-row-key]")?.getAttribute("data-row-key") ?? ""],
+    });
+
+  it("double-click fits a pod column to its content", () => {
+    layout();
+    render(<Table territories={[terr({ rows: [pod(), pod({ uid: "u2", name: "payments-api-2" })], total: 2 })]} kind={PODS} onRetry={() => {}} />);
+    const grid = screen.getByRole("grid");
+    const template = grid.style.getPropertyValue("--cols");
+    const tracks = / (?![^()]*\))/;
+    const handle = within(grid).getByRole("separator", { name: "Resize Namespace" });
+    const save = vi.spyOn(Storage.prototype, "setItem");
+    stubWidths({ "c1/u1": 150, "c1/u2": 210 });
+    fireEvent.doubleClick(handle);
+    expect(grid.style.getPropertyValue("--cols").split(tracks)[1]).toBe("210px");
+    expect(save).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(grid.style.getPropertyValue("--cols")).toBe(template);
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("fit shrinks a wide pod column to its header and cells", () => {
+    layout();
+    render(<Table territories={[terr({ rows: [pod(), pod({ uid: "u2", name: "payments-api-2" })], total: 2 })]} kind={PODS} onRetry={() => {}} />);
+    const grid = screen.getByRole("grid");
+    const handle = within(grid).getByRole("separator", { name: "Resize Namespace" });
+    // A 300px column whose cells need 100 and 60: the header's free space is not content.
+    stubWidths({ "c1/u1": 100, "c1/u2": 60 }, 300);
+    fireEvent.doubleClick(handle);
+    expect(grid.style.getPropertyValue("--cols").split(/ (?![^()]*\))/)[1]).toBe("100px");
+    fireEvent.keyDown(handle, { key: "Enter" });
+  });
+
+  it("dragging shows a guide and a width tooltip, then removes them", () => {
+    layout();
+    render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} />);
+    const handle = within(screen.getByRole("grid")).getByRole("separator", { name: "Resize Namespace" });
+    vi.spyOn(handle.closest("[role=columnheader]")!, "getBoundingClientRect")
+      .mockReturnValue({ width: 100, top: 10, bottom: 40, right: 300 } as DOMRect);
+    const pointer = (type: string, clientX: number) =>
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+    const overlay = () => [document.body.querySelector("[data-resize-guide]"), document.body.querySelector("[data-resize-tip]")];
+    vi.useFakeTimers();
+    try {
+      pointer("pointerdown", 100);
+      pointer("pointermove", 108);
+      act(() => vi.advanceTimersToNextFrame());
+      const [guide, tip] = overlay();
+      expect(guide?.getAttribute("aria-hidden")).toBe("true");
+      expect(tip?.textContent).toBe("Namespace · 108 px");
+      expect(tip?.getAttribute("aria-hidden")).toBe("true");
+      expect((guide as HTMLElement).style.transform).toBe("translateX(307px)");
+      pointer("pointerup", 108);
+      expect(overlay()).toEqual([null, null]);
+
+      pointer("pointerdown", 100);
+      pointer("pointermove", 120);
+      act(() => vi.advanceTimersToNextFrame());
+      expect(overlay()[0]).not.toBeNull();
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(overlay()).toEqual([null, null]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the filter icon stays clickable beside the divider", () => {
+    layout();
+    const onCommit = vi.spyOn(Storage.prototype, "setItem");
+    render(<Table territories={[terr({ rows: [pod()], total: 1 })]} kind={PODS} onRetry={() => {}} />);
+    const filter = screen.getByRole("button", { name: "Filter by Status" });
+    fireEvent.click(filter);
+    expect(filter.getAttribute("aria-expanded")).toBe("true");
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
   it("narrows a responsive column wider than the cap from its real width without a jump", () => {

@@ -3,15 +3,17 @@ import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import type { Job, Plan, ResourceRow } from "../../api/types";
 import { resourceDescribe } from "../../test/describe";
 import { DEPLOYMENTS } from "../../test/kinds";
 import { Table } from "../../test/table";
+import type { RowRequest } from "../territories/TerritoryTable";
 import { Inspector } from "../inspector/Inspector";
-import { ActionDialog, ActionsProvider } from "./ActionDialog";
+import { ActionDialog, ActionsProvider, reviewFocus } from "./ActionDialog";
 import { DrainProgress } from "./DrainProgress";
-import { loadCodeMirror } from "./lazyCodeMirror";
+import { loadCodeMirror, type EditorKeys } from "./lazyCodeMirror";
 
 // CodeMirror itself doesn't run in jsdom: a stand-in kit draws both sides of a diff as text and
 // the editor as a textarea, and tells the tests when (and whether) it was loaded.
@@ -26,11 +28,24 @@ const kit = vi.hoisted(() => ({
     parent.append(a, b);
     return { destroy: () => parent.replaceChildren() };
   },
-  editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string) => {
+  editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string, keys: EditorKeys) => {
     const area = document.createElement("textarea");
     area.value = doc;
     area.setAttribute("aria-label", label);
     area.addEventListener("input", () => onChange(area.value));
+    // Mirrors `editorKeymap`: CodeMirror runs it on the content before the page sees the key.
+    area.addEventListener("keydown", (e) => {
+      if (e.repeat && (e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        keys.onSubmit();
+      } else if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        keys.onLeave();
+      }
+    });
     parent.append(area);
     return { focus: () => area.focus(), destroy: () => area.remove() };
   },
@@ -267,12 +282,12 @@ describe("action dialog", () => {
     await waitFor(() => expect(onDone).toHaveBeenCalled());
   });
 
-  it("cancel takes first focus, applying says so and locks the dialog", async () => {
+  it("the action button takes first focus, applying says so and locks the dialog", async () => {
     let answer!: (r: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => { answer = r; })));
     const onDone = vi.fn();
     wrap(<ActionDialog plan={plan()} onDone={onDone} onReview={vi.fn()} />);
-    expect(document.activeElement).toBe(button("Cancel", dialog()));
+    expect(document.activeElement).toBe(button("Restart", dialog()));
     fireEvent.click(button("Restart", dialog()));
     expect(button("Applying…", dialog()).disabled).toBe(true);
     expect(button("Cancel", dialog()).disabled).toBe(true);
@@ -286,11 +301,147 @@ describe("action dialog", () => {
     wrap(<ActionDialog plan={plan({ confirm_text: "web" })} onDone={vi.fn()} onReview={vi.fn()} />);
     const cancel = button("Cancel", dialog());
     const input = screen.getByLabelText("Type web to confirm");
-    expect(document.activeElement).toBe(cancel);
-    fireEvent.keyDown(dialog(), { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(input); // Restart is off until the name is typed
+    expect(document.activeElement).toBe(input);
     fireEvent.keyDown(dialog(), { key: "Tab" });
     expect(document.activeElement).toBe(cancel);
+    fireEvent.keyDown(dialog(), { key: "Tab" });
+    expect(document.activeElement).toBe(input); // Restart is off until the name is typed
+  });
+
+  const applied = { outcome: "succeeded", message: "Done.", job_id: null, audit_id: 1 };
+  const applies = (calls: Call[]) => calls.filter((c) => c.method === "POST" && c.url.endsWith("/apply"));
+
+  it.each([
+    ["restart", "Restart"],
+    ["scale", "Scale"],
+    ["rollback", "Roll back"],
+    ["cordon", "Cordon"],
+    ["uncordon", "Uncordon"],
+    ["edit", "Save"],
+  ] as const)("a review opens on its action button and enter applies (%s)", async (action, label) => {
+    const calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+    const onDone = vi.fn();
+    const diff = action === "edit" ? { before: "a: 1\n", after: "a: 2\n" } : null;
+    wrap(<ActionDialog plan={plan({ action, apply_label: label, diff })} onDone={onDone} onReview={vi.fn()} />);
+    const go = button(label, dialog());
+    expect(document.activeElement).toBe(go);
+    expect(go.getAttribute("aria-keyshortcuts")).toBe("Control+Enter");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(applies(calls)).toEqual([{ url: "/api/actions/p1/apply", method: "POST", body: {} }]);
+  });
+
+  it("delete, drain and evict reviews keep focus on cancel", () => {
+    for (const [action, label] of [["delete", "Delete"], ["drain", "Drain"], ["evict", "Evict"]] as const) {
+      wrap(<ActionDialog plan={plan({ action, apply_label: label })} onDone={vi.fn()} onReview={vi.fn()} />);
+      expect(document.activeElement).toBe(button("Cancel", dialog()));
+      expect(button(label, dialog()).disabled).toBe(false);
+      cleanup();
+    }
+    expect(reviewFocus({ action: "delete", blocked: [], confirm_text: "web" })).toBe("cancel");
+  });
+
+  it("a blocked review opens on cancel and a typed one on its name field", () => {
+    const blocked = plan({ action: "scale", apply_label: "Scale", blocked: ["Nothing changes: web already runs 3 replicas."] });
+    wrap(<ActionDialog plan={blocked} onDone={vi.fn()} onReview={vi.fn()} />);
+    expect(document.activeElement).toBe(button("Cancel", dialog()));
+    cleanup();
+    wrap(<ActionDialog plan={plan({ confirm_text: "web" })} onDone={vi.fn()} onReview={vi.fn()} />);
+    expect(document.activeElement).toBe(screen.getByLabelText("Type web to confirm"));
+    expect(reviewFocus({ action: "restart", blocked: [], confirm_text: null })).toBe("apply");
+  });
+
+  it("ctrl+enter confirms any review", async () => {
+    let calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+    let onDone = vi.fn();
+    wrap(<ActionDialog plan={plan()} onDone={onDone} onReview={vi.fn()} />);
+    expect(fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true })).toBe(false);
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(applies(calls)).toHaveLength(1);
+
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }]) {
+      cleanup();
+      calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+      onDone = vi.fn();
+      wrap(<ActionDialog plan={plan({ action: "delete", apply_label: "Delete" })} onDone={onDone} onReview={vi.fn()} />);
+      const cancel = button("Cancel", dialog());
+      expect(document.activeElement).toBe(cancel);
+      // On Cancel, Ctrl+Enter confirms; it never presses Cancel.
+      expect(fireEvent.keyDown(cancel, { key: "Enter", ...mod })).toBe(false);
+      await waitFor(() => expect(onDone).toHaveBeenCalledWith({ message: "Done.", tone: "ok" }));
+      expect(applies(calls)).toEqual([{ url: "/api/actions/p1/apply", method: "POST", body: {} }]);
+    }
+  });
+
+  it("ctrl+enter does nothing until the name is typed", async () => {
+    const calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+    const onDone = vi.fn();
+    wrap(<ActionDialog plan={plan({ confirm_text: "web" })} onDone={onDone} onReview={vi.fn()} />);
+    const input = screen.getByLabelText("Type web to confirm");
+    expect(document.activeElement).toBe(input);
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(applies(calls)).toHaveLength(0);
+    await userEvent.type(input, "web");
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    // The field acts on plain Enter only, so Ctrl+Enter in it applies exactly once.
+    expect(applies(calls)).toEqual([{ url: "/api/actions/p1/apply", method: "POST", body: { confirm_text: "web" } }]);
+  });
+
+  it("a held enter never applies", () => {
+    const calls = serve({ "POST /api/actions/p1/apply": [ok(applied)] });
+    wrap(<ActionDialog plan={plan()} onDone={vi.fn()} onReview={vi.fn()} />);
+    const go = button("Restart", dialog());
+    expect(document.activeElement).toBe(go);
+    // The prevented keydown is what stops a held Enter from pressing the button (R31).
+    expect(fireEvent.keyDown(go, { key: "Enter", repeat: true })).toBe(false);
+    expect(fireEvent.keyDown(go, { key: "Enter", ctrlKey: true, repeat: true })).toBe(false);
+    expect(applies(calls)).toHaveLength(0);
+    expect(go.textContent).toBe("Restart");
+  });
+
+  it("ctrl+enter while applying does nothing more", async () => {
+    let answer!: (r: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>((r) => { answer = r; }));
+    vi.stubGlobal("fetch", fetch);
+    const onDone = vi.fn();
+    wrap(<ActionDialog plan={plan()} onDone={onDone} onReview={vi.fn()} />);
+    fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => answer(new Response(JSON.stringify(applied), { status: 200 })));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ctrl+enter never applies past its review", () => {
+  it("two ctrl+enters in one act send one apply", () => {
+    // In one act nothing re-renders between the presses, so only the `applying` guard can stop the second.
+    const fetch = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetch);
+    wrap(<ActionDialog plan={plan()} onDone={vi.fn()} onReview={vi.fn()} />);
+    act(() => {
+      fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true });
+      fireEvent.keyDown(dialog(), { key: "Enter", ctrlKey: true });
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ctrl+enter on a blocked review sends nothing", async () => {
+    const fetch = vi.fn(() => json({}));
+    vi.stubGlobal("fetch", fetch);
+    const onDone = vi.fn();
+    wrap(<ActionDialog plan={plan({ blocked: ["Nothing changes: web already runs 3 replicas."] })} onDone={onDone} onReview={vi.fn()} />);
+    const cancel = button("Cancel", dialog());
+    expect(document.activeElement).toBe(cancel);
+    // Prevented (Cancel is never pressed by it) and refused.
+    expect(fireEvent.keyDown(cancel, { key: "Enter", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(dialog(), { key: "Enter", metaKey: true })).toBe(false);
+    await act(async () => {});
+    expect(fetch).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(dialog()).toBeTruthy();
   });
 });
 
@@ -518,6 +669,28 @@ describe("changes from the details", () => {
     await waitFor(() => expect(document.activeElement).toBe(area));
   });
 
+  it("an enter held from the scale form never applies the review", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan({ action: "scale", title: "Scale Deployment web", apply_label: "Scale" }))],
+      "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Scaled.", job_id: null, audit_id: 1 })],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Scale", tools()));
+    const replicas = screen.getByLabelText("Replicas");
+    await userEvent.clear(replicas);
+    await userEvent.type(replicas, "2{Enter}");
+    await waitFor(() => expect(document.activeElement).toBe(button("Scale", dialog())));
+    // The same Enter, still held, repeats on the button that just took focus.
+    expect(fireEvent.keyDown(document.activeElement!, { key: "Enter", repeat: true })).toBe(false);
+    expect(calls.filter((c) => c.url.endsWith("/apply"))).toHaveLength(0);
+    expect(calls.find((c) => c.url === "/api/actions/plan")?.body).toMatchObject({ params: { replicas: 2 } });
+  });
+
   it("scale form plans with replicas", async () => {
     const calls = serve({
       [DESCRIBE]: [ok(resourceDescribe())],
@@ -715,6 +888,401 @@ describe("changes from the details", () => {
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
     expect(calls.find((c) => c.url === "/api/actions/plan")?.body).toMatchObject({ action: "restart" });
   });
+
+  it("ctrl+delete in the details plans the delete, but in a field it edits the field", async () => {
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      "POST /api/actions/plan": [ok(plan({ action: "delete" }))],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Scale", tools()));
+    const field = new KeyboardEvent("keydown", { key: "Delete", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      screen.getByLabelText("Replicas").dispatchEvent(field);
+    });
+    expect(field.defaultPrevented).toBe(false);
+    expect(calls.some((c) => c.url === "/api/actions/plan")).toBe(false);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Describe" }), { key: "Delete", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(calls.filter((c) => c.url === "/api/actions/plan").map((c) => c.body)).toEqual([
+      expect.objectContaining({ action: "delete", params: { expected_uid: deployment().uid } }),
+    ]);
+  });
+});
+
+describe("yaml editor keys", () => {
+  const BEFORE = "kind: Deployment\nspec:\n  replicas: 3\n";
+  const EDITED = BEFORE.replace("replicas: 3", "replicas: 4");
+  const editPlan = () =>
+    ok(plan({ action: "edit", title: "Edit Deployment web", apply_label: "Save", diff: { before: "replicas: 3\n", after: "replicas: 4\n" } }));
+  const plans = (calls: Call[]) => calls.filter((c) => c.url === "/api/actions/plan");
+
+  /** The details on the YAML tab, editing; `edit` types a change. Keys that reach past the details are recorded. */
+  async function openEditor({ edit = true } = {}) {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: BEFORE })], "POST /api/actions/plan": [editPlan()] });
+    const outside = vi.fn();
+    const onClose = vi.fn();
+    wrap(
+      <div onKeyDown={(e) => outside(e.key)}>
+        <ActionsProvider>
+          <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} onClose={onClose} />
+        </ActionsProvider>
+      </div>,
+    );
+    const start = button("Edit", tools());
+    start.focus();
+    fireEvent.click(start);
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    if (edit) fireEvent.input(area, { target: { value: EDITED } });
+    return { calls, area, outside, onClose };
+  }
+
+  async function reviewsWith(mod: { ctrlKey: true } | { metaKey: true }) {
+    const { calls, area } = await openEditor();
+    expect(fireEvent.keyDown(area, { key: "Enter", ...mod })).toBe(false);
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(plans(calls).map((c) => c.body)).toEqual([
+      { action: "edit", target: { cluster_id: "c1", kind_key: "deployments.apps", namespace: "demo", name: "web" }, params: { yaml: EDITED } },
+    ]);
+    // The normal review, opened on its action button: nothing is applied from the editor.
+    await waitFor(() => expect(document.activeElement).toBe(button("Save", dialog())));
+    expect(calls.filter((c) => c.url.endsWith("/apply"))).toEqual([]);
+  }
+
+  it("ctrl+enter in the editor reviews the changes", async () => {
+    await reviewsWith({ ctrlKey: true });
+  });
+
+  it("cmd+enter works too", async () => {
+    await reviewsWith({ metaKey: true });
+  });
+
+  it("review changes names its key, and the bar says how to leave", async () => {
+    await openEditor();
+    expect(button("Review changes").getAttribute("aria-keyshortcuts")).toBe("Control+Enter");
+    expect(screen.getByText((_, el) => el?.textContent ==="Ctrl Enter reviews · Esc leaves the editor")).toBeTruthy();
+  });
+
+  it("a held ctrl+enter after a refused plan plans only once", async () => {
+    const refused = "An edit can't change the kind, name or namespace. Create a new object with kubectl instead.";
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      [YAML]: [ok({ yaml: BEFORE })],
+      "POST /api/actions/plan": [{ status: 422, body: { detail: refused } }],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Edit", tools()));
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: EDITED } });
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    expect(await screen.findByText(refused)).toBeTruthy();
+    // Still held: the repeats are swallowed, though Review changes could be pressed again.
+    for (let i = 0; i < 5; i++) expect(fireEvent.keyDown(area, { key: "Enter", ctrlKey: true, repeat: true })).toBe(false);
+    await act(async () => {});
+    expect(plans(calls)).toHaveLength(1);
+    expect(button("Review changes").disabled).toBe(false);
+  });
+
+  it("ctrl+enter with nothing changed does nothing", async () => {
+    const { calls, area } = await openEditor({ edit: false });
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(area, { key: "Enter", metaKey: true });
+    await act(async () => {});
+    expect(plans(calls)).toEqual([]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(area);
+  });
+
+  it("escape leaves the editor onto review changes", async () => {
+    const { area, outside, onClose } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Review changes"));
+    // Esc stops at the editor: the details stay open with the edit in them.
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(outside).not.toHaveBeenCalledWith("Escape");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(area.isConnected).toBe(true);
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("digits do not leave the YAML tab while the editor is open", async () => {
+    const { area } = await openEditor();
+    const yamlTab = () => screen.getByRole("tab", { name: "YAML" });
+    // Ruling R36: after Esc focus sits on the (non-editable) button bar; a digit there keeps the edit.
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Review changes"));
+    expect(fireEvent.keyDown(document.activeElement!, { key: "1" })).toBe(true);
+    expect(yamlTab().getAttribute("aria-selected")).toBe("true");
+    expect(area.isConnected).toBe(true);
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("digits never act in an input, the editor or a terminal", async () => {
+    const section = () => screen.getByRole("region", { name: /^Details for/ });
+    const tabSelected = (name: string) => screen.getByRole("tab", { name }).getAttribute("aria-selected") === "true";
+    const press = (el: Element) => {
+      const ev = new KeyboardEvent("keydown", { key: "2", bubbles: true, cancelable: true });
+      act(() => { el.dispatchEvent(ev); });
+      return ev.defaultPrevented;
+    };
+    // The scale form's number input.
+    serve({ [DESCRIBE]: [ok(resourceDescribe())] });
+    const first = wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Scale", tools()));
+    expect(press(screen.getByLabelText("Replicas"))).toBe(false);
+    expect(tabSelected("Describe")).toBe(true);
+    // A terminal inside the details.
+    const term = document.createElement("div");
+    term.className = "xterm";
+    const input = document.createElement("textarea");
+    term.append(input);
+    section().append(term);
+    expect(press(input)).toBe(false);
+    expect(tabSelected("Describe")).toBe(true);
+    first.unmount();
+    // The YAML editor's own field.
+    const { area } = await openEditor();
+    expect(press(area)).toBe(false);
+    expect(tabSelected("YAML")).toBe(true);
+  });
+
+  it("with nothing changed escape lands on discard", async () => {
+    const { area, outside } = await openEditor({ edit: false });
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Discard"));
+    expect(outside).not.toHaveBeenCalledWith("Escape");
+  });
+
+  it("left and right move between review changes and discard", async () => {
+    const { area } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    const review = button("Review changes");
+    const discard = button("Discard");
+    expect(fireEvent.keyDown(review, { key: "ArrowLeft" })).toBe(false);
+    expect(document.activeElement).toBe(discard);
+    expect(fireEvent.keyDown(discard, { key: "ArrowRight" })).toBe(false);
+    expect(document.activeElement).toBe(review);
+    // Alt+arrows stay history: not prevented, focus stays.
+    expect(fireEvent.keyDown(review, { key: "ArrowLeft", altKey: true })).toBe(true);
+    expect(document.activeElement).toBe(review);
+  });
+
+  it("escape and arrows never discard", async () => {
+    const { area } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(button("Discard"));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    // Only a press discards.
+    expect(document.activeElement).toBe(button("Discard"));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    expect(await screen.findByTestId("yaml")).toBeTruthy();
+  });
+
+  it("ctrl+enter on discard never discards", async () => {
+    const { calls, area } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    const discard = button("Discard");
+    expect(document.activeElement).toBe(discard);
+    // Held: prevented (so the button is never pressed) and nothing reviewed.
+    expect(fireEvent.keyDown(discard, { key: "Enter", ctrlKey: true, repeat: true })).toBe(false);
+    expect(fireEvent.keyDown(discard, { key: "Enter", metaKey: true, repeat: true })).toBe(false);
+    await act(async () => {});
+    expect(plans(calls)).toEqual([]);
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    // Pressed once: it reviews the changes, from anywhere in the editor.
+    expect(fireEvent.keyDown(discard, { key: "Enter", ctrlKey: true })).toBe(false);
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(plans(calls)).toHaveLength(1);
+  });
+
+  it("a digit after leaving the editor keeps the edit", async () => {
+    const { area } = await openEditor();
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Review changes"));
+    await userEvent.keyboard("1");
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true");
+  });
+});
+
+describe("focus after a tool closes", () => {
+  const REVISIONS = "GET /api/clusters/c1/deployments/demo/web/revisions";
+  const notLost = () => {
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.isConnected).toBe(true);
+  };
+  function details(routes: Record<string, unknown[]> = {}) {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })], ...routes });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    return calls;
+  }
+
+  it("discard from the keyboard goes back to the edit button", async () => {
+    details();
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.click(edit);
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Discard"));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(button("Edit", tools()));
+  });
+
+  it("discard after the YAML view's own edit button lands on the YAML tab", async () => {
+    details();
+    fireEvent.click(screen.getByRole("tab", { name: "YAML" }));
+    const panel = screen.getByRole("tabpanel");
+    const edit = await within(panel).findByRole("button", { name: "Edit" });
+    edit.focus();
+    fireEvent.click(edit);
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    fireEvent.keyDown(area, { key: "Escape" });
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "YAML" }));
+  });
+
+  it("escape in the scale form goes back to the scale button", async () => {
+    details();
+    const scale = button("Scale", tools());
+    scale.focus();
+    fireEvent.click(scale);
+    const replicas = screen.getByLabelText("Replicas");
+    await waitFor(() => expect(document.activeElement).toBe(replicas));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(button("Scale", tools()));
+  });
+
+  it("cancel in the scale form goes back to the scale button", async () => {
+    details();
+    const scale = button("Scale", tools());
+    scale.focus();
+    fireEvent.click(scale);
+    button("Cancel").focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(button("Scale", tools()));
+  });
+
+  it("cancel in the rollback form goes back to the roll back button", async () => {
+    details({ [REVISIONS]: [ok([{ revision: 2, created_at: null, images: ["web:2"], current: true }, { revision: 1, created_at: null, images: ["web:1"], current: false }])] });
+    const rollback = button("Roll back", tools());
+    rollback.focus();
+    fireEvent.click(rollback);
+    await screen.findByRole("radio", { name: /Revision 1/ });
+    button("Cancel").focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByRole("form", { name: "Roll back web" })).toBeNull();
+    notLost();
+    expect(document.activeElement).toBe(button("Roll back", tools()));
+  });
+
+  it("an applied edit still focuses what it did", async () => {
+    details({
+      "POST /api/actions/plan": [ok(plan({ action: "edit", title: "Edit Deployment web", apply_label: "Save", diff: { before: "a\n", after: "b\n" } }))],
+      "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Saved Deployment demo/web.", job_id: null, audit_id: 3 })],
+    });
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.click(edit);
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    fireEvent.input(area, { target: { value: "kind: Deployment\nspec: {}\n" } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(document.activeElement).toBe(button("Save", dialog())));
+    await userEvent.keyboard("{Enter}");
+    const said = await screen.findByText("Saved Deployment demo/web.");
+    await waitFor(() => expect(document.activeElement).toBe(said));
+  });
+});
+
+describe("an unsaved edit in the details", () => {
+  const EDITED = "kind: Deployment\nspec: {}\n";
+  async function editing() {
+    serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })] });
+    const outside = vi.fn();
+    const onClose = vi.fn();
+    wrap(
+      <div onKeyDown={(e) => outside(e.key)}>
+        <ActionsProvider>
+          <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} onClose={onClose} />
+        </ActionsProvider>
+      </div>,
+    );
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.click(edit);
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: EDITED } });
+    return { area, outside, onClose };
+  }
+  const yamlTab = () => screen.getByRole("tab", { name: "YAML" });
+
+  it.each([["End"], ["Home"], ["ArrowRight"], ["ArrowLeft"]])("%s on the YAML tab keeps the edit", async (key) => {
+    const { area } = await editing();
+    yamlTab().focus();
+    expect(fireEvent.keyDown(yamlTab(), { key })).toBe(true);
+    expect(yamlTab().getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(yamlTab());
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("escape on a tool button keeps the details open with the edit", async () => {
+    const { area, outside, onClose } = await editing();
+    const edit = button("Edit", tools());
+    edit.focus();
+    fireEvent.keyDown(edit, { key: "Escape" });
+    expect(outside).not.toHaveBeenCalledWith("Escape");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText("Unsaved YAML edit: review or discard it first.")).toBeTruthy();
+    expect(document.activeElement).toBe(edit);
+  });
+
+  it("escape on the YAML tab keeps the details open with the edit", async () => {
+    const { area, outside } = await editing();
+    yamlTab().focus();
+    fireEvent.keyDown(yamlTab(), { key: "Escape" });
+    expect(outside).not.toHaveBeenCalledWith("Escape");
+    expect(area.value).toBe(EDITED);
+  });
 });
 
 describe("tool keys on rows", () => {
@@ -738,6 +1306,8 @@ describe("tool keys on rows", () => {
   it.each([
     [{ key: "r" }, "restart"],
     [{ key: "d", ctrlKey: true }, "delete"],
+    [{ key: "Delete", ctrlKey: true }, "delete"],
+    [{ key: "Backspace", metaKey: true }, "delete"],
   ])("%o on a row opens its details and plans %s", async (press, action) => {
     const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], "POST /api/actions/plan": [ok(plan({ action: action as Plan["action"] }))] });
     wrap(
@@ -767,6 +1337,302 @@ describe("tool keys on rows", () => {
     const row = document.querySelector<HTMLElement>("[data-row-key]")!;
     fireEvent.keyDown(row, { key: "s" });
     expect(((await screen.findByLabelText("Replicas")) as HTMLInputElement).value).toBe("3");
+  });
+
+  /** The table with web's row focused; `routes` add to the describe and YAML. */
+  function table(routes: Record<string, unknown[]> = {}) {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })], ...routes });
+    wrap(
+      <ActionsProvider>
+        <div style={{ height: 600 }}>
+          <Table territories={[territory]} kind={{ ...DEPLOYMENTS, verbs: VERBS }} onRetry={() => {}} />
+        </div>
+      </ActionsProvider>,
+    );
+    const row = () => document.querySelector<HTMLElement>("[data-row-key]")!;
+    act(() => row().focus());
+    return { calls, row };
+  }
+  const detailsShown = () => screen.queryByRole("region", { name: "Details for web" }) !== null;
+  const UNSAVED = "Unsaved YAML edit: review or discard it first.";
+
+  it("discard after e on the row goes back to the row", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "e" });
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(area));
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(document.activeElement).toBe(button("Discard"));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(row());
+  });
+
+  it("escape in the scale form after s on the row goes back to the row", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "s" });
+    const replicas = await screen.findByLabelText("Replicas");
+    await waitFor(() => expect(document.activeElement).toBe(replicas));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    expect(detailsShown()).toBe(true);
+    expect(document.activeElement).toBe(row());
+  });
+
+  it("escape on the row keeps the details and an unsaved edit, and says why", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "e" });
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: "kind: Deployment\nspec: {}\n" } });
+    act(() => row().focus());
+    expect(fireEvent.keyDown(row(), { key: "Escape" })).toBe(false);
+    expect(detailsShown()).toBe(true);
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe("kind: Deployment\nspec: {}\n");
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    expect(document.activeElement).toBe(row());
+    // From the page too (focus on <main>'s stand-in: nothing focused).
+    act(() => (document.activeElement as HTMLElement).blur());
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(detailsShown()).toBe(true);
+    expect(area.value).toBe("kind: Deployment\nspec: {}\n");
+  });
+
+  it("the unsaved note goes once the edit is discarded", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "e" });
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    fireEvent.input(area, { target: { value: "kind: Deployment\nspec: {}\n" } });
+    act(() => row().focus());
+    fireEvent.keyDown(row(), { key: "Escape" });
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    fireEvent.click(button("Discard"));
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+    expect(detailsShown()).toBe(true);
+    // Nothing unsaved now: Esc closes the details as before.
+    act(() => row().focus());
+    fireEvent.keyDown(row(), { key: "Escape" });
+    expect(detailsShown()).toBe(false);
+  });
+
+  it("the unsaved note goes once the edit is reviewed", async () => {
+    const { calls, row } = table({
+      "POST /api/actions/plan": [ok(plan({ action: "edit", title: "Edit Deployment web", apply_label: "Save", diff: { before: "a\n", after: "b\n" } }))],
+    });
+    fireEvent.keyDown(row(), { key: "e" });
+    const area = await screen.findByLabelText("Edit Deployment YAML");
+    fireEvent.input(area, { target: { value: "kind: Deployment\nspec: {}\n" } });
+    act(() => row().focus());
+    fireEvent.keyDown(row(), { key: "Escape" });
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    fireEvent.click(button("Review changes"));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+    expect(calls.filter((c) => c.url.endsWith("/apply"))).toEqual([]);
+  });
+
+  it("escape on the row with the editor open but unchanged closes the details", async () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "e" });
+    await screen.findByLabelText("Edit Deployment YAML");
+    act(() => row().focus());
+    fireEvent.keyDown(row(), { key: "Escape" });
+    expect(detailsShown()).toBe(false);
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+  });
+
+  it("a held enter on a row neither opens nor closes the details", () => {
+    const { row } = table();
+    fireEvent.keyDown(row(), { key: "Enter", repeat: true });
+    expect(detailsShown()).toBe(false);
+    fireEvent.keyDown(row(), { key: "Enter" });
+    expect(detailsShown()).toBe(true);
+    fireEvent.keyDown(row(), { key: "Enter", repeat: true });
+    fireEvent.keyDown(row(), { key: "Enter", repeat: true });
+    expect(detailsShown()).toBe(true);
+  });
+});
+
+describe("an unsaved edit and the row (Ruling R41, extended)", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      { x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 600, width: 1200, height: 600, toJSON: () => ({}) } as DOMRect);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const UNSAVED = "Unsaved YAML edit: review or discard it first.";
+  const EDITED = "kind: Deployment\nspec: {}\n";
+  const editPlan = () => ok(plan({ action: "edit", title: "Edit Deployment web", apply_label: "Save", diff: { before: "a\n", after: "b\n" } }));
+  const territory = {
+    cluster: { id: "c1", name: "aks-prod-east", context_name: "x", server: "https://x", ...FILE_CLUSTER_METADATA, original_server: null, provider: "aks" as const,
+      region: null, environment: "development" as const, state: "ready" as const, message: null },
+    state: "ready" as const, message: null, rows: [deployment(), deployment({ uid: "d-2", name: "worker" })], total: 2, failing: 0, pending: 0,
+  };
+  const rowNamed = (name: string) =>
+    Array.from(document.querySelectorAll<HTMLElement>("[data-row-key]")).find((r) => r.textContent?.includes(name))!;
+  const web = () => rowNamed("web");
+  const selected = (el: HTMLElement) => el.getAttribute("aria-selected") === "true";
+  const detailsFor = (name: string) => screen.queryByRole("region", { name: "Details for " + name }) !== null;
+  let offDocument = () => {};
+  afterEach(() => offDocument());
+
+  /** The table (rows opted in to the kind arrows, as in the console) with web's YAML being edited. */
+  async function editingOnTheRow({ edit = true, routes = {} as Record<string, unknown[]> } = {}) {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })], ...routes });
+    // What a document listener (the kind strip's) sees: the key, and whether it was prevented.
+    const documentKeys = vi.fn();
+    const onDocument = (e: KeyboardEvent) => documentKeys(e.key, e.defaultPrevented);
+    document.addEventListener("keydown", onDocument);
+    offDocument = () => document.removeEventListener("keydown", onDocument);
+    const ui = (request: RowRequest | null) => (
+      <ActionsProvider>
+        <div style={{ height: 600 }} data-kind-row-keys="">
+          <Table territories={[territory]} kind={{ ...DEPLOYMENTS, verbs: VERBS }} onRetry={() => {}} request={request} />
+        </div>
+      </ActionsProvider>
+    );
+    const view = wrap(ui(null));
+    let seq = 0;
+    /** The palette asks for `action` on the row with `uid`. */
+    const ask = (action: RowRequest["action"], uid: string) => view.rerender(ui({ key: "c1/" + uid, action, seq: ++seq }));
+    act(() => web().focus());
+    fireEvent.keyDown(web(), { key: "e" });
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    if (edit) fireEvent.input(area, { target: { value: EDITED } });
+    act(() => web().focus());
+    return { calls, area, documentKeys, ask };
+  }
+
+  it("enter on the row keeps the details and the edit, and says why", async () => {
+    const { area } = await editingOnTheRow();
+    expect(fireEvent.keyDown(web(), { key: "Enter" })).toBe(false);
+    expect(fireEvent.keyDown(web(), { key: "d" })).toBe(false);
+    expect(detailsFor("web")).toBe(true);
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+  });
+
+  it("down on the row keeps the selection and the edit, and says why", async () => {
+    const { area } = await editingOnTheRow();
+    expect(fireEvent.keyDown(web(), { key: "ArrowDown" })).toBe(false);
+    fireEvent.keyDown(web(), { key: "ArrowDown", repeat: true });
+    fireEvent.keyDown(web(), { key: "ArrowUp" });
+    expect(selected(web())).toBe(true);
+    expect(selected(rowNamed("worker"))).toBe(false);
+    expect(detailsFor("web")).toBe(true);
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    expect(document.activeElement).toBe(web());
+  });
+
+  it("page, home and end keys on the row never move the selection", async () => {
+    const { area } = await editingOnTheRow();
+    for (const key of ["PageDown", "PageUp", "End", "Home"]) fireEvent.keyDown(web(), { key });
+    expect(selected(web())).toBe(true);
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("a tool key on the row keeps the edit, and says why", async () => {
+    const { calls, area } = await editingOnTheRow();
+    fireEvent.keyDown(web(), { key: "s" });
+    fireEvent.keyDown(web(), { key: "r" });
+    fireEvent.keyDown(web(), { key: "d", ctrlKey: true });
+    await act(async () => {});
+    expect(screen.queryByLabelText("Replicas")).toBeNull();
+    expect(calls.filter((c) => c.url === "/api/actions/plan")).toEqual([]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByLabelText("Edit Deployment YAML")).toBe(area);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+  });
+
+  it("the palette asking for another row keeps the selection and the edit, and says why", async () => {
+    const { area, ask } = await editingOnTheRow();
+    ask("details", "d-2");
+    expect(selected(web())).toBe(true);
+    expect(detailsFor("worker")).toBe(false);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+    // On the edited row itself it is not a move: the YAML tab stays, and so does the edit.
+    ask("yaml", "d-1");
+    expect(area.value).toBe(EDITED);
+  });
+
+  it("the kind arrows on the row never switch kinds away from the edit", async () => {
+    const { documentKeys } = await editingOnTheRow();
+    fireEvent.keyDown(web(), { key: "ArrowRight" });
+    // The kind strip listens on the document and ignores a prevented key (`pageKey`).
+    expect(documentKeys).toHaveBeenCalledWith("ArrowRight", true);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
+  });
+
+  it("after discard, the arrows, down and enter work as before", async () => {
+    const { area, documentKeys } = await editingOnTheRow();
+    fireEvent.keyDown(area, { key: "Escape" });
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(document.activeElement).toBe(button("Discard"));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByLabelText("Edit Deployment YAML")).toBeNull();
+    act(() => web().focus());
+    fireEvent.keyDown(web(), { key: "ArrowRight" });
+    expect(documentKeys).toHaveBeenCalledWith("ArrowRight", false);
+    fireEvent.keyDown(web(), { key: "ArrowDown" });
+    await waitFor(() => expect(selected(rowNamed("worker"))).toBe(true));
+    expect(detailsFor("worker")).toBe(true);
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+    act(() => rowNamed("worker").focus());
+    fireEvent.keyDown(rowNamed("worker"), { key: "Enter" });
+    expect(detailsFor("worker")).toBe(false);
+  });
+
+  it("with the editor unchanged, enter closes the details", async () => {
+    await editingOnTheRow({ edit: false });
+    fireEvent.keyDown(web(), { key: "Enter" });
+    expect(detailsFor("web")).toBe(false);
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+  });
+
+  it("with the editor unchanged, down moves the selection", async () => {
+    await editingOnTheRow({ edit: false });
+    fireEvent.keyDown(web(), { key: "ArrowDown" });
+    await waitFor(() => expect(selected(rowNamed("worker"))).toBe(true));
+    expect(screen.queryByText(UNSAVED)).toBeNull();
+  });
+
+  it("after an applied review, down moves the selection", async () => {
+    const { area } = await editingOnTheRow({
+      routes: {
+        "POST /api/actions/plan": [editPlan()],
+        "POST /api/actions/p1/apply": [ok({ outcome: "succeeded", message: "Saved Deployment demo/web.", job_id: null, audit_id: 3 })],
+      },
+    });
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Save", dialog()));
+    await screen.findByText("Saved Deployment demo/web.");
+    act(() => web().focus());
+    fireEvent.keyDown(web(), { key: "ArrowDown" });
+    await waitFor(() => expect(selected(rowNamed("worker"))).toBe(true));
+  });
+
+  it("a cancelled review leaves the edit unsaved, so down still keeps it", async () => {
+    const { area } = await editingOnTheRow({ routes: { "POST /api/actions/plan": [editPlan()] } });
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(button("Cancel", dialog()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    act(() => web().focus());
+    fireEvent.keyDown(web(), { key: "ArrowDown" });
+    expect(selected(web())).toBe(true);
+    expect(area.value).toBe(EDITED);
+    expect(screen.getByText(UNSAVED)).toBeTruthy();
   });
 });
 

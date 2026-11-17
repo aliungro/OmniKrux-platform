@@ -5,55 +5,44 @@
 .section { scroll-margin-top: 24px; margin-bottom: 36px; }
 .section h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
 .lede { margin: 0 0 20px; max-width: 70ch; color: var(--ink-3); line-height: 1.5; }
-.rows { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
-.row { position: relative; display: flex; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
-.row[data-pin-dragging] { opacity: .5; }
-/* A manual popover: the top layer keeps it above the top bar and the dock without a z-index. */
-.dragPreview {
-  position: fixed;
-  inset: 0 auto auto 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  overflow: visible;
-  background: transparent;
-  color: inherit;
-  max-width: min(280px, calc(100vw - 16px));
-  max-height: calc(100vh - 16px);
-  pointer-events: none;
-  transform: translate3d(-100%, -100%, 0);
+.list { position: relative; }
+.rows { position: relative; z-index: 1; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 8px 12px 4px;
+  border: 1px solid transparent;
+  border-bottom-color: var(--rule);
+  transition: transform 150ms ease;
 }
-.dragCard {
-  max-height: inherit;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  padding: 10px 14px;
-  border: 1px solid var(--focus);
+/* Rows slide only while a drag opens the gap; a drop or cancel settles them at once. */
+.rows:not([data-pin-dragging]) .row { transition: none; }
+.row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 8px; }
+.rows[data-pin-dragging] { cursor: grabbing; user-select: none; }
+.row[data-pin-lifted] {
+  z-index: 2;
   border-radius: 8px;
+  border-color: var(--focus);
   background: var(--surf-2);
-  color: var(--ink);
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--bg) 70%, transparent);
-  animation: dragLift 120ms ease-out;
+  box-shadow: 0 10px 24px #0008;
+  /* It follows the pointer exactly; only the rows it passes slide. */
+  transition: none;
 }
-@keyframes dragLift {
-  from { opacity: .65; transform: scale(.96); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .dragCard { animation: none; }
-}
-.row[data-drop-placement]::after {
-  content: "";
+/* The landing spot: shown only while dragging, sized to the lifted row. */
+.gap {
+  display: none;
   position: absolute;
   inset-inline: 0;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--focus);
+  border: 1.5px dashed color-mix(in srgb, var(--focus) 40%, var(--rule));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--focus) 5%, transparent);
   pointer-events: none;
+  transition: top 150ms ease;
 }
-.row[data-drop-placement="before"]::after { top: -1px; }
-.row[data-drop-placement="after"]::after { bottom: -1px; }
-.identity { display: flex; align-items: start; gap: 8px; flex: 1; min-width: 0; }
-.dragHandle {
+.rows[data-pin-dragging] + .gap { display: block; }
+.grip {
   touch-action: none;
   display: grid;
   place-items: center;
@@ -62,23 +51,39 @@
   height: 26px;
   border-radius: 6px;
   color: var(--ink-3);
+  opacity: 1;
   cursor: grab;
 }
-.dragHandle:hover { background: var(--surf-2); color: var(--ink); }
-.dragHandle:active { cursor: grabbing; }
-.dragHandle::before {
+.grip:hover { background: var(--surf-2); color: var(--ink); }
+.grip:active, .row[data-pin-lifted] .grip { cursor: grabbing; color: var(--ink); }
+.grip::before {
   content: "";
   width: 10px;
   height: 15px;
   background: radial-gradient(circle, currentColor 1px, transparent 1.4px) 0 0 / 5px 5px;
   pointer-events: none;
 }
+.page .more {
+  flex: none;
+  align-self: start;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
+}
+.page .more[aria-expanded="true"] { background: var(--surf-2); color: var(--focus); border-color: var(--rule); }
+@media (prefers-reduced-motion: reduce) {
+  .row, .gap { transition: none; }
+}
 .announcement { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
 .name { flex: 1; min-width: 0; }
 .name strong { display: block; font-size: 14px; font-weight: 600; }
 .key { display: block; margin-top: 3px; color: var(--ink-3); font-size: 12px; overflow-wrap: anywhere; }
 .hidden { margin: 7px 0 0; color: var(--ink-3); font-size: 12px; line-height: 1.4; }
-.controls { display: flex; flex-wrap: wrap; gap: 4px; }
 .page button { padding: 6px 9px; color: var(--ink-2); font: inherit; font-size: 12px; background: var(--surf); border: 1px solid var(--rule); border-radius: 6px; cursor: pointer; }
 .page button:hover:not(:disabled) { background: var(--surf-2); color: var(--ink); }
 .page button:disabled { opacity: .35; cursor: default; }
@@ -93,4 +98,4 @@
 .options p { margin: 8px; font-size: 13px; color: var(--ink-3); }
 .empty { padding: 18px 0; border-block: 1px solid var(--rule); color: var(--ink-2); }
 .problem { color: var(--warn); line-height: 1.5; }
-@media (max-width: 640px) { .page { padding: 28px 16px; } .row { align-items: start; flex-direction: column; gap: 10px; } .footer { flex-wrap: wrap; } .add { min-width: 180px; } }
+@media (max-width: 640px) { .page { padding: 28px 16px; } .footer { flex-wrap: wrap; } .add { min-width: 180px; } }

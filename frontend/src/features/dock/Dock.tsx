@@ -1,7 +1,21 @@
-import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { inTerminal, pressed } from "../chrome/shortcuts";
+import {
+  memo,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FocusEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+  type Ref,
+} from "react";
+import { inTerminal, isDeleteKey, isEditable, pressed } from "../chrome/shortcuts";
 import { LogPane } from "../logs/LogPane";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { holdNote } from "./follow";
 import {
   MAX_SHARE,
   MIN_HEIGHT,
@@ -14,12 +28,15 @@ import {
   type Session,
 } from "./dockState";
 import { LazyShellPane } from "./lazyShell";
-import { SessionTabs, panelId, revealSessionTab, tabId } from "./SessionTabs";
+import { SessionTabs, panelId, tabId } from "./SessionTabs";
 import { ShellContainerDialog } from "./ShellContainerDialog";
 import type { DockApi } from "./useDock";
 import s from "./Dock.module.css";
 
 export const EMPTY_DOCK = "Open logs (l) or a shell (s) from a pod";
+/** Alt+Down with nothing in the dock. */
+export const NO_LOGS_YET = "No logs open yet: press L on a pod first.";
+const NOTICE_MS = 4000;
 const STEP = 24; // pixels per arrow key on the grip
 const STACK_AT = 760; // same breakpoint as Dock.module.css
 const PANE_MIN = 170; // header, wrapped controls, and room for log lines
@@ -54,6 +71,8 @@ function Grip({ height, minimum, max, onResize }: { height: number; minimum: num
     drag.current = null;
   };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    // With a modifier the arrows are someone else's: Alt+Up leaves the logs.
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const by: Record<string, number> = { ArrowUp: height + STEP, ArrowDown: height - STEP, Home: minimum, End: max };
     if (!(e.key in by)) return;
     e.preventDefault();
@@ -79,16 +98,113 @@ function Grip({ height, minimum, max, onResize }: { height: number; minimum: num
   );
 }
 
+/** What Shell can ask of the dock: Alt+Down moves the keyboard into it. */
+export interface DockHandle {
+  /** Focus the selected session's log (or its shell's terminal); false, and a notice, with none open. */
+  enter(): boolean;
+}
+
+/** The key's target, unless the key is not the dock's: handled, composing, or in a dialog, picker or modal. */
+function dockKeyTarget(e: KeyboardEvent<HTMLElement>): Element | null {
+  const target = e.target;
+  if (e.defaultPrevented || e.nativeEvent.isComposing || !(target instanceof Element)) return null;
+  if (target.closest("select, dialog, [role='dialog'], [role='alertdialog'], [aria-modal='true']")) return null;
+  if (document.querySelector('[aria-modal="true"]')) return null;
+  return target;
+}
+
+/** No modifier held: the dock's arrows act only then (Alt+arrows are history and leaving the logs). */
+function plain(e: KeyboardEvent<HTMLElement>): boolean {
+  return !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+}
+
 /**
  * The dock under the table: one tab per logs or shell session, each named and coloured by its
  * cluster. Sessions stay connected while their tab is in the background. Memoized: `useDock`'s API
  * object changes only with the dock's own state, so watch updates to the table don't re-render it.
+ *
+ * The logs keyboard zone: Esc and Alt+Up go back to the table (`onFocusWorkspace`) and never close
+ * anything; left and right on a log switch tabs; Ctrl+Del (Cmd+Backspace) closes the tab that has
+ * the focus; Shift+L in the follow log pins its pod. Inside a terminal only Alt+Up is the dock's,
+ * and Enter once the shell has ended, which closes its tab (the shell pane's `onClose`).
  */
-export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockApi; onFocusWorkspace: () => void }) {
-  const { state, dispatch, ask, shellChoice, keyboardFocus, claimKeyboardFocus } = dock;
+export const Dock = memo(function Dock({
+  dock,
+  onFocusWorkspace,
+  zoneActive = false,
+  ref,
+}: {
+  dock: DockApi;
+  zoneActive?: boolean;
+  /** Back to the table; `now` focuses it in this tick (a key press), else after the next frame (a removal). */
+  onFocusWorkspace: (opts?: { now?: boolean }) => void;
+  ref?: Ref<DockHandle>;
+}) {
+  const { state, dispatch, ask, shellChoice } = dock;
   const base = useId();
   const [viewport, setViewport] = useState(() => ({ height: window.innerHeight, width: window.innerWidth }));
   const [autofocusSuppressedTab, setAutofocusSuppressedTab] = useState<string | null>(null);
+  /** Alt+Down's "nothing open" line, shown in the empty dock for a few seconds (`at` restarts the clock). */
+  const [notice, setNotice] = useState<{ text: string; at: number } | null>(null);
+  /** The session whose log (or tab button, for a shell) takes the focus once it is drawn. */
+  const pendingFocus = useRef<string | null>(null);
+  /** What last had the focus in the dock, to rescue the focus when a removal takes it away. */
+  const lastDockFocus = useRef<Element | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const backToWorkspace = useRef(onFocusWorkspace);
+  backToWorkspace.current = onFocusWorkspace;
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => window.clearTimeout(t);
+  }, [notice]);
+
+  /** Where the keyboard lands in a session: its log, or its tab button for a shell (so arrows keep working). */
+  const landingOf = (id: string): HTMLElement | null => {
+    const x = stateRef.current.sessions.find((s) => s.id === id);
+    if (!x) return null;
+    if (x.kind === "logs") {
+      return document.getElementById(panelId(base, id))?.querySelector<HTMLElement>('[role="log"]') ?? null;
+    }
+    return document.getElementById(tabId(base, id));
+  };
+
+  useImperativeHandle(ref, () => ({
+    enter() {
+      const { sessions, focused } = stateRef.current;
+      const x = sessions.find((s) => s.id === focused);
+      if (!x) {
+        setNotice((n) => ({ text: NO_LOGS_YET, at: (n?.at ?? 0) + 1 }));
+        return false;
+      }
+      setNotice(null);
+      if (x.kind === "logs") {
+        landingOf(x.id)?.focus();
+      } else {
+        // The terminal takes the keyboard: active again (so it focuses itself once it opens), and now.
+        setAutofocusSuppressedTab(null);
+        document.getElementById(panelId(base, x.id))?.querySelector<HTMLElement>(".xterm textarea")?.focus();
+      }
+      return true;
+    },
+  }));
+
+  // After a commit: focus what a key asked for, or rescue the focus a removal left on <body>.
+  useLayoutEffect(() => {
+    const id = pendingFocus.current;
+    if (id !== null) {
+      pendingFocus.current = null;
+      landingOf(id)?.focus();
+    }
+    const last = lastDockFocus.current;
+    if (last && !last.isConnected && (document.activeElement === document.body || document.activeElement === null)) {
+      lastDockFocus.current = null;
+      backToWorkspace.current();
+    }
+  }, [state.sessions, state.focused]);
 
   // Ctrl \ switches between one pane and side by side, even from inside a terminal.
   useEffect(() => {
@@ -101,6 +217,20 @@ export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockA
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [dispatch]);
+
+  // Alt+Up leaves a terminal for the table: caught on the way down, before xterm (or an IME path)
+  // can stop it on its textarea, and never sent to the shell.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!pressed("leaveLogs", e) || !inTerminal(e.target) || !(e.target instanceof Node)) return;
+      if (!sectionRef.current?.contains(e.target) || document.querySelector('[aria-modal="true"]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) backToWorkspace.current({ now: true });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   // The dock is drawn within 70% of the window as it is now; the chosen height comes back when it grows.
   useEffect(() => {
@@ -119,39 +249,76 @@ export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockA
     return () => window.clearTimeout(t);
   }, [state.height]);
 
-  useLayoutEffect(() => {
-    if (!keyboardFocus) return;
-    const focused = state.sessions.find((session) => session.id === state.focused);
-    const tab = focused?.kind === "logs" ? document.getElementById(tabId(base, focused.id)) : null;
-    if (claimKeyboardFocus(keyboardFocus) && tab) {
-      revealSessionTab(tab);
-      tab.focus({ preventScroll: true });
-    }
-  }, [base, claimKeyboardFocus, keyboardFocus, state.focused, state.sessions]);
+  /** Focus another session once it is shown, keeping a shell's terminal from taking the keyboard. */
+  const moveTo = (id: string) => {
+    if (stateRef.current.sessions.find((x) => x.id === id)?.kind === "shell") setAutofocusSuppressedTab(tabId(base, id));
+    pendingFocus.current = id;
+  };
+
+  /**
+   * Close a session from the keyboard and move on: to the session that takes its place, or back to
+   * the table when none is left. Reads the dock as it is now, since an ended shell's Enter can come
+   * from a handler attached long before.
+   */
+  const closeAndMove = (id: string) => {
+    const action = { type: "close", id } as const;
+    const next = dockReducer(stateRef.current, action).focused;
+    if (next) moveTo(next);
+    dispatch(action);
+    if (!next) backToWorkspace.current();
+  };
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
-    const close = !e.shiftKey && pressed("closeLog", e);
-    if (!close && !pressed("leaveLogs", e)) return;
-    const target = e.target;
-    if (e.defaultPrevented || e.nativeEvent.isComposing || !(target instanceof Element) ||
-        target !== document.activeElement || inTerminal(target) || target.closest("select, dialog, [role='dialog'], [role='alertdialog']") ||
-        document.querySelector('[aria-modal="true"]')) return;
+    const target = dockKeyTarget(e);
+    if (!target) return;
+    let act: (() => void) | null = null;
+    // Back to the table, from anywhere in the dock: a session or the strip's controls (grip, layout).
+    if ((!e.shiftKey && pressed("backToTable", e) && !inTerminal(target)) || pressed("leaveLogs", e)) {
+      act = () => onFocusWorkspace({ now: true });
+    }
     const owner = target.closest<HTMLElement>("[data-dock-session]");
-    const session = state.sessions.find((x) => x.id === owner?.dataset.dockSession);
-    if (session?.kind !== "logs") return;
+    const at = state.sessions.findIndex((x) => x.id === owner?.dataset.dockSession);
+    const session = state.sessions[at];
+    const onLog = target.matches('[role="log"]');
+    // The tab button or its close button.
+    const onTab = target.closest('[role="tablist"]') !== null;
 
+    if (act || !session) {
+      // Nothing else is the strip's.
+    } else if (onLog && plain(e) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      act = () => {
+        const n = state.sessions.length;
+        const next = state.sessions[(at + (e.key === "ArrowRight" ? 1 : n - 1)) % n];
+        if (next.id === session.id) return;
+        if (next.id === state.focused) {
+          // Already selected (an arrow from its split peer): nothing re-renders, so focus it now
+          // rather than leave a pending focus for some later change to spring on the table.
+          landingOf(next.id)?.focus();
+          return;
+        }
+        moveTo(next.id);
+        dispatch({ type: "focus", id: next.id });
+      };
+    } else if (isDeleteKey(e) && (onLog || onTab) && !isEditable(target)) {
+      act = () => closeAndMove(session.id);
+    } else if (session.follow && (onLog || onTab) && pressed("pinFollow", e)) {
+      act = dock.pinFollow;
+    }
+    if (!act) return;
     e.preventDefault();
     e.stopPropagation();
-    if (e.repeat) return;
-    onFocusWorkspace();
-    if (!close) return;
-    const action = { type: "close", id: session.id } as const;
-    const afterClose = dockReducer(state, action);
-    const survivor = afterClose.sessions.find((x) => x.id === afterClose.focused);
-    if (survivor?.kind === "shell" && survivor.id !== state.focused) {
-      setAutofocusSuppressedTab(tabId(base, survivor.id));
-    }
-    dispatch(action);
+    if (!e.repeat) act();
+  };
+
+  // Where the focus is in the dock; moving it somewhere else outside the dock forgets it.
+  const tracking = {
+    onFocus: (e: FocusEvent<HTMLElement>) => {
+      lastDockFocus.current = e.target;
+    },
+    onBlur: (e: FocusEvent<HTMLElement>) => {
+      const to = e.relatedTarget;
+      if (to instanceof Node && !e.currentTarget.contains(to)) lastDockFocus.current = null;
+    },
   };
 
   const dialog = ask
@@ -160,9 +327,10 @@ export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockA
 
   if (state.sessions.length === 0) {
     return (
-      <section className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-page-keys="off">
+      <section ref={sectionRef} className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-dock data-keyboard-zone={zoneActive ? "logs" : undefined} data-page-keys="off" {...tracking}>
         {dialog}
-        <p className={s.hint}>{EMPTY_DOCK}</p>
+        {/* Always there, so a notice is announced when the text changes. */}
+        <p className={s.hint} role="status">{notice?.text ?? EMPTY_DOCK}</p>
       </section>
     );
   }
@@ -180,11 +348,15 @@ export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockA
 
   return (
     <section
+      ref={sectionRef}
       className={s.dock}
       style={{ height, "--dock-pane-min": `${minimum - STRIP_MIN}px` } as CSSProperties}
       aria-label="Logs and shells"
+      data-dock
+      data-keyboard-zone={zoneActive ? "logs" : undefined}
       data-page-keys="off"
       onKeyDown={onKeyDown}
+      {...tracking}
       onFocusCapture={(e) => {
         const tab = (e.target as HTMLElement).closest('[role="tab"]');
         // Tab navigation suppresses this session's autofocus; new sessions can still activate.
@@ -220,7 +392,8 @@ export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockA
             onFocus={() => dispatch({ type: "focus", id: x.id })}
           >
             {x.kind === "logs" ? (
-              <LogPane key={x.id} session={toLogSession(x)} active={x.id === activeLogs} />
+              <LogPane key={x.id} session={toLogSession(x)} active={x.id === activeLogs}
+                note={x.follow ? holdNote(x) : null} />
             ) : (
               <LazyShellPane
                 key={x.id}
@@ -229,6 +402,7 @@ export const Dock = memo(function Dock({ dock, onFocusWorkspace }: { dock: DockA
                 onStartDebug={x.debug || x.node ? undefined : () => dock.askDebug(x)}
                 onRestart={x.node ? () => dock.askRestart(x) : undefined}
                 note={shellNote(x)}
+                onClose={() => closeAndMove(x.id)}
               />
             )}
           </div>

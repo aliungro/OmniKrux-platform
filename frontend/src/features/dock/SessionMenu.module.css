@@ -1,0 +1,98 @@
+/* The "{n} open" popup (mockup 3A/3C .drop): a raised surface under the strip's button, a search
+   box, then every session. The selected session carries its cluster's colour as a 2px inset on the
+   left, as its tab does on top; the option Enter picks is tinted lilac. */
+.menu {
+  position: fixed;
+  z-index: 30;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  padding: 5px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surf-2);
+  box-shadow: 0 10px 24px #0009;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.find {
+  flex: none;
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+.find::placeholder {
+  color: var(--ink-3);
+}
+
+.find:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* A smaller badge, as on the tabs. */
+.option > :first-child {
+  flex: none;
+  height: 17px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+
+.option[aria-selected="true"] {
+  color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--c);
+}
+
+.option[data-active] {
+  background: #c9b8ff22;
+  color: var(--ink);
+}
+
+.pod {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ns {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-3);
+}
+
+.none {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--ink-3);
+}

@@ -34,6 +34,7 @@ import { ShellBridge } from "../shell/ShellBridge";
 import { HOME, kindView, type ClosedTab, type KubeView } from "../shell/workspace";
 import type { TabNav } from "../shell/browserHistory";
 import type { useDock } from "../dock/useDock";
+import { useFollowSelection } from "../dock/useFollowSelection";
 import type { PaletteSelection } from "../palette/CommandPalette";
 import { usePinnedKinds } from "../settings/pinnedKinds";
 import { KubernetesHome } from "../home/KubernetesHome";
@@ -180,10 +181,11 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
   const counts = useMemo(() => countFilters(all, now, kind), [all, now, kind]);
   const namespaces = useMemo(() => (kind.namespaced ? namespacesIn(all) : null), [kind.namespaced, all]);
 
-  const { openPod, openOwnerLogs, openWorkloadLogs, askNodeShell } = dock;
+  const { openPod, openFollow, openPinned, openOwnerLogs, openWorkloadLogs, askNodeShell } = dock;
+  // L: the one follow log, on this pod; p: the run before the last restart, in a tab of its own.
   const onOpenLogs = useCallback(
-    (row: ResourceRow, previous?: boolean, keyboardOrigin?: HTMLElement) => openPod(row, "logs", { previous, keyboardOrigin }),
-    [openPod],
+    (row: ResourceRow, previous?: boolean) => (previous ? openPod(row, "logs", { previous: true }) : openFollow(row)),
+    [openPod, openFollow],
   );
   const onOpenShell = useCallback((row: ResourceRow) => openPod(row, "shell"), [openPod]);
   const onNodeShell = useCallback((row: ResourceRow, node: string) => askNodeShell(row.cluster_id, node), [askNodeShell]);
@@ -277,6 +279,8 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
     }
     return null;
   }, [selection.selected, shown]);
+  // The follow log moves with this pane's selection once it settles.
+  useFollowSelection({ active: paneActive, kindKey, selected: selection.selected, watch, dock });
   const paletteSelection = useMemo<PaletteSelection | null>(
     () => (selectedRow ? { ...selectedRow, kind } : null),
     [selectedRow, kind],
@@ -355,6 +359,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
             podCounts={podCounts}
             metrics={metrics}
             onOpenLogs={onOpenLogs}
+            onPinLogs={openPinned}
             onOpenShell={onOpenShell}
             onNodeShell={onNodeShell}
             onOwnerLogs={onOwnerLogs}

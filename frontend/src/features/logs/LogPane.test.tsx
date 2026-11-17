@@ -248,6 +248,89 @@ describe("LogPane", () => {
   });
 });
 
+it("arrow, page, home and end keys move the log", async () => {
+  render(<LogPane session={session()} />);
+  send(Array.from({ length: 1000 }, (_, i) => line(i)));
+  await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+  const log = logArea();
+  const scroll = fakeScroll(log, 20_000);
+  log.focus();
+  const key = (init: KeyboardEventInit) => fireEvent.keyDown(log, init);
+
+  expect(key({ key: "Home" })).toBe(false);
+  expect(scroll.top).toBe(0);
+  expect(screen.getByRole("button", { name: /Jump to live/ })).toBeTruthy();
+  key({ key: "ArrowDown" });
+  expect(scroll.top).toBe(20);
+  key({ key: "ArrowDown" });
+  expect(scroll.top).toBe(40);
+  key({ key: "ArrowUp" });
+  expect(scroll.top).toBe(20);
+  key({ key: "PageDown" });
+  expect(scroll.top).toBe(20 + 540);
+  key({ key: "PageUp" });
+  expect(scroll.top).toBe(20);
+  key({ key: "ArrowUp" });
+  key({ key: "ArrowUp" });
+  expect(scroll.top).toBe(0); // never past the top
+
+  // With a modifier they are someone else's: Alt+Up leaves the logs, Ctrl+Home is the browser's.
+  for (const init of [{ altKey: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }]) {
+    expect(key({ key: "ArrowDown", ...init })).toBe(true);
+    expect(key({ key: "End", ...init })).toBe(true);
+  }
+  expect(scroll.top).toBe(0);
+
+  expect(key({ key: "End" })).toBe(false);
+  expect(scroll.top).toBe(20_000);
+  expect(screen.getByRole("button", { name: "Follow" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByRole("button", { name: /Jump to live/ })).toBeNull();
+});
+
+it("a retargeted pane streams the new pod and keeps wrap and the query", () => {
+  const { rerender } = render(<LogPane session={session()} />);
+  const first = FakeWebSocket.last;
+  fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search logs" }), { target: { value: "panic" } });
+  // The reader had moved to another container and the previous run of the old pod.
+  fireEvent.change(screen.getByRole("combobox", { name: "Container" }), { target: { value: "istio-proxy" } });
+  fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+  const before = FakeWebSocket.instances.length;
+
+  rerender(<LogPane session={session({ pod: "payments-api-77c9d", container: "app", containers: ["app"] })} />);
+  expect(first.closedByClient).toBe(true);
+  expect(FakeWebSocket.instances.slice(0, before).every((w) => w.closedByClient)).toBe(true);
+  const fresh = FakeWebSocket.instances.slice(before);
+  expect(fresh).toHaveLength(1);
+  expect(fresh[0].params.get("pod")).toBe("payments-api-77c9d");
+  expect(fresh[0].params.get("container")).toBe("app");
+  expect(fresh[0].params.get("previous")).toBe("false");
+  expect(fresh[0].params.get("follow")).toBe("true");
+  expect(screen.getByRole("button", { name: "Wrap" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "Previous" }).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.getByRole<HTMLInputElement>("searchbox", { name: "Search logs" }).value).toBe("panic");
+  expect(screen.getByRole("region", { name: "Logs for payments-api-77c9d" })).toBeTruthy();
+});
+
+it("a retarget keeps focus and text in the log search", () => {
+  const { rerender } = render(<LogPane session={session()} />);
+  const search = screen.getByRole<HTMLInputElement>("searchbox", { name: "Search logs" });
+  search.focus();
+  fireEvent.change(search, { target: { value: "timeout" } });
+  rerender(<LogPane session={session({ pod: "payments-api-77c9d" })} />);
+  expect(document.activeElement).toBe(search);
+  expect(search.value).toBe("timeout");
+  expect(FakeWebSocket.last.params.get("pod")).toBe("payments-api-77c9d");
+});
+
+it("the follow note is announced", () => {
+  const { rerender } = render(<LogPane session={session()} />);
+  rerender(<LogPane session={session()} note="Still showing crasher: no row is selected." />);
+  expect(screen.getByRole("status").textContent).toBe("Still showing crasher: no row is selected.");
+  rerender(<LogPane session={session()} note={null} />);
+  expect(screen.queryByText("Still showing crasher: no row is selected.")).toBeNull();
+});
+
 it("clears a nonempty log search on the first plain Escape", () => {
   render(<LogPane session={session()} />);
   const search = screen.getByRole<HTMLInputElement>("searchbox", { name: "Search logs" });

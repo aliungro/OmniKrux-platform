@@ -5,8 +5,9 @@
   align-items: center;
   min-width: 0;
   gap: 3px;
-  /* The remaining 8px of the handle sits inside the column gap. */
-  padding-inline-end: 6px;
+  /* The handle's 10px hit area is centred on the boundary: 5px inside, 5px in the gap.
+     This keeps the filter icon at least 5px clear of it. */
+  padding-inline-end: 10px;
 }
 
 .sort,
@@ -45,5 +46,5 @@
 }
 
 @media (pointer: coarse) {
-  .header { padding-inline-end: 13px; }
+  .header { padding-inline-end: 16px; }
 }

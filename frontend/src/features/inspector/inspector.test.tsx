@@ -10,6 +10,9 @@ import { EventsTable } from "./EventsTable";
 import { Inspector } from "./Inspector";
 import { MetricsView, NodeMetricsView } from "./MetricsView";
 import { ResourceDescribeView } from "./ResourceDescribeView";
+import tableStyles from "./ResizableInspectorTable.module.css";
+import { componentCss } from "../../test/css";
+import { fakeColumnLayout } from "../../test/layout";
 
 afterEach(() => {
   cleanup();
@@ -39,6 +42,23 @@ function wrap(ui: ReactNode) {
     client,
     rerender: (next: ReactNode) => out.rerender(<QueryClientProvider client={client}>{next}</QueryClientProvider>),
   };
+}
+
+
+/**
+ * The events table as Chrome draws a column `column` px wide: its label needs 80, and each row's
+ * cell what `byRow` says for the reason in that row.
+ */
+function eventWidths(byRow: Record<string, number>, column = 80) {
+  fakeColumnLayout({
+    box: (el) => el.matches("th, td") ? column : el.matches("[data-column-label]") ? 80 : undefined,
+    content: (el) => {
+      if (el.matches("[data-column-label]")) return 80;
+      if (el.tagName !== "TD") return undefined;
+      const text = el.closest("tr")?.textContent ?? "";
+      return Object.entries(byRow).find(([key]) => text.includes(key))?.[1];
+    },
+  });
 }
 
 describe("describe view", () => {
@@ -587,6 +607,88 @@ describe("inspector table column widths", () => {
     for (const handle of handles) fireEvent.keyDown(handle, { key: "Enter" });
   });
 
+  it("every inspector table resizes", async () => {
+    const sample = { state: "ok", message: null, at: new Date().toISOString(), window_s: 15, stale: false };
+    const usage = { cpu_m: 100, memory_b: 1024 ** 2 };
+    vi.stubGlobal("fetch", (url: string) => json(url.includes("/pods/") ? {
+      ...sample,
+      containers: [{ name: "metrics-sidecar", ...usage, cpu_request_m: null, cpu_limit_m: null, memory_request_b: null, memory_limit_b: null }],
+    } : {
+      ...sample, ...usage, allocatable_cpu_m: 1500, capacity_cpu_m: 2000,
+      allocatable_memory_b: 4096 ** 2, capacity_memory_b: 4096 ** 2,
+    }));
+    const cols = { columns: ["Name", "Value"], rows: [[{ text: "a", link: null, cls: null }, { text: "b", link: null, cls: null }]], note: null };
+    wrap(<>
+      <EventsTable events={events} error={null} />
+      <MetricsView clusterId="c1" ns="payments" name="pod" />
+      <NodeMetricsView clusterId="c1" name="worker" />
+      <ResourceDescribeView clusterId="c1" data={resourceDescribe({ kind_key: "deployments.apps", sections: [{ title: "Members", ...cols }], events: [] })} />
+    </>);
+    await screen.findByText("metrics-sidecar");
+    await screen.findByRole("columnheader", { name: "Used" });
+    const press = (handle: Element, type: string, clientX: number) =>
+      fireEvent(handle, Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }), { pointerId: 1 }));
+    const tables = screen.getAllByRole("table");
+    expect(tables).toHaveLength(4);
+    for (const table of tables) {
+      const headers = within(table).getAllByRole("columnheader");
+      for (const header of headers) expect(within(header).getAllByRole("separator")).toHaveLength(1);
+      const header = headers[0];
+      const handle = within(header).getByRole("separator");
+      vi.spyOn(header, "getBoundingClientRect").mockReturnValue({ width: 100 } as DOMRect);
+      press(handle, "pointerdown", 100);
+      expect(document.querySelectorAll("[data-resize-guide],[data-resize-tip]")).toHaveLength(2);
+      press(handle, "pointerup", 130);
+      expect(document.querySelectorAll("[data-resize-guide],[data-resize-tip]")).toHaveLength(0);
+      expect((table.querySelectorAll("col")[0] as HTMLElement).style.width).toBe("130px");
+      fireEvent.keyDown(handle, { key: "Enter" });
+    }
+  });
+
+  it("double-click fits an events column to its content", () => {
+    const two = [{ ...events[0], reason: "Scheduled" }, { ...events[0], reason: "Pulled" }];
+    render(<EventsTable events={two} error={null} />);
+    const table = screen.getByRole("table");
+    const handle = within(table).getByRole("separator", { name: "Resize Event" });
+    // The header measures 80; the two rows' cells 150 and 210 (plus a cell's 1px padding each
+    // side), so the widest cell must win.
+    eventWidths({ Pulled: 210, Scheduled: 150 });
+    fireEvent.doubleClick(handle);
+    expect((table.querySelectorAll("col")[1] as HTMLElement).style.width).toBe("212px");
+    expect(savedWidths()["inspector:events"]).toEqual({ event: 212 });
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(savedWidths()["inspector:events"]).toBeUndefined();
+  });
+
+  it("fit shrinks a wide events column in its fixed layout", () => {
+    const two = [{ ...events[0], reason: "Scheduled" }, { ...events[0], reason: "Pulled" }];
+    render(<EventsTable events={two} error={null} />);
+    const table = screen.getByRole("table");
+    const handle = within(table).getByRole("separator", { name: "Resize Event" });
+    // Drawn 300px wide in a fixed layout, a cell keeps its column's width whatever its style.
+    eventWidths({ Pulled: 150, Scheduled: 100 }, 300);
+    fireEvent.doubleClick(handle);
+    expect(table.style.tableLayout).toBe("fixed");
+    // The widest cell's contents and its 1px padding each side.
+    expect((table.querySelectorAll("col")[1] as HTMLElement).style.width).toBe("152px");
+    expect(savedWidths()["inspector:events"]).toEqual({ event: 152 });
+    fireEvent.keyDown(handle, { key: "Enter" });
+  });
+
+  it("inspector headers keep 10px of end padding so the handle clears the label", () => {
+    const css = document.createElement("style");
+    css.textContent = componentCss(import.meta.url, "./ResizableInspectorTable.module.css", tableStyles);
+    document.head.append(css);
+    try {
+      render(<EventsTable events={events} error={null} />);
+      const th = screen.getAllByRole("columnheader")[0];
+      expect(th.closest("table")!.parentElement!.className).toBe(tableStyles.scroll);
+      expect(getComputedStyle(th).paddingRight).toBe("10px");
+    } finally {
+      css.remove();
+    }
+  });
+
   it("shares Events widths across instances and leaves the empty state free of a table", () => {
     const { rerender } = render(<><EventsTable events={events} error={null} /><EventsTable events={events} error={null} /></>);
     const [first, second] = screen.getAllByRole("table");
@@ -1041,5 +1143,40 @@ describe("secret values", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     expect(writeText).toHaveBeenCalledWith("data:\n  password: •••••• (12 bytes)\n");
     expect(fetch.mock.calls.some(([u]) => u.endsWith("/reveal"))).toBe(false);
+  });
+});
+
+describe("detail tabs from the keyboard", () => {
+  const open = () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(describeBody())));
+    wrap(<Inspector row={row()} provider="gke" />);
+    return screen.getByRole("tab", { name: "Describe" });
+  };
+  const selected = (name: string) => screen.getByRole("tab", { name }).getAttribute("aria-selected") === "true";
+
+  it("digits inside the details switch tabs and focus the tab", () => {
+    const describeTab = open();
+    describeTab.focus();
+    expect(fireEvent.keyDown(describeTab, { key: "3" })).toBe(false);
+    expect(selected("Events")).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Events" }));
+  });
+
+  it("home and end go to the first and last detail tab", () => {
+    const describeTab = open();
+    describeTab.focus();
+    expect(fireEvent.keyDown(describeTab, { key: "End" })).toBe(false);
+    expect(selected("Metrics")).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Metrics" }));
+    expect(fireEvent.keyDown(document.activeElement!, { key: "Home" })).toBe(false);
+    expect(selected("Describe")).toBe(true);
+    expect(document.activeElement).toBe(describeTab);
+  });
+
+  it("alt+arrows on a detail tab are not tab switches", () => {
+    const describeTab = open();
+    describeTab.focus();
+    expect(fireEvent.keyDown(describeTab, { key: "ArrowRight", altKey: true })).toBe(true);
+    expect(selected("Describe")).toBe(true);
   });
 });

@@ -6,7 +6,16 @@ import type { Cluster, ContainerInfo, DebugContainer, NodeShellPod, OwnerRef, Po
 import { describeQuery, podPath } from "../inspector/useDescribe";
 import { isContainerStates } from "../territories/ContainerBullets";
 import { textColumn } from "../territories/model";
-import { dockReducer, initialDockState, type DockAction, type DockState, type Session, type SessionKind } from "./dockState";
+import {
+  dockReducer,
+  followSession,
+  initialDockState,
+  type DockAction,
+  type DockState,
+  type FollowHold,
+  type Session,
+  type SessionKind,
+} from "./dockState";
 import { prefetchShellPane } from "./lazyShell";
 
 export const DEBUG_CONFIRM =
@@ -41,16 +50,22 @@ export type ShellChoice = {
   | { stage: "error"; error: string; retry: () => void; openDefault: (() => void) | null }
 );
 
-type KeyboardFocus = { request: number; origin: HTMLElement };
-
 export interface DockApi {
   state: DockState;
   /** A focus choice or closing the focused tab cancels pending opens' focus. */
   dispatch: Dispatch<DockAction>;
   /** Logs (optionally the previous run) or a shell for a pod row. */
-  openPod: (row: ResourceRow, kind: SessionKind, opts?: { previous?: boolean; keyboardOrigin?: HTMLElement }) => void;
-  keyboardFocus: KeyboardFocus | null;
-  claimKeyboardFocus: (ticket: KeyboardFocus) => boolean;
+  openPod: (row: ResourceRow, kind: SessionKind, opts?: { previous?: boolean }) => void;
+  /** L, the row menu's "Logs" and the palette: open the one follow log on this pod, or retarget it. */
+  openFollow: (row: ResourceRow) => void;
+  /** The settled selection: retarget the follow log, if one is open, without taking focus. */
+  followRow: (row: ResourceRow) => void;
+  /** Keep the follow log on its last pod and say why (null: clear the note). */
+  holdFollow: (reason: FollowHold | null) => void;
+  /** Shift+L: the pod's log in its own pinned tab, which never retargets. */
+  openPinned: (row: ResourceRow) => void;
+  /** Shift+L in the follow log: pin its current pod in a tab of its own, leaving the focus where it is. */
+  pinFollow: () => void;
   /** Logs of every pod the row's owner selects. */
   openOwnerLogs: (row: ResourceRow, owner: OwnerRef) => void;
   /**
@@ -70,12 +85,12 @@ export interface DockApi {
 }
 
 /** Every container whose logs can be read, init first, as the pod lists them. */
-function allContainers(d: PodDescribe): string[] {
+export function allContainers(d: PodDescribe): string[] {
   return [...d.init_containers, ...d.containers, ...d.ephemeral_containers].map((c) => c.name);
 }
 
 /** kubectl's choice: the default-container annotation, else the first regular container. */
-function defaultContainer(d: PodDescribe): string | null {
+export function defaultContainer(d: PodDescribe): string | null {
   const named = d.annotations["kubectl.kubernetes.io/default-container"];
   if (named && d.containers.some((c) => c.name === named)) return named;
   return d.containers[0]?.name ?? null;
@@ -84,6 +99,11 @@ function defaultContainer(d: PodDescribe): string | null {
 /** Logs open on the container that's failing, since that's the one worth reading. */
 function logsContainer(d: PodDescribe): string | null {
   return d.containers.find((c) => c.state_class === "bad")?.name ?? defaultContainer(d);
+}
+
+/** The pod a follow request is for. */
+function followKey(clusterId: string, namespace: string, pod: string): string {
+  return `${clusterId}|${namespace}|${pod}`;
 }
 
 function regularContainerCount(row: ResourceRow): number {
@@ -110,20 +130,16 @@ export function useDock(clusters: Cluster[]): DockApi {
    * closed while focused), or a slow one would pull your keystrokes to another pod (or cluster).
    */
   const latestOpen = useRef(0);
-  const [keyboardFocus, setKeyboardFocus] = useState<KeyboardFocus | null>(null);
-  const pendingFocus = useRef<{ clusterId: string; ticket: KeyboardFocus; cancel: () => void } | null>(null);
-  useEffect(() => () => pendingFocus.current?.cancel(), []);
-  const claimKeyboardFocus = useCallback((ticket: KeyboardFocus) => {
-    setKeyboardFocus(null);
-    if (pendingFocus.current?.ticket !== ticket) return false;
-    pendingFocus.current.cancel();
-    return ticket.request === latestOpen.current && ticket.origin.isConnected &&
-      document.activeElement === ticket.origin && !document.querySelector('[aria-modal="true"]');
-  }, []);
+  /**
+   * The newest follow request (L or a settled selection). A describe that resolves for an older
+   * one is dropped, so a slow pod never retargets the follow log over a newer row.
+   */
+  const followSeq = useRef(0);
+  /** The follow request still waiting on its describe, and the pod it's for. */
+  const pendingFollow = useRef<{ seq: number; key: string } | null>(null);
 
   const shellPending = useRef<string | null>(null);
   const nextOpen = useCallback(() => {
-    pendingFocus.current?.cancel();
     if (shellPending.current) {
       shellPending.current = null;
       setShellChoice(null);
@@ -132,17 +148,24 @@ export function useDock(clusters: Cluster[]): DockApi {
   }, []);
   const stateRef = useRef(state);
   stateRef.current = state;
+  /** The follow request on its way no longer applies (its tab closed, or its cluster went). */
+  const cancelFollow = useCallback(() => {
+    followSeq.current++;
+    pendingFollow.current = null;
+  }, []);
   const dispatch = useCallback((action: DockAction) => {
-    if ((action.type === "open" || action.type === "replace") && lifecycle.isRemoved(action.session.cluster.id)) return;
+    if ((action.type === "open" || action.type === "replace" || action.type === "follow") &&
+        lifecycle.isRemoved(action.session.cluster.id)) return;
     if (action.type === "focus" || (action.type === "close" && action.id === stateRef.current.focused)) nextOpen();
+    if (action.type === "close" && action.id === followSession(stateRef.current)?.id) cancelFollow();
     dispatchNow(action);
-  }, [lifecycle, nextOpen]);
+  }, [cancelFollow, lifecycle, nextOpen]);
   useEffect(() => lifecycle.subscribe(id => {
-    if (pendingFocus.current?.clusterId === id) pendingFocus.current.cancel();
+    if (followSession(stateRef.current)?.cluster.id === id) cancelFollow();
     if (shellPending.current === id) nextOpen();
     dispatchNow({ type: "closeCluster", clusterId: id });
     setAsk(current => current?.cluster.id === id ? null : current);
-  }), [lifecycle, nextOpen]);
+  }), [cancelFollow, lifecycle, nextOpen]);
   const newId = useCallback(() => `s${++nextId.current}`, []);
   const clustersRef = useRef(clusters);
   clustersRef.current = clusters;
@@ -213,31 +236,18 @@ export function useDock(clusters: Cluster[]): DockApi {
     load();
   }, [containersOf, dispatch, newId, nextOpen]);
 
-  const openPod = useCallback(
-    (row: ResourceRow, kind: SessionKind, opts: { previous?: boolean; keyboardOrigin?: HTMLElement } = {}) => {
+  /** A log tab of its own for a pod row: the previous run (p), or pinned (Shift+L). */
+  const openLogs = useCallback(
+    (row: ResourceRow, opts: { previous?: boolean; pinned?: boolean }) => {
       const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
       if (!cluster || lifecycle.isRemoved(cluster.id)) return;
-      if (kind === "shell") {
-        openPodShell(row, cluster);
-        return;
-      }
       const request = nextOpen();
       const started = lifecycle.startChange();
-      const origin = opts.keyboardOrigin;
-      const ticket = origin ? { request, origin } : null;
-      if (ticket && document.activeElement === ticket.origin && !document.querySelector('[aria-modal="true"]')) {
-        const cancel = () => {
-          ticket.origin.removeEventListener("blur", cancel);
-          pendingFocus.current = null;
-        };
-        pendingFocus.current = { clusterId: cluster.id, ticket, cancel };
-        ticket.origin.addEventListener("blur", cancel);
-      }
       void containersOf(row).catch(() => null).then((d) => {
         if (lifecycle.wasRemovedSince(cluster.id, started)) return;
         const session: Session = {
           id: newId(),
-          kind,
+          kind: "logs",
           cluster,
           namespace: row.namespace ?? "",
           pod: row.name,
@@ -245,18 +255,113 @@ export function useDock(clusters: Cluster[]): DockApi {
           containers: d ? allContainers(d) : [],
         };
         if (opts.previous) session.previous = true;
-        // The newest open is always selected, as a click's is. Only the keyboard handoff into it
-        // waits on focus: it is skipped when focus left the row (or a dialog opened) meanwhile.
-        const focus = request === latestOpen.current;
-        const handoff = focus && ticket && pendingFocus.current?.ticket === ticket &&
-          document.activeElement === ticket.origin && !document.querySelector('[aria-modal="true"]');
-        if (handoff) setKeyboardFocus(ticket);
-        else if (ticket && pendingFocus.current?.ticket === ticket) pendingFocus.current.cancel();
-        dispatch({ type: "open", session, focus });
+        if (opts.pinned) session.pinned = true;
+        // The newest open is always selected, as a click's is; the keyboard stays where it is.
+        dispatch({ type: "open", session, focus: request === latestOpen.current });
       });
     },
-    [containersOf, newId, dispatch, lifecycle, nextOpen, openPodShell],
+    [containersOf, newId, dispatch, lifecycle, nextOpen],
   );
+
+  const openPod = useCallback(
+    (row: ResourceRow, kind: SessionKind, opts: { previous?: boolean } = {}) => {
+      if (kind === "shell") {
+        const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
+        if (cluster && !lifecycle.isRemoved(cluster.id)) openPodShell(row, cluster);
+        return;
+      }
+      openLogs(row, { previous: opts.previous });
+    },
+    [lifecycle, openLogs, openPodShell],
+  );
+
+  const openPinned = useCallback((row: ResourceRow) => openLogs(row, { pinned: true }), [openLogs]);
+
+  /**
+   * Describes the pod, then opens or retargets the follow log on its default container. Each
+   * request takes the next follow number, and one overtaken by a newer request is dropped.
+   * `request` is L's open number (it takes the focus unless something newer happened meanwhile);
+   * null for a settled selection, which never takes the focus.
+   */
+  const startFollow = useCallback(
+    (row: ResourceRow, cluster: Cluster, request: number | null) => {
+      const seq = ++followSeq.current;
+      pendingFollow.current = { seq, key: followKey(cluster.id, row.namespace ?? "", row.name) };
+      const started = lifecycle.startChange();
+      void containersOf(row).catch(() => null).then((d) => {
+        if (seq !== followSeq.current) return;
+        pendingFollow.current = null;
+        if (lifecycle.wasRemovedSince(cluster.id, started)) return;
+        dispatch({
+          type: "follow",
+          focus: request !== null && request === latestOpen.current,
+          // A settled selection only moves an open follow log; it never opens one.
+          retarget: request === null,
+          session: {
+            id: newId(),
+            kind: "logs",
+            cluster,
+            namespace: row.namespace ?? "",
+            pod: row.name,
+            container: d ? defaultContainer(d) : null,
+            containers: d ? allContainers(d) : [],
+            follow: true,
+          },
+        });
+      });
+    },
+    [containersOf, dispatch, lifecycle, newId],
+  );
+
+  const openFollow = useCallback(
+    (row: ResourceRow) => {
+      const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
+      if (!cluster || lifecycle.isRemoved(cluster.id)) return;
+      startFollow(row, cluster, nextOpen());
+    },
+    [lifecycle, nextOpen, startFollow],
+  );
+
+  const followRow = useCallback(
+    (row: ResourceRow) => {
+      const current = followSession(stateRef.current);
+      if (!current) return;
+      const key = followKey(row.cluster_id, row.namespace ?? "", row.name);
+      // Already on its way (L on this row, or an earlier settle): let that one finish.
+      if (pendingFollow.current?.key === key) return;
+      if (key === followKey(current.cluster.id, current.namespace, current.pod)) {
+        // Back on the followed pod: a retarget still on its way no longer applies, and the note goes.
+        cancelFollow();
+        dispatch({ type: "hold", reason: null });
+        return;
+      }
+      const cluster = clustersRef.current.find((c) => c.id === row.cluster_id);
+      if (!cluster || lifecycle.isRemoved(cluster.id)) return;
+      startFollow(row, cluster, null);
+    },
+    [cancelFollow, dispatch, lifecycle, startFollow],
+  );
+
+  const holdFollow = useCallback((reason: FollowHold | null) => dispatch({ type: "hold", reason }), [dispatch]);
+
+  const pinFollow = useCallback(() => {
+    const f = followSession(stateRef.current);
+    if (!f) return;
+    dispatch({
+      type: "open",
+      focus: false,
+      session: {
+        id: newId(),
+        kind: "logs",
+        cluster: f.cluster,
+        namespace: f.namespace,
+        pod: f.pod,
+        container: f.container,
+        containers: f.containers,
+        pinned: true,
+      },
+    });
+  }, [dispatch, newId]);
 
   const openOwnerLogs = useCallback(
     (row: ResourceRow, owner: OwnerRef) => {
@@ -425,7 +530,11 @@ export function useDock(clusters: Cluster[]): DockApi {
   );
 
   return useMemo(
-    () => ({ state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, shellChoice, keyboardFocus, claimKeyboardFocus, ...fns }),
-    [state, dispatch, openPod, openOwnerLogs, openWorkloadLogs, ask, shellChoice, keyboardFocus, claimKeyboardFocus, fns],
+    () => ({
+      state, dispatch, openPod, openFollow, followRow, holdFollow, openPinned, pinFollow, openOwnerLogs, openWorkloadLogs,
+      ask, shellChoice, ...fns,
+    }),
+    [state, dispatch, openPod, openFollow, followRow, holdFollow, openPinned, pinFollow, openOwnerLogs, openWorkloadLogs,
+      ask, shellChoice, fns],
   );
 }

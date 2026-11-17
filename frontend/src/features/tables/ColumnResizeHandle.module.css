@@ -1,27 +1,34 @@
+/* The hit area is 10px wide and centred on the column boundary. */
 .handle {
   position: absolute;
   z-index: 1;
   inset-block: 0;
-  inset-inline-end: -8px;
-  width: 14px;
+  inset-inline-end: -5px;
+  width: 10px;
   cursor: col-resize;
   touch-action: none;
   user-select: none;
 }
 
+/* A faint divider is always there; hover brightens it, focus and drag make it the lilac guide. */
 .handle::after {
   content: "";
   position: absolute;
-  inset-block: 5px;
-  inset-inline-end: 8px;
+  inset-block: 7px;
+  inset-inline-start: calc(50% - 0.5px);
+  width: 1px;
+  background: var(--rule);
+}
+
+.handle:hover::after {
+  background: var(--ink-3);
+}
+
+.handle:is(:focus-visible, [data-resizing])::after {
+  inset-inline-start: calc(50% - 1px);
   width: 2px;
   border-radius: 1px;
   background: var(--focus);
-  opacity: 0;
-}
-
-.handle:is(:hover, :focus-visible, [data-resizing])::after {
-  opacity: 1;
 }
 
 .handle:focus-visible {
@@ -29,13 +36,34 @@
   outline-offset: -2px;
 }
 
+/* The guide and tooltip are body children, positioned by transform while dragging. */
+.guide,
+.tip {
+  position: fixed;
+  left: 0;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.guide {
+  width: 2px;
+  border-radius: 1px;
+  background: var(--focus);
+}
+
+.tip {
+  padding: 3px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surf-2);
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 @media (pointer: coarse) {
   .handle {
     width: 24px;
-    inset-inline-end: -11px;
-  }
-
-  .handle::after {
-    inset-inline-end: 11px;
+    inset-inline-end: -12px;
   }
 }

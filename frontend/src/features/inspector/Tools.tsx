@@ -19,11 +19,16 @@ import s from "./Inspector.module.css";
 export interface ToolIntent {
   tool: ToolId | ViewIntent;
   seq: number;
+  /** For `tool: "tab"`: the detail tab to show, 1-based. */
+  tab?: number;
 }
 
 /** What a row's key asks of the details themselves rather than of a change tool. */
-export type ViewIntent = "yaml" | "workloadLogs" | "reveal";
-const VIEW_INTENTS: ReadonlySet<string> = new Set<ViewIntent>(["yaml", "workloadLogs", "reveal"]);
+export type ViewIntent = "yaml" | "workloadLogs" | "reveal" | "tab" | "unsaved";
+const VIEW_INTENTS: ReadonlySet<string> = new Set<ViewIntent>(["yaml", "workloadLogs", "reveal", "tab", "unsaved"]);
+
+/** Said when Esc would close the details over an unsaved YAML edit (Ruling R41). */
+export const UNSAVED_EDIT = "Unsaved YAML edit: review or discard it first.";
 
 /** The count a workload runs at, from its row's Ready column ("2/3" → 3); 1 when it can't tell. */
 export function desiredReplicas(row: ResourceRow): number {
@@ -68,6 +73,12 @@ export function useTools({
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<ActionOutcome | null>(null);
   const said = useRef<HTMLParagraphElement>(null);
+  /** What had focus when the open form or editor was asked for: where focus goes back when it closes. */
+  const opener = useRef<Element | null>(null);
+  /** The editor's text differs from the YAML editing began with. */
+  const unsaved = useRef(false);
+  /** Esc asked to close the details over an unsaved edit: say why it didn't (Ruling R41). */
+  const [unsavedNote, setUnsavedNote] = useState(false);
 
   // A plan that returns after a pane loses focus must not open a dialog over the active pane.
   const identity = `${row.cluster_id}\n${kindKey}\n${row.uid}`;
@@ -84,6 +95,7 @@ export function useTools({
     setBusy(null);
     setError(null);
     setOutcome(null);
+    setUnsavedNote(false);
   }
 
   /** Plans a change on this object; true when it was applied (and what it did is shown). */
@@ -120,8 +132,14 @@ export function useTools({
 
   const run = (tool: ToolId) => {
     if (!paneActive || busy !== null || !tools.includes(tool)) return;
+    // Every other tool would replace the editor and its unsaved text: say why not (Ruling R41).
+    if (open === "edit" && unsaved.current && tool !== "edit" && tool !== "nodeShell") {
+      setUnsavedNote(true);
+      return;
+    }
     setError(null);
     setOutcome(null);
+    if (tool === "edit" || tool === "scale" || tool === "rollback") opener.current = document.activeElement;
     switch (tool) {
       case "edit":
         setOpen("edit");
@@ -151,9 +169,23 @@ export function useTools({
   };
   const runRef = useRef(run);
   runRef.current = run;
+  const openRef = useRef(open);
+  openRef.current = open;
 
-  // A tool's key pressed on the row: run it once the details are open.
+  // Once the form or editor has gone, `Frame` has already used the opener (a child's layout effect
+  // runs first): a later loss of focus is not sent back to it.
+  useLayoutEffect(() => {
+    if (open === null) opener.current = null;
+  }, [open]);
+
+  // A tool's key pressed on the row: run it once the details are open. Esc on the row over an
+  // unsaved edit says why the details stayed open.
   useEffect(() => {
+    if (intent?.tool === "unsaved") {
+      if (openRef.current === "edit") setUnsavedNote(true);
+      onIntentDone?.();
+      return;
+    }
     if (!intent || VIEW_INTENTS.has(intent.tool)) return;
     runRef.current(intent.tool as ToolId);
     onIntentDone?.();
@@ -162,15 +194,20 @@ export function useTools({
   const close = useCallback(() => {
     setOpen(null);
     setError(null);
+    setUnsavedNote(false);
   }, []);
 
-  /** Tool keys pressed inside the details, never in a field, the editor or a terminal. */
+  /**
+   * Tool keys pressed inside the details (Ctrl+D and Ctrl+Del or Cmd+Backspace delete), never in a
+   * field, the editor or a terminal. A held delete key reviews once.
+   */
   const onKey = (e: KeyboardEvent<HTMLElement>) => {
     if (e.defaultPrevented || isEditable(e.target)) return;
     const id = toolShortcut(e, keyedTools(tools));
     if (id === undefined) return;
     e.preventDefault();
     e.stopPropagation();
+    if (e.repeat && id === "delete") return;
     run(id as ToolId);
   };
 
@@ -228,7 +265,7 @@ export function useTools({
     );
   } else if (outcome && open === null) {
     strip = (
-      <p ref={said} className={s.outcome} data-tone={outcome.tone} role="status" tabIndex={-1}>
+      <p ref={said} className={s.outcome} data-tone={outcome.tone} role="status" tabIndex={-1} data-focus-after="">
         {outcome.message}
       </p>
     );
@@ -266,8 +303,15 @@ export function useTools({
         label={`Edit ${row.kind} YAML`}
         busy={busy === "edit"}
         error={error}
+        notice={unsavedNote ? UNSAVED_EDIT : null}
+        onChanged={(changed) => {
+          unsaved.current = changed;
+        }}
         onDiscard={close}
-        onReview={(text) => void request("edit", "edit", { yaml: text }).then((applied) => applied && close())}
+        onReview={(text) => {
+          setUnsavedNote(false);
+          void request("edit", "edit", { yaml: text }).then((applied) => applied && close());
+        }}
       />
     ) : null;
 
@@ -283,5 +327,14 @@ export function useTools({
     onKey,
     canEdit: tools.includes("edit"),
     edit: () => run("edit"),
+    /**
+     * The YAML editor is open: nothing may switch away from the YAML tab by key (it is shown only
+     * there, so the unsaved text would go with it). Ruling R36.
+     */
+    editing: open === "edit",
+    /** Esc inside the details over an unsaved edit: say why they stay open. */
+    unsavedEscape: () => setUnsavedNote(true),
+    /** Where focus goes back when the open form or editor closes itself. */
+    opener,
   };
 }

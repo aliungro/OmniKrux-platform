@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { ShellSession } from "../../api/types";
+import { pressed } from "../chrome/shortcuts";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import pc from "../territories/provider.module.css";
 import { useExec } from "./useExec";
@@ -56,9 +57,22 @@ function whenFontReady(open: () => void): () => void {
   };
 }
 
+/** Enter alone, not mid-composition: the key that closes an ended shell's tab. */
+function isPlainEnter(e: KeyboardEvent): boolean {
+  return e.key === "Enter" && !e.isComposing && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+}
+
 /** The server's refusal for a container that isn't running (see backend `running_container`). */
 export function isNotRunning(message: string | null): boolean {
   return message !== null && message.startsWith("Can't open a shell:") && message.includes("isn't running");
+}
+
+/**
+ * The server's sentence for a shell that ended with no exit code (backend `exec/session.py`):
+ * it already says the shell ended, so the pane shows it alone.
+ */
+function endedInWords(message: string | null): boolean {
+  return message !== null && message.startsWith("The shell ended");
 }
 
 /**
@@ -70,6 +84,7 @@ export function isNotRunning(message: string | null): boolean {
  * `onRestart`: replaces Start again / Reconnect; a node shell needs a new node-shell pod, since the
  * server deleted the old one when its session ended.
  * `note`: a standing line under the terminal, e.g. what a debug container is attached to.
+ * `onClose`: closes this shell's tab; once the shell has ended, Enter in the terminal calls it.
  */
 export function ShellPane({
   session,
@@ -77,12 +92,14 @@ export function ShellPane({
   onStartDebug,
   onRestart,
   note,
+  onClose,
 }: {
   session: ShellSession;
   active?: boolean;
   onStartDebug?: () => void;
   onRestart?: () => void;
   note?: string;
+  onClose?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -101,6 +118,11 @@ export function ShellPane({
 
   const activeRef = useRef(active);
   activeRef.current = active;
+  // The key handler is attached once, with the terminal: it reads these, so it sees the latest.
+  const endedRef = useRef(false);
+  endedRef.current = exec.status === "exited";
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -124,6 +146,19 @@ export function ShellPane({
         // Not laid out yet (hidden tab); the next resize fits it.
       }
     };
+    // Alt+Up leaves the shell for the table: not sent to the shell, so it reaches the dock.
+    // Once the shell has ended, a plain Enter closes its tab (held, it closes once).
+    // Every other key, Esc included (vim, less), is the shell's.
+    term.attachCustomKeyEventHandler?.((e) => {
+      if (e.type !== "keydown") return true;
+      if (pressed("leaveLogs", e)) return false;
+      if (endedRef.current && isPlainEnter(e)) {
+        e.preventDefault();
+        if (!e.repeat) onCloseRef.current?.();
+        return false;
+      }
+      return true;
+    });
     const typed = term.onData((d) => send(d));
     const sized = term.onResize(({ cols, rows }) => resize(cols, rows));
     let watcher: ResizeObserver | null = null;
@@ -187,11 +222,19 @@ export function ShellPane({
 
       {exec.status === "exited" && (
         <div className={s.note} role="status">
-          <span>
-            {`Session ended${exec.exitCode === null ? "" : ` (exit ${exec.exitCode})`}`}
-            {exec.message ? ` ${exec.message}` : ""}
-            {exec.cannotRun && onStartDebug ? " A debug container brings its own shell." : ""}
-          </span>
+          {endedInWords(exec.message) ? (
+            // An end with no code: the server's sentence already says the shell ended.
+            <span>{exec.message}</span>
+          ) : (
+            <span>
+              {"Shell ended."}
+              {/* A shell that couldn't run: the server's words already carry its code. */}
+              {exec.exitCode !== null && exec.exitCode !== 0 && !exec.cannotRun ? ` Exit code ${exec.exitCode}.` : ""}
+              {exec.message ? ` ${exec.message}` : ""}
+              {exec.cannotRun && onStartDebug ? " A debug container brings its own shell." : ""}
+            </span>
+          )}
+          {onClose && <span className={s.keys}>Enter closes this tab · Alt ↑ back to the table</span>}
           {exec.cannotRun && onStartDebug && (
             <button type="button" className={s.btn} onClick={onStartDebug}>Start a debug container</button>
           )}

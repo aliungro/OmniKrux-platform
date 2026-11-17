@@ -1,6 +1,7 @@
 import { useCallback, useRef, type ReactNode } from "react";
 import { ColumnResizeHandle } from "../tables/ColumnResizeHandle";
 import { MAX_COLUMN_WIDTH, useColumnWidths } from "../tables/columnWidths";
+import { fitColumnWidth, measureColumn } from "../tables/fitColumn";
 import s from "./ResizableInspectorTable.module.css";
 
 export interface InspectorColumn {
@@ -12,17 +13,18 @@ export interface InspectorColumn {
 }
 
 /** A header with a stable `readWidth`, so its handle keeps one ResizeObserver across renders. */
-function InspectorColumnHeader({ columnKey, label, minWidth, view, previewWidth, commitWidth }: {
+function InspectorColumnHeader({ columnKey, label, minWidth, view, previewWidth, commitWidth, getGuideRect }: {
   columnKey: string;
   label: string;
   minWidth: number;
   view: string;
+  getGuideRect: () => DOMRect | null;
 } & Pick<ReturnType<typeof useColumnWidths>, "previewWidth" | "commitWidth">) {
   const header = useRef<HTMLTableCellElement>(null);
   const readWidth = useCallback(() => header.current?.getBoundingClientRect().width ?? minWidth, [minWidth]);
   return (
     <th ref={header} scope="col" aria-label={label} style={{ minWidth }}>
-      {label}
+      <span data-column-label className={s.label}>{label}</span>
       <ColumnResizeHandle
         label={label}
         minWidth={minWidth}
@@ -30,6 +32,8 @@ function InspectorColumnHeader({ columnKey, label, minWidth, view, previewWidth,
         readWidth={readWidth}
         onPreview={width => previewWidth(columnKey, width)}
         onCommit={width => commitWidth(columnKey, width)}
+        onFit={() => fitColumnWidth(measureColumn(header.current!), minWidth, MAX_COLUMN_WIDTH)}
+        guide={getGuideRect}
         view={view}
       />
     </th>
@@ -45,6 +49,8 @@ export function ResizableInspectorTable({ tableKey, columns, className, label, v
   children: ReactNode;
 }) {
   const { widths, previewWidth, commitWidth } = useColumnWidths(tableKey);
+  const scroll = useRef<HTMLDivElement>(null);
+  const getGuideRect = useCallback(() => scroll.current?.getBoundingClientRect() ?? null, []);
   const tracks = columns.map(column => {
     const minWidth = column.minWidth ?? 64;
     const saved = widths.get(column.key);
@@ -58,7 +64,7 @@ export function ResizableInspectorTable({ tableKey, columns, className, label, v
   const total = tracks.reduce((sum, track) => sum + (track.width ?? (fixed ? autoMin : track.minWidth)), 0);
 
   return (
-    <div className={s.scroll}>
+    <div ref={scroll} className={s.scroll}>
       <table
         className={className}
         aria-label={label}
@@ -73,7 +79,7 @@ export function ResizableInspectorTable({ tableKey, columns, className, label, v
           <tr>
             {tracks.map(({ key, label, minWidth }) => (
               <InspectorColumnHeader key={key} columnKey={key} label={label} minWidth={minWidth}
-                view={view ?? tableKey} previewWidth={previewWidth} commitWidth={commitWidth} />
+                view={view ?? tableKey} previewWidth={previewWidth} commitWidth={commitWidth} getGuideRect={getGuideRect} />
             ))}
           </tr>
         </thead>

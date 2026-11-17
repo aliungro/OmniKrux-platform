@@ -6,6 +6,7 @@ import type { AuditRecord } from "../../api/types";
 import { useClusters } from "../../api/useClusters";
 import { useNow } from "../../hooks/useNow";
 import { ColumnResizeHandle } from "../tables/ColumnResizeHandle";
+import { fitColumnWidth, measureColumn } from "../tables/fitColumn";
 import { MAX_COLUMN_WIDTH, useColumnWidths } from "../tables/columnWidths";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { Status } from "../territories/Status";
@@ -43,14 +44,15 @@ function localTime(at: string | null, format: Intl.DateTimeFormat): string {
   return Number.isNaN(d.getTime()) ? "—" : format.format(d);
 }
 
-function AuditColumnHeader({ column, previewWidth, commitWidth }: {
+function AuditColumnHeader({ column, previewWidth, commitWidth, getGuideRect }: {
   column: (typeof COLUMNS)[number];
+  getGuideRect: () => DOMRect | null;
 } & Pick<ReturnType<typeof useColumnWidths>, "previewWidth" | "commitWidth">) {
   const header = useRef<HTMLSpanElement>(null);
   const readWidth = useCallback(() => header.current?.getBoundingClientRect().width ?? column.base, [column.base]);
   return (
     <span ref={header} role="columnheader" aria-label={column.label} className={s.column}>
-      <span className={s.heading} title={column.label}>{column.label}</span>
+      <span className={s.heading} data-column-label title={column.label}>{column.label}</span>
       <ColumnResizeHandle
         label={column.label}
         minWidth={column.min}
@@ -58,6 +60,8 @@ function AuditColumnHeader({ column, previewWidth, commitWidth }: {
         readWidth={readWidth}
         onPreview={width => previewWidth(column.key, width)}
         onCommit={width => commitWidth(column.key, width)}
+        onFit={() => fitColumnWidth(measureColumn(header.current!), column.min, MAX_COLUMN_WIDTH)}
+        guide={getGuideRect}
       />
     </span>
   );
@@ -171,6 +175,7 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
   const [expanded, setExpanded] = useState<number | null>(null);
   const [focusId, setFocusId] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const getGuideRect = useCallback(() => scrollRef.current?.getBoundingClientRect() ?? null, []);
   const focusPending = useRef(false);
 
   // The search goes to the server once typing pauses.
@@ -213,7 +218,8 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
       toggle(id);
       return;
     }
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    // With Alt, Ctrl or Cmd the arrows are the page's (Alt+Down goes into the logs).
+    if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
     const at = indexById.get(id);
     if (at === undefined) return;
@@ -265,7 +271,7 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
           <div role="rowgroup" className={s.head}>
             <div role="row" aria-rowindex={1} className={`${s.grid} ${s.cols}`}>
               {COLUMNS.map(column => (
-                <AuditColumnHeader key={column.key} column={column} previewWidth={previewWidth} commitWidth={commitWidth} />
+                <AuditColumnHeader key={column.key} column={column} previewWidth={previewWidth} commitWidth={commitWidth} getGuideRect={getGuideRect} />
               ))}
             </div>
           </div>

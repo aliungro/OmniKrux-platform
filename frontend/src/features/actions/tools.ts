@@ -68,8 +68,11 @@ export function keyedTools(tools: readonly ToolId[]): ShortcutId[] {
   return tools.filter((t): t is Extract<ToolId, ShortcutId> => t !== "rollback" && t !== "evict");
 }
 
-/** Everything a row offers besides its change tools: its details, and the dock's logs and shells. */
-export type RowAction = ToolId | Extract<ShortcutId, "details" | "yaml" | "logs" | "previousLogs" | "shell" | "workloadLogs" | "reveal">;
+/**
+ * Everything a row offers besides its change tools: its details, and the dock's logs (the follow
+ * log, a pinned log, the previous run) and shells.
+ */
+export type RowAction = ToolId | Extract<ShortcutId, "details" | "yaml" | "logs" | "pinLogs" | "previousLogs" | "shell" | "workloadLogs" | "reveal">;
 
 /** What the page can do for a row: plan changes (inside the actions provider), open logs or shells. */
 export interface RowCan {
@@ -87,7 +90,11 @@ export interface RowCan {
 export function rowActions(kindKey: string, verbs: readonly string[], row: ResourceRow, can: RowCan): RowAction[] {
   const keyed = new Set(shortcutsFor(kindKey).map((x) => x.id));
   const out: RowAction[] = ["details", "yaml"];
-  if (can.logs && keyed.has("logs")) out.push("logs", "previousLogs");
+  if (can.logs && keyed.has("logs")) {
+    out.push("logs");
+    if (keyed.has("pinLogs")) out.push("pinLogs");
+    out.push("previousLogs");
+  }
   if (can.shell && keyed.has("shell")) out.push("shell");
   if (can.workloadLogs && keyed.has("workloadLogs")) out.push("workloadLogs");
   // A Secret's keys (Ruling R38): its details open on them; revealing one is the next step.

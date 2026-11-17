@@ -9,7 +9,7 @@ import { TopBar } from "./TopBar";
 import { KindTabs } from "./KindTabs";
 import { DEFAULT_PINNED, usePinnedKinds } from "../settings/pinnedKinds";
 import { pressed, SHORTCUTS, type Shortcut } from "./shortcuts";
-import { focusTableRow, routesPageKeys } from "./pageKeys";
+import { focusTableRow, keyboardZone, routesPageKeys } from "./pageKeys";
 import { chipsFor } from "../territories/model";
 import { DEPLOYMENTS, EVENTS, KINDS, NODES, PODS, SECRETS } from "../../test/kinds";
 
@@ -352,15 +352,15 @@ describe("FilterBar counts", () => {
 });
 
 describe("ShortcutBar per kind", () => {
-  const strip = () => Array.from(within(screen.getByRole("navigation", { name: "Keyboard shortcuts" })).getAllByRole("listitem")).map((li) => li.textContent);
+  const strip = () => Array.from(within(screen.getByRole("navigation", { name: /^Keyboard shortcuts/ })).getAllByRole("listitem")).map((li) => li.textContent);
   it("shortcut bar follows the active kind", () => {
     const { rerender } = render(<ShortcutBar kind="pods" />);
     expect(strip()).toEqual([
-      "↑↓ move", "Enter details", "l logs", "p previous logs", "s shell", "f port-forward", "Ctrl F search logs", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
+      "↑↓ move", "Enter details", "l logs", "Shift L pin a log", "p previous logs", "s shell", "f port-forward", "Alt ↓ into the logs", "Ctrl Del delete", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
     ]);
     rerender(<ShortcutBar kind="deployments.apps" />);
     expect(strip()).toEqual([
-      "↑↓ move", "Enter details", "s scale", "r restart", "l logs", "Ctrl F search logs", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
+      "↑↓ move", "Enter details", "s scale", "r restart", "l logs", "Alt ↓ into the logs", "Ctrl Del delete", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts",
     ]);
     rerender(<ShortcutBar kind="nodes" />);
     expect(strip()).toEqual(expect.arrayContaining(["c cordon", "r drain", "s node shell"]));
@@ -368,13 +368,13 @@ describe("ShortcutBar per kind", () => {
     rerender(<ShortcutBar kind="secrets" />);
     expect(strip()).toContain("x reveal");
     rerender(<ShortcutBar kind="widgets.example.omnikrux.dev" />);
-    expect(strip()).toEqual(["↑↓ move", "Enter details", "Ctrl F search logs", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts"]);
+    expect(strip()).toEqual(["↑↓ move", "Enter details", "Alt ↓ into the logs", "Ctrl Del delete", ": kinds", "Ctrl K commands", "/ filter", "? all shortcuts"]);
   });
   it("the ? sheet lists the active kind's row keys and every other key", () => {
     render(<ShortcutBar kind="deployments.apps" />);
     fireEvent.click(screen.getByRole("button", { name: /all shortcuts/ }));
     const sheet = screen.getByRole("dialog", { name: "All shortcuts" });
-    const rows = within(sheet).getByRole("region", { name: "Rows" }).textContent;
+    const rows = within(sheet).getByRole("region", { name: "Table" }).textContent;
     expect(rows).toContain("Scale");
     expect(rows).toContain("Delete");
     expect(rows).not.toContain("Shell in the selected pod");
@@ -383,14 +383,60 @@ describe("ShortcutBar per kind", () => {
     expect(anywhere).toContain("Jump to any kind");
     expect(anywhere).toContain("Ctrl K");
     expect(within(sheet).getByRole("region", { name: "Logs" }).textContent).toContain("Jump to live");
-    expect(within(sheet).getByRole("region", { name: "Logs and shells (bottom dock)" }).textContent).toContain("Ctrl \\");
+    expect(within(sheet).getByRole("region", { name: "Dock" }).textContent).toContain("Ctrl \\");
   });
 
-  it("help sheet names the bottom dock", () => {
+  it("the bar shows the logs keys in the logs zone", () => {
+    render(<ShortcutBar kind="pods" zone="logs" />);
+    const text = screen.getByRole("navigation", { name: "Keyboard shortcuts: logs" }).textContent;
+    expect(text).toContain("back to the table");
+    expect(text).toContain("close the tab");
+    expect(text).not.toContain("previous logs");
+  });
+
+  it("the bar shows the table keys with alt down and ctrl delete", () => {
+    render(<ShortcutBar kind="pods" zone="table" />);
+    const text = screen.getByRole("navigation", { name: "Keyboard shortcuts: table" }).textContent;
+    expect(text).toContain("Alt ↓ into the logs");
+    expect(text).toContain("Ctrl Del delete");
+  });
+
+  it("the bar shows cmd backspace on a mac and ctrl delete elsewhere", () => {
+    const platform = vi.spyOn(navigator, "platform", "get");
+    try {
+      platform.mockReturnValue("MacIntel");
+      const { unmount } = render(<ShortcutBar kind="pods" zone="table" />);
+      const mac = screen.getByRole("navigation", { name: "Keyboard shortcuts: table" }).textContent;
+      expect(mac).toContain("⌘ ⌫");
+      expect(mac).not.toContain("Ctrl Del");
+      unmount();
+      platform.mockReturnValue("Win32");
+      render(<ShortcutBar kind="pods" zone="table" />);
+      const win = screen.getByRole("navigation", { name: "Keyboard shortcuts: table" }).textContent;
+      expect(win).toContain("Ctrl Del");
+      expect(win).not.toContain("⌫");
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("help keycaps follow the platform", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      render(<ShortcutBar kind="pods" zone="table" />);
+      fireEvent.click(screen.getByRole("button", { name: /all shortcuts/ }));
+      const sheet = screen.getByRole("dialog", { name: "All shortcuts" });
+      expect(sheet.textContent).toContain("⌘ ⌫");
+      expect(within(sheet).getByRole("region", { name: "Logs" }).textContent).toContain("Switch between dock tabs");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("help sheet names the dock", () => {
     render(<ShortcutBar kind="pods" />);
     fireEvent.click(screen.getByRole("button", { name: /all shortcuts/ }));
-    const group = within(screen.getByRole("dialog", { name: "All shortcuts" })).getByRole("region", { name: "Logs and shells (bottom dock)" });
-    expect(group.textContent).toContain("Move between open logs and shells (bottom dock)");
+    const group = within(screen.getByRole("dialog", { name: "All shortcuts" })).getByRole("region", { name: "Dock" });
     expect(group.textContent).toContain("Switch the bottom dock between one pane and side by side");
   });
 });
@@ -488,4 +534,38 @@ it("unpinning an inactive tab leaves focus on the active tab",()=>{
  render(<PinnedRow/>); fireEvent.contextMenu(screen.getByRole("tab",{name:"Secrets"}));
  fireEvent.click(screen.getByRole("menuitem",{name:"Unpin Secrets"}));
  expect(document.activeElement).toBe(screen.getByRole("tab",{name:"Pods"}));
+});
+
+describe("keyboard zone", () => {
+  it("keyboard zone follows focus", () => {
+    render(
+      <div>
+        <div role="grid"><div role="row" data-row-key="a" tabIndex={0}>row</div></div>
+        <section data-dock data-page-keys="off"><button>dock button</button><input aria-label="dock search" /></section>
+        <input aria-label="filter" />
+        <div role="dialog"><button>in dialog</button></div>
+      </div>,
+    );
+    expect(keyboardZone(null)).toBe("table");
+    expect(keyboardZone(document.body)).toBe("table");
+    expect(keyboardZone(screen.getByText("row"))).toBe("table");
+    expect(keyboardZone(screen.getByText("dock button"))).toBe("logs");
+    expect(keyboardZone(screen.getByLabelText("dock search"))).toBe("logs");
+    expect(keyboardZone(screen.getByLabelText("filter"))).toBeNull();
+    expect(keyboardZone(screen.getByText("in dialog"))).toBeNull();
+  });
+  it("keyboard zone is shell inside a terminal", () => {
+    render(
+      <section data-dock data-page-keys="off">
+        <div role="tablist"><button role="tab">shell tab</button></div>
+        <div className="xterm"><textarea aria-label="terminal input" /></div>
+      </section>,
+    );
+    expect(keyboardZone(screen.getByLabelText("terminal input"))).toBe("shell");
+    expect(keyboardZone(screen.getByRole("tab", { name: "shell tab" }))).toBe("logs");
+  });
+  it("a modal dialog inside the dock is not the logs zone", () => {
+    render(<section data-dock><div aria-modal="true"><button>confirm</button></div></section>);
+    expect(keyboardZone(screen.getByText("confirm"))).toBeNull();
+  });
 });

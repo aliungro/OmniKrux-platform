@@ -7,10 +7,11 @@ import { useKinds } from "../../api/useKinds";
 import { ActionsProvider } from "../actions/ActionDialog";
 import { AuditView } from "../audit/AuditView";
 import { focusTableRow } from "../chrome/pageKeys";
+import { useKeyboardZone } from "../chrome/useKeyboardZone";
 import { AllShortcuts, ShortcutBar } from "../chrome/ShortcutBar";
 import { allGroups, isEditable, pageKey, pressed } from "../chrome/shortcuts";
 import { TopBar, type ScopeCluster } from "../chrome/TopBar";
-import { Dock } from "../dock/Dock";
+import { Dock, type DockHandle } from "../dock/Dock";
 import { useDock } from "../dock/useDock";
 import { KubernetesTab, type KubernetesTabProps } from "../kubernetes/KubernetesTab";
 import { CommandPalette, usePaletteKeys, type PaletteMode } from "../palette/CommandPalette";
@@ -35,11 +36,12 @@ interface PaneProps extends Omit<KubernetesTabProps, "nav" | "paneActive"> {
   active: boolean;
   split: boolean;
   onFocusPane(id: string): void;
+  zoneActive: boolean;
   reportScope(id: string, scope: ScopeCluster[] | null): void;
   reportTarget(id: string, target: PaletteTarget | null): void;
 }
 
-function KubePane({ tab, title, history, active, split, onFocusPane, reportScope, reportTarget, ...props }: PaneProps) {
+function KubePane({ tab, title, history, active, split, zoneActive, onFocusPane, reportScope, reportTarget, ...props }: PaneProps) {
   const nav = usePaneNav(history, tab);
   const id = tab.id;
   const bridge = useMemo(() => ({
@@ -52,6 +54,7 @@ function KubePane({ tab, title, history, active, split, onFocusPane, reportScope
       className={s.pane}
       aria-label={split ? title : undefined}
       data-active-pane={active}
+      data-keyboard-zone={zoneActive ? "table" : undefined}
       tabIndex={-1}
       onFocusCapture={activate}
       onPointerDownCapture={activate}
@@ -77,6 +80,7 @@ export function Shell() {
   const kinds = kindsQuery.data?.kinds;
   const kindsError = kinds === undefined && kindsQuery.isError ? failure(kindsQuery.error, "retry") : null;
   const dock = useDock(clusters);
+  const zone = useKeyboardZone();
   const [settingsSection, setSettingsSection] = useState<"pinned-kinds" | undefined>(undefined);
   const [scope, setScope] = useState<{ id: string; value: ScopeCluster[] } | null>(null);
   const [target, setTarget] = useState<{ id: string; value: PaletteTarget } | null>(null);
@@ -85,6 +89,7 @@ export function Shell() {
   const [forwardsAsk, setForwardsAsk] = useState(0);
   const forwards = usePortForwards().query.data?.length ?? 0;
   const main = useRef<HTMLElement>(null);
+  const dockRef = useRef<DockHandle>(null);
   const kube = ws.app === "kubernetes";
   // Outside Kubernetes no view holds a watch. Dock sessions and forwards still learn of a removed
   // cluster from clusterLifecycle: the registry poll (useClusters, every 15 s) and removals made
@@ -142,14 +147,26 @@ export function Shell() {
       focusView();
     }
   };
-  const focusWorkspaceFromDock = useCallback(() => {
-    const origin = document.activeElement;
-    requestAnimationFrame(() => {
-      const focused = document.activeElement;
-      if ((focused !== origin && focused !== document.body) || document.querySelector('[aria-modal="true"]')) return;
+  /**
+   * Back from the dock to the selected row, else `<main>`. A key press (`now`) lands in this tick, so
+   * nothing can take the focus first; a removal waits a frame and yields to whatever claimed it.
+   */
+  const focusWorkspaceFromDock = useCallback((opts?: { now?: boolean }) => {
+    const land = () => {
+      if (document.querySelector('[aria-modal="true"]')) return;
       const pane = main.current?.querySelector<HTMLElement>('[data-active-pane="true"]');
       if (pane && focusTableRow(pane, { selectedOnly: true })) return;
       main.current?.focus({ preventScroll: true });
+    };
+    if (opts?.now) {
+      land();
+      return;
+    }
+    const origin = document.activeElement;
+    requestAnimationFrame(() => {
+      const focused = document.activeElement;
+      if (focused !== origin && focused !== document.body) return;
+      land();
     });
   }, []);
 
@@ -174,6 +191,8 @@ export function Shell() {
     const app = appForKey(e);
     if (app) { e.preventDefault(); switchApp(app); return; }
     if (pressed("help", e)) { e.preventDefault(); setHelp(true); return; }
+    // Alt+Down: into the logs, from any app (the dock is shared). Held, it moves in once.
+    if (pressed("enterLogs", e)) { e.preventDefault(); if (!e.repeat) dockRef.current?.enter(); return; }
     if (!kube) return;
     if (pressed("newTab", e)) newTab();
     else if (pressed("closeTab", e)) closeTab();
@@ -209,7 +228,7 @@ export function Shell() {
                 <div className={ws.split ? s.split : s.single}>
                   {visible.map((tab) => (
                     <KubePane key={tab.id} tab={tab} title={tabLabel(tab.view, { clusters, kinds })} history={history}
-                      active={tab.id === activeId} split={ws.split !== undefined} onFocusPane={focusPane}
+                      active={tab.id === activeId} zoneActive={zone === "table" && tab.id === activeId && tab.view.page === "kind"} split={ws.split !== undefined} onFocusPane={focusPane}
                       reportScope={reportScope} reportTarget={reportTarget}
                       dock={dock} closed={closed} onReopen={(index) => dispatch({ type: "reopenClosed", index })}
                       loadProblem={loadProblem} onDismissLoadProblem={dismissLoadProblem} onEditPinned={editPinned} onOpenView={openView} />
@@ -220,8 +239,9 @@ export function Shell() {
               <AuditView filters={ws.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />
             ) : <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection} />}
           </main>
-          <Dock dock={dock} onFocusWorkspace={focusWorkspaceFromDock} />
-          {kind && <ShortcutBar kind={kind} onOpen={() => setHelp(true)} />}
+          {/* A shell is in the dock: the dock keeps its outline, the bar says how to leave the terminal. */}
+          <Dock ref={dockRef} dock={dock} zoneActive={zone === "logs" || zone === "shell"} onFocusWorkspace={focusWorkspaceFromDock} />
+          {(kind || zone === "logs" || zone === "shell") && <ShortcutBar kind={kind} zone={zone ?? "table"} onOpen={() => setHelp(true)} />}
         </div>
       </div>
       {help && <AllShortcuts groups={allGroups(kind)} onClose={() => setHelp(false)} />}

@@ -83,3 +83,10 @@
     border-bottom: 1px solid var(--rule);
   }
 }
+
+/* The logs zone has the keyboard: the same lilac outline as the table's. */
+.dock[data-keyboard-zone="logs"] {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  border-radius: 8px;
+}

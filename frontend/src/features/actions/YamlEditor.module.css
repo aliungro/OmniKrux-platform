@@ -18,6 +18,36 @@
   font-weight: 600;
 }
 
+/* How to get out by keyboard, quiet beside the state: the keycaps carry it. Short of room it
+   gives way first (an ellipsis), never the buttons. */
+.hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.k {
+  min-width: 17px;
+  height: 17px;
+  margin: 0 1px;
+  padding: 0 4px;
+  font-size: 10px;
+  vertical-align: middle;
+}
+
+/* A narrow details pane keeps the buttons and drops the hint. */
+@container (max-width: 559px) {
+  .hint {
+    display: none;
+  }
+}
+
 .push {
   flex: 1;
 }

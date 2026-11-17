@@ -18,6 +18,8 @@
 }
 
 .pane {
+  position: relative;
+  isolation: isolate;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -25,6 +27,18 @@
   overflow: hidden;
   outline: none;
   background: var(--bg);
+}
+
+/* The table zone has the keyboard: a lilac outline over the whole pane (tabs, filter bar, table),
+   drawn here so no scroller clips it. It appears at once, never eased, and does not take clicks. */
+.pane[data-keyboard-zone="table"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--focus);
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 4;
 }
 
 .paneTitle, .splitTools {

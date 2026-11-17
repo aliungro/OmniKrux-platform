@@ -7,6 +7,7 @@ import {
   MIN_HEIGHT,
   clampHeight,
   dockReducer,
+  followSession,
   identity,
   initialDockState,
   loadHeight,
@@ -168,6 +169,125 @@ describe("dockReducer", () => {
     );
     expect(s).toMatchObject({ focused: "a", previous: null });
     expect(visibleSessions(s).map((x) => x.id)).toEqual(["a", "c"]);
+  });
+});
+
+describe("follow and pinned logs", () => {
+  const follow = (id: string, pod: string, over: Partial<Session> = {}) =>
+    ({ type: "follow" as const, session: session(id, { pod, follow: true, ...over }) });
+
+  it("follow appends one follow session then retargets it in place", () => {
+    let s = run(start(), { type: "open", session: session("x", { pod: "x" }) }, follow("f1", "a"));
+    expect(s.sessions.map((x) => x.id)).toEqual(["x", "f1"]);
+    expect(s.focused).toBe("f1");
+    s = run(s, { type: "focus", id: "x" }, { ...follow("f2", "b", { container: "web", containers: ["web", "helper"] }), focus: false });
+    const followed = s.sessions.filter((x) => x.follow);
+    expect(followed).toHaveLength(1);
+    expect(followed[0]).toMatchObject({ id: "f1", pod: "b", follow: true, container: "web", containers: ["web", "helper"] });
+    expect(s.sessions.map((x) => x.id)).toEqual(["x", "f1"]);
+    expect(s.focused).toBe("x");
+    s = dockReducer(s, follow("f3", "c"));
+    expect(followSession(s)).toMatchObject({ id: "f1", pod: "c" });
+    expect(s.focused).toBe("f1");
+  });
+
+  it("following the same pod again returns the same state", () => {
+    const s = run(start(), follow("f1", "a"));
+    expect(dockReducer(s, follow("f2", "a"))).toBe(s);
+    expect(dockReducer(s, { ...follow("f2", "a"), focus: false })).toBe(s);
+    expect(dockReducer(s, { type: "hold", reason: null })).toBe(s);
+  });
+
+  it("a follow and a pinned log of the same pod are two tabs", () => {
+    const s = run(start(), follow("f", "a"), { type: "open", session: session("p", { pod: "a", pinned: true }) });
+    expect(s.sessions.map((x) => x.id)).toEqual(["f", "p"]);
+    expect(s.focused).toBe("p");
+    // A plain log of that pod is a third.
+    expect(dockReducer(s, { type: "open", session: session("l", { pod: "a" }) }).sessions).toHaveLength(3);
+  });
+
+  it("one pod gives one pinned tab whatever its container", () => {
+    let s = run(
+      start(),
+      { type: "open", session: session("p1", { pod: "a", container: "web", pinned: true }) },
+      { type: "open", session: session("x", { pod: "x" }) },
+    );
+    s = dockReducer(s, { type: "open", session: session("p2", { pod: "a", container: "helper", pinned: true }) });
+    expect(s.sessions.map((x) => x.id)).toEqual(["p1", "x"]);
+    expect(s.focused).toBe("p1");
+    // Unpinned logs of another container are still their own tabs.
+    s = run(
+      s,
+      { type: "open", session: session("l1", { pod: "a", container: "web" }) },
+      { type: "open", session: session("l2", { pod: "a", container: "helper" }) },
+    );
+    expect(s.sessions).toHaveLength(4);
+  });
+
+  it("a retarget with no follow log opens nothing", () => {
+    const s = run(start(), { type: "open", session: session("x", { pod: "x" }) });
+    expect(dockReducer(s, { type: "follow", session: session("f", { pod: "a", follow: true }), focus: false, retarget: true })).toBe(s);
+    expect(dockReducer(start(), { type: "follow", session: session("f", { pod: "a", follow: true }), retarget: true }).sessions).toHaveLength(0);
+    // With a follow log, a retarget moves it as before.
+    const f = run(s, { type: "follow", session: session("f", { pod: "a", follow: true }) });
+    expect(followSession(dockReducer(f, { type: "follow", session: session("g", { pod: "b" }), retarget: true }))).toMatchObject({ id: "f", pod: "b" });
+  });
+
+  it("pinning a pod that is already pinned focuses its tab", () => {
+    let s = run(
+      start(),
+      { type: "open", session: session("p1", { pod: "a", pinned: true }) },
+      { type: "open", session: session("p2", { pod: "b", pinned: true }) },
+    );
+    expect(s.focused).toBe("p2");
+    s = dockReducer(s, { type: "open", session: session("p3", { pod: "a", pinned: true }) });
+    expect(s.sessions.map((x) => x.id)).toEqual(["p1", "p2"]);
+    expect(s.focused).toBe("p1");
+  });
+
+  it("retarget clears the hold", () => {
+    let s = run(start(), follow("f", "a"), { type: "hold", reason: "notPod" });
+    expect(followSession(s)?.hold).toBe("notPod");
+    s = dockReducer(s, { ...follow("g", "b"), focus: false });
+    expect(followSession(s)).toMatchObject({ id: "f", pod: "b" });
+    expect(followSession(s)?.hold).toBeUndefined();
+    // Back on the same pod after a hold: the note goes, the stream stays.
+    s = run(s, { type: "hold", reason: "noSelection" });
+    const held = s;
+    s = dockReducer(s, { ...follow("h", "b"), focus: false });
+    expect(s).not.toBe(held);
+    expect(followSession(s)).toMatchObject({ id: "f", pod: "b" });
+    expect(followSession(s)?.hold).toBeUndefined();
+  });
+
+  it("hold sets the reason only on the follow session", () => {
+    let s = run(
+      start(),
+      { type: "open", session: session("p", { pod: "a", pinned: true }) },
+      { type: "open", session: session("l", { pod: "a" }) },
+    );
+    expect(dockReducer(s, { type: "hold", reason: "gone" })).toBe(s); // no follow log: nothing to hold
+    s = run(s, follow("f", "a"), { type: "hold", reason: "gone" });
+    expect(s.sessions.map((x) => x.hold)).toEqual([undefined, undefined, "gone"]);
+    expect(dockReducer(s, { type: "hold", reason: "gone" })).toBe(s);
+    s = dockReducer(s, { type: "hold", reason: null });
+    expect(s.sessions.map((x) => x.hold)).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("closeCluster closes the follow session too", () => {
+    let s = run(
+      start(),
+      { type: "open", session: session("x", { pod: "x", cluster: cluster({ id: "c2" }) }) },
+      follow("f", "a"),
+      { type: "open", session: session("p", { pod: "a", pinned: true }) },
+    );
+    s = dockReducer(s, { type: "closeCluster", clusterId: "c1" });
+    expect(s.sessions.map((x) => x.id)).toEqual(["x"]);
+    expect(followSession(s)).toBeUndefined();
+    expect(s.focused).toBe("x");
+    // The next follow starts a new one.
+    s = dockReducer(s, follow("g", "b"));
+    expect(followSession(s)).toMatchObject({ id: "g", pod: "b" });
   });
 });
 

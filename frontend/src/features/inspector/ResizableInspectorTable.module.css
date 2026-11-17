@@ -5,8 +5,24 @@
   padding-inline-end: 11px;
 }
 
+/* The resize handle is 10px wide, centred on the column boundary: its 5px inside edge clears the label. */
+.scroll table th {
+  padding-inline-end: 10px;
+}
+
+@media (pointer: coarse) {
+  .scroll table th {
+    padding-inline-end: 16px;
+  }
+}
+
 .scroll th {
   position: relative;
   box-sizing: border-box;
   overflow-wrap: anywhere;
+}
+
+/* An inline span reports no scrollWidth, which fit-to-content reads. */
+.label {
+  display: inline-block;
 }

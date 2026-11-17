@@ -20,8 +20,8 @@ import type { ClusterState, KindInfo, OwnerRef, ResourceRow } from "../../api/ty
 import { BulkDeleteDialog, type DeleteSelection } from "../actions/BulkDeleteDialog";
 import { canDelete, rowActions, TOOL_LABEL, type RowAction, type ToolId } from "../actions/tools";
 import { useStartAction } from "../actions/useActions";
-import { pageKey, pressed, rowShortcut } from "../chrome/shortcuts";
-import { routesPageKeys } from "../chrome/pageKeys";
+import { isDeleteKey, isEditable, pageKey, pressed, rowShortcut, type ShortcutId } from "../chrome/shortcuts";
+import { routesKindKeys, routesPageKeys } from "../chrome/pageKeys";
 import { ContextMenu, isMenuKey, menuAnchor, type MenuAnchor, type MenuItem } from "../chrome/ContextMenu";
 import { Inspector, type WorkloadLogs } from "../inspector/Inspector";
 import type { ToolIntent } from "../inspector/Tools";
@@ -64,8 +64,10 @@ export interface TerritoryTableProps {
   podCounts?: Map<string, Map<string, number>> | null;
   /** Live CPU and memory per row (pods and nodes); null for kinds without them. */
   metrics?: MetricsLookup | null;
-  /** `previous`: the run before the last restart (the `p` key). */
-  onOpenLogs?: (row: ResourceRow, previous?: boolean, keyboardOrigin?: HTMLElement) => void;
+  /** L: the follow log on this pod; `previous`: the run before the last restart (the `p` key). */
+  onOpenLogs?: (row: ResourceRow, previous?: boolean) => void;
+  /** Shift+L: the pod's log in a pinned tab of its own. */
+  onPinLogs?: (row: ResourceRow) => void;
   onOpenShell?: (row: ResourceRow) => void;
   onNodeShell?: (row: ResourceRow, node: string) => void;
   onOwnerLogs?: (row: ResourceRow, owner: OwnerRef) => void;
@@ -101,9 +103,12 @@ function sameRef(a: RowRef | null, b: RowRef): boolean {
 const NOT_LIVE: ReadonlySet<ClusterState> = new Set(["syncing", "error", "unknown"]);
 
 const ROW_MENU_LABELS: Partial<Record<RowAction, string>> = {
-  details: "Details", yaml: "YAML", logs: "Logs", previousLogs: "Previous logs",
+  details: "Details", yaml: "YAML", logs: "Logs", pinLogs: "Pin logs", previousLogs: "Previous logs",
   workloadLogs: "Logs", shell: "Shell", reveal: "Show secret keys",
 };
+
+/** Row keys that act once however long they're held (a held Enter never toggles the details on and off). */
+const HELD_ONCE: ReadonlySet<ShortcutId> = new Set<ShortcutId>(["details", "logs", "previousLogs", "pinLogs", "reveal", "delete"]);
 
 function verbsFor(kind: KindInfo, row: ResourceRow): readonly string[] {
   return kind.verbs_by_cluster?.[row.cluster_id] ?? kind.verbs;
@@ -123,6 +128,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   podCounts = null,
   metrics = null,
   onOpenLogs,
+  onPinLogs,
   onOpenShell,
   onNodeShell,
   onOwnerLogs,
@@ -134,6 +140,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   paneActive = true,
 }: TerritoryTableProps) {
   const { selected, open } = selection;
+  const resizeKey = useMemo(() => JSON.stringify(menuView ?? null), [menuView]);
   const items = useMemo(() => flatten(territories, open ? selected : null), [territories, open, selected]);
   const indexByKey = useMemo(() => {
     const m = new Map<string, number>();
@@ -144,6 +151,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [items]);
   const selectedKey = selected ? rowKey(selected.clusterId, selected.uid) : null;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const getGuideRect = useCallback(() => scrollRef.current?.getBoundingClientRect() ?? null, []);
   const restored = useRef(false);
   /** Set when the keyboard moved the selection; the row takes focus once it has rendered. */
   const focusPending = useRef(false);
@@ -259,20 +267,43 @@ export const TerritoryTable = memo(function TerritoryTable({
 
   /**
    * Runs what a row's key means (or the palette asked for): the details, the dock's logs and
-   * shells, or, through the details, the YAML tab and the change tools, each reviewed first.
+   * shells, or, through the details, the YAML tab and the change tools, each reviewed first. The
+   * logs keep the keyboard where it is: on the table.
    */
-  const act = (row: ResourceRow, action: RowAction, from: "key" | "menu" | "palette", keyboardOrigin?: HTMLElement) => {
+  /**
+   * Ruling R41: the open details hold an unsaved YAML edit, so nothing may close them or move the
+   * selection away. True when that is so; the details then say why (once per press, not per repeat).
+   * One query of the rendered rows, made only for a key that would leave the details.
+   */
+  const keepUnsavedEdit = (repeat = false): boolean => {
+    if (!open || selectedKey === null || !scrollRef.current?.querySelector("[data-unsaved-edit]")) return false;
+    if (!repeat) {
+      const key = selectedKey;
+      setIntent((prev) => ({ key, tool: "unsaved", seq: (prev?.seq ?? 0) + 1 }));
+    }
+    return true;
+  };
+
+  const act = (row: ResourceRow, action: RowAction, from: "key" | "menu" | "palette") => {
     const ref = { clusterId: row.cluster_id, uid: row.uid };
+    // Another row (by a key, a row menu or the palette) would take the selection from the edit.
+    if (rowKey(row.cluster_id, row.uid) !== selectedKey && keepUnsavedEdit()) return;
     switch (action) {
       case "details":
         if (from === "key") toggle(row);
         else onSelection({ selected: ref, open: true });
         return;
       case "logs":
+        select(row);
+        onOpenLogs?.(row);
+        return;
       case "previousLogs":
         select(row);
-        if (keyboardOrigin) onOpenLogs?.(row, action === "previousLogs", keyboardOrigin);
-        else onOpenLogs?.(row, action === "previousLogs");
+        onOpenLogs?.(row, true);
+        return;
+      case "pinLogs":
+        select(row);
+        onPinLogs?.(row);
         return;
       case "shell":
         select(row);
@@ -354,23 +385,37 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [request, indexByKey, items]);
 
   const runRowKey = (e: KeyboardEvent<HTMLDivElement> | globalThis.KeyboardEvent, at: number | undefined, fromPage = false) => {
-    // Escape closes the details from the row or from inside them.
+    // Escape closes the details from the row or from inside them, but never over an unsaved YAML
+    // edit: the details stay open and say why (Ruling R41).
     if (pressed("close", e)) {
       if (!open) return;
       e.preventDefault();
-      if (!e.repeat) close();
+      if (!keepUnsavedEdit(e.repeat) && !e.repeat) close();
       return;
     }
     if (at === undefined) return;
     const it = items[at];
     if (it.type !== "row") return;
+    // 1-4 show a detail tab while the details are open; focus stays where it is.
+    if (pressed("detailTab", e) && open && selectedKey === rowKey(it.row.cluster_id, it.row.uid)) {
+      e.preventDefault();
+      if (!e.repeat) {
+        const key = selectedKey;
+        setIntent((prev) => ({ key, tool: "tab", tab: Number(e.key), seq: (prev?.seq ?? 0) + 1 }));
+      }
+      return;
+    }
     // The key means what this kind gives it (`s`: a pod's shell, a deployment's scale, a node's
     // shell), among what this row offers (a node has the one of cordon and uncordon that applies).
     const id = rowShortcut(e, kind.key, rowActions(kind.key, verbsFor(kind, it.row), it.row, can));
     if (id === undefined) return;
+    // The delete key in a field, the editor or a terminal edits there (Ctrl+Backspace a word).
+    if (id === "delete" && (isEditable(e.target) || isEditable(document.activeElement))) return;
     e.preventDefault();
-    // Holding a log shortcut or reveal must perform the action only once.
-    if (e.repeat && (id === "logs" || id === "previousLogs" || id === "reveal")) return;
+    // Holding a log key, reveal or delete performs it once: one stream, one review.
+    if (e.repeat && HELD_ONCE.has(id)) return;
+    // Enter would close the details, and the arrows move the selection, over an unsaved edit (R41).
+    if ((id === "move" || id === "details") && keepUnsavedEdit(e.repeat)) return;
     if (fromPage) {
       const key = rowKey(it.row.cluster_id, it.row.uid);
       const el = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])
@@ -393,9 +438,7 @@ export const TerritoryTable = memo(function TerritoryTable({
       scrollAlign.current = "auto";
       return;
     }
-    const active = document.activeElement;
-    const keyboardOrigin = (id === "logs" || id === "previousLogs") && active instanceof HTMLElement ? active : undefined;
-    act(it.row, id as RowAction, "key", keyboardOrigin);
+    act(it.row, id as RowAction, "key");
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -417,6 +460,10 @@ export const TerritoryTable = memo(function TerritoryTable({
 
   const onPageKey = (e: globalThis.KeyboardEvent) => {
     if (!paneActive || !pageKey(e) || !routesPageKeys(e.target)) return;
+    // The delete key deletes what has the focus: from the page itself, the selected row; from a
+    // chrome control (a kind tab, a button), nothing.
+    if (isDeleteKey(e) && !(e.target === null || e.target === document.body
+      || (e.target instanceof HTMLElement && e.target.tagName === "MAIN"))) return;
     // Keep native activation and navigation on chrome controls (including nested button icons).
     if (["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
       && e.target instanceof Element
@@ -437,6 +484,21 @@ export const TerritoryTable = memo(function TerritoryTable({
     }
     runRowKey(e, at, true);
   };
+  // Ruling R41: the kind arrows (on a row or the page) never switch away from an unsaved edit. The
+  // kind strip listens on the document too; this runs first (capture) and prevents the key, which
+  // the strip then ignores.
+  const onKindKey = (e: globalThis.KeyboardEvent) => {
+    if (!open || !paneActive || e.shiftKey || !pressed("moveKind", e) || !pageKey(e) || !routesKindKeys(e.target)) return;
+    if (keepUnsavedEdit(e.repeat)) e.preventDefault();
+  };
+  const kindKeyRef = useRef(onKindKey);
+  kindKeyRef.current = onKindKey;
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => kindKeyRef.current(e);
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+
   const pageKeyRef = useRef(onPageKey);
   pageKeyRef.current = onPageKey;
   useEffect(() => {
@@ -453,6 +515,46 @@ export const TerritoryTable = memo(function TerritoryTable({
     else if (scrollRef.current) scrollRef.current.scrollTop = initialScrollTop;
   }, [territories, selectedKey, indexByKey, virtualizer, initialScrollTop]);
 
+  /** The selected row's index while it's shown: where to put focus that goes with it. */
+  const selectedAt = useRef<number | null>(null);
+  const latestItems = useRef(items);
+  latestItems.current = items;
+  const rescueWait = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearInterval(rescueWait.current), []);
+  /**
+   * The selected row went (deleted, say) and took the focus with it: give it to the row now at
+   * its index, else the last row, else `<main>`. Never the selection: that stays on what went.
+   * Under a review dialog it waits for the dialog to close, as that hands focus back to the row
+   * that went.
+   */
+  const rescueFocus = (index: number) => {
+    const land = () => {
+      if (document.activeElement !== null && document.activeElement !== document.body) return;
+      const list = latestItems.current;
+      let at = Math.min(index, list.length - 1);
+      while (at < list.length && at >= 0 && list[at].type !== "row") at += 1;
+      if (at >= list.length) {
+        at = list.length - 1;
+        while (at >= 0 && list[at].type !== "row") at -= 1;
+      }
+      const it = at >= 0 ? list[at] : undefined;
+      const key = it?.type === "row" ? rowKey(it.row.cluster_id, it.row.uid) : null;
+      const el = key === null ? undefined : Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])
+        .find((n) => n.dataset.rowKey === key);
+      (el ?? scrollRef.current?.closest<HTMLElement>("main") ?? scrollRef.current)?.focus({ preventScroll: true });
+    };
+    window.clearInterval(rescueWait.current);
+    if (document.querySelector('[aria-modal="true"]') === null) {
+      land();
+      return;
+    }
+    rescueWait.current = window.setInterval(() => {
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
+      window.clearInterval(rescueWait.current);
+      land();
+    }, 100);
+  };
+
   // Bring the selected row into view, then focus it once the virtualizer has rendered it.
   useLayoutEffect(() => {
     if (revealed.current !== reveal) {
@@ -463,7 +565,10 @@ export const TerritoryTable = memo(function TerritoryTable({
       const active = document.activeElement;
       focusPending.current = active === null || active === document.body || (scrollRef.current?.contains(active) ?? false);
     }
-    if (selectedKey === null) return;
+    if (selectedKey === null) {
+      selectedAt.current = null;
+      return;
+    }
     const at = indexByKey.get(selectedKey);
     if (at === undefined) {
       focusPending.current = false;
@@ -472,10 +577,14 @@ export const TerritoryTable = memo(function TerritoryTable({
       // so both come back with it.
       const home = territories.find((t) => t.cluster.id === selected?.clusterId);
       if (home && NOT_LIVE.has(home.state)) return;
+      // Focus that went with the row lands on the row now in its place.
+      if (selectedAt.current !== null && paneActive) rescueFocus(selectedAt.current);
+      selectedAt.current = null;
       // Deleted or filtered out on a live cluster: nothing left to inspect.
       if (open) { if (onMissingSelection) onMissingSelection(); else onSelection((prev) => (prev.open ? { ...prev, open: false } : prev)); }
       return;
     }
+    selectedAt.current = at;
     if (scrollPending.current) {
       scrollPending.current = false;
       virtualizer.scrollToIndex(at, { align: scrollAlign.current });
@@ -561,7 +670,7 @@ export const TerritoryTable = memo(function TerritoryTable({
             </span>}
             {columns.map((c) => <ColumnHeader key={`${kind.key}:${c.key}`} col={c}
               filter={columnFilters.find(f => f.key === c.key)} sort={sort} source={pickSource}
-              onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} resizeView={menuView}
+              onFilter={f => onColumnFilter(c.key, f)} onSort={onSort} resizeView={resizeKey} getGuideRect={getGuideRect}
               onPreviewWidth={width => previewColumn(c.key, width)}
               onCommitWidth={width => commitWidth(c.key, width)} />)}
           </div>

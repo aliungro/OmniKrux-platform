@@ -2,6 +2,8 @@ import type { Cluster, LogSession, ShellSession } from "../../api/types";
 
 export type SessionKind = "logs" | "shell";
 export type DockLayout = "single" | "split";
+/** Why the follow log still shows its last pod: the selected row isn't a pod, nothing is selected, or the pod is gone. */
+export type FollowHold = "notPod" | "noSelection" | "gone";
 
 /** One tab in the dock: a log stream or a shell, always tied to its cluster. */
 export interface Session {
@@ -25,6 +27,12 @@ export interface Session {
   node?: string;
   /** Debug shells: the container asked for as target, and the one the server attached to (null: none). */
   debug?: { requested: string | null; target: string | null };
+  /** Logs: the one follow log, retargeted in place to the selected pod row. */
+  follow?: boolean;
+  /** Logs: opened with Shift+L (or pinned from the follow log); never retargets. */
+  pinned?: boolean;
+  /** The follow log only: why it still shows its last pod. */
+  hold?: FollowHold;
 }
 
 export interface DockState {
@@ -53,6 +61,14 @@ export type DockAction =
    * `focus: false` as for "open", unless the old tab is still the focused one.
    */
   | { type: "replace"; id: string; session: Session; focus?: boolean }
+  /**
+   * Opens the one follow log, or retargets it in place (same id and position, so its pane stays
+   * mounted). `focus: false` as for "open". `retarget: true` only moves an open follow log: with
+   * none (closed, or its cluster removed, while the describe was on its way) nothing opens.
+   */
+  | { type: "follow"; session: Session; focus?: boolean; retarget?: boolean }
+  /** Sets or clears why the follow log still shows its last pod. */
+  | { type: "hold"; reason: FollowHold | null }
   | { type: "toggleLayout" }
   | { type: "resize"; height: number; viewport: number };
 
@@ -96,18 +112,41 @@ export function initialDockState(): DockState {
   return { sessions: [], focused: null, previous: null, layout: "single", height: loadHeight() };
 }
 
-/** Two sessions are the same when they'd show the same thing. */
+/**
+ * Two sessions are the same when they'd show the same thing. A pod has one pinned tab, whichever
+ * container it was opened on (its picker switches containers): pinning from the follow log and
+ * Shift+L on the same pod land on the same tab.
+ */
 function sameTarget(a: Session, b: Session): boolean {
   return (
     a.kind === b.kind &&
     a.cluster.id === b.cluster.id &&
     a.namespace === b.namespace &&
     a.pod === b.pod &&
-    a.container === b.container &&
+    (a.container === b.container || (!!a.pinned && !!b.pinned)) &&
     (a.previous ?? false) === (b.previous ?? false) &&
     (a.selector ?? "") === (b.selector ?? "") &&
-    (a.cleanupPod ?? false) === (b.cleanupPod ?? false)
+    (a.cleanupPod ?? false) === (b.cleanupPod ?? false) &&
+    (a.follow ?? false) === (b.follow ?? false) &&
+    (a.pinned ?? false) === (b.pinned ?? false)
   );
+}
+
+/** The one follow log, if it is open. */
+export function followSession(state: DockState): Session | undefined {
+  return state.sessions.find((s) => s.follow);
+}
+
+/** The session without its hold note. */
+function unheld(s: Session): Session {
+  const next = { ...s };
+  delete next.hold;
+  return next;
+}
+
+/** The state with one session swapped for another in the same place. */
+function swap(state: DockState, old: Session, next: Session): DockState {
+  return { ...state, sessions: state.sessions.map((s) => (s === old ? next : s)) };
 }
 
 function focusOn(state: DockState, s: Session): DockState {
@@ -166,6 +205,39 @@ export function dockReducer(state: DockState, action: DockAction): DockState {
         previous: state.previous === action.id ? action.session.id : state.previous,
       };
       return action.focus === false && state.focused !== action.id ? next : focusOn(next, action.session);
+    }
+    case "follow": {
+      const current = followSession(state);
+      const quiet = action.focus === false && state.focused !== null;
+      if (!current && action.retarget) return state;
+      if (!current) {
+        const added = unheld({ ...action.session, follow: true });
+        delete added.pinned;
+        const next = { ...state, sessions: [...state.sessions, added] };
+        return quiet ? next : focusOn(next, added);
+      }
+      const t = action.session;
+      const same = current.cluster.id === t.cluster.id && current.namespace === t.namespace &&
+        current.pod === t.pod && current.container === t.container;
+      let next = state;
+      if (!same) {
+        next = swap(state, current, unheld({
+          ...current,
+          cluster: t.cluster,
+          namespace: t.namespace,
+          pod: t.pod,
+          container: t.container,
+          containers: t.containers,
+        }));
+      } else if (current.hold) {
+        next = swap(state, current, unheld(current));
+      }
+      return action.focus === false ? next : focusOn(next, current);
+    }
+    case "hold": {
+      const current = followSession(state);
+      if (!current || (current.hold ?? null) === action.reason) return state;
+      return swap(state, current, action.reason ? { ...current, hold: action.reason } : unheld(current));
     }
     case "toggleLayout":
       if (state.sessions.length < 2) return state;

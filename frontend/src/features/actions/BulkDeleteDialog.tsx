@@ -107,6 +107,7 @@ export function BulkDeleteDialog({ selected, onClose }: {
   return createPortal(
     <DialogShell provider={provider}
       role="dialog" busy={applying} onCancel={close} first={first} labelledBy={`${id}-title`}
+      onConfirm={results === null ? () => void apply() : undefined}
       className={s.dialog}>
       <h2 id={`${id}-title`} className={cd.title}>
         {results ? "Deletion results" : `Delete ${selected.length} ${noun}`}

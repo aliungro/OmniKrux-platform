@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import type { Link, OwnerRef, Provider, ResourceDescribe, ResourceRow } from "../../api/types";
-import { capsOf, shortcutsFor } from "../chrome/shortcuts";
+import { capsOf, isEditable, shortcutsFor } from "../chrome/shortcuts";
 import { useGoTo } from "../navigation/navigation";
 import { rowTitle, textColumn } from "../territories/model";
 import { DescribeView } from "./DescribeView";
@@ -67,13 +67,14 @@ interface Props {
 function useViewIntent(
   intent: ToolIntent | null | undefined,
   onIntentDone: (() => void) | undefined,
-  on: { yaml: () => void; workloadLogs?: () => void; reveal?: () => void },
+  on: { yaml: () => void; tab: (n: number) => void; workloadLogs?: () => void; reveal?: () => void },
 ) {
   const onRef = useRef(on);
   onRef.current = on;
   useEffect(() => {
     if (!intent) return;
     if (intent.tool === "yaml") onRef.current.yaml();
+    else if (intent.tool === "tab") onRef.current.tab(intent.tab ?? 0);
     else if (intent.tool === "workloadLogs") onRef.current.workloadLogs?.();
     else if (intent.tool === "reveal") onRef.current.reveal?.();
     else return;
@@ -172,7 +173,10 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
   const describe = useDescribe(row.cluster_id, ns, row.name, rv);
   const yaml = usePodYaml(row.cluster_id, ns, row.name, rv, tab === "YAML");
   const change = useTools({ row, kindKey: "pods", verbs, onNodeShell, onEditing: () => setTab("YAML"), intent, onIntentDone, paneActive });
-  useViewIntent(intent, onIntentDone, { yaml: () => setTab("YAML") });
+  useViewIntent(intent, onIntentDone, {
+    yaml: () => setTab("YAML"),
+    tab: (n) => { if (!change.editing && WITH_METRICS[n - 1]) setTab(WITH_METRICS[n - 1]); },
+  });
   const editor = change.editor(yaml.data);
   const tools = (
     <>
@@ -186,7 +190,7 @@ function PodInspector({ row, provider, verbs = NO_VERBS, intent, onIntentDone, o
     </>
   );
   return (
-    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} onClose={onClose}>
+    <Frame row={row} provider={provider} tabs={WITH_METRICS} tab={tab} onTab={setTab} tools={tools} strip={change.strip} onKey={change.onKey} editing={change.editing} onUnsavedEscape={change.unsavedEscape} returnFocus={change.opener} onClose={onClose}>
       {tab === "Describe" && <Loaded q={describe}>{(d) => (
         <DescribeView
           data={d}
@@ -224,6 +228,10 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
   const keysFocused = useCallback(() => setKeysAsk(null), []);
   useViewIntent(intent, onIntentDone, {
     yaml: () => setTab("YAML"),
+    tab: (n) => {
+      const shown = nodes ? WITH_METRICS : BASE_TABS;
+      if (!change.editing && shown[n - 1]) setTab(shown[n - 1]);
+    },
     workloadLogs: logs.open,
     reveal: () => {
       setTab("Describe");
@@ -251,6 +259,9 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
         </>
       }
       onKey={change.onKey}
+      editing={change.editing}
+      onUnsavedEscape={change.unsavedEscape}
+      returnFocus={change.opener}
       onClose={onClose}
     >
       {tab === "Describe" && (
@@ -292,7 +303,9 @@ function ResourceInspector({ row, provider, kindKey, verbs = NO_VERBS, intent, o
 
 /**
  * The inspector's frame: the provider stripe, the tabs, the tools on the right, a form the tools
- * open (`strip`), and the panel.
+ * open (`strip`), and the panel. When what had focus inside it goes (Discard, a form's Cancel or
+ * Esc), focus is never left on the page's body: it goes to what a change said (`data-focus-after`),
+ * else back to what opened the form or editor, else to the selected tab.
  */
 function Frame({
   row,
@@ -303,6 +316,9 @@ function Frame({
   tools,
   strip,
   onKey,
+  editing,
+  onUnsavedEscape,
+  returnFocus,
   onClose,
   children,
 }: {
@@ -314,24 +330,88 @@ function Frame({
   tools?: ReactNode;
   strip?: ReactNode;
   onKey?: (e: KeyboardEvent<HTMLElement>) => void;
+  /**
+   * The YAML editor is open: no key may switch away from it or close the details around it
+   * (Rulings R36, R41); only Discard drops an edit.
+   */
+  editing?: boolean;
+  /** Esc was kept from closing the details over an unsaved edit. */
+  onUnsavedEscape?: () => void;
+  /** What opened the form or editor that is closing: where focus goes back to. */
+  returnFocus?: RefObject<Element | null>;
   onClose?: () => void;
   children: ReactNode;
 }) {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const id = useId();
+  const sectionRef = useRef<HTMLElement>(null);
+  /** The element inside the details that last had focus, until focus moves elsewhere on the page. */
+  const lastInside = useRef<Element | null>(null);
 
-  // Left/right move between tabs, as a tablist should.
+  // Every render, two reads: focus that went with an element inside the details is put back.
+  useLayoutEffect(() => {
+    const last = lastInside.current;
+    if (!last || last.isConnected) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    lastInside.current = null;
+    const said = sectionRef.current?.querySelector<HTMLElement>("[data-focus-after]");
+    const opener = returnFocus?.current;
+    const back = opener instanceof HTMLElement && opener.isConnected ? opener : null;
+    (said ?? back ?? tabRefs.current[tabs.indexOf(tab)])?.focus({ preventScroll: true });
+  });
+
+  // Left/right, Home and End move between tabs, as a tablist should; Alt+arrows stay history.
+  // Never while the editor is open: it is shown only on the YAML tab.
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
+    if (editing) return;
     e.preventDefault();
     const at = tabs.indexOf(tab);
-    const next = (at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+    const next =
+      e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
     onTab(tabs[next]);
     tabRefs.current[next]?.focus();
   };
 
+  // 1-4 inside the details jump to that tab and focus it; never in a field, editor or terminal,
+  // and never while the YAML editor is open.
+  const onSectionKey = (e: KeyboardEvent<HTMLElement>) => {
+    // Esc never closes the details around the editor; over an unsaved edit it says why.
+    if (editing && e.key === "Escape") {
+      e.stopPropagation();
+      if (!e.repeat && e.currentTarget.querySelector("[data-unsaved-edit]")) onUnsavedEscape?.();
+      return;
+    }
+    if (
+      !editing && !e.defaultPrevented && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+      !isEditable(e.target) && /^[1-4]$/.test(e.key) && tabs[Number(e.key) - 1] !== undefined
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      const i = Number(e.key) - 1;
+      onTab(tabs[i]);
+      tabRefs.current[i]?.focus();
+      return;
+    }
+    onKey?.(e);
+  };
+
   return (
-    <section className={`${s.insp} ${pc[knownProvider(provider)]}`} aria-label={`Details for ${rowTitle(row)}`} onKeyDown={onKey}>
+    <section
+      ref={sectionRef}
+      className={`${s.insp} ${pc[knownProvider(provider)]}`}
+      aria-label={`Details for ${rowTitle(row)}`}
+      onKeyDown={onSectionKey}
+      onFocus={(e) => {
+        if (e.currentTarget.contains(e.target)) lastInside.current = e.target;
+      }}
+      onBlur={(e) => {
+        const to = e.relatedTarget;
+        if (to instanceof Node && !e.currentTarget.contains(to)) lastInside.current = null;
+      }}
+    >
       <div className={s.bar}>
         <div role="tablist" aria-label="Details" className={s.tabs} onKeyDown={onTabKey}>
           {tabs.map((t, i) => (

@@ -200,10 +200,42 @@ describe("selection", () => {
     fireEvent.keyDown(first, { key: "p" });
     fireEvent.keyDown(first, { key: "p", repeat: true });
     fireEvent.keyDown(podRow("pod-2"), { key: "s" });
-    expect(onOpenLogs).toHaveBeenNthCalledWith(1, expect.objectContaining({ uid: "2" }), false, second);
-    expect(onOpenLogs).toHaveBeenNthCalledWith(2, expect.objectContaining({ uid: "1" }), true, first);
+    expect(onOpenLogs).toHaveBeenNthCalledWith(1, expect.objectContaining({ uid: "2" }));
+    expect(onOpenLogs).toHaveBeenNthCalledWith(2, expect.objectContaining({ uid: "1" }), true);
     expect(onOpenLogs).toHaveBeenCalledTimes(2);
     expect(onOpenShell).toHaveBeenCalledWith(expect.objectContaining({ uid: "2" }));
+  });
+
+  it("L opens the follow log and keeps focus on the row", () => {
+    const onOpenLogs = vi.fn();
+    renderTable(3, { onOpenLogs });
+    const row = podRow("pod-1");
+    row.focus();
+    fireEvent.keyDown(row, { key: "l" });
+    expect(onOpenLogs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ uid: "1" }));
+    expect(row.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("shift+L pins and keeps focus on the row", () => {
+    const onOpenLogs = vi.fn();
+    const onPinLogs = vi.fn();
+    renderTable(3, { onOpenLogs, onPinLogs });
+    const row = podRow("pod-2");
+    row.focus();
+    const event = new KeyboardEvent("keydown", { key: "L", shiftKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      row.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(onPinLogs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ uid: "2" }));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+    expect(row.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(row);
+    // Caps Lock's L without Shift is neither.
+    fireEvent.keyDown(row, { key: "L" });
+    expect(onPinLogs).toHaveBeenCalledTimes(1);
+    expect(onOpenLogs).not.toHaveBeenCalled();
   });
 
   it("virtualizer keeps working with an open inspector at 10000 rows", () => {
@@ -376,7 +408,7 @@ describe("keys per kind", () => {
     expect(within(menu).queryByRole("menuitem", { name: "Edit pinned kinds…" })).toBeNull();
     expect(onOpenLogs).not.toHaveBeenCalled();
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Logs" }));
-    expect(onOpenLogs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ uid: "1" }), false);
+    expect(onOpenLogs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ uid: "1" }));
     expect(screen.queryByRole("menu")).toBeNull();
 
     fireEvent.contextMenu(podRow("pod-1"));
@@ -517,12 +549,226 @@ describe("keys per kind", () => {
     expect(JSON.parse(posts[0][1]!.body as string)).toMatchObject({ action: "delete", target: { name: "pod-1", kind_key: "pods" } });
   });
 
+  const deletePlan = {
+    plan_id: "p1", action: "delete", target: { cluster_id: "c1", kind_key: "pods", namespace: "n", name: "pod-1" }, kind: "Pod",
+    cluster: { id: "c1", name: "big", provider: "gke", environment: "development" }, title: "Delete Pod pod-1",
+    summary: ["Delete Pod n/pod-1."], warnings: [], blocked: [], diff: null, confirm_text: null, apply_label: "Delete",
+    expires_at: "2026-11-08T10:05:00Z",
+  };
+  const serveDelete = () => {
+    const fetch = vi.fn((_url: string, init?: RequestInit) => json(init?.method === "POST" ? deletePlan : describeBody));
+    vi.stubGlobal("fetch", fetch);
+    return () => fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+  };
+
+  it.each([
+    ["ctrl+delete", { key: "Delete", ctrlKey: true }],
+    ["cmd+backspace", { key: "Backspace", metaKey: true }],
+  ] as const)("%s on a pod row opens the delete review like ctrl+D", async (_name, press) => {
+    const posts = serveDelete();
+    renderKind(PODS, rows(2));
+    const row = podRow("pod-1");
+    row.focus();
+    const event = new KeyboardEvent("keydown", { ...press, bubbles: true, cancelable: true });
+    act(() => {
+      row.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(inspector()!.getAttribute("aria-label")).toBe("Details for pod-1");
+    expect(await screen.findByRole("dialog", { name: "Delete Pod pod-1" })).toBeTruthy();
+    expect(posts().map(([url]) => url)).toEqual(["/api/actions/plan"]);
+    expect(JSON.parse(posts()[0][1]!.body as string)).toMatchObject({
+      action: "delete", target: { name: "pod-1", kind_key: "pods" }, params: { expected_uid: "1" },
+    });
+  });
+
+  it("ctrl+delete from the page reviews the selected row", async () => {
+    const posts = serveDelete();
+    renderKind(PODS, rows(2));
+    fireEvent.click(podRow("pod-1"));
+    fireEvent.keyDown(podRow("pod-1"), { key: "Escape" });
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: "Delete", ctrlKey: true });
+    expect(await screen.findByRole("dialog", { name: "Delete Pod pod-1" })).toBeTruthy();
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("ctrl+delete inside the open details reviews that row", async () => {
+    const posts = serveDelete();
+    renderKind(PODS, rows(2));
+    fireEvent.keyDown(podRow("pod-1"), { key: "Enter" });
+    const details = inspector()!;
+    const tab = await within(details).findByRole("tab", { name: "Describe" });
+    fireEvent.keyDown(tab, { key: "Delete", ctrlKey: true });
+    expect(await screen.findByRole("dialog", { name: "Delete Pod pod-1" })).toBeTruthy();
+    expect(JSON.parse(posts()[0][1]!.body as string)).toMatchObject({ action: "delete", params: { expected_uid: "1" } });
+  });
+
+  it("held shift+L pins once and held ctrl+delete reviews once", async () => {
+    const posts = serveDelete();
+    const onPinLogs = vi.fn();
+    renderKind(PODS, rows(2), { onOpenLogs: vi.fn(), onPinLogs });
+    const row = podRow("pod-1");
+    row.focus();
+    fireEvent.keyDown(row, { key: "L", shiftKey: true });
+    fireEvent.keyDown(row, { key: "L", shiftKey: true, repeat: true });
+    fireEvent.keyDown(row, { key: "L", shiftKey: true, repeat: true });
+    expect(onPinLogs).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(row, { key: "Delete", ctrlKey: true });
+    const repeat = new KeyboardEvent("keydown", { key: "Delete", ctrlKey: true, repeat: true, bubbles: true, cancelable: true });
+    act(() => {
+      row.dispatchEvent(repeat);
+    });
+    expect(repeat.defaultPrevented).toBe(true);
+    expect(await screen.findByRole("dialog", { name: "Delete Pod pod-1" })).toBeTruthy();
+    expect(posts()).toHaveLength(1);
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("a held ctrl+delete inside the details reviews once", async () => {
+    const posts = serveDelete();
+    renderKind(PODS, rows(2));
+    fireEvent.keyDown(podRow("pod-1"), { key: "Enter" });
+    const tab = await within(inspector()!).findByRole("tab", { name: "Describe" });
+    fireEvent.keyDown(tab, { key: "Delete", ctrlKey: true, repeat: true });
+    await act(async () => {});
+    expect(posts()).toHaveLength(0);
+    fireEvent.keyDown(tab, { key: "Delete", ctrlKey: true });
+    expect(await screen.findByRole("dialog", { name: "Delete Pod pod-1" })).toBeTruthy();
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("ctrl+delete on a kind without delete does nothing", async () => {
+    const posts = serveDelete();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ActionsProvider>
+          <div style={{ height: 600 }}>
+            <Table territories={[territory(rows(2))]} kind={{ ...PODS, verbs: ["get", "list", "watch", "update"] }} onRetry={() => {}} />
+          </div>
+        </ActionsProvider>
+      </QueryClientProvider>,
+    );
+    const row = podRow("pod-1");
+    row.focus();
+    const event = new KeyboardEvent("keydown", { key: "Delete", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      row.dispatchEvent(event);
+    });
+    fireEvent.keyDown(document.body, { key: "Delete", ctrlKey: true });
+    await act(async () => {});
+    expect(event.defaultPrevented).toBe(false);
+    expect(inspector()).toBeNull();
+    expect(posts()).toHaveLength(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("after a delete removes the focused row, focus is on the row now in its place", () => {
+    const client = new QueryClient();
+    const ui = (rs: ResourceRow[]) => (
+      <QueryClientProvider client={client}>
+        <Table territories={[territory(rs)]} kind={PODS} onRetry={() => {}} />
+      </QueryClientProvider>
+    );
+    const all = rows(3);
+    const { rerender } = render(ui(all));
+    const row = podRow("pod-1");
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    rerender(ui(all.filter((r) => r.uid !== "1")));
+    expect(row.isConnected).toBe(false);
+    expect(document.activeElement).toBe(podRow("pod-2"));
+    // Focus only: the selection stays on the row that went, so nothing else moves with it.
+    expect(podRow("pod-2").getAttribute("aria-selected")).toBe("false");
+    expect(inspector()).toBeNull();
+
+    // The last row: focus goes to the row before it; no rows: to the table itself.
+    fireEvent.click(podRow("pod-2"));
+    rerender(ui([all[0]]));
+    expect(document.activeElement).toBe(podRow("pod-0"));
+    fireEvent.click(podRow("pod-0"));
+    rerender(ui([]));
+    expect(document.activeElement).toBe(screen.getByRole("grid").parentElement);
+  });
+
+  it("a row deleted while its review is open gives focus to a row once the review closes", () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const client = new QueryClient();
+      const ui = (rs: ResourceRow[]) => (
+        <QueryClientProvider client={client}>
+          <Table territories={[territory(rs)]} kind={PODS} onRetry={() => {}} />
+        </QueryClientProvider>
+      );
+      const all = rows(3);
+      const { rerender } = render(ui(all));
+      fireEvent.click(podRow("pod-1"));
+      const review = document.createElement("div");
+      review.setAttribute("aria-modal", "true");
+      const apply = document.createElement("button");
+      review.append(apply);
+      document.body.append(review);
+      apply.focus();
+      rerender(ui(all.filter((r) => r.uid !== "1")));
+      expect(document.activeElement).toBe(apply);
+      act(() => vi.advanceTimersByTime(300));
+      expect(document.activeElement).toBe(apply);
+      // The review closes; the row it would hand focus back to is gone.
+      review.remove();
+      act(() => vi.advanceTimersByTime(100));
+      expect(document.activeElement).toBe(podRow("pod-2"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("y opens the details on the YAML tab", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => json(url.endsWith("/yaml") || url.includes("/yaml?") ? { yaml: "kind: Deployment" } : resourceDescribe())));
     renderKind(DEPLOYMENTS, asKind("Deployment", "web"));
     fireEvent.keyDown(podRow("web-0"), { key: "y" });
     expect(inspector()!.getAttribute("aria-label")).toBe("Details for web-0");
     await waitFor(() => expect(screen.getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true"));
+  });
+
+  it("1 to 4 jump to the detail tabs from the row and keep focus on it", async () => {
+    renderTable(3);
+    podRow("pod-0").focus();
+    fireEvent.keyDown(podRow("pod-0"), { key: "Enter" });
+    expect(inspector()).toBeTruthy();
+    const row = podRow("pod-0");
+    row.focus();
+    const selected = (name: string) => screen.getByRole("tab", { name }).getAttribute("aria-selected") === "true";
+    expect(fireEvent.keyDown(row, { key: "3" })).toBe(false);
+    await waitFor(() => expect(selected("Events")).toBe(true));
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(row, { key: "4" });
+    await waitFor(() => expect(selected("Metrics")).toBe(true));
+    fireEvent.keyDown(row, { key: "1" });
+    await waitFor(() => expect(selected("Describe")).toBe(true));
+    fireEvent.keyDown(row, { key: "y" });
+    await waitFor(() => expect(selected("YAML")).toBe(true));
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("4 on a kind without metrics does nothing", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => json(resourceDescribe())));
+    renderKind(DEPLOYMENTS, asKind("Deployment", "web"));
+    const row = podRow("web-0");
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    fireEvent.keyDown(row, { key: "4" });
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Metrics" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Describe" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("digits do nothing while the details are closed", () => {
+    renderTable(3);
+    const row = podRow("pod-0");
+    row.focus();
+    expect(fireEvent.keyDown(row, { key: "3" })).toBe(true);
+    expect(inspector()).toBeNull();
   });
 
   it("l on a workload opens the logs of all its pods", async () => {
