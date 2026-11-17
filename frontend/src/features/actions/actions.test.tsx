@@ -34,7 +34,10 @@ const kit = vi.hoisted(() => ({
     area.addEventListener("input", () => onChange(area.value));
     // Mirrors `editorKeymap`: CodeMirror runs it on the content before the page sees the key.
     area.addEventListener("keydown", (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      if (e.repeat && (e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
         keys.onSubmit();
       } else if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
@@ -932,6 +935,30 @@ describe("yaml editor keys", () => {
     await openEditor();
     expect(button("Review changes").getAttribute("aria-keyshortcuts")).toBe("Control+Enter");
     expect(screen.getByText((_, el) => el?.textContent ==="Ctrl Enter reviews · Esc leaves the editor")).toBeTruthy();
+  });
+
+  it("a held ctrl+enter after a refused plan plans only once", async () => {
+    const refused = "An edit can't change the kind, name or namespace. Create a new object with kubectl instead.";
+    const calls = serve({
+      [DESCRIBE]: [ok(resourceDescribe())],
+      [YAML]: [ok({ yaml: BEFORE })],
+      "POST /api/actions/plan": [{ status: 422, body: { detail: refused } }],
+    });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    fireEvent.click(button("Edit", tools()));
+    const area = (await screen.findByLabelText("Edit Deployment YAML")) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: EDITED } });
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    expect(await screen.findByText(refused)).toBeTruthy();
+    // Still held: the repeats are swallowed, though Review changes could be pressed again.
+    for (let i = 0; i < 5; i++) expect(fireEvent.keyDown(area, { key: "Enter", ctrlKey: true, repeat: true })).toBe(false);
+    await act(async () => {});
+    expect(plans(calls)).toHaveLength(1);
+    expect(button("Review changes").disabled).toBe(false);
   });
 
   it("ctrl+enter with nothing changed does nothing", async () => {

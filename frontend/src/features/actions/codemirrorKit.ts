@@ -24,10 +24,13 @@ const MONO = '"Geist Mono", ui-monospace, monospace';
 /**
  * The editor's own keys, ahead of CodeMirror's: Mod-Enter (Ctrl, or Cmd on macOS) reviews the
  * changes and Escape leaves the editor. Both are always handled, so Mod-Enter never inserts a line
- * and Escape never falls through to `simplifySelection`.
+ * and Escape never falls through to `simplifySelection`. A held Mod-Enter reviews once: its repeats
+ * are swallowed first (a binding's `run` never sees the event), so a refused plan isn't asked for
+ * again at key-repeat rate.
  */
 export function editorKeymap(keys: EditorKeys): KeyBinding[] {
   return [
+    { any: (_view, e) => e.repeat && e.key === "Enter" && (e.ctrlKey || e.metaKey) },
     { key: "Mod-Enter", run: () => { keys.onSubmit(); return true; } },
     { key: "Escape", run: () => { keys.onLeave(); return true; } },
   ];
