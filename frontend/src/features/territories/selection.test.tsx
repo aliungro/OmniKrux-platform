@@ -1,3 +1,4 @@
+import { AllShortcuts } from "../chrome/ShortcutBar";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/territories/selection.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -692,35 +693,27 @@ describe("keys per kind", () => {
     expect(document.activeElement).toBe(screen.getByRole("grid").parentElement);
   });
 
-  it("a row deleted while its review is open gives focus to a row once the review closes", () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    try {
-      const client = new QueryClient();
-      const ui = (rs: ResourceRow[]) => (
-        <QueryClientProvider client={client}>
-          <Table territories={[territory(rs)]} kind={PODS} onRetry={() => {}} />
-        </QueryClientProvider>
-      );
-      const all = rows(3);
-      const { rerender } = render(ui(all));
-      fireEvent.click(podRow("pod-1"));
-      const review = document.createElement("div");
-      review.setAttribute("aria-modal", "true");
-      const apply = document.createElement("button");
-      review.append(apply);
-      document.body.append(review);
-      apply.focus();
-      rerender(ui(all.filter((r) => r.uid !== "1")));
-      expect(document.activeElement).toBe(apply);
-      act(() => vi.advanceTimersByTime(300));
-      expect(document.activeElement).toBe(apply);
-      // The review closes; the row it would hand focus back to is gone.
-      review.remove();
-      act(() => vi.advanceTimersByTime(100));
-      expect(document.activeElement).toBe(podRow("pod-2"));
-    } finally {
-      vi.useRealTimers();
-    }
+  it("a row deleted under a modal gives focus to its successor once the modal closes", async () => {
+    const client = new QueryClient();
+    const ui = (rs: ResourceRow[], modal = false) => (
+      <QueryClientProvider client={client}>
+        <Table territories={[territory(rs)]} kind={PODS} onRetry={() => {}} />
+        {modal && <AllShortcuts groups={[]} onClose={() => {}} />}
+      </QueryClientProvider>
+    );
+    const all = rows(3);
+    const { rerender } = render(ui(all));
+    const opener = podRow("pod-1");
+    fireEvent.click(opener);
+    opener.focus();
+    rerender(ui(all, true));
+    const remaining = all.filter(r => r.uid !== "1");
+    rerender(ui(remaining, true));
+    await act(async () => {});
+    expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+    rerender(ui(remaining));
+    await act(async () => {});
+    expect(document.activeElement).toBe(podRow("pod-2"));
   });
 
   it("y opens the details on the YAML tab", async () => {

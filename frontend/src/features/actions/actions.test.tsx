@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import type { Job, Plan, ResourceRow } from "../../api/types";
 import { resourceDescribe } from "../../test/describe";
 import { DEPLOYMENTS } from "../../test/kinds";
+import { AllShortcuts } from "../chrome/ShortcutBar";
 import { Table } from "../../test/table";
 import type { RowRequest } from "../territories/TerritoryTable";
 import { Inspector } from "../inspector/Inspector";
@@ -1382,6 +1383,59 @@ describe("tool keys on rows", () => {
       region: null, environment: "development" as const, state: "ready" as const, message: null },
     state: "ready" as const, message: null, rows: [deployment()], total: 1, failing: 0, pending: 0,
   };
+
+  async function deletedReview() {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], "POST /api/actions/plan": [ok(plan({ action: "delete" }))] });
+    const worker = deployment({ name: "worker", uid: "worker" });
+    function view(rows: ResourceRow[], active = true, mounted = true, help = false) {
+      return <ActionsProvider><button>Elsewhere</button>{mounted && <Table territories={[{ ...territory, rows }]}
+        kind={{ ...DEPLOYMENTS, verbs: VERBS }} paneActive={active} onRetry={() => {}} />}{help && <AllShortcuts groups={[]} onClose={() => {}} />}</ActionsProvider>;
+    }
+    const app = wrap(view([deployment(), worker]));
+    const opener = document.querySelector<HTMLElement>("[data-row-key]")!;
+    act(() => opener.focus());
+    fireEvent.keyDown(opener, { key: "Delete", ctrlKey: true });
+    await screen.findByRole("dialog");
+    const intervals = vi.spyOn(window, "setInterval");
+    const update = (active = true, mounted = true, help = false) => app.rerender(view([worker], active, mounted, help));
+    update();
+    expect(opener.isConnected).toBe(false);
+    return { calls, update, intervals };
+  }
+
+  it("deleted opener restores focus after the last review closes", async () => {
+    const { calls, intervals } = await deletedReview();
+    expect(button("Cancel")).toBe(document.activeElement);
+    fireEvent.click(button("Cancel"));
+    await act(async () => {});
+    expect(document.activeElement?.textContent).toContain("worker");
+    expect(document.activeElement?.hasAttribute("data-row-key")).toBe(true);
+    expect(intervals.mock.calls.some(([, delay]) => delay === 100)).toBe(false);
+    expect(calls.filter(c => c.url.endsWith("/apply"))).toHaveLength(0);
+  });
+
+  it("waits for shortcut help when it outlives the deleted opener's review", async () => {
+    const { update, calls } = await deletedReview();
+    update(true, true, true);
+    fireEvent.click(button("Cancel"));
+    await act(async () => {});
+    expect(screen.getByRole("dialog", { name: "All shortcuts" }).contains(document.activeElement)).toBe(true);
+    update();
+    await act(async () => {});
+    expect(document.activeElement?.hasAttribute("data-row-key")).toBe(true);
+    expect(calls.some(c => c.url.endsWith("/apply"))).toBe(false);
+  });
+
+  it.each(["pane", "focus", "blur", "unmount"])("closing a review never rescues an inactive pane or overrides deliberate focus (%s)", async (loss) => {
+    const { update } = await deletedReview();
+    if (loss === "pane") { update(false); update(true); }
+    if (loss === "unmount") update(true, false);
+    fireEvent.click(button("Cancel"));
+    if (loss === "focus" || loss === "blur") button("Elsewhere").focus();
+    if (loss === "blur") button("Elsewhere").blur();
+    await act(async () => {});
+    expect(document.activeElement).toBe(loss === "focus" ? button("Elsewhere") : document.body);
+  });
 
   it.each([
     [{ key: "r" }, "restart"],

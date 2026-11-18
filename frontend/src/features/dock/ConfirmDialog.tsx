@@ -1,3 +1,4 @@
+import { registerDialogRoot } from "../chrome/dialogLifecycle";
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { pressed } from "../chrome/shortcuts";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
@@ -50,11 +51,13 @@ export function DialogShell({
   const returnTo = useRef<Element | null>(null);
 
   useEffect(() => {
+    const release = registerDialogRoot(dialogRef.current!);
     returnTo.current = document.activeElement;
     first.current?.focus();
     return () => {
       const back = restoreFocusTo?.current ?? returnTo.current;
       if (back instanceof HTMLElement && back.isConnected) back.focus();
+      release();
     };
   }, []); // once, on open: `first` is a ref
 
