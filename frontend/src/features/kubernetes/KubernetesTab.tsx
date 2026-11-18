@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { retryCluster, useClusters } from "../../api/useClusters";
 import { useCloudAccounts } from "../../api/useCloud";
@@ -28,7 +28,8 @@ import {
   type Filters,
   type Selection,
 } from "../../features/territories/model";
-import { TerritoryTable, type RowRequest } from "../../features/territories/TerritoryTable";
+import { ViewBoundary } from "../shell/lazyView";
+import type { RowRequest } from "../../features/territories/TerritoryTable";
 import { useNow } from "../../hooks/useNow";
 import { ShellBridge } from "../shell/ShellBridge";
 import { HOME, kindView, type ClosedTab, type KubeView } from "../shell/workspace";
@@ -69,6 +70,8 @@ export interface KubernetesTabProps {
   onOpenView?(view: KubeView, split?: boolean): void;
   paneActive?: boolean;
 }
+
+const TerritoryTable = lazy(() => import("../territories/TerritoryTable").then(m => ({ default: m.TerritoryTable })));
 
 export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned, onOpenView, paneActive = true }: KubernetesTabProps) {
   return nav.view.page === "home"
@@ -341,34 +344,36 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
         <FilterBar paneActive={paneActive} clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
         <NavigationNotice text={nav.notice ?? scopeNoticeText} waiting={nav.waiting} />
         <div className={s.main} data-kind-row-keys>
-          <TerritoryTable
-            initialScrollTop={initialScrollTop}
-            onScroll={tabNav.setScroll}
-            onMissingSelection={onMissingSelection}
-            territories={shown}
-            columnFilters={filters.columns}
-            sort={filters.sort}
-            onColumnFilter={onColumnFilter}
-            onSort={onSort}
-            pickSource={all}
-            kind={kind}
-            selection={selection}
-            onSelection={onSelection}
-            reveal={nav.reveal}
-            onRetry={onRetry}
-            podCounts={podCounts}
-            metrics={metrics}
-            onOpenLogs={onOpenLogs}
-            onPinLogs={openPinned}
-            onOpenShell={onOpenShell}
-            onNodeShell={onNodeShell}
-            onOwnerLogs={onOwnerLogs}
-            onWorkloadLogs={onWorkloadLogs}
-            request={rowRequest}
-            paneActive={paneActive}
-            onOpenSplit={onOpenView && openRowSplit}
-            menuView={tabNav.view}
-          />
+          <ViewBoundary label="resources">
+            <TerritoryTable
+              initialScrollTop={initialScrollTop}
+              onScroll={tabNav.setScroll}
+              onMissingSelection={onMissingSelection}
+              territories={shown}
+              columnFilters={filters.columns}
+              sort={filters.sort}
+              onColumnFilter={onColumnFilter}
+              onSort={onSort}
+              pickSource={all}
+              kind={kind}
+              selection={selection}
+              onSelection={onSelection}
+              reveal={nav.reveal}
+              onRetry={onRetry}
+              podCounts={podCounts}
+              metrics={metrics}
+              onOpenLogs={onOpenLogs}
+              onPinLogs={openPinned}
+              onOpenShell={onOpenShell}
+              onNodeShell={onNodeShell}
+              onOwnerLogs={onOwnerLogs}
+              onWorkloadLogs={onWorkloadLogs}
+              request={rowRequest}
+              paneActive={paneActive}
+              onOpenSplit={onOpenView && openRowSplit}
+              menuView={tabNav.view}
+            />
+          </ViewBoundary>
         </div>
       </>
     );

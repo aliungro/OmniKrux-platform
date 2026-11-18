@@ -82,7 +82,7 @@ it("edit pinned kinds opens settings at the section and changes the live row", a
     const tab = await screen.findByRole("tab",{name:"Pods"});
     fireEvent.contextMenu(tab);
     fireEvent.click(screen.getByRole("menuitem",{name:"Edit pinned kinds…"}));
-    expect(screen.getByRole("heading",{name:"Settings",level:1})).toBeTruthy();
+    expect(await screen.findByRole("heading",{name:"Settings",level:1})).toBeTruthy();
     expect(scroll).toHaveBeenCalled();
     expect(location.hash).toBe("#/settings");
     removePinned("Services");
