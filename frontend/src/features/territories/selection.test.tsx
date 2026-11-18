@@ -1,3 +1,5 @@
+import { registerDialogRoot } from "../chrome/dialogLifecycle";
+import { requestSelectedRowFocus } from "../chrome/tableFocus";
 import { AllShortcuts } from "../chrome/ShortcutBar";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/territories/selection.test.tsx
@@ -855,5 +857,91 @@ describe("keys per kind", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
     expect(screen.queryByText("hunter2")).toBeNull();
+  });
+});
+
+describe("pending dock returns", () => {
+  function setup() {
+    const data = rows(140);
+    const onSelection = vi.fn();
+    const initial = {
+      territories: [territory(data)], kind: PODS, onRetry: vi.fn(), onSelection,
+      selection: { selected: { clusterId: "c1", uid: "0" }, open: false }, paneActive: true,
+    };
+    const ui = (props: Partial<TerritoryTableProps> = {}, mounted = true) => (
+      <main tabIndex={-1}>
+        <button>Logs</button><input aria-label="Other field" />
+        {mounted && <TerritoryTable {...initial} {...props} />}
+      </main>
+    );
+    const view = render(ui());
+    const grid = screen.getByRole("grid");
+    const viewport = grid.parentElement!;
+    const origin = screen.getByText("Logs");
+    origin.focus();
+    fireEvent.scroll(viewport, { target: { scrollTop: 3600 } });
+    expect(grid.querySelector('[aria-selected="true"]')).toBeNull();
+    const remountRows = () => fireEvent.scroll(viewport, { target: { scrollTop: 0 } });
+    return { data, origin, grid, onSelection, remountRows, update: (props: Partial<TerritoryTableProps>, mounted = true) => view.rerender(ui(props, mounted)) };
+  }
+
+  it.each(["pane", "modal", "field", "uid", "unmount"])("delayed row return yields permanently after %s ownership changes", change => {
+    const t = setup();
+    expect(requestSelectedRowFocus(t.grid)).toBe(true);
+    if (change === "pane") {
+      t.update({ paneActive: false });
+      expect(requestSelectedRowFocus(t.grid)).toBe(false);
+      t.update({});
+    } else if (change === "modal") {
+      const dialog = document.createElement("dialog");
+      document.body.append(dialog);
+      const close = registerDialogRoot(dialog);
+      close();
+      dialog.remove();
+    } else if (change === "field") {
+      screen.getByLabelText("Other field").focus();
+      t.origin.focus();
+    } else if (change === "uid") {
+      t.update({ selection: { selected: { clusterId: "c1", uid: "1" }, open: false } });
+      t.update({});
+    } else {
+      t.update({}, false);
+      // Reconnect the old root so the registry's connectedness guard alone cannot pass this check.
+      document.querySelector("main")!.append(t.grid);
+      expect(requestSelectedRowFocus(t.grid)).toBe(false);
+    }
+    t.remountRows();
+    expect(document.activeElement).toBe(t.origin);
+    expect(t.onSelection).not.toHaveBeenCalled();
+  });
+
+  it.each(["deleted", "filtered", "not ready"])("uses the owned main fallback when the accepted row is %s", change => {
+    const t = setup();
+    expect(requestSelectedRowFocus(t.grid)).toBe(true);
+    const replacement = { ...t.data[0], uid: "replacement" };
+    const remaining = change === "deleted" ? [replacement, ...t.data.slice(1)] : t.data.slice(1);
+    t.update({ territories: [territory(remaining, change === "not ready" ? "syncing" : "ready")],
+      pickSource: [territory(change === "filtered" ? t.data : remaining)] });
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    expect(requestSelectedRowFocus(t.grid)).toBe(false);
+    t.remountRows();
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    expect(t.onSelection).not.toHaveBeenCalled();
+  });
+
+  it("consumes the latest return once and rejects empty or unverified selection", () => {
+    const t = setup();
+    expect(requestSelectedRowFocus(t.grid)).toBe(true);
+    expect(requestSelectedRowFocus(t.grid)).toBe(true);
+    const focused = vi.fn();
+    t.grid.addEventListener("focusin", focused);
+    t.remountRows();
+    expect(document.activeElement).toBe(podRow("pod-0"));
+    expect(focused).toHaveBeenCalledTimes(1);
+    t.update({ selection: { selected: null, open: false } });
+    expect(requestSelectedRowFocus(t.grid)).toBe(false);
+    t.update({ territories: [territory(t.data, "syncing")] });
+    expect(requestSelectedRowFocus(t.grid)).toBe(false);
+    expect(t.onSelection).not.toHaveBeenCalled();
   });
 });

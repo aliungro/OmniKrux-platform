@@ -1,4 +1,5 @@
 import { onDialogOpened, onLastDialogClosed } from "../chrome/dialogLifecycle";
+import { registerSelectedRowFocus } from "../chrome/tableFocus";
 import { ColumnHeader } from "./ColumnHeader";
 import type { ColumnFilter, SortSpec } from "./columnFilters";
 import {
@@ -518,6 +519,57 @@ export const TerritoryTable = memo(function TerritoryTable({
     if (index !== undefined) virtualizer.scrollToIndex(index, { align: "auto" });
     else if (scrollRef.current) scrollRef.current.scrollTop = initialScrollTop;
   }, [territories, selectedKey, indexByKey, virtualizer, initialScrollTop]);
+
+  // The pending callback belongs to one dock return. Repeated requests replace it even
+  // when the target is the same row, and each listener is released with its own request.
+  const pendingReturn = useRef<{ deliver: (at: number | undefined) => void; cancel: () => void } | null>(null);
+  useLayoutEffect(() => () => pendingReturn.current?.cancel(), [paneActive, selectedKey, kind.key]);
+  const readyForReturn = selected !== null && (!expectedUid || expectedUid === selected.uid)
+    && territories.some(t => t.cluster.id === selected.clusterId && t.state === "ready");
+  const returnIndex = readyForReturn && selectedKey !== null ? indexByKey.get(selectedKey) : undefined;
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const owned = () => paneActive && grid.isConnected && gridRef.current === grid
+      && !grid.closest('[data-active-pane="false"]') && !document.querySelector('[aria-modal="true"]');
+    return registerSelectedRowFocus(grid, () => {
+      pendingReturn.current?.cancel();
+      if (!owned() || returnIndex === undefined) return false;
+      const origin = document.activeElement;
+      let lastIndex: number | undefined;
+      const cancel = () => {
+        stopOpen();
+        document.removeEventListener("focusin", cancel, true);
+        document.removeEventListener("focusout", cancel, true);
+        if (pendingReturn.current === request) pendingReturn.current = null;
+      };
+      const stopOpen = onDialogOpened(cancel);
+      const request = { cancel, deliver: (at: number | undefined) => {
+        if (pendingReturn.current !== request) return;
+        if (!owned() || document.activeElement !== origin) { cancel(); return; }
+        if (at === undefined) {
+          cancel();
+          grid.closest<HTMLElement>("main")?.focus({ preventScroll: true });
+          return;
+        }
+        if (at !== lastIndex) {
+          lastIndex = at;
+          virtualizer.scrollToIndex(at, { align: "auto" });
+        }
+        const row = grid.querySelector<HTMLElement>('[data-row-key][aria-selected="true"]');
+        if (row && row.dataset.rowKey === selectedKey) {
+          cancel();
+          row.focus({ preventScroll: true });
+        }
+      } };
+      pendingReturn.current = request;
+      document.addEventListener("focusin", cancel, true);
+      document.addEventListener("focusout", cancel, true);
+      request.deliver(returnIndex);
+      return true;
+    });
+  }, [paneActive, returnIndex, selectedKey, virtualizer]);
+  useLayoutEffect(() => { pendingReturn.current?.deliver(returnIndex); });
 
   /** The selected row's index while it's shown: where to put focus that goes with it. */
   const selectedAt = useRef<{ key: string; kind: string; index: number } | null>(null);

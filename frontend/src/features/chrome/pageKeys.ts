@@ -1,3 +1,4 @@
+import { requestSelectedRowFocus } from "./tableFocus";
 import { inTerminal, isEditable, type KeyboardZone } from "./shortcuts";
 
 /** The page and its chrome hand row keys to the table; nested keyboard owners keep theirs. */
@@ -19,7 +20,8 @@ export function routesKindKeys(target: EventTarget | null): boolean {
 }
 
 /** Give focus back to the visible table's selected row, or its first row before a selection. */
-export function focusTableRow(root: ParentNode = document, { selectedOnly = false } = {}): boolean {
+export function focusTableRow(root: ParentNode = document, { selectedOnly = false, revealSelected = false } = {}): boolean {
+  if (revealSelected) return requestSelectedRowFocus(root);
   const selected = selectedOnly ? '[aria-selected="true"]' : "";
   const row = root.querySelector<HTMLElement>(`[role="grid"] [data-row-key][tabindex="0"]${selected}`);
   if (row === null) return false;

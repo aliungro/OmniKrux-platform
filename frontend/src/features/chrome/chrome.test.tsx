@@ -1,3 +1,4 @@
+import { registerSelectedRowFocus, requestSelectedRowFocus } from "./tableFocus";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/chrome/chrome.test.tsx
 import { afterEach, describe, it, expect, vi } from "vitest";
@@ -568,4 +569,19 @@ describe("keyboard zone", () => {
     render(<section data-dock><div aria-modal="true"><button>confirm</button></div></section>);
     expect(keyboardZone(screen.getByText("confirm"))).toBeNull();
   });
+});
+
+it("keeps the latest grid registration through stale cleanup and opts in only on reveal", () => {
+  render(<main><div role="grid" /></main>);
+  const grid = screen.getByRole("grid");
+  const handler = vi.fn(() => true);
+  const old = registerSelectedRowFocus(grid, handler);
+  const current = registerSelectedRowFocus(grid, handler);
+  old();
+  expect(focusTableRow()).toBe(false);
+  expect(focusTableRow(document, { selectedOnly: true })).toBe(false);
+  expect(handler).not.toHaveBeenCalled();
+  expect(focusTableRow(screen.getByRole("main"), { revealSelected: true })).toBe(true);
+  current();
+  expect(requestSelectedRowFocus(grid)).toBe(false);
 });

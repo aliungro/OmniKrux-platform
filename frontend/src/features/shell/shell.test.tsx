@@ -954,3 +954,31 @@ it("a zone change does not re-render the table rows", async () => {
   await waitFor(() => expect(zonePane().getAttribute("data-keyboard-zone")).toBe("table"));
   expect(rowRenders.count).toBe(before);
 });
+
+it.each([{ key: "Escape" }, { key: "ArrowUp", altKey: true }])("$key from logs reveals and focuses the selected virtualized row", async (keys) => {
+  const watches = await renderPods();
+  const many = Array.from({ length: 10000 }, (_, i) => ({ ...pods[0], uid: "z" + i, name: "z" + i }));
+  updatePods(watches, [...pods, ...many]);
+  const first = startAtFirstPod();
+  const targetKey = first.dataset.rowKey;
+  fireEvent.keyDown(first, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  tab.focus();
+  const grid = first.closest<HTMLElement>('[role="grid"]')!;
+  const viewport = grid.parentElement!;
+  Object.defineProperty(viewport, "scrollHeight", { value: 360200 });
+  let requested: number | undefined;
+  viewport.scrollTo = ((opts: ScrollToOptions) => { requested = opts.top; }) as typeof viewport.scrollTo;
+  fireEvent.scroll(viewport, { target: { scrollTop: 36000 } });
+  expect(first.isConnected).toBe(false);
+  expect(grid.querySelectorAll("[data-row-key]").length).toBeLessThan(60);
+  fireEvent.keyDown(tab, keys);
+  expect(requested).toBeDefined();
+  fireEvent.scroll(viewport, { target: { scrollTop: requested } });
+  await waitFor(() => expect(document.activeElement).toBe(podRow(pods[0].name)));
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe(targetKey);
+  expect(viewport.scrollTop).toBeLessThan(100);
+  expect(grid.querySelectorAll("[data-row-key]").length).toBeLessThan(60);
+  expect(await logTab(pods[0].name)).toBe(tab);
+  expect(logStream(pods[0].name).closedByClient).toBe(false);
+});
