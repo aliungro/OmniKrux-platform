@@ -157,7 +157,7 @@ export function Shell() {
     const land = () => {
       if (document.querySelector('[aria-modal="true"]')) return;
       const pane = main.current?.querySelector<HTMLElement>('[data-active-pane="true"]');
-      if (pane && focusTableRow(pane, { selectedOnly: true, revealSelected: true })) return;
+      if (pane && focusTableRow(pane, { selectedOnly: true, revealSelected: opts?.now })) return;
       main.current?.focus({ preventScroll: true });
     };
     if (opts?.now) {

@@ -982,3 +982,34 @@ it.each([{ key: "Escape" }, { key: "ArrowUp", altKey: true }])("$key from logs r
   expect(await logTab(pods[0].name)).toBe(tab);
   expect(logStream(pods[0].name).closedByClient).toBe(false);
 });
+
+it("closing the final focused log keeps an offscreen selection outside the deferred return", async () => {
+  const watches = await renderPods();
+  updatePods(watches, [...pods, ...Array.from({ length: 200 }, (_, i) => ({ ...pods[0], uid: "z" + i, name: "z" + i }))]);
+  const selected = startAtFirstPod();
+  fireEvent.keyDown(selected, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  tab.focus();
+  const viewport = selected.closest<HTMLElement>('[role="grid"]')!.parentElement!;
+  Object.defineProperty(viewport, "scrollHeight", { value: 8000 });
+  fireEvent.scroll(viewport, { target: { scrollTop: 3600 } });
+  expect(selected.isConnected).toBe(false);
+  const scroll = vi.fn();
+  viewport.scrollTo = scroll;
+  const frames: FrameRequestCallback[] = [];
+  const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => frames.push(callback));
+  try {
+    press(tab);
+    expect(tab.isConnected).toBe(false);
+    expect(frames.length).toBeGreaterThan(0);
+    const field = screen.getByRole("textbox", { name: /Filter by name/ });
+    field.focus();
+    field.blur();
+    act(() => frames.splice(0).forEach(callback => callback(performance.now())));
+    expect(scroll).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    expect(viewport.scrollTop).toBe(3600);
+  } finally {
+    raf.mockRestore();
+  }
+});
