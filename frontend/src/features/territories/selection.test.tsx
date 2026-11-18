@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Plan, PlanRequest, ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
-import type { TerritoryTableProps } from "./TerritoryTable";
+import { TerritoryTable, type TerritoryTableProps } from "./TerritoryTable";
 import { resourceDescribe, secretDescribe } from "../../test/describe";
 import { DEPLOYMENTS, NODES, PODS, SERVICES } from "../../test/kinds";
 import { Table } from "../../test/table";
@@ -714,6 +714,31 @@ describe("keys per kind", () => {
     rerender(ui(remaining));
     await act(async () => {});
     expect(document.activeElement).toBe(podRow("pod-2"));
+  });
+
+  it.each(["unrelated opener", "different missing selection"])("skips modal rescue with %s", async (reason) => {
+    const client = new QueryClient();
+    const all = rows(3);
+    function ui(modal: boolean, removed: boolean) {
+      const uid = removed && reason === "different missing selection" ? "missing" : "1";
+      return <QueryClientProvider client={client}>
+        <TerritoryTable territories={[territory(removed ? all.filter(r => r.uid !== "1") : all)]}
+          kind={PODS} onRetry={() => {}} selection={{ selected: { clusterId: "c1", uid }, open: false }}
+          onSelection={() => {}} />
+        {!removed && <button>Outside</button>}
+        {modal && <AllShortcuts groups={[]} onClose={() => {}} />}
+      </QueryClientProvider>;
+    }
+    const { rerender } = render(ui(false, false));
+    const opener = reason === "unrelated opener" ? screen.getByRole("button", { name: "Outside" }) : podRow("pod-1");
+    opener.focus();
+    rerender(ui(true, false));
+    rerender(ui(true, true));
+    expect(opener.isConnected).toBe(false);
+    expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+    rerender(ui(false, true));
+    await act(async () => {});
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("y opens the details on the YAML tab", async () => {

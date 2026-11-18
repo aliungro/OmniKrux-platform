@@ -1,4 +1,4 @@
-import { onLastDialogClosed } from "../chrome/dialogLifecycle";
+import { onDialogOpened, onLastDialogClosed } from "../chrome/dialogLifecycle";
 import { ColumnHeader } from "./ColumnHeader";
 import type { ColumnFilter, SortSpec } from "./columnFilters";
 import {
@@ -520,7 +520,26 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [territories, selectedKey, indexByKey, virtualizer, initialScrollTop]);
 
   /** The selected row's index while it's shown: where to put focus that goes with it. */
-  const selectedAt = useRef<number | null>(null);
+  const selectedAt = useRef<{ key: string; kind: string; index: number } | null>(null);
+  const modalOrigin = useRef<{ grid: HTMLElement; key: string } | null>(null);
+  useLayoutEffect(() => {
+    if (!paneActive) return;
+    const stopOpen = onDialogOpened(() => {
+      const active = document.activeElement;
+      // Nested and replacement dialogs inherit the original row until final close.
+      if (!active || active === document.body || active.closest('[aria-modal="true"]')) return;
+      const grid = gridRef.current;
+      const row = active.closest<HTMLElement>("[data-row-key]");
+      modalOrigin.current = grid && row?.dataset.rowKey && grid.contains(row)
+        ? { grid, key: row.dataset.rowKey } : null;
+    });
+    const stopClose = onLastDialogClosed(() => { modalOrigin.current = null; });
+    return () => {
+      stopOpen();
+      stopClose();
+      modalOrigin.current = null;
+    };
+  }, [paneActive, selectedKey, kind.key]);
   const latestItems = useRef(items);
   latestItems.current = items;
   const cancelRescue = useRef<(() => void) | null>(null);
@@ -555,6 +574,7 @@ export const TerritoryTable = memo(function TerritoryTable({
       land();
       return;
     }
+    if (modalOrigin.current?.grid !== grid || modalOrigin.current.key !== selectedKey) return;
     const active = document.activeElement;
     if (active && active !== document.body && !active.closest('[aria-modal="true"]')) return;
     const unsubscribe = onLastDialogClosed(() => {
@@ -596,14 +616,15 @@ export const TerritoryTable = memo(function TerritoryTable({
       const home = territories.find((t) => t.cluster.id === selected?.clusterId);
       if (home && NOT_LIVE.has(home.state)) return;
       // Focus that went with the row lands on the row now in its place.
-      if (selectedAt.current !== null && paneActive) rescueFocus(selectedAt.current);
+      const previous = selectedAt.current;
+      if (paneActive && previous?.key === selectedKey && previous.kind === kind.key) rescueFocus(previous.index);
       selectedAt.current = null;
       // Deleted or filtered out on a live cluster: nothing left to inspect.
       if (open) { if (onMissingSelection) onMissingSelection(); else onSelection((prev) => (prev.open ? { ...prev, open: false } : prev)); }
       return;
     }
     cancelRescue.current?.();
-    selectedAt.current = at;
+    selectedAt.current = { key: selectedKey, kind: kind.key, index: at };
     if (scrollPending.current) {
       scrollPending.current = false;
       virtualizer.scrollToIndex(at, { align: scrollAlign.current });
