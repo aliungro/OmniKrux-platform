@@ -424,11 +424,13 @@ function Frame({
               id={`${id}-tab-${i}`}
               aria-selected={tab === t}
               aria-controls={`${id}-panel`}
+              aria-keyshortcuts={String(i + 1)}
               tabIndex={tab === t ? 0 : -1}
               className={s.tab}
               onClick={() => onTab(t)}
             >
               {t}
+              <span className={`${k.k} ${s.k}`} aria-hidden="true">{i + 1}</span>
             </button>
           ))}
         </div>

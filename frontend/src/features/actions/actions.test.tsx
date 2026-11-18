@@ -914,6 +914,86 @@ describe("changes from the details", () => {
   });
 });
 
+describe("detail tab shortcuts", () => {
+  it.each([
+    {
+      kindKey: "pods",
+      row: deployment({ uid: "p-1", kind: "Pod" }),
+      describeRoute: "GET /api/clusters/c1/pods/demo/web/describe",
+      metrics: true,
+    },
+    { kindKey: "nodes", row: node(), describeRoute: NODE_DESCRIBE, metrics: true },
+    { kindKey: "deployments.apps", row: deployment(), describeRoute: DESCRIBE, metrics: false },
+  ])("detail tabs show their existing shortcut numbers without changing tab names ($kindKey)", ({
+    kindKey, row, describeRoute, metrics,
+  }) => {
+    serve({ [describeRoute]: [ok(resourceDescribe())] });
+    wrap(<ActionsProvider><Inspector row={row} provider="aks" kindKey={kindKey} /></ActionsProvider>);
+
+    const tablist = within(screen.getByRole("tablist", { name: "Details" }));
+    const names = metrics ? ["Describe", "YAML", "Events", "Metrics"] : ["Describe", "YAML", "Events"];
+    const tabs = tablist.getAllByRole("tab");
+    const panel = screen.getByRole("tabpanel", { name: "Describe" });
+    expect(tabs).toEqual(names.map((name) => tablist.getByRole("tab", { name })));
+    expect(new Set(tabs.map((tab) => tab.id)).size).toBe(names.length);
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs[0].id);
+    tabs.forEach((tab, index) => {
+      const number = String(index + 1);
+      const hint = within(tab).getByText(number);
+      expect(hint.getAttribute("aria-hidden")).toBe("true");
+      expect(hint.closest("[hidden]")).toBeNull();
+      expect(hint.tabIndex).toBe(-1);
+      expect(tab.lastElementChild).toBe(hint);
+      expect(tab.getAttribute("aria-keyshortcuts")).toBe(number);
+      expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+      expect(tab.tabIndex).toBe(index === 0 ? 0 : -1);
+    });
+
+    fireEvent.click(tablist.getByRole("tab", { name: "Events" }));
+    expect(screen.getByRole("tabpanel", { name: "Events" })).toBe(panel);
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs[2].id);
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual(names.map((_, index) => index === 2 ? 0 : -1));
+  });
+
+  it("tab hints preserve existing editing and tab-navigation guards", async () => {
+    serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })] });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    const user = userEvent.setup();
+    const activeTab = (name: string) => screen.getByRole("tab", { name, selected: true });
+    activeTab("Describe").focus();
+    for (const [key, name] of [
+      ["{ArrowRight}", "YAML"], ["{ArrowLeft}", "Describe"], ["{End}", "Events"],
+      ["{Home}", "Describe"], ["2", "YAML"], ["3", "Events"], ["1", "Describe"], ["4", "Describe"],
+    ]) {
+      await user.keyboard(key);
+      expect(document.activeElement).toBe(activeTab(name));
+    }
+
+    await user.click(button("Scale", tools()));
+    const replicas = screen.getByLabelText<HTMLInputElement>("Replicas");
+    await user.clear(replicas);
+    await user.type(replicas, "2");
+    expect(replicas.value).toBe("2");
+    expect(document.activeElement).toBe(replicas);
+    expect(activeTab("Describe")).toBeTruthy();
+    await user.click(button("Cancel"));
+
+    await user.click(button("Edit", tools()));
+    const editor = await screen.findByLabelText<HTMLTextAreaElement>("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(editor));
+    const before = editor.value;
+    editor.setSelectionRange(before.length, before.length);
+    await user.keyboard("13");
+    expect(editor.value).toBe(before + "13");
+    expect(document.activeElement).toBe(editor);
+    expect(activeTab("YAML")).toBeTruthy();
+  });
+});
+
 describe("yaml editor keys", () => {
   const BEFORE = "kind: Deployment\nspec:\n  replicas: 3\n";
   const EDITED = BEFORE.replace("replicas: 3", "replicas: 4");

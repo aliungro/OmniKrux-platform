@@ -492,7 +492,9 @@ describe("resource inspector", () => {
     wrap(<Inspector row={deployRow} provider="kind" kindKey="deployments.apps" />);
     expect(await screen.findByText("2 desired, 2 updated, 1 ready, 1 available")).toBeTruthy();
     expect(fetch.mock.calls[0][0]).toBe("/api/clusters/c1/resources/deployments.apps/web/describe?namespace=demo");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Describe", "YAML", "Events"]);
+    expect(screen.getAllByRole("tab")).toEqual(
+      ["Describe", "YAML", "Events"].map((name) => screen.getByRole("tab", { name })),
+    );
     // A field with nothing to say reads as a dash, never "null".
     expect(screen.queryByText("null")).toBeNull();
     const sets = screen.getByRole("table", { name: "Replica sets" });
@@ -544,7 +546,9 @@ describe("resource inspector", () => {
     vi.stubGlobal("fetch", fetch);
     wrap(<Inspector row={nodeRow} provider="aks" kindKey="nodes" />);
     await waitFor(() => expect(fetch.mock.calls[0]?.[0]).toBe("/api/clusters/c1/resources/nodes/aks-np1-03/describe"));
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Describe", "YAML", "Events", "Metrics"]);
+    expect(screen.getAllByRole("tab")).toEqual(
+      ["Describe", "YAML", "Events", "Metrics"].map((name) => screen.getByRole("tab", { name })),
+    );
     fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
     expect(await screen.findByText("950m")).toBeTruthy();
     expect(screen.getByText("allocatable 1900m · capacity 2000m")).toBeTruthy();
