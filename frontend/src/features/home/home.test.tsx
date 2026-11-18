@@ -51,20 +51,70 @@ vi.mock("../territories/TerritoryTable", async importOriginal => {
   await coldTable.wait;
   return importOriginal();
 });
-it("focuses the verified queue Pod when its table chunk mounts after identity proof", async () => {
+// jsdom has no scrolling layout. Deliver the browser's scroll notification on
+// demand so the real virtualizer mounts the distant row in a separate commit.
+function delayQueueScroll() {
+  const originalFetch = vi.mocked(fetch);
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("/api/kinds")
+    ? json({ ...KINDS, kinds: KINDS.kinds.map(k => k.key === "pods" ? { ...k, sort: "recent" } : k) })
+    : originalFetch(url)));
+  const peers = Array.from({ length: 180 }, (_, i) => ({ ...pod, created_at: "2026-11-18T12:00:00Z", uid: `other-${i}`, name: `api-${i}` }));
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(16000);
+  let scroll: (() => void) | undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value(this: HTMLElement, options: ScrollToOptions) {
+    if (options.top && options.top > 600) {
+      const offset = options.top;
+      scroll = () => { this.scrollTop = offset; fireEvent.scroll(this); };
+    }
+  } });
+  return {
+    rows: [...peers, failingPod],
+    async mountRow(beforeMount?: () => void) {
+      await waitFor(() => expect(scroll).toBeTypeOf("function"));
+      expect(document.querySelector('[data-row-key="c1/p1"]')).toBeNull();
+      beforeMount?.();
+      act(() => scroll!());
+      return waitFor(() => {
+        const exact = document.querySelector<HTMLElement>('[data-row-key="c1/p1"]');
+        expect(exact).toBeTruthy();
+        return exact!;
+      });
+    },
+    restore() {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "scrollTo", descriptor);
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+    },
+  };
+}
+it("focuses the verified offscreen queue Pod after the cold table and its row mount separately", async () => {
   let release!: () => void;
   coldTable.wait = new Promise<void>(resolve => { release = resolve; });
+  const delayed = delayQueueScroll();
   try {
-    show(); await ready([failingPod]);
+    show(); await ready(delayed.rows);
     fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
     podLink().focus(); await userEvent.keyboard("{Enter}");
     await screen.findByText(/Loading resources/);
     await waitFor(() => expect(screen.queryByText(/Opening Pod/)).toBeNull());
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("expected_uid=p1"))).toBe(true);
     await act(async () => { release(); await vi.dynamicImportSettled(); });
-    await screen.findByRole("tab", { name: "Describe" });
-    await waitFor(() => expect((document.activeElement as HTMLElement)?.dataset.rowKey).toBe("c1/p1"));
-  } finally { release(); }
+    const exact = await delayed.mountRow();
+    await waitFor(() => expect(document.activeElement).toBe(exact));
+  } finally { release(); delayed.restore(); }
+});
+it("mounting the offscreen queue Pod preserves focus moved to the filter", async () => {
+  const delayed = delayQueueScroll();
+  try {
+    show(); await ready(delayed.rows);
+    fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+    podLink().focus(); await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByText(/Opening Pod/)).toBeNull());
+    const filter = screen.getByPlaceholderText("Filter by name, label or image");
+    filter.focus();
+    await delayed.mountRow();
+    expect(document.activeElement).toBe(filter);
+  } finally { delayed.restore(); }
 });
 it.each(["upsert", "multipart"] as const)("same-UID %s watch updates preserve the queue Pod's pending YAML draft and focus", async (update) => {
   // jsdom supplies DOM ranges but not browser layout measurements used by real CodeMirror.

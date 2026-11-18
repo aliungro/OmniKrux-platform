@@ -59,10 +59,23 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
   }, [target, current, available, registered, name, namespace, rv, client, attempt]);
   const state = !target ? null : proof?.target === target ? proof.state : "waiting";
   const ready = state === "ready" && available && !!row;
-  useEffect(() => {
-    if (!ready || !tableReady || !paneActive || document.activeElement !== root.current || !target) return;
+  useLayoutEffect(() => {
+    const owner = root.current;
+    if (!owner || !ready || !tableReady || !paneActive || document.activeElement !== owner || !target) return;
     const key = rowKey(target.clusterId, target.uid);
-    Array.from(root.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? []).find(el => el.dataset.rowKey === key)?.focus({ preventScroll: true });
+    const focusRow = () => {
+      if (document.activeElement !== owner || !owner.isConnected) return false;
+      const match = Array.from(owner.querySelectorAll<HTMLElement>("[data-row-key]")).find(el => el.dataset.rowKey === key);
+      match?.focus({ preventScroll: true });
+      return !!match;
+    };
+    if (focusRow()) return;
+    // The virtualizer may commit the scrolled window after the table itself mounts.
+    const observer = new MutationObserver(() => { if (focusRow()) observer.disconnect(); });
+    const cancel = () => observer.disconnect();
+    observer.observe(owner, { childList: true, subtree: true });
+    owner.addEventListener("blur", cancel, { once: true });
+    return () => { cancel(); owner.removeEventListener("blur", cancel); };
   }, [ready, tableReady, paneActive, target]);
   return { root, ready, state, retry: () => retry(n => n + 1) };
 }
