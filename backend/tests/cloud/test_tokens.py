@@ -3,7 +3,7 @@ import json
 import logging
 
 import pytest
-from aiohttp import web
+from aiohttp import WSServerHandshakeError, web
 from kubernetes_asyncio.client import CoreV1Api
 from kubernetes_asyncio.client.exceptions import ApiException
 
@@ -464,3 +464,145 @@ async def test_cloud_lifespan_drains_refresh_after_waiter_cancellation(
         await original_close()  # also closes a session reopened by the old implementation on RED
 
     assert observed == ["refresh finished", "HTTP closed"]
+
+
+async def test_shell_upgrade_401_refreshes_token_on_next_attempt(
+    cloud_cluster, cloud_http_client, fake_cloud, fake_api, monkeypatch, caplog
+):
+    app, cluster, _ = cloud_cluster
+    attempts = []
+    route = fake_api._route
+
+    async def refuse_first_credential(request):
+        if request.path.endswith("/exec"):
+            bearer = request.headers["Authorization"]
+            attempts.append(bearer)
+            if bearer == attempts[0]:
+                return web.Response(status=401, reason=f"Refused {bearer}")
+        return await route(request)
+
+    monkeypatch.setattr(fake_api, "_route", refuse_first_credential)
+    first, second = BrowserSocket(app), BrowserSocket(app)
+    with caplog.at_level(logging.DEBUG):
+        await asyncio.wait_for(exec_shell(first, cluster.id, "demo", "web-1"), 5)
+        assert first.sent[-1]["type"] == "error"
+        assert first.closed == (1011, None)
+        assert len(attempts) == 1
+        second.type({"type": "stdin", "data": "reconnected"})
+        second.type({"type": "stdin", "data": "exit 0"})
+        await asyncio.wait_for(exec_shell(second, cluster.id, "demo", "web-1"), 5)
+        audit = await cloud_http_client.get("/api/audit", params={"cluster": cluster.id})
+
+    assert len(attempts) == 2
+    assert len(set(attempts)) == 2, "explicit reconnect reused the rejected credential"
+    assert second.output("stdout") == "reconnected"
+    assert second.closed == (1000, None)
+    assert audit.status_code == 200
+    assert sorted(record["outcome"] for record in audit.json()["records"]) == ["ended", "failed"]
+    published = json.dumps(first.sent + second.sent) + audit.text + caplog.text
+    assert not any(value in published for value in fake_cloud.gcp._expires)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_delayed_shell_refusal_preserves_cached_credential(
+    status, cloud_cluster, fake_api, monkeypatch
+):
+    app, cluster, account = cloud_cluster
+    services = app.state.cloud
+    source = await services.broker.tokens_for(cluster.id)
+    arrived, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed_refusal(request):
+        arrived.set()
+        await release.wait()
+        return web.Response(status=status)
+
+    monkeypatch.setattr(fake_api, "_route", delayed_refusal)
+    async with app.state.connections.ws_api(cluster.id) as api:
+        old = (await source()).value
+        connecting = api.rest_client.pool_manager.ws_connect(
+            api.configuration.host + "/exec", headers={"Authorization": f"Bearer {old}"}
+        )
+        pending = asyncio.ensure_future(connecting)
+        try:
+            await asyncio.wait_for(arrived.wait(), 5)
+            if status == 401:
+                source.reject(old)
+                await api.configuration.refresh_api_key_hook(api.configuration)
+            expected = (await source()).value
+            assert (expected != old) == (status == 401)
+        finally:
+            release.set()
+            with pytest.raises(WSServerHandshakeError) as error:
+                await asyncio.wait_for(pending, 5)
+        assert error.value.status == status
+        assert (await source()).value == expected
+        ref = await app.state.registry.cloud_ref(cluster.id)
+        config = await services.store.config(account.id)
+        provider_token = await services.adapters[account.provider].token_fetch(config, ref)()
+        assert provider_token.value == expected
+
+
+async def test_cloud_upgrade_cancellation_and_exceptional_exit(
+    cloud_cluster, fake_api, monkeypatch
+):
+    app, cluster, _ = cloud_cluster
+    source = await app.state.cloud.broker.tokens_for(cluster.id)
+    arrived, release = asyncio.Event(), asyncio.Event()
+    route = fake_api._route
+
+    async def delayed(request):
+        if request.path == "/pending":
+            arrived.set()
+            await release.wait()
+            return web.Response(status=403)
+        return await route(request)
+
+    monkeypatch.setattr(fake_api, "_route", delayed)
+    async with app.state.connections.ws_api(cluster.id) as api:
+        session = api.rest_client.pool_manager
+        url = api.configuration.host
+        token = (await source()).value
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Sec-WebSocket-Protocol": "v4.channel.k8s.io",
+        }
+        pending = asyncio.ensure_future(session.ws_connect(url + "/pending", headers=headers))
+        try:
+            await asyncio.wait_for(arrived.wait(), 5)
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        finally:
+            release.set()
+        assert (await source()).value == token
+        exec_url = url + "/api/v1/namespaces/demo/pods/web-1/exec"
+        socket = await session.ws_connect(exec_url, headers=headers)
+        await socket.close()
+        assert socket.closed
+        with pytest.raises(RuntimeError, match="caller failed"):
+            async with session.ws_connect(exec_url, headers=headers) as socket:
+                raise RuntimeError("caller failed")
+        assert socket.closed
+
+
+async def test_upgrade_rejects_sent_header_even_when_configuration_differs(
+    cloud_cluster, fake_api, monkeypatch
+):
+    app, cluster, _ = cloud_cluster
+    source = await app.state.cloud.broker.tokens_for(cluster.id)
+    sent = (await source()).value
+
+    async def refuse(request):
+        assert request.headers["Authorization"] == f"Bearer {sent}"
+        return web.Response(status=401)
+
+    monkeypatch.setattr(fake_api, "_route", refuse)
+    async with app.state.connections.ws_api(cluster.id) as api:
+        api.configuration.api_key["BearerToken"] = "different-from-request"
+        with pytest.raises(WSServerHandshakeError) as error:
+            await api.rest_client.pool_manager.ws_connect(
+                api.configuration.host + "/exec", headers={"Authorization": f"Bearer {sent}"}
+            )
+        assert error.value.status == 401
+        assert (await source()).value != sent
