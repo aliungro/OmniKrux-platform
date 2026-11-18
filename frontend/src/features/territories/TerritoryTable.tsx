@@ -60,6 +60,9 @@ export interface TerritoryTableProps {
   kind: KindInfo;
   /** The current row and whether its details are open; held by Console so other views can set it. */
   selection: Selection;
+  /** Navigation identity survives the Home proof gate solely to finish owned focus work. */
+  attentionFocusOwner?: RowRef;
+  missingFocusOwner?: boolean;
   onSelection: Dispatch<SetStateAction<Selection>>;
   onRetry: (clusterId: string, state: ClusterState) => void;
   /** Live pods per node per cluster, for the Nodes view's Pods column. */
@@ -126,6 +129,8 @@ export const TerritoryTable = memo(function TerritoryTable({
   columnFilters = [], sort = null, onColumnFilter = () => {}, onSort = () => {}, pickSource = territories,
   kind,
   selection,
+  attentionFocusOwner,
+  missingFocusOwner = false,
   onSelection,
   onRetry,
   podCounts = null,
@@ -154,6 +159,7 @@ export const TerritoryTable = memo(function TerritoryTable({
     return m;
   }, [items]);
   const selectedKey = selected ? rowKey(selected.clusterId, selected.uid) : null;
+  const ownerKey = attentionFocusOwner ? rowKey(attentionFocusOwner.clusterId, attentionFocusOwner.uid) : selectedKey;
   const gridRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const getGuideRect = useCallback(() => scrollRef.current?.getBoundingClientRect() ?? null, []);
@@ -523,7 +529,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   // The pending callback belongs to one dock return. Repeated requests replace it even
   // when the target is the same row, and each listener is released with its own request.
   const pendingReturn = useRef<{ deliver: (at: number | undefined) => void; cancel: () => void } | null>(null);
-  useLayoutEffect(() => () => pendingReturn.current?.cancel(), [paneActive, selectedKey, kind.key]);
+  useLayoutEffect(() => () => pendingReturn.current?.cancel(), [paneActive, ownerKey, kind.key, attentionFocusOwner]);
   const readyForReturn = selected !== null && (!expectedUid || expectedUid === selected.uid)
     && territories.some(t => t.cluster.id === selected.clusterId && t.state === "ready");
   const returnIndex = readyForReturn && selectedKey !== null ? indexByKey.get(selectedKey) : undefined;
@@ -589,13 +595,14 @@ export const TerritoryTable = memo(function TerritoryTable({
     return () => {
       stopOpen();
       stopClose();
+      selectedAt.current = null;
       modalOrigin.current = null;
     };
-  }, [paneActive, selectedKey, kind.key]);
+  }, [paneActive, ownerKey, kind.key, attentionFocusOwner]);
   const latestItems = useRef(items);
   latestItems.current = items;
   const cancelRescue = useRef<(() => void) | null>(null);
-  useLayoutEffect(() => () => cancelRescue.current?.(), [paneActive, selectedKey, kind.key]);
+  useLayoutEffect(() => () => cancelRescue.current?.(), [paneActive, ownerKey, kind.key, attentionFocusOwner]);
   /**
    * The selected row went (deleted, say) and took the focus with it: give it to the row now at
    * its index, else the last row, else `<main>`. Never the selection: that stays on what went.
@@ -626,7 +633,7 @@ export const TerritoryTable = memo(function TerritoryTable({
       land();
       return;
     }
-    if (modalOrigin.current?.grid !== grid || modalOrigin.current.key !== selectedKey) return;
+    if (modalOrigin.current?.grid !== grid || modalOrigin.current.key !== ownerKey) return;
     const active = document.activeElement;
     if (active && active !== document.body && !active.closest('[aria-modal="true"]')) return;
     const unsubscribe = onLastDialogClosed(() => {
@@ -656,7 +663,13 @@ export const TerritoryTable = memo(function TerritoryTable({
       focusPending.current = active === null || active === document.body || (scrollRef.current?.contains(active) ?? false);
     }
     if (selectedKey === null) {
-      selectedAt.current = null;
+      // Home can report the missing UID one render after withholding the selection.
+      const previous = selectedAt.current;
+      if (missingFocusOwner && previous) {
+        if (paneActive && previous.key === ownerKey && previous.kind === kind.key
+          && modalOrigin.current?.key === ownerKey) rescueFocus(previous.index);
+        selectedAt.current = null;
+      }
       return;
     }
     const at = indexByKey.get(selectedKey);
@@ -669,7 +682,7 @@ export const TerritoryTable = memo(function TerritoryTable({
       if (home && NOT_LIVE.has(home.state)) return;
       // Focus that went with the row lands on the row now in its place.
       const previous = selectedAt.current;
-      if (paneActive && previous?.key === selectedKey && previous.kind === kind.key) rescueFocus(previous.index);
+      if (paneActive && previous?.key === ownerKey && previous.kind === kind.key) rescueFocus(previous.index);
       selectedAt.current = null;
       // Deleted or filtered out on a live cluster: nothing left to inspect.
       if (open) { if (onMissingSelection) onMissingSelection(); else onSelection((prev) => (prev.open ? { ...prev, open: false } : prev)); }

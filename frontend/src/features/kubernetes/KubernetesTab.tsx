@@ -369,6 +369,8 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
                 pickSource={all}
                 kind={kind}
                 selection={selection}
+                attentionFocusOwner={attention}
+                missingFocusOwner={!!attention && landing.state === "missing"}
                 onSelection={onSelection}
                 reveal={nav.reveal + (landing.ready ? 1 : 0)}
                 expectedUid={attention && landing.ready ? attention.uid : undefined}

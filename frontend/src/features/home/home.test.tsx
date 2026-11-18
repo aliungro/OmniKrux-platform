@@ -116,6 +116,46 @@ it("mounting the offscreen queue Pod preserves focus moved to the filter", async
     expect(document.activeElement).toBe(filter);
   } finally { delayed.restore(); }
 });
+it.each(["help", "dock"] as const)("a proved Home Pod deleted during a %s return retains its owned fallback", async source => {
+  const peers = Array.from({ length: 160 }, (_, i) => ({ ...pod, uid: `z${i}`, name: `z${i}` }));
+  show(); await ready([failingPod, ...peers]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  const exact = await waitFor(() => {
+    const row = document.querySelector<HTMLElement>('[data-row-key="c1/p1"]');
+    expect(row).toBeTruthy();
+    expect(document.activeElement).toBe(row);
+    return row!;
+  });
+  const watch = FakeWebSocket.last;
+  const grid = exact.closest<HTMLElement>('[role="grid"]')!;
+  if (source === "help") {
+    fireEvent.keyDown(exact, { key: "?" });
+    await screen.findByRole("dialog", { name: "All shortcuts" });
+  } else {
+    fireEvent.click(await screen.findByRole("button", { name: "Logs" }));
+    const tab = await screen.findByRole("tab", { name: /Logs.*web-pod/ });
+    tab.focus();
+    const viewport = grid.parentElement!;
+    Object.defineProperty(viewport, "scrollHeight", { value: 9000 });
+    fireEvent.scroll(viewport, { target: { scrollTop: 3200 } });
+    expect(exact.isConnected).toBe(false);
+    viewport.scrollTo = vi.fn();
+    fireEvent.keyDown(tab, { key: "Escape" });
+    expect(viewport.scrollTo).toHaveBeenCalled();
+    expect(document.activeElement).toBe(tab);
+  }
+  act(() => watch.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true,
+    rows: [{ ...pod, uid: "replacement" }, ...peers] }));
+  await screen.findByText("This Pod is no longer available");
+  if (source === "help") fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  await waitFor(() => {
+    const focus = document.activeElement;
+    expect(focus === grid.closest("main") || (source === "help" && grid.contains(focus) && focus?.hasAttribute("data-row-key"))).toBe(true);
+  });
+  expect(grid.querySelector('[aria-selected="true"]')).toBeNull();
+  expect(screen.queryByRole("tab", { name: "Describe" })).toBeNull();
+});
 it.each(["upsert", "multipart"] as const)("same-UID %s watch updates preserve the queue Pod's pending YAML draft and focus", async (update) => {
   // jsdom supplies DOM ranges but not browser layout measurements used by real CodeMirror.
   const createRange = document.createRange.bind(document);
