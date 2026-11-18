@@ -61,15 +61,32 @@ export function AttentionQueue({ territories, nav, paneActive, searchRef, loadin
   };
   if (!loading && !territories.length) return null;
   return <section ref={section} aria-labelledby={`${id}-heading`} className={s.queue} onFocusCapture={e => { focused.current = e.target as HTMLElement; }}>
-    <h2 id={`${id}-heading`} ref={heading} tabIndex={-1}>Problems right now</h2>
+    <h2 id={`${id}-heading`} ref={heading} className={s.heading} tabIndex={-1}>Problems right now</h2>
     {unavailable.map(t => <button type="button" className={s.connection} key={t.cluster.id} data-attention-target={`cluster:${t.cluster.id}`} onClick={() => openCluster(t)}><ProviderBadge provider={knownProvider(t.cluster.provider)} /><b>{t.cluster.name}</b><span>{connectionProblem(t)}</span><span>Open cluster</span></button>)}
     {partial && ready.length > 0 && <p className={s.note}>Partial coverage: some clusters are updating or unavailable.</p>}
     {count > 0 ? <>
-      <button type="button" className={s.disclosure} aria-expanded={expanded} aria-controls={`${id}-pods`} onClick={() => setExpanded(!expanded)}>{expanded ? "Hide" : "Show"} {count} failing Pods</button>
-      {expanded && <div id={`${id}-pods`} className={s.pods}>{previews.map(({ territory: t, rows }) => <div key={t.cluster.id}>
-        {rows.map(row => <button type="button" className={s.pod} key={row.uid} data-attention-target={rowKey(t.cluster.id, row.uid)} onClick={() => openPod(row)}><span aria-hidden="true" className={s.diamond}>◆</span><b>{row.name}</b><span>{row.namespace ?? "No namespace"}</span><span>{t.cluster.name}</span><span className={s.diamond}>{textColumn(row, "status") ?? "Failing"}</span></button>)}
+      <button
+        type="button"
+        className={s.disclosure}
+        aria-label={`${expanded ? "Hide" : "Show"} ${count} failing Pods`}
+        aria-expanded={expanded}
+        aria-controls={`${id}-pods`}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className={s.count}><span aria-hidden="true" className={s.diamond} />{count} failing Pods</span>
+        <span className={s.action}>{expanded ? "Hide" : "View"}<span aria-hidden="true" className={s.chevron} /></span>
+      </button>
+      <div id={`${id}-pods`} className={s.pods} hidden={!expanded}>{expanded && previews.map(({ territory: t, rows }) => <div key={t.cluster.id}>
+        {rows.map(row => <button type="button" className={s.pod} key={row.uid} data-attention-target={rowKey(t.cluster.id, row.uid)} onClick={() => openPod(row)}>
+          <span aria-hidden="true" className={s.diamond} />
+          <span>
+            <b>{row.name}</b>
+            <small>{row.namespace ?? "No namespace"} <span aria-hidden="true">·</span> {t.cluster.name}</small>
+          </span>
+          <span className={s.status}>{textColumn(row, "status") ?? "Failing"}</span>
+        </button>)}
         {t.failing > 5 && <button type="button" className={s.all} data-attention-target={`all:${t.cluster.id}`} aria-label={`View all ${t.failing} failing Pods in ${t.cluster.name}`} onClick={() => openCluster(t, true)}>View all {t.failing} failing Pods <span>in {t.cluster.name}</span></button>}
-      </div>)}</div>}
+      </div>)}</div>
     </> : <p className={s.note}>{!partial && !loading ? "No failing Pods" : !ready.length && unavailable.length === territories.length && !loading ? "Pod status unavailable" : "Waiting for live pod status"}</p>}
   </section>;
 }
