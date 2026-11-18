@@ -78,7 +78,8 @@ async def client(fake_api, tmp_path):
             yield http, info.id
 
 
-async def test_describe_route_returns_describe(client, fake_api):
+@pytest.mark.parametrize("params", [{}, {"expected_uid": "u-crasher"}])
+async def test_describe_route_returns_describe(client, fake_api, params):
     http, cluster_id = client
     fake_api.events.extend(
         [
@@ -92,7 +93,7 @@ async def test_describe_route_returns_describe(client, fake_api):
             {"type": "Normal", "reason": "Other", "involvedObject": {"uid": "someone-else"}},
         ]
     )
-    r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/describe")
+    r = await http.get(f"/api/clusters/{cluster_id}/pods/demo/crasher/describe", params=params)
     assert r.status_code == 200
     body = r.json()
     assert body["pod"]["name"] == "crasher" and body["pod"]["status"] == "CrashLoopBackOff"
@@ -116,6 +117,19 @@ async def test_describe_route_returns_describe(client, fake_api):
     assert body["events_error"] is None
     [events_call] = [q for _, path, q in fake_api.requests if path.endswith("/events")]
     assert events_call["fieldSelector"] == "involvedObject.uid=u-crasher"
+
+
+async def test_describe_expected_uid_rejects_a_replacement_before_related_reads(client, fake_api):
+    http, cluster_id = client
+    r = await http.get(
+        f"/api/clusters/{cluster_id}/pods/demo/crasher/describe",
+        params={"expected_uid": "u-original-crasher"},
+    )
+    assert r.status_code == 404
+    assert r.json() == {"detail": "This Pod is no longer available"}
+    assert [(method, path) for method, path, _ in fake_api.requests] == [
+        ("GET", "/api/v1/namespaces/demo/pods/crasher"),
+    ]
 
 
 async def test_yaml_strips_managed_fields(client):

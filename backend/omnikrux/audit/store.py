@@ -257,6 +257,7 @@ class AuditLog:
         cluster_id: str | None = None,
         action: str | None = None,
         text: str | None = None,
+        outcome: Outcome | None = None,
         before: int | None = None,
         limit: int = 100,
     ) -> AuditPage:
@@ -267,6 +268,8 @@ class AuditLog:
             query = query.where(AuditRecord.cluster_id == cluster_id)
         if action is not None:
             query = query.where(AuditRecord.action == action)
+        if outcome is not None:
+            query = query.where(AuditRecord.outcome == outcome)
         if before is not None:
             query = query.where(AuditRecord.id < before)
         if text:

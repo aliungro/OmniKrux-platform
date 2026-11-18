@@ -83,6 +83,7 @@ export interface TerritoryTableProps {
    * into view, and focuses it unless you've moved focus outside the table meanwhile.
    */
   reveal?: number;
+  expectedUid?: string;
   onOpenSplit?: (row: ResourceRow) => void;
   menuView?: unknown;
   paneActive?: boolean;
@@ -135,6 +136,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   onWorkloadLogs,
   request = null,
   reveal = 0,
+  expectedUid,
   onOpenSplit,
   menuView,
   paneActive = true,
@@ -694,6 +696,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                   <div role="gridcell" aria-colspan={columnCount}>
                     <Inspector
                       row={it.row}
+                      expectedUid={expectedUid}
                       kindKey={kind.key}
                       verbs={verbsFor(kind, it.row)}
                       intent={intent?.key === rowKey(it.row.cluster_id, it.row.uid) ? intent : null}

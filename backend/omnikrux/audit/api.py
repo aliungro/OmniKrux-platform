@@ -1,7 +1,7 @@
 """GET /api/audit: the audit log, newest first."""
 
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -20,13 +20,19 @@ async def audit_records(
     cluster: str | None = None,
     action: str | None = None,
     q: str | None = None,
+    outcome: Literal["failed"] | None = None,
     before: int | None = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 100,
 ) -> AuditPage:
     audit: AuditLog = request.app.state.audit
     try:
         return await audit.list(
-            cluster_id=cluster or None, action=action or None, text=q, before=before, limit=limit
+            cluster_id=cluster or None,
+            action=action or None,
+            text=q,
+            outcome=outcome,
+            before=before,
+            limit=limit,
         )
     except Exception as exc:
         log.warning("Could not read the audit log (%s)", type(exc).__name__)

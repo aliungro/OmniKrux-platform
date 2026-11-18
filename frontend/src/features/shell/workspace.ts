@@ -2,7 +2,8 @@ import { NO_AUDIT_FILTER, type AuditFilters } from "../audit/useAudit";
 import { NO_FILTER, type Filters, type RowRef } from "../territories/model";
 
 export type AppId = "kubernetes" | "audit" | "settings";
-export type KubeView = { page: "home"; section?: "discovered" } | { page: "kind"; kind: string; clusters: string[] | null; filters: Filters; selected: RowRef | null; open: boolean };
+/** Home return controls are page-session history; storage deliberately omits them. */
+export type KubeView = { page: "home"; section?: "discovered"; attention?: { expanded: boolean; target: string; clusterId: string } } | { page: "kind"; kind: string; clusters: string[] | null; filters: Filters; selected: RowRef | null; open: boolean; fromAttention?: { clusterId: string; uid: string; namespace: string | null } };
 export function kindView(from: KubeView, kind: string, clusters?: string[] | null): Extract<KubeView, { page: "kind" }> {
   return { page:"kind", kind, clusters: clusters ?? (from.page === "kind" ? from.clusters : null), filters:{...(from.page === "kind" ? from.filters : NO_FILTER),status:"all",columns:[],sort:null},selected:null,open:false };
 }
@@ -26,9 +27,9 @@ const newTab = (id: string, view: KubeView = HOME): Tab<KubeView> => ({ id, view
 export function defaultWorkspace(): Workspace { const tab = newTab(newTabId()); return {version:1,app:"kubernetes",kubernetes:{tabs:[tab],active:tab.id,closed:[]},audit:{filters:{...NO_AUDIT_FILTER}}}; }
 export function sameView(a: KubeView, b: KubeView): boolean {
   if (a.page !== b.page) return false;
-  if (a.page === "home" || b.page === "home") return a.page === "home" && b.page === "home" && a.section === b.section;
+  if (a.page === "home" || b.page === "home") return a.page === "home" && b.page === "home" && a.section === b.section && a.attention?.expanded === b.attention?.expanded && a.attention?.target === b.attention?.target && a.attention?.clusterId === b.attention?.clusterId;
   const sameArray = (x: string[] | null, y: string[] | null) => x === y || (x !== null && y !== null && x.length === y.length && x.every((v,i)=>v===y[i]));
-  return a.kind===b.kind && sameArray(a.clusters,b.clusters) && a.open===b.open && (a.selected === b.selected || (a.selected !== null && b.selected !== null && a.selected.clusterId===b.selected.clusterId && a.selected.uid===b.selected.uid)) && a.filters.status===b.filters.status && a.filters.text===b.filters.text && a.filters.namespace===b.filters.namespace && a.filters.columns.length===b.filters.columns.length && a.filters.columns.every((x,i)=>{ const y=b.filters.columns[i]; if (x.key!==y.key || x.op!==y.op) return false; if (x.op==="contains" && y.op==="contains") return x.text===y.text; if (x.op==="oneOf" && y.op==="oneOf") return sameArray(x.values,y.values); if (x.op==="between" && y.op==="between") return x.min===y.min && x.max===y.max; return "seconds" in x && "seconds" in y && x.seconds===y.seconds; }) && a.filters.sort?.key===b.filters.sort?.key && a.filters.sort?.dir===b.filters.sort?.dir;
+  return a.fromAttention===b.fromAttention && a.kind===b.kind && sameArray(a.clusters,b.clusters) && a.open===b.open && (a.selected === b.selected || (a.selected !== null && b.selected !== null && a.selected.clusterId===b.selected.clusterId && a.selected.uid===b.selected.uid)) && a.filters.status===b.filters.status && a.filters.text===b.filters.text && a.filters.namespace===b.filters.namespace && a.filters.columns.length===b.filters.columns.length && a.filters.columns.every((x,i)=>{ const y=b.filters.columns[i]; if (x.key!==y.key || x.op!==y.op) return false; if (x.op==="contains" && y.op==="contains") return x.text===y.text; if (x.op==="oneOf" && y.op==="oneOf") return sameArray(x.values,y.values); if (x.op==="between" && y.op==="between") return x.min===y.min && x.max===y.max; return "seconds" in x && "seconds" in y && x.seconds===y.seconds; }) && a.filters.sort?.key===b.filters.sort?.key && a.filters.sort?.dir===b.filters.sort?.dir;
 }
 export type WorkspaceAction = {type:"switchApp";app:AppId} | {type:"newTab";view?:KubeView;split?:boolean} | {type:"closeTab";id:string} | {type:"activateTab"|"back"|"forward"|"splitTab";id:string} | {type:"nextTab"|"previousTab"|"closeSplit"} | {type:"navigate";id:string;view:KubeView | ((v: KubeView) => KubeView);mode:"push"|"replace"} | {type:"reopenClosed";index:number} | {type:"scroll";id:string;top:number} | {type:"auditFilters";filters:AuditFilters};
 /** Reducer actions carry generated data so reducing the same state and action is deterministic. */
@@ -41,7 +42,12 @@ export function prepareWorkspaceAction(action: WorkspaceAction): PreparedWorkspa
 }
 export function workspaceReducer(ws: Workspace, action: PreparedWorkspaceAction): Workspace {
   if (action.type === "switchApp") return ws.app===action.app ? ws : {...ws,app:action.app};
-  if (action.type === "auditFilters") { const a=ws.audit.filters,b=action.filters; return a.cluster===b.cluster && a.action===b.action && a.text===b.text ? ws : {...ws,audit:{filters:b}}; }
+  if (action.type === "auditFilters") {
+    const a = ws.audit.filters, b = action.filters;
+    return a.cluster === b.cluster && a.action === b.action && a.text === b.text && a.outcome === b.outcome
+      ? ws
+      : { ...ws, audit: { filters: b } };
+  }
   const k=ws.kubernetes, activeIndex=k.tabs.findIndex(t=>t.id===k.active);
   if (action.type === "closeSplit") return ws.split ? {...ws, split: undefined} : ws;
   if (action.type === "splitTab") {

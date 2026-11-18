@@ -49,6 +49,23 @@ def entry(cluster_id: str, **overrides) -> AuditEntry:
     return AuditEntry(**(values | overrides))
 
 
+async def test_list_filters_outcome_before_the_limit(setup):
+    audit, info, _ = setup
+    oldest = await audit.begin(entry(info.id))
+    await audit.finish(oldest, "failed")
+    await audit.begin(entry(info.id))
+    newest = await audit.begin(entry(info.id))
+    await audit.finish(newest, "failed")
+    await audit.begin(entry(info.id))
+
+    page = await audit.list(outcome="failed", limit=1)
+    assert [record.id for record in page.records] == [newest]
+    assert page.next_before == newest
+    older = await audit.list(outcome="failed", limit=1, before=page.next_before)
+    assert [record.id for record in older.records] == [oldest]
+    assert older.next_before is None
+
+
 async def test_audit_entry_overrides_snapshot(setup):
     audit, info, _ = setup
     await audit.begin(entry(info.id, cluster_name="Override", provider="aks"))

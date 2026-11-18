@@ -173,7 +173,7 @@ export function statusClass(row: ResourceRow): StatusClass {
   return v !== null && STATUS_CLASSES.includes(v) ? (v as StatusClass) : "done";
 }
 
-function isFailing(row: ResourceRow): boolean {
+export function isFailing(row: ResourceRow): boolean {
   return statusClass(row) === "bad";
 }
 

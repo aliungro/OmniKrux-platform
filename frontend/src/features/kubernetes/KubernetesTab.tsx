@@ -38,6 +38,7 @@ import type { useDock } from "../dock/useDock";
 import { useFollowSelection } from "../dock/useFollowSelection";
 import type { PaletteSelection } from "../palette/CommandPalette";
 import { usePinnedKinds } from "../settings/pinnedKinds";
+import { useAttentionLanding } from "../home/useAttentionLanding";
 import { KubernetesHome } from "../home/KubernetesHome";
 import s from "../../App.module.css";
 
@@ -74,6 +75,10 @@ export interface KubernetesTabProps {
 const TerritoryTable = lazy(() => import("../territories/TerritoryTable").then(m => ({ default: m.TerritoryTable })));
 
 export function KubernetesTab({ nav, dock, closed, onReopen, loadProblem, onDismissLoadProblem, onEditPinned, onOpenView, paneActive = true }: KubernetesTabProps) {
+  // Keep the shared Pods watch alive across the Home/Pods component handoff.
+  // Otherwise the outgoing subscriber closes it between render and subscription,
+  // briefly publishing retained rows before the new empty watch takes over.
+  useWatch(nav.view.page === "home" || nav.view.kind === "pods" ? "pods" : null);
   return nav.view.page === "home"
     ? <KubernetesHome nav={nav} closed={closed} onReopen={onReopen} loadProblem={loadProblem} onDismissLoadProblem={onDismissLoadProblem} paneActive={paneActive} />
     : <KindView nav={nav} dock={dock} onEditPinned={onEditPinned} onOpenView={onOpenView} paneActive={paneActive} />;
@@ -115,7 +120,12 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
 
   const view = tabNav.view.page === "kind" ? tabNav.view : kindView(tabNav.view, "pods") as Extract<KubeView, {page:"kind"}>;
   const { filters } = view;
-  const selection = useMemo<Selection>(() => ({ selected: view.selected, open: view.open }), [view.selected, view.open]);
+  const attention = view.fromAttention;
+  const [tableReady, setTableReady] = useState(false);
+  const tableMount = useCallback((element: HTMLDivElement | null) => setTableReady(element !== null), []);
+  const landing = useAttentionLanding(attention, watch, list ? list.some(c => c.id === attention?.clusterId) : undefined, paneActive, tableReady);
+  const held = !!attention && !landing.ready;
+  const selection = useMemo<Selection>(() => ({ selected: held ? null : view.selected, open: !held && view.open }), [view.selected, view.open, held]);
   const latestSelection = useRef(selection);
   latestSelection.current = selection;
   const lastText = useRef(0);
@@ -156,7 +166,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
       if (v.page !== "kind") return v;
       const old = { selected: v.selected, open: v.open };
       const value = typeof next === "function" ? next(old) : next;
-      return { ...v, ...value };
+      return { ...v, ...value, fromAttention: undefined };
     }, "replace");
   }, [tabNav.navigate]);
   /** An action the palette asked for on the selected row. */
@@ -222,7 +232,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
     setSelection,
     onLand: (row, landedKind, sameKind) => {
       lastText.current = 0;
-      tabNav.navigate(v => v.page === "kind" ? { ...v, filters: showingFilters(row, v.filters, landedKind, new Date()), clusters: v.clusters === null || v.clusters.includes(row.cluster_id) ? v.clusters : [...v.clusters, row.cluster_id], selected: {clusterId: row.cluster_id, uid: row.uid}, open: true } : v, sameKind ? "push" : "replace");
+      tabNav.navigate(v => v.page === "kind" ? { ...v, fromAttention: undefined, filters: showingFilters(row, v.filters, landedKind, new Date()), clusters: v.clusters === null || v.clusters.includes(row.cluster_id) ? v.clusters : [...v.clusters, row.cluster_id], selected: {clusterId: row.cluster_id, uid: row.uid}, open: true } : v, sameKind ? "push" : "replace");
     },
   });
   const { cancel: cancelJump } = nav;
@@ -233,7 +243,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
     const value = typeof next === "function" ? next(previous) : next;
     latestSelection.current = value;
     lastText.current = 0;
-    tabNav.navigate(v => v.page === "kind" ? { ...v, ...value } : v, previous.open !== value.open ? "push" : "replace");
+    tabNav.navigate(v => v.page === "kind" ? { ...v, ...value, fromAttention: undefined } : v, previous.open !== value.open ? "push" : "replace");
   }, [cancelJump, tabNav.navigate]);
   const onFilters = useCallback((next: Filters) => {
     cancelJump();
@@ -243,7 +253,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
     lastText.current = textOnly ? now : 0;
     tabNav.navigate(v => {
       if (v.page !== "kind") return v;
-      const updated = { ...v, filters: next };
+      const updated = { ...v, filters: next, fromAttention: undefined };
       lastTextView.current = textOnly ? updated : null;
       return updated;
     }, mode);
@@ -253,7 +263,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
     if (id && (!Object.hasOwn(watch.rows, id) || Object.hasOwn(watch.pending, id))) return;
     setSelection(prev => ({...prev, open:false}));
   }, [selection.selected, watch.rows, watch.pending, setSelection]);
-  const onColumnFilter = useCallback((key: string, f: import("../territories/columnFilters").ColumnFilter | null) => { cancelJump(); lastText.current = 0; tabNav.navigate(v => v.page === "kind" ? {...v, filters: {...v.filters, columns: [...v.filters.columns.filter(x => x.key !== key), ...(f ? [f] : [])]}} : v, "push"); }, [cancelJump, tabNav.navigate]);
+  const onColumnFilter = useCallback((key: string, f: import("../territories/columnFilters").ColumnFilter | null) => { cancelJump(); lastText.current = 0; tabNav.navigate(v => v.page === "kind" ? {...v, fromAttention: undefined, filters: {...v.filters, columns: [...v.filters.columns.filter(x => x.key !== key), ...(f ? [f] : [])]}} : v, "push"); }, [cancelJump, tabNav.navigate]);
   const onSort = useCallback((sort: import("../territories/columnFilters").SortSpec | null) => { cancelJump(); lastText.current = 0; tabNav.navigate(v => v.page === "kind" ? {...v, filters: {...v.filters, sort}} : v, "push"); }, [cancelJump, tabNav.navigate]);
   const onSelectKind = useCallback(
     (key: string, opts?: { replace: boolean }) => {
@@ -283,9 +293,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
     return null;
   }, [selection.selected, shown]);
   // The follow log moves with this pane's selection once it settles.
-  useFollowSelection({ active: paneActive, kindKey, selected: selection.selected, watch, dock });
-  const [tableReady, setTableReady] = useState(false);
-  const tableMount = useCallback((element: HTMLDivElement | null) => setTableReady(element !== null), []);
+  useFollowSelection({ active: paneActive && !held, kindKey, selected: selection.selected, watch, dock });
   const paletteSelection = useMemo<PaletteSelection | null>(
     () => (tableReady && selectedRow ? { ...selectedRow, kind } : null),
     [tableReady, selectedRow, kind],
@@ -343,40 +351,44 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
           onAllKinds={onAllKinds}
           onOpenKind={onOpenView && ((key, split) => onOpenView(kindView(HOME, key, view.clusters), split))}
         />
-        <FilterBar paneActive={paneActive} clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
-        <NavigationNotice text={nav.notice ?? scopeNoticeText} waiting={nav.waiting} />
-        <ViewBoundary label="resources">
-          <div className={s.main} data-kind-row-keys ref={tableMount}>
-            <TerritoryTable
-              initialScrollTop={initialScrollTop}
-              onScroll={tabNav.setScroll}
-              onMissingSelection={onMissingSelection}
-              territories={shown}
-              columnFilters={filters.columns}
-              sort={filters.sort}
-              onColumnFilter={onColumnFilter}
-              onSort={onSort}
-              pickSource={all}
-              kind={kind}
-              selection={selection}
-              onSelection={onSelection}
-              reveal={nav.reveal}
-              onRetry={onRetry}
-              podCounts={podCounts}
-              metrics={metrics}
-              onOpenLogs={onOpenLogs}
-              onPinLogs={openPinned}
-              onOpenShell={onOpenShell}
-              onNodeShell={onNodeShell}
-              onOwnerLogs={onOwnerLogs}
-              onWorkloadLogs={onWorkloadLogs}
-              request={rowRequest}
-              paneActive={paneActive}
-              onOpenSplit={onOpenView && openRowSplit}
-              menuView={tabNav.view}
-            />
-          </div>
-        </ViewBoundary>
+        <FilterBar paneActive={paneActive} clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope, fromAttention: undefined} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
+        <NavigationNotice text={attention && landing.state === "missing" ? "This Pod is no longer available" : attention && landing.state === "error" ? "Could not verify this Pod. Try again." : attention && !landing.ready ? "Opening Pod… Waiting for live pod status" : nav.notice ?? scopeNoticeText} waiting={nav.waiting || (!!attention && landing.state === "waiting")} />
+        {attention && landing.state === "error" && <button type="button" className={s.btn} onClick={landing.retry}>Try Pod again</button>}
+        <div ref={landing.root} tabIndex={-1} className={s.main} data-kind-row-keys>
+          <ViewBoundary label="resources">
+            <div ref={tableMount} style={{ display: "contents" }}>
+              <TerritoryTable
+                initialScrollTop={initialScrollTop}
+                onScroll={tabNav.setScroll}
+                onMissingSelection={onMissingSelection}
+                territories={held && landing.state !== "missing" ? shown.map(t => ({ ...t, rows: [] })) : shown}
+                columnFilters={filters.columns}
+                sort={filters.sort}
+                onColumnFilter={onColumnFilter}
+                onSort={onSort}
+                pickSource={all}
+                kind={kind}
+                selection={selection}
+                onSelection={onSelection}
+                reveal={nav.reveal + (landing.ready ? 1 : 0)}
+                expectedUid={attention && landing.ready ? attention.uid : undefined}
+                onRetry={onRetry}
+                podCounts={podCounts}
+                metrics={metrics}
+                onOpenLogs={onOpenLogs}
+                onPinLogs={openPinned}
+                onOpenShell={onOpenShell}
+                onNodeShell={onNodeShell}
+                onOwnerLogs={onOwnerLogs}
+                onWorkloadLogs={onWorkloadLogs}
+                request={rowRequest}
+                paneActive={paneActive}
+                onOpenSplit={onOpenView && openRowSplit}
+                menuView={tabNav.view}
+              />
+            </div>
+          </ViewBoundary>
+        </div>
       </>
     );
   }

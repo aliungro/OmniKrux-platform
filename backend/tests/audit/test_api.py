@@ -79,3 +79,38 @@ async def test_audit_route_limit_bounds(http, limit):
     client, _ = http
     r = await client.get("/api/audit", params={"limit": limit})
     assert r.status_code == 422
+
+
+async def test_failed_audit_outcome_filters_before_pagination(http):
+    client, audit = http
+
+    async def add(outcome, **fields):
+        record_id = await audit.begin(entry(**fields))
+        await audit.finish(record_id, outcome)
+        return record_id
+
+    oldest = await add("failed", name="needle-oldest")
+    await audit.begin(entry(name="needle-started"))
+    middle = await add("failed", cluster_id="c2", name="needle-other-cluster")
+    await add("unknown", name="needle-unknown")
+    newest = await add("failed", name="needle-newest")
+    await add("failed", action="restart", name="needle-other-action")
+    await add("failed", name="other-name")
+    succeeded = await add("succeeded", name="needle")
+    ended = await add("ended", name="needle")
+
+    async def page(params, expected, cursor):
+        response = await client.get("/api/audit", params=params)
+        assert response.status_code == 200
+        body = response.json()
+        assert [record["id"] for record in body["records"]] == expected
+        assert body["next_before"] == cursor
+
+    await page({"limit": 2}, [ended, succeeded], succeeded)
+    failed = {"outcome": "failed", "q": "needle", "action": "scale", "limit": 2}
+    await page(failed, [newest, middle], middle)
+    await page(failed | {"before": middle}, [oldest], None)
+    await page(failed | {"cluster": "c1"}, [newest, oldest], None)
+    for unsupported in ("succeeded", "Failed", ""):
+        response = await client.get("/api/audit", params={"outcome": unsupported})
+        assert response.status_code == 422
