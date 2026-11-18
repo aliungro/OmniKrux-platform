@@ -1,14 +1,45 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 
-const graph = JSON.parse(readFileSync(process.argv[2] ?? "dist/.vite/startup-graph.json", "utf8"));
+const args = process.argv.slice(2);
+const snapshot = args[0] === "--snapshot" && args.length === 2;
+if (args.length && !snapshot) throw new Error("Usage: check-startup-bundle.mjs [--snapshot captured-graph.json]");
+const graph = JSON.parse(readFileSync(snapshot ? args[1] : "dist/.vite/startup-graph.json", "utf8"));
 const chunks = new Map(graph.chunks.map(chunk => [chunk.file, chunk]));
 const initial = new Set();
 function visit(file) {
   if (initial.has(file)) return;
+  if (!chunks.has(file)) throw new Error("Missing startup chunk: " + file);
   initial.add(file);
   for (const dep of chunks.get(file).imports) visit(dep);
 }
-for (const chunk of graph.chunks.filter(chunk => chunk.entry)) visit(chunk.file);
+if (snapshot) {
+  for (const chunk of graph.chunks.filter(chunk => chunk.entry)) visit(chunk.file);
+} else {
+  // Vite's HTML plugin can rewrite chunks after generateBundle. Measure the files served.
+  for (const chunk of chunks.values()) {
+    const code = readFileSync(join("dist", chunk.file));
+    chunk.bytes = code.byteLength;
+    chunk.gzipBytes = gzipSync(code).byteLength;
+  }
+  const html = readFileSync("dist/index.html", "utf8");
+  let hasEntry = false;
+  for (const [tag, kind] of html.matchAll(/<(script|link)\b[^>]*>/gi)) {
+    const attrs = new Map(Array.from(tag.matchAll(/([^\s=<>]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g),
+      ([, key, quoted, single, bare]) => [key.toLowerCase(), quoted ?? single ?? bare]));
+    const entry = kind.toLowerCase() === "script" && attrs.get("type") === "module";
+    const preload = kind.toLowerCase() === "link" && attrs.get("rel")?.split(/\s+/).includes("modulepreload");
+    if (!entry && !preload) continue;
+    const ref = attrs.get(entry ? "src" : "href");
+    if (!ref) throw new Error("Missing startup asset URL: " + tag);
+    const url = new URL(ref, "https://build.invalid/index.html");
+    if (url.origin !== "https://build.invalid") throw new Error("Unmeasured external startup asset: " + ref);
+    visit(decodeURIComponent(url.pathname.slice(1)));
+    if (entry) hasEntry = true;
+  }
+  if (!hasEntry) throw new Error("Missing HTML module entry");
+}
 if (!initial.size) throw new Error("Missing entry chunk");
 const deferredModules = [
   "/features/audit/AuditView.tsx", "/features/settings/SettingsView.tsx",

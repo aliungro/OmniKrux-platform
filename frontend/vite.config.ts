@@ -1,6 +1,5 @@
 /// <reference types="vitest/config" />
 import { relative } from "node:path";
-import { gzipSync } from "node:zlib";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
@@ -14,8 +13,6 @@ export default defineConfig({
         entry: chunk.isEntry,
         imports: chunk.imports,
         dynamicImports: chunk.dynamicImports,
-        bytes: Buffer.byteLength(chunk.code),
-        gzipBytes: gzipSync(chunk.code).byteLength,
         modules: Object.keys(chunk.modules).map(id => "/" + relative(process.cwd(), id).replaceAll("\\", "/")),
       }));
       this.emitFile({ type: "asset", fileName: ".vite/startup-graph.json", source: JSON.stringify({ chunks }) });

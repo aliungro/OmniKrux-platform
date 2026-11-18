@@ -284,9 +284,11 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
   }, [selection.selected, shown]);
   // The follow log moves with this pane's selection once it settles.
   useFollowSelection({ active: paneActive, kindKey, selected: selection.selected, watch, dock });
+  const [tableReady, setTableReady] = useState(false);
+  const tableMount = useCallback((element: HTMLDivElement | null) => setTableReady(element !== null), []);
   const paletteSelection = useMemo<PaletteSelection | null>(
-    () => (selectedRow ? { ...selectedRow, kind } : null),
-    [selectedRow, kind],
+    () => (tableReady && selectedRow ? { ...selectedRow, kind } : null),
+    [tableReady, selectedRow, kind],
   );
   const onRowAction = useCallback(
     (action: RowAction) => {
@@ -343,8 +345,8 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
         />
         <FilterBar paneActive={paneActive} clusters={list} scope={view.clusters} onScope={scope => { cancelJump(); lastText.current = 0; setScopeNotice(null); tabNav.navigate(v => v.page === "kind" ? {...v, clusters: scope} : v, "push"); }} value={filters} onChange={onFilters} chips={chips} counts={counts} namespaces={namespaces} columns={kind.columns} pickSource={all} />
         <NavigationNotice text={nav.notice ?? scopeNoticeText} waiting={nav.waiting} />
-        <div className={s.main} data-kind-row-keys>
-          <ViewBoundary label="resources">
+        <ViewBoundary label="resources">
+          <div className={s.main} data-kind-row-keys ref={tableMount}>
             <TerritoryTable
               initialScrollTop={initialScrollTop}
               onScroll={tabNav.setScroll}
@@ -373,8 +375,8 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
               onOpenSplit={onOpenView && openRowSplit}
               menuView={tabNav.view}
             />
-          </ViewBoundary>
-        </div>
+          </div>
+        </ViewBoundary>
       </>
     );
   }
