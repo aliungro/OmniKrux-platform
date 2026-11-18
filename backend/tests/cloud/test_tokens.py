@@ -606,3 +606,45 @@ async def test_upgrade_rejects_sent_header_even_when_configuration_differs(
             )
         assert error.value.status == 401
         assert (await source()).value != sent
+
+
+async def test_noncallable_provider_rejection_hook_does_not_mask_401(
+    cloud_cluster, fake_api, monkeypatch
+):
+    app, cluster, account = cloud_cluster
+    services = app.state.cloud
+    adapter = services.adapters[account.provider]
+    original_fetch = adapter.token_fetch
+    fetches = 0
+
+    def provider_fetch(config, ref):
+        fetch_token = original_fetch(config, ref)
+
+        async def fetch():
+            nonlocal fetches
+            fetches += 1
+            return await fetch_token()
+
+        fetch.reject = "unexpected metadata"
+        return fetch
+
+    monkeypatch.setattr(adapter, "token_fetch", provider_fetch)
+    source = await services.broker.tokens_for(cluster.id)
+    sent = (await source()).value
+    assert (await source()).value == sent
+    assert fetches == 1
+
+    async def refuse(request):
+        assert request.headers["Authorization"] == f"Bearer {sent}"
+        return web.Response(status=401)
+
+    monkeypatch.setattr(fake_api, "_route", refuse)
+    async with app.state.connections.ws_api(cluster.id) as api:
+        with pytest.raises(WSServerHandshakeError) as error:
+            await api.rest_client.pool_manager.ws_connect(
+                api.configuration.host + "/exec", headers={"Authorization": f"Bearer {sent}"}
+            )
+        assert error.value.status == 401
+        assert fetches == 1
+        await source()
+        assert fetches == 2

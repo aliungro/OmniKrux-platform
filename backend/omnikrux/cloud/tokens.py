@@ -131,7 +131,8 @@ class TokenBroker:
                 raise CloudClusterUnavailable(exc.message) from None
             source.require_active()
             # Some providers also cache the credential shared with discovery.
-            source.reject_provider_token = getattr(fetch, "reject", None)
+            reject = getattr(fetch, "reject", None)
+            source.reject_provider_token = reject if callable(reject) else None
             return token
         finally:
             del self._refreshes[cluster_id]
