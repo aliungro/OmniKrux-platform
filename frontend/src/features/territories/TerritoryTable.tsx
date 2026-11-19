@@ -587,9 +587,10 @@ export const TerritoryTable = memo(function TerritoryTable({
       // Nested and replacement dialogs inherit the original row until final close.
       if (!active || active === document.body || active.closest('[aria-modal="true"]')) return;
       const grid = gridRef.current;
-      const row = active.closest<HTMLElement>("[data-row-key]");
-      modalOrigin.current = grid && row?.dataset.rowKey && grid.contains(row)
-        ? { grid, key: row.dataset.rowKey } : null;
+      const origin = active.closest<HTMLElement>("[data-row-key], [data-inspector-key]");
+      const key = origin?.dataset.rowKey ?? origin?.dataset.inspectorKey;
+      modalOrigin.current = grid && key && active.closest('[role="grid"]') === grid && key === ownerKey
+        ? { grid, key } : null;
     });
     const stopClose = onLastDialogClosed(() => { modalOrigin.current = null; });
     return () => {
@@ -789,6 +790,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                 <div
                   key={v.key}
                   ref={virtualizer.measureElement}
+                  data-inspector-key={rowKey(it.row.cluster_id, it.row.uid)}
                   data-index={v.index}
                   role="row"
                   aria-rowindex={rowIndex}

@@ -575,6 +575,31 @@ function press(el: Element, init: KeyboardEventInit = { key: "Delete", ctrlKey: 
   return event;
 }
 
+it.each(["connected", "Escape", "Cancel"] as const)("inspector Delete restores owned focus for %s", async close => {
+  const { serve, plans } = serveDeletes();
+  const watches = await renderPods(undefined, false, serve);
+  await userEvent.click(podRow(pods[0].name));
+  const inspector = await screen.findByRole("region", { name: "Details for " + pods[0].name });
+  const opener = within(inspector).getByRole("button", { name: /^Delete\b/ });
+  await userEvent.click(opener);
+  const review = await screen.findByRole("dialog", { name: "Delete Pod " + pods[0].name });
+  if (close === "connected") {
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(document.activeElement === opener).toBe(true));
+    return;
+  }
+  updatePods(watches, [pods[1]]);
+  await waitFor(() => expect(opener.isConnected).toBe(false));
+  expect(review.contains(document.activeElement)).toBe(true);
+  if (close === "Escape") await userEvent.keyboard("{Escape}");
+  else await userEvent.click(within(review).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(document.activeElement === podRow(pods[1].name)).toBe(true));
+  updatePods(watches, [{ ...pods[0], uid: "replacement" }, pods[1]]);
+  await waitFor(() => expect(podRow(pods[0].name).getAttribute("aria-selected")).toBe("false"));
+  expect(screen.queryByRole("region", { name: /^Details for/ })).toBeNull();
+  expect(plans()).toHaveLength(1);
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/apply"))).toBe(false);
+});
 it("after a ctrl+delete removal focus is on a row, not the body", async () => {
   const { serve, plans } = serveDeletes();
   const three = [...pods, { ...pods[1], uid: "api-third", name: "api-third" }];

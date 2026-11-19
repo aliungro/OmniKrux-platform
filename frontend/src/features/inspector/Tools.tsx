@@ -212,13 +212,16 @@ export function useTools({
   };
 
   const buttons: ReactNode = tools.map((tool) => {
+    // A delete review can restore its opener only while the button remains focusable.
+    const reviewingDelete = tool === "delete" && busy === tool;
     const caps = tool === "rollback" || tool === "evict" ? [] : capsOf(tool);
     return (
       <button
         key={tool}
         type="button"
         className={`${s.btn}${tool === "delete" || tool === "evict" ? ` ${s.danger}` : ""}`}
-        disabled={busy !== null}
+        disabled={busy !== null && !reviewingDelete}
+        aria-disabled={reviewingDelete || undefined}
         aria-pressed={open === tool ? true : undefined}
         onClick={() => run(tool)}
       >

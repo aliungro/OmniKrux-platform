@@ -718,7 +718,7 @@ describe("keys per kind", () => {
     expect(document.activeElement).toBe(podRow("pod-2"));
   });
 
-  it.each(["unrelated opener", "different missing selection"])("skips modal rescue with %s", async (reason) => {
+  it.each(["unrelated opener", "other grid inspector", "different missing selection"])("skips modal rescue with %s", async (reason) => {
     const client = new QueryClient();
     const all = rows(3);
     function ui(modal: boolean, removed: boolean) {
@@ -727,12 +727,14 @@ describe("keys per kind", () => {
         <TerritoryTable territories={[territory(removed ? all.filter(r => r.uid !== "1") : all)]}
           kind={PODS} onRetry={() => {}} selection={{ selected: { clusterId: "c1", uid }, open: false }}
           onSelection={() => {}} />
-        {!removed && <button>Outside</button>}
+        {!removed && (reason === "other grid inspector"
+          ? <div role="grid"><div data-inspector-key="c1/1"><button>Outside</button></div></div>
+          : <button>Outside</button>)}
         {modal && <AllShortcuts groups={[]} onClose={() => {}} />}
       </QueryClientProvider>;
     }
     const { rerender } = render(ui(false, false));
-    const opener = reason === "unrelated opener" ? screen.getByRole("button", { name: "Outside" }) : podRow("pod-1");
+    const opener = reason === "different missing selection" ? podRow("pod-1") : screen.getByRole("button", { name: "Outside" });
     opener.focus();
     rerender(ui(true, false));
     rerender(ui(true, true));
