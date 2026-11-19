@@ -600,6 +600,28 @@ it.each(["connected", "Escape", "Cancel"] as const)("inspector Delete restores o
   expect(plans()).toHaveLength(1);
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/apply"))).toBe(false);
 });
+it.each(["Escape", "Cancel"] as const)("a same-name replacement that arrives during an inspector Delete review is never selected (%s)", async close => {
+  const { serve, plans } = serveDeletes();
+  const watches = await renderPods(undefined, false, serve);
+  await userEvent.click(podRow(pods[0].name));
+  const inspector = await screen.findByRole("region", { name: "Details for " + pods[0].name });
+  await userEvent.click(within(inspector).getByRole("button", { name: /^Delete\b/ }));
+  const review = await screen.findByRole("dialog", { name: "Delete Pod " + pods[0].name });
+  // The Pod goes and its same-name replacement arrives while the review is still open.
+  updatePods(watches, [pods[1]]);
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Details for/ })).toBeNull());
+  updatePods(watches, [{ ...pods[0], uid: "replacement" }, pods[1]]);
+  await waitFor(() => expect(podRow(pods[0].name)).toBeTruthy());
+  expect(review.contains(document.activeElement)).toBe(true);
+  if (close === "Escape") await userEvent.keyboard("{Escape}");
+  else await userEvent.click(within(review).getByRole("button", { name: "Cancel" }));
+  const grid = podRow(pods[1].name).closest('[role="grid"]')!;
+  await waitFor(() => expect(grid.contains(document.activeElement) && document.activeElement?.hasAttribute("data-row-key")).toBe(true));
+  expect(podRow(pods[0].name).getAttribute("aria-selected")).toBe("false");
+  expect(screen.queryByRole("region", { name: /^Details for/ })).toBeNull();
+  expect(plans()).toHaveLength(1);
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/apply"))).toBe(false);
+});
 it("after a ctrl+delete removal focus is on a row, not the body", async () => {
   const { serve, plans } = serveDeletes();
   const three = [...pods, { ...pods[1], uid: "api-third", name: "api-third" }];

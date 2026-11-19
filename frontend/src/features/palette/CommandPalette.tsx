@@ -159,7 +159,10 @@ export function CommandPalette({
     const back = document.activeElement;
     inputRef.current?.focus();
     return () => {
-      if (!changedView.current && back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
+      // Opened from the page itself (<body>, or the workspace <main> a page load focuses):
+      // the page's own fallback picks the target, as for any lost focus.
+      const fromPage = back === document.body || (back instanceof HTMLElement && back.tagName === "MAIN");
+      if (!changedView.current && back instanceof HTMLElement && !fromPage && back.isConnected) back.focus();
       else focusLost.current?.();
       release();
     };

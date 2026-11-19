@@ -22,6 +22,10 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
     && watch.clusters[target.clusterId]?.state === "ready"
     && watch.nextSnapshotPart[target.clusterId] !== undefined;
   const available = current || retained;
+  // A reconnect is not a new visit. A proved landing stays selected, as any selection does,
+  // while its cluster has no current data; the next complete snapshot decides whether the
+  // UID is still there. That snapshot is keyed by UID, so no second Describe proof is needed.
+  const reconnecting = !!target && established.current === target && !available && registered !== false;
   const row = target && available ? watch.rows[target.clusterId]?.get(target.uid) : undefined;
   const name = row?.name;
   const namespace = row?.namespace;
@@ -42,6 +46,7 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
     // Once this landing proved the UID, the mounted inspector owns version refreshes.
     // Re-gating an ordinary same-UID update would unmount its editor and lose drafts.
     if (target && established.current === target && available && registered !== false && name !== undefined && namespace === target.namespace) return;
+    if (reconnecting) return;
     established.current = undefined;
     setProof(null);
     if (!target) return;
@@ -56,9 +61,9 @@ export function useAttentionLanding(target: Target, watch: WatchState, registere
       error => { if (owned) setProof({ target, state: error instanceof HttpError && error.status === 404 ? "missing" : "error" }); },
     );
     return () => { owned = false; };
-  }, [target, current, available, registered, name, namespace, rv, client, attempt]);
+  }, [target, current, available, reconnecting, registered, name, namespace, rv, client, attempt]);
   const state = !target ? null : proof?.target === target ? proof.state : "waiting";
-  const ready = state === "ready" && available && !!row;
+  const ready = state === "ready" && (available ? !!row : reconnecting);
   useLayoutEffect(() => {
     const owner = root.current;
     if (!owner || !ready || !tableReady || !paneActive || document.activeElement !== owner || !target) return;

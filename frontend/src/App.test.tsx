@@ -255,8 +255,9 @@ describe("Console dock wiring", () => {
       rows: [pod("alpha", "Running", "ok"), pod("beta", "Running", "ok"), pod("gamma", "Running", "ok")] });
     renderConsole();
     const first = (await screen.findByText("alpha")).closest<HTMLElement>('[role="row"]')!;
-    expect(document.activeElement).toBe(document.body);
-    fireEvent.keyDown(document.body, { key: "ArrowDown" });
+    // A page load puts the keyboard on the workspace, never on <body>.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("main")));
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(first.getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first, { key: "l" });
@@ -372,8 +373,8 @@ describe("Console dock wiring", () => {
   it("closing the palette opened from the page puts focus on the table row", async () => {
     renderConsole();
     const row = (await screen.findByText("crasher-1")).closest<HTMLElement>('[role="row"]')!;
-    expect(document.activeElement).toBe(document.body);
-    fireEvent.keyDown(document.body, { key: ":" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("main")));
+    fireEvent.keyDown(document.activeElement!, { key: ":" });
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(document.activeElement).toBe(row);
   });

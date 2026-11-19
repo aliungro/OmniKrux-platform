@@ -45,6 +45,8 @@ function show() {
 }
 const search = () => screen.getByRole("combobox", { name: "Search Kubernetes" });
 const failingPod: ResourceRow = { ...pod, columns: { status: "CrashLoopBackOff", status_class: "bad" } };
+const nextFrame = () => act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+const pod2 = (): ResourceRow => ({ ...pod, uid: "p2", name: "api-pod" });
 const podLink = () => screen.getByRole("button", { name: /web-pod.*demo.*prod-east.*CrashLoopBackOff/ });
 const coldTable = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
 vi.mock("../territories/TerritoryTable", async importOriginal => {
@@ -331,6 +333,39 @@ it("the first move after a queue landing does not reveal the next row again", as
   // An ordinary move keeps the list where it is; only a new landing aligns to the top.
   expect(scrollRequests.filter(r => r.align === "start")).toEqual([]);
 });
+it("a reconnect keeps an opened queue Pod selected like any other selection", async () => {
+  show(); await ready([failingPod, pod2()]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  await screen.findByRole("tab", { name: /Describe/ });
+  const ws = FakeWebSocket.last;
+  act(() => ws.emit({ type: "cluster_status", cluster_id: "c1", state: "syncing", message: "Watch restarted" }));
+  await nextFrame();
+  expect(screen.queryByText(/Opening Pod/)).toBeNull();
+  act(() => {
+    ws.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    ws.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [failingPod, pod2()] });
+  });
+  await nextFrame();
+  expect(screen.queryByText(/Opening Pod/)).toBeNull();
+  await screen.findByRole("tab", { name: /Describe/ });
+  expect(document.querySelector('[data-row-key="c1/p1"]')?.getAttribute("aria-selected")).toBe("true");
+});
+it("a reconnect that loses the opened queue Pod says it is gone", async () => {
+  show(); await ready([failingPod, pod2()]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  await screen.findByRole("tab", { name: /Describe/ });
+  const ws = FakeWebSocket.last;
+  act(() => {
+    ws.emit({ type: "cluster_status", cluster_id: "c1", state: "syncing", message: null });
+    ws.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    ws.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [{ ...failingPod, uid: "p1-new" }, pod2()] });
+  });
+  expect(await screen.findByText("This Pod is no longer available")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+  expect(document.querySelector('[data-row-key="c1/p1-new"]')?.getAttribute("aria-selected")).not.toBe("true");
+});
 it("each queue visit rechecks identity and late proof preserves deliberate focus", async () => {
   const originalFetch = vi.mocked(fetch);
   let resolve!: (value: Response) => void;
@@ -443,6 +478,19 @@ function seedClosed(view: KubeView, back: KubeView[] = [HOME]) {
   localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
 }
 
+it("a fresh page load puts the keyboard in the workspace, not on the page body", async () => {
+  show();
+  await nextFrame();
+  expect(document.activeElement).toBe(screen.getByRole("main"));
+});
+it("a pane that claims focus as the page loads keeps it", async () => {
+  const ws = defaultWorkspace();
+  ws.kubernetes.tabs[0].view = { page: "home", section: "discovered" };
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+  show();
+  await nextFrame();
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Discovered clusters" }));
+});
 it("home leads with the search", () => {
   show();
   const heading = screen.getByRole("heading", { name: "Where do you want to look?" });
@@ -570,6 +618,15 @@ it("a cluster that can't be reached says so", async () => {
   show(); await screen.findByRole("button", { name: /prod-east/ });
   act(() => FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "error", message: "certificate expired" }));
   expect((await screen.findAllByText("Can't reach it: certificate expired")).length).toBeGreaterThan(0);
+});
+it("a cloud cluster's connection problem shows the backend's safe cause", async () => {
+  // The backend words cloud watch errors without the endpoint (R48), so Home can say why.
+  clusters = [{ ...cluster, source: "cloud", server: null }];
+  show(); await screen.findByRole("button", { name: /prod-east/ });
+  const cause = "Couldn't watch the cluster's resources. Check the cluster, then try again.";
+  act(() => FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "error", message: cause }));
+  await waitFor(() => expect(screen.getAllByText(cause).length).toBe(2)); // the card and the problem row
+  expect(screen.queryByText("Connection unavailable")).toBeNull();
 });
 it("opening a card scopes the tab to that cluster and back returns home", async () => {
   show(); fireEvent.click(await screen.findByRole("button", { name: /prod-east/ }));

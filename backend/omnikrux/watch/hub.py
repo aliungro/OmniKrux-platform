@@ -3,9 +3,11 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Protocol
 
-from omnikrux.clusters.registry import ClusterInfo
+from omnikrux.clusters.registry import SOURCE_CLOUD, ClusterInfo
+from omnikrux.kube.connections import cloud_kube_error
+from omnikrux.kube.tokens import CloudClusterUnavailable
 from omnikrux.resources.kinds import is_kind_key
-from omnikrux.watch.cache import WatchCache
+from omnikrux.watch.cache import WatchCache, default_watch_error
 from omnikrux.watch.source import ResourceSource
 
 logger = logging.getLogger(__name__)
@@ -235,13 +237,28 @@ class WatchHub:
             except Exception:
                 logger.warning("forgetting cluster %s elsewhere failed", cluster_id, exc_info=True)
 
+    async def _watch_error(self, cluster_id: str, exc: Exception) -> str:
+        """Words a failed watch. A cloud cluster's raw error can name its private API endpoint
+        (Plan 5 R48), so only cloud-safe wording is published for it; a file cluster keeps its
+        usual reason."""
+        clusters = await self._registry.list()
+        if not any(c.id == cluster_id and c.source == SOURCE_CLOUD for c in clusters):
+            return default_watch_error(exc)
+        if isinstance(exc, CloudClusterUnavailable):  # written to be safe to publish
+            return exc.message
+        return cloud_kube_error("watch the cluster's resources", exc=exc).message
+
     def _acquire(self, key: Key) -> WatchCache:
         if (pending := self._evictions.pop(key, None)) is not None:
             pending.cancel()
         cache = self._caches.get(key)
         if cache is None:
             cid, kind_key = key
-            cache = self._caches[key] = WatchCache(cid, lambda: self._source_for(cid, kind_key))
+            cache = self._caches[key] = WatchCache(
+                cid,
+                lambda: self._source_for(cid, kind_key),
+                describe_error=lambda exc: self._watch_error(cid, exc),
+            )
         self._refs[key] = self._refs.get(key, 0) + 1
         return cache
 

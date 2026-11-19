@@ -118,6 +118,15 @@ export function Shell() {
       if (target === before || target === document.body) main.current?.focus({ preventScroll: true });
     });
   }, []);
+  // A page load starts like an app switch: the keyboard goes to the workspace unless a
+  // pane claimed it while mounting (a heading, a landing), never staying on <body>.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active === null || active === document.body) main.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const switchApp = useCallback((app: AppId) => {
     setSettingsSection(undefined);
     dispatch({ type: "switchApp", app });

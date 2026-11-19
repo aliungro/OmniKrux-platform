@@ -1,8 +1,13 @@
 import asyncio
+import dataclasses
 
 import pytest
 
+from omnikrux.clusters.registry import SOURCE_CLOUD
+from omnikrux.kube.client import ClusterUnavailable
+from omnikrux.kube.tokens import CloudClusterUnavailable
 from omnikrux.watch.hub import WatchHub
+from tests.conftest import FakeRegistry, _cluster
 from tests.watch.fakes import FakeSource
 from tests.watch.test_cache import p
 
@@ -25,6 +30,60 @@ async def test_one_bad_cluster_does_not_block_others(fake_registry_two_clusters)
     msgs = await asyncio.wait_for(collect(await hub.subscribe("pods"), 5), 2)
     assert any(m["type"] == "snapshot" and m["cluster_id"] == "good" for m in msgs)
     assert hub.status("bad") == ("error", "Can't reach this cluster: dial tcp: i/o timeout")
+    await hub.close()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        RuntimeError("Cannot connect to host 10.20.30.40:443 ssl:default"),
+        ClusterUnavailable("The cluster rejected the console's credentials: 10.20.30.40:443"),
+    ],
+)
+async def test_a_cloud_cluster_watch_error_never_repeats_the_raw_error(raw):
+    # The raw text can carry the private API endpoint (R48); a cloud cluster gets safe words.
+    cloud = dataclasses.replace(_cluster("cloud"), source=SOURCE_CLOUD)
+    sources = {
+        "cloud": FakeSource(factory_errors=[raw] * 100),
+        "file": FakeSource(factory_errors=[raw] * 100),
+    }
+    hub = WatchHub(
+        FakeRegistry([cloud, _cluster("file")]),
+        lambda cid, spec: sources[cid].factory(),
+        idle_seconds=0.1,
+    )
+    sub = await hub.subscribe("pods")
+
+    async def settled():
+        while hub.status("cloud")[0] != "error" or hub.status("file")[0] != "error":
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(settled(), 2)
+    _, message = hub.status("cloud")
+    assert "10.20.30.40" not in message
+    assert message == "Couldn't watch the cluster's resources. Check the cluster, then try again."
+    file_message = (
+        raw.message if isinstance(raw, ClusterUnavailable) else f"Can't reach this cluster: {raw}"
+    )
+    assert hub.status("file") == ("error", file_message)
+    await sub.close()
+    await hub.close()
+
+
+async def test_a_cloud_cluster_keeps_its_own_safe_diagnostic():
+    said = "The cloud account was removed. Reconnect it in Settings."
+    cloud = dataclasses.replace(_cluster("cloud"), source=SOURCE_CLOUD)
+    source = FakeSource(factory_errors=[CloudClusterUnavailable(said)] * 100)
+    hub = WatchHub(FakeRegistry([cloud]), lambda cid, spec: source.factory(), idle_seconds=0.1)
+    sub = await hub.subscribe("pods")
+
+    async def settled():
+        while hub.status("cloud")[0] != "error":
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(settled(), 2)
+    assert hub.status("cloud") == ("error", said)
+    await sub.close()
     await hub.close()
 
 

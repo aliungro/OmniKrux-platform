@@ -194,6 +194,23 @@ async def test_generic_error_message_and_backoff_resets_after_a_watch_delivers_a
     await cache.stop()
 
 
+async def test_a_failure_to_word_the_error_still_publishes_a_safe_status():
+    async def broken(exc: Exception) -> str:
+        raise RuntimeError("registry offline")
+
+    src = FakeSource(factory_errors=[RuntimeError("dial 10.20.30.40:443")] * 5)
+    cache = WatchCache("cl", src.factory, backoff=(60,), describe_error=broken)
+    q = cache.subscribe()
+    await cache.start()
+    msgs = await drain(q, 2)
+    statuses = [(m["state"], m["message"]) for m in msgs if m["type"] == "cluster_status"]
+    assert statuses == [
+        ("syncing", None),
+        ("error", "Can't reach this cluster. Check the cluster, then try again."),
+    ]
+    await cache.stop()
+
+
 async def test_retry_keeps_the_last_error_visible_until_the_next_outcome():
     from omnikrux.kube.client import ClusterUnavailable
 
