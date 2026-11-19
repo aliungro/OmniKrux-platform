@@ -17,6 +17,13 @@ SNAPSHOT_PART_SIZE = 500
 ABSENT_RECHECK_SECONDS = 300
 
 
+def default_watch_error(exc: Exception) -> str:
+    """The published reason for a failed watch: a `ClusterUnavailable` is already in words."""
+    if isinstance(exc, ClusterUnavailable):
+        return exc.message
+    return f"Can't reach this cluster: {str(exc) or type(exc).__name__}"
+
+
 class WatchCache:
     """List+watch one kind on one cluster and fan snapshots and deltas out to subscribers.
 
@@ -32,11 +39,13 @@ class WatchCache:
         backoff: Sequence[float] = (1, 2, 5, 10, 30),
         stable_seconds: float = 30,
         min_watch_interval: float = 1,
+        describe_error: Callable[[Exception], Awaitable[str]] | None = None,
     ):
         """`backoff` steps reset only once a watch proved stable: it delivered an event or stayed
         up for `stable_seconds`. Watches restart at most once per `min_watch_interval` seconds."""
         self.cluster_id = cluster_id
         self._source_factory = source_factory
+        self._describe_error = describe_error
         self._backoff = tuple(backoff)
         self._stable_seconds = stable_seconds
         self._min_watch_interval = min_watch_interval
@@ -123,17 +132,25 @@ class WatchCache:
                 if self._stable:
                     step = 0
                 if isinstance(exc, ClusterUnavailable):
-                    message = exc.message
-                    logger.warning("cluster %s unavailable: %s", self.cluster_id, message)
+                    logger.warning("cluster %s unavailable: %s", self.cluster_id, exc.message)
                 else:
-                    message = f"Can't reach this cluster: {str(exc) or type(exc).__name__}"
                     logger.warning("watch failed for cluster %s", self.cluster_id, exc_info=True)
+                message = await self._error_message(exc)
                 self._retry.clear()
                 self._set_state("error", message)
                 last_error = message
                 delay = self._backoff[min(step, len(self._backoff) - 1)]
                 step += 1
                 await self._wait_backoff(delay)
+
+    async def _error_message(self, exc: Exception) -> str:
+        if self._describe_error is not None:
+            try:
+                return await self._describe_error(exc)
+            except Exception:  # noqa: BLE001 - a status must still be published
+                logger.warning("could not word the watch error for %s", self.cluster_id)
+                return "Can't reach this cluster. Check the cluster, then try again."
+        return default_watch_error(exc)
 
     async def _relist(self, source: ResourceSource) -> str:
         items, rv = await source.list()

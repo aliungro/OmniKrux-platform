@@ -606,6 +606,15 @@ it("a cluster that can't be reached says so", async () => {
   act(() => FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "error", message: "certificate expired" }));
   expect((await screen.findAllByText("Can't reach it: certificate expired")).length).toBeGreaterThan(0);
 });
+it("a cloud cluster's connection problem shows the backend's safe cause", async () => {
+  // The backend words cloud watch errors without the endpoint (R48), so Home can say why.
+  clusters = [{ ...cluster, source: "cloud", server: null }];
+  show(); await screen.findByRole("button", { name: /prod-east/ });
+  const cause = "Couldn't watch the cluster's resources. Check the cluster, then try again.";
+  act(() => FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "error", message: cause }));
+  await waitFor(() => expect(screen.getAllByText(cause).length).toBe(2)); // the card and the problem row
+  expect(screen.queryByText("Connection unavailable")).toBeNull();
+});
 it("opening a card scopes the tab to that cluster and back returns home", async () => {
   show(); fireEvent.click(await screen.findByRole("button", { name: /prod-east/ }));
   expect(screen.getByRole("tab", { name: "Pods · prod-east" })).toBeTruthy();
