@@ -575,6 +575,31 @@ function press(el: Element, init: KeyboardEventInit = { key: "Delete", ctrlKey: 
   return event;
 }
 
+it.each(["connected", "Escape", "Cancel"] as const)("inspector Delete restores owned focus for %s", async close => {
+  const { serve, plans } = serveDeletes();
+  const watches = await renderPods(undefined, false, serve);
+  await userEvent.click(podRow(pods[0].name));
+  const inspector = await screen.findByRole("region", { name: "Details for " + pods[0].name });
+  const opener = within(inspector).getByRole("button", { name: /^Delete\b/ });
+  await userEvent.click(opener);
+  const review = await screen.findByRole("dialog", { name: "Delete Pod " + pods[0].name });
+  if (close === "connected") {
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(document.activeElement === opener).toBe(true));
+    return;
+  }
+  updatePods(watches, [pods[1]]);
+  await waitFor(() => expect(opener.isConnected).toBe(false));
+  expect(review.contains(document.activeElement)).toBe(true);
+  if (close === "Escape") await userEvent.keyboard("{Escape}");
+  else await userEvent.click(within(review).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(document.activeElement === podRow(pods[1].name)).toBe(true));
+  updatePods(watches, [{ ...pods[0], uid: "replacement" }, pods[1]]);
+  await waitFor(() => expect(podRow(pods[0].name).getAttribute("aria-selected")).toBe("false"));
+  expect(screen.queryByRole("region", { name: /^Details for/ })).toBeNull();
+  expect(plans()).toHaveLength(1);
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/apply"))).toBe(false);
+});
 it("after a ctrl+delete removal focus is on a row, not the body", async () => {
   const { serve, plans } = serveDeletes();
   const three = [...pods, { ...pods[1], uid: "api-third", name: "api-third" }];
@@ -953,4 +978,63 @@ it("a zone change does not re-render the table rows", async () => {
   fireEvent.keyDown(document.activeElement!, { key: "Escape" });
   await waitFor(() => expect(zonePane().getAttribute("data-keyboard-zone")).toBe("table"));
   expect(rowRenders.count).toBe(before);
+});
+
+it.each([{ key: "Escape" }, { key: "ArrowUp", altKey: true }])("$key from logs reveals and focuses the selected virtualized row", async (keys) => {
+  const watches = await renderPods();
+  const many = Array.from({ length: 10000 }, (_, i) => ({ ...pods[0], uid: "z" + i, name: "z" + i }));
+  updatePods(watches, [...pods, ...many]);
+  const first = startAtFirstPod();
+  const targetKey = first.dataset.rowKey;
+  fireEvent.keyDown(first, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  tab.focus();
+  const grid = first.closest<HTMLElement>('[role="grid"]')!;
+  const viewport = grid.parentElement!;
+  Object.defineProperty(viewport, "scrollHeight", { value: 360200 });
+  let requested: number | undefined;
+  viewport.scrollTo = ((opts: ScrollToOptions) => { requested = opts.top; }) as typeof viewport.scrollTo;
+  fireEvent.scroll(viewport, { target: { scrollTop: 36000 } });
+  expect(first.isConnected).toBe(false);
+  expect(grid.querySelectorAll("[data-row-key]").length).toBeLessThan(60);
+  fireEvent.keyDown(tab, keys);
+  expect(requested).toBeDefined();
+  fireEvent.scroll(viewport, { target: { scrollTop: requested } });
+  await waitFor(() => expect(document.activeElement).toBe(podRow(pods[0].name)));
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe(targetKey);
+  expect(viewport.scrollTop).toBeLessThan(100);
+  expect(grid.querySelectorAll("[data-row-key]").length).toBeLessThan(60);
+  expect(await logTab(pods[0].name)).toBe(tab);
+  expect(logStream(pods[0].name).closedByClient).toBe(false);
+});
+
+it("closing the final focused log keeps an offscreen selection outside the deferred return", async () => {
+  const watches = await renderPods();
+  updatePods(watches, [...pods, ...Array.from({ length: 200 }, (_, i) => ({ ...pods[0], uid: "z" + i, name: "z" + i }))]);
+  const selected = startAtFirstPod();
+  fireEvent.keyDown(selected, { key: "l" });
+  const tab = await logTab(pods[0].name);
+  tab.focus();
+  const viewport = selected.closest<HTMLElement>('[role="grid"]')!.parentElement!;
+  Object.defineProperty(viewport, "scrollHeight", { value: 8000 });
+  fireEvent.scroll(viewport, { target: { scrollTop: 3600 } });
+  expect(selected.isConnected).toBe(false);
+  const scroll = vi.fn();
+  viewport.scrollTo = scroll;
+  const frames: FrameRequestCallback[] = [];
+  const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => frames.push(callback));
+  try {
+    press(tab);
+    expect(tab.isConnected).toBe(false);
+    expect(frames.length).toBeGreaterThan(0);
+    const field = screen.getByRole("textbox", { name: /Filter by name/ });
+    field.focus();
+    field.blur();
+    act(() => frames.splice(0).forEach(callback => callback(performance.now())));
+    expect(scroll).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    expect(viewport.scrollTop).toBe(3600);
+  } finally {
+    raf.mockRestore();
+  }
 });

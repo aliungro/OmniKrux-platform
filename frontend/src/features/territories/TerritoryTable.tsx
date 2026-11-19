@@ -1,3 +1,5 @@
+import { onDialogOpened, onLastDialogClosed } from "../chrome/dialogLifecycle";
+import { registerSelectedRowFocus } from "../chrome/tableFocus";
 import { ColumnHeader } from "./ColumnHeader";
 import type { ColumnFilter, SortSpec } from "./columnFilters";
 import {
@@ -58,6 +60,9 @@ export interface TerritoryTableProps {
   kind: KindInfo;
   /** The current row and whether its details are open; held by Console so other views can set it. */
   selection: Selection;
+  /** Navigation identity survives the Home proof gate solely to finish owned focus work. */
+  attentionFocusOwner?: RowRef;
+  missingFocusOwner?: boolean;
   onSelection: Dispatch<SetStateAction<Selection>>;
   onRetry: (clusterId: string, state: ClusterState) => void;
   /** Live pods per node per cluster, for the Nodes view's Pods column. */
@@ -83,6 +88,7 @@ export interface TerritoryTableProps {
    * into view, and focuses it unless you've moved focus outside the table meanwhile.
    */
   reveal?: number;
+  expectedUid?: string;
   onOpenSplit?: (row: ResourceRow) => void;
   menuView?: unknown;
   paneActive?: boolean;
@@ -123,6 +129,8 @@ export const TerritoryTable = memo(function TerritoryTable({
   columnFilters = [], sort = null, onColumnFilter = () => {}, onSort = () => {}, pickSource = territories,
   kind,
   selection,
+  attentionFocusOwner,
+  missingFocusOwner = false,
   onSelection,
   onRetry,
   podCounts = null,
@@ -135,6 +143,7 @@ export const TerritoryTable = memo(function TerritoryTable({
   onWorkloadLogs,
   request = null,
   reveal = 0,
+  expectedUid,
   onOpenSplit,
   menuView,
   paneActive = true,
@@ -150,6 +159,8 @@ export const TerritoryTable = memo(function TerritoryTable({
     return m;
   }, [items]);
   const selectedKey = selected ? rowKey(selected.clusterId, selected.uid) : null;
+  const ownerKey = attentionFocusOwner ? rowKey(attentionFocusOwner.clusterId, attentionFocusOwner.uid) : selectedKey;
+  const gridRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const getGuideRect = useCallback(() => scrollRef.current?.getBoundingClientRect() ?? null, []);
   const restored = useRef(false);
@@ -515,12 +526,84 @@ export const TerritoryTable = memo(function TerritoryTable({
     else if (scrollRef.current) scrollRef.current.scrollTop = initialScrollTop;
   }, [territories, selectedKey, indexByKey, virtualizer, initialScrollTop]);
 
+  // The pending callback belongs to one dock return. Repeated requests replace it even
+  // when the target is the same row, and each listener is released with its own request.
+  const pendingReturn = useRef<{ deliver: (at: number | undefined) => void; cancel: () => void } | null>(null);
+  useLayoutEffect(() => () => pendingReturn.current?.cancel(), [paneActive, ownerKey, kind.key, attentionFocusOwner]);
+  const readyForReturn = selected !== null && (!expectedUid || expectedUid === selected.uid)
+    && territories.some(t => t.cluster.id === selected.clusterId && t.state === "ready");
+  const returnIndex = readyForReturn && selectedKey !== null ? indexByKey.get(selectedKey) : undefined;
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const owned = () => paneActive && grid.isConnected && gridRef.current === grid
+      && !grid.closest('[data-active-pane="false"]') && !document.querySelector('[aria-modal="true"]');
+    return registerSelectedRowFocus(grid, () => {
+      pendingReturn.current?.cancel();
+      if (!owned() || returnIndex === undefined) return false;
+      const origin = document.activeElement;
+      let lastIndex: number | undefined;
+      const cancel = () => {
+        stopOpen();
+        document.removeEventListener("focusin", cancel, true);
+        document.removeEventListener("focusout", cancel, true);
+        if (pendingReturn.current === request) pendingReturn.current = null;
+      };
+      const stopOpen = onDialogOpened(cancel);
+      const request = { cancel, deliver: (at: number | undefined) => {
+        if (pendingReturn.current !== request) return;
+        if (!owned() || document.activeElement !== origin) { cancel(); return; }
+        if (at === undefined) {
+          cancel();
+          grid.closest<HTMLElement>("main")?.focus({ preventScroll: true });
+          return;
+        }
+        if (at !== lastIndex) {
+          lastIndex = at;
+          virtualizer.scrollToIndex(at, { align: "auto" });
+        }
+        const row = grid.querySelector<HTMLElement>('[data-row-key][aria-selected="true"]');
+        if (row && row.dataset.rowKey === selectedKey) {
+          cancel();
+          row.focus({ preventScroll: true });
+        }
+      } };
+      pendingReturn.current = request;
+      document.addEventListener("focusin", cancel, true);
+      document.addEventListener("focusout", cancel, true);
+      request.deliver(returnIndex);
+      return true;
+    });
+  }, [paneActive, returnIndex, selectedKey, virtualizer]);
+  useLayoutEffect(() => { pendingReturn.current?.deliver(returnIndex); });
+
   /** The selected row's index while it's shown: where to put focus that goes with it. */
-  const selectedAt = useRef<number | null>(null);
+  const selectedAt = useRef<{ key: string; kind: string; index: number } | null>(null);
+  const modalOrigin = useRef<{ grid: HTMLElement; key: string } | null>(null);
+  useLayoutEffect(() => {
+    if (!paneActive) return;
+    const stopOpen = onDialogOpened(() => {
+      const active = document.activeElement;
+      // Nested and replacement dialogs inherit the original row until final close.
+      if (!active || active === document.body || active.closest('[aria-modal="true"]')) return;
+      const grid = gridRef.current;
+      const origin = active.closest<HTMLElement>("[data-row-key], [data-inspector-key]");
+      const key = origin?.dataset.rowKey ?? origin?.dataset.inspectorKey;
+      modalOrigin.current = grid && key && active.closest('[role="grid"]') === grid && key === ownerKey
+        ? { grid, key } : null;
+    });
+    const stopClose = onLastDialogClosed(() => { modalOrigin.current = null; });
+    return () => {
+      stopOpen();
+      stopClose();
+      selectedAt.current = null;
+      modalOrigin.current = null;
+    };
+  }, [paneActive, ownerKey, kind.key, attentionFocusOwner]);
   const latestItems = useRef(items);
   latestItems.current = items;
-  const rescueWait = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearInterval(rescueWait.current), []);
+  const cancelRescue = useRef<(() => void) | null>(null);
+  useLayoutEffect(() => () => cancelRescue.current?.(), [paneActive, ownerKey, kind.key, attentionFocusOwner]);
   /**
    * The selected row went (deleted, say) and took the focus with it: give it to the row now at
    * its index, else the last row, else `<main>`. Never the selection: that stays on what went.
@@ -528,7 +611,11 @@ export const TerritoryTable = memo(function TerritoryTable({
    * that went.
    */
   const rescueFocus = (index: number) => {
+    cancelRescue.current?.();
+    const grid = gridRef.current;
+    if (!grid) return;
     const land = () => {
+      if (!grid.isConnected || gridRef.current !== grid) return;
       if (document.activeElement !== null && document.activeElement !== document.body) return;
       const list = latestItems.current;
       let at = Math.min(index, list.length - 1);
@@ -543,16 +630,27 @@ export const TerritoryTable = memo(function TerritoryTable({
         .find((n) => n.dataset.rowKey === key);
       (el ?? scrollRef.current?.closest<HTMLElement>("main") ?? scrollRef.current)?.focus({ preventScroll: true });
     };
-    window.clearInterval(rescueWait.current);
     if (document.querySelector('[aria-modal="true"]') === null) {
       land();
       return;
     }
-    rescueWait.current = window.setInterval(() => {
-      if (document.querySelector('[aria-modal="true"]') !== null) return;
-      window.clearInterval(rescueWait.current);
+    if (modalOrigin.current?.grid !== grid || modalOrigin.current.key !== ownerKey) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && !active.closest('[aria-modal="true"]')) return;
+    const unsubscribe = onLastDialogClosed(() => {
+      cancel();
       land();
-    }, 100);
+    });
+    const moved = (event: FocusEvent) => {
+      if (event.target instanceof Element && !event.target.closest('[aria-modal="true"]')) cancel();
+    };
+    const cancel = () => {
+      unsubscribe();
+      document.removeEventListener("focusin", moved);
+      cancelRescue.current = null;
+    };
+    cancelRescue.current = cancel;
+    document.addEventListener("focusin", moved);
   };
 
   // Bring the selected row into view, then focus it once the virtualizer has rendered it.
@@ -566,7 +664,13 @@ export const TerritoryTable = memo(function TerritoryTable({
       focusPending.current = active === null || active === document.body || (scrollRef.current?.contains(active) ?? false);
     }
     if (selectedKey === null) {
-      selectedAt.current = null;
+      // Home can report the missing UID one render after withholding the selection.
+      const previous = selectedAt.current;
+      if (missingFocusOwner && previous) {
+        if (paneActive && previous.key === ownerKey && previous.kind === kind.key
+          && modalOrigin.current?.key === ownerKey) rescueFocus(previous.index);
+        selectedAt.current = null;
+      }
       return;
     }
     const at = indexByKey.get(selectedKey);
@@ -578,13 +682,15 @@ export const TerritoryTable = memo(function TerritoryTable({
       const home = territories.find((t) => t.cluster.id === selected?.clusterId);
       if (home && NOT_LIVE.has(home.state)) return;
       // Focus that went with the row lands on the row now in its place.
-      if (selectedAt.current !== null && paneActive) rescueFocus(selectedAt.current);
+      const previous = selectedAt.current;
+      if (paneActive && previous?.key === ownerKey && previous.kind === kind.key) rescueFocus(previous.index);
       selectedAt.current = null;
       // Deleted or filtered out on a live cluster: nothing left to inspect.
       if (open) { if (onMissingSelection) onMissingSelection(); else onSelection((prev) => (prev.open ? { ...prev, open: false } : prev)); }
       return;
     }
-    selectedAt.current = at;
+    cancelRescue.current?.();
+    selectedAt.current = { key: selectedKey, kind: kind.key, index: at };
     if (scrollPending.current) {
       scrollPending.current = false;
       virtualizer.scrollToIndex(at, { align: scrollAlign.current });
@@ -615,7 +721,6 @@ export const TerritoryTable = memo(function TerritoryTable({
   }, [layoutFor, widths]);
   // A column drag previews by writing the grid's template directly. A React pass per frame would
   // render every visible row again; the saved width goes through state once, on release.
-  const gridRef = useRef<HTMLDivElement>(null);
   const previewWidths = useRef(new Map<string, number>());
   const applyPreview = useCallback(() => {
     const grid = gridRef.current;
@@ -685,6 +790,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                 <div
                   key={v.key}
                   ref={virtualizer.measureElement}
+                  data-inspector-key={rowKey(it.row.cluster_id, it.row.uid)}
                   data-index={v.index}
                   role="row"
                   aria-rowindex={rowIndex}
@@ -694,6 +800,7 @@ export const TerritoryTable = memo(function TerritoryTable({
                   <div role="gridcell" aria-colspan={columnCount}>
                     <Inspector
                       row={it.row}
+                      expectedUid={expectedUid}
                       kindKey={kind.key}
                       verbs={verbsFor(kind, it.row)}
                       intent={intent?.key === rowKey(it.row.cluster_id, it.row.uid) ? intent : null}

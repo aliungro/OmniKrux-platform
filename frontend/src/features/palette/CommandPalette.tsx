@@ -1,3 +1,4 @@
+import { registerDialogRoot } from "../chrome/dialogLifecycle";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Cluster, KindInfo, ResourceRow } from "../../api/types";
 import { rowActions, type RowAction } from "../actions/tools";
@@ -117,6 +118,7 @@ export function CommandPalette({
 }) {
   const { pinned } = usePinnedKinds();
   const base = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -153,11 +155,13 @@ export function CommandPalette({
   const focusLost = useRef(onFocusLost);
   focusLost.current = onFocusLost;
   useEffect(() => {
+    const release = registerDialogRoot(dialogRef.current!);
     const back = document.activeElement;
     inputRef.current?.focus();
     return () => {
       if (!changedView.current && back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
       else focusLost.current?.();
+      release();
     };
   }, []);
 
@@ -205,6 +209,7 @@ export function CommandPalette({
     <div className={s.backdrop} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       {/* A click anywhere but the field keeps focus in the field, so the keys (Esc) keep working. */}
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}

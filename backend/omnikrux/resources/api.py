@@ -129,7 +129,9 @@ async def _owner_selector(api: ApiClient, namespace: str, owner: OwnerRef) -> st
 
 
 @router.get("/pods/{namespace}/{name}/describe")
-async def describe(cluster_id: str, namespace: str, name: str, request: Request) -> PodDescribe:
+async def describe(
+    cluster_id: str, namespace: str, name: str, request: Request, expected_uid: str | None = None
+) -> PodDescribe:
     async def events_of(api: ApiClient, uid: str) -> dict | Exception:
         try:
             return await read_json(
@@ -148,7 +150,10 @@ async def describe(cluster_id: str, namespace: str, name: str, request: Request)
 
     async def run(api: ApiClient) -> PodDescribe:
         pod = await read_pod(api, namespace, name, timeout=REQUEST_TIMEOUT)
-        uid = (pod.get("metadata") or {}).get("uid", "")
+        metadata = pod.get("metadata") or {}
+        if expected_uid is not None and expected_uid != metadata.get("uid"):
+            raise HTTPException(status_code=404, detail="This Pod is no longer available")
+        uid = metadata.get("uid", "")
         owner = describe_pod(pod, []).pod.owner
         events, selector = await asyncio.gather(
             events_of(api, uid),

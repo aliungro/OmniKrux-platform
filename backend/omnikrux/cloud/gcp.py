@@ -469,11 +469,8 @@ class GcpAdapter:
         return ClusterAccess(server, found.details.get("ca"))
 
     def token_fetch(self, account: AccountConfig, ref: CloudClusterRef) -> TokenFetch:
-        async def fetch() -> BearerToken:
-            self._project(account)
-            return await self._cached_token(account)()
-
-        return fetch
+        self._project(account)
+        return self._cached_token(account)
 
     def forget(self, account_id: str) -> None:
         self._tokens.pop(account_id, None)

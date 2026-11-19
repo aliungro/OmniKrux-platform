@@ -34,6 +34,7 @@ class _ClusterToken:
     ) -> None:
         self.ref = ref
         self._cache: CachedToken | None = CachedToken(partial(refresh, self))
+        self.reject_provider_token: Callable[[str], None] | None = None
         self.source = CloudTokenSource(self)
         self.account_checked = False
         self._forgotten: str | None = None
@@ -56,11 +57,14 @@ class _ClusterToken:
     def reject(self, value: str) -> None:
         if self._cache is not None:
             self._cache.reject(value)
+            if self.reject_provider_token is not None:
+                self.reject_provider_token(value)
 
     def forget(self, message: str) -> None:
         self._forgotten = message
         # Detach the cache. An in-flight waiter can settle without retrying the retired fetch.
         self._cache = None
+        self.reject_provider_token = None
 
 
 class TokenBroker:
@@ -120,11 +124,15 @@ class TokenBroker:
         try:
             account = await self._account(source)
             try:
-                token = await self._adapters[source.ref.provider].token_fetch(account, source.ref)()
+                fetch = self._adapters[source.ref.provider].token_fetch(account, source.ref)
+                token = await fetch()
             except CloudError as exc:
                 source.require_active()
                 raise CloudClusterUnavailable(exc.message) from None
             source.require_active()
+            # Some providers also cache the credential shared with discovery.
+            reject = getattr(fetch, "reject", None)
+            source.reject_provider_token = reject if callable(reject) else None
             return token
         finally:
             del self._refreshes[cluster_id]

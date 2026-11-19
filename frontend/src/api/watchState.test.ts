@@ -1,8 +1,64 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import type { WatchMessage } from "./types";
-import { applyMessage, applyMessages, emptyWatchState, resetForReconnect, type WatchState } from "./watchState";
+import { applyMessage, applyMessages, emptyWatchState, hasCurrentSnapshot, resetForReconnect, type WatchState } from "./watchState";
 const row = (uid: string) => ({ uid, cluster_id: "c", kind: "Pod", namespace: "n", name: uid, created_at: "", labels: {}, columns: {} });
 const snap = (uids: string[], part = 0, last = true) => ({ type: "snapshot", cluster_id: "c", rows: uids.map(row), part, last } as const);
+const ready = (cluster_id = "c") => ({ type: "cluster_status", cluster_id, state: "ready", message: null } as const);
+const syncing = { ...ready(), state: "syncing" } as const;
+
+describe("current snapshot", () => {
+  it("ready does not make an incomplete snapshot current", () => {
+    let s = applyMessage(emptyWatchState(), ready());
+    expect(hasCurrentSnapshot(s, "c")).toBe(false);
+    s = applyMessage(s, { type: "upsert", cluster_id: "c", row: row("retained") });
+    expect(hasCurrentSnapshot(s, "c")).toBe(false);
+    s = applyMessage(s, snap(["x"], 0, false));
+    expect(hasCurrentSnapshot(s, "c")).toBe(false);
+    s = applyMessage(s, snap(["y"], 1, true));
+    expect(hasCurrentSnapshot(s, "c")).toBe(true);
+    s = applyMessage(s, snap(["refresh"], 0, false));
+    expect(hasCurrentSnapshot(s, "c")).toBe(false);
+    expect([...s.rows.c.keys()]).toEqual(["x", "y"]);
+    s = applyMessage(s, snap([]));
+    expect(hasCurrentSnapshot(s, "c")).toBe(true);
+    expect(s.rows.c.size).toBe(0);
+  });
+
+  it("reconnect and removal invalidate the affected snapshot", () => {
+    let s = applyMessages(emptyWatchState(), [snap(["a"]), { ...snap([]), cluster_id: "d" }]);
+    expect(s.snapshotReady.has("c")).toBe(true);
+    expect(hasCurrentSnapshot(s, "c")).toBe(false);
+    s = applyMessages(s, [ready(), ready("d")]);
+    expect(hasCurrentSnapshot(s, "c")).toBe(true);
+    s = resetForReconnect(s);
+    s = applyMessages(s, [ready(), ready("d")]);
+    expect([...s.rows.c.keys()]).toEqual(["a"]);
+    expect(s.snapshotReady.has("c")).toBe(false);
+    expect(s.snapshotReady.has("d")).toBe(false);
+    s = applyMessages(s, [snap(["b"]), { ...snap([]), cluster_id: "d" }]);
+    expect(s.snapshotReady.has("c")).toBe(true);
+    s = applyMessages(s, [snap(["x"], 0, false), syncing, ready(), snap(["y"], 1, true)]);
+    expect(s.snapshotReady.has("c")).toBe(false);
+    expect(s.snapshotReady.has("d")).toBe(true);
+    expect([...s.rows.c.keys()]).toEqual(["x", "y"]);
+    s = applyMessages(s, [snap(["z"]), { type: "cluster_removed", cluster_id: "c" }]);
+    expect(s.snapshotReady.has("c")).toBe(false);
+    expect(s.snapshotReady.has("d")).toBe(true);
+    s = applyMessages(s, [ready(), snap(["orphan"], 1, true)]);
+    expect(s.snapshotReady.has("c")).toBe(false);
+  });
+
+  it.each([
+    [snap([], 0, false), snap([], 2, true)],
+    [snap([], 0, false), snap([], 2, false), snap([], 1, true)],
+    [snap([], 0, false), snap([], 1, false), snap([], 1, false), snap([], 2, true)],
+    [snap([]), snap([], 1, true)],
+  ])("rejects invalid snapshot ordering (%#)", (...parts) => {
+    const complete = applyMessages(emptyWatchState(), [ready(), snap([])]);
+    expect(hasCurrentSnapshot(complete, "c")).toBe(true);
+    expect(hasCurrentSnapshot(applyMessages(complete, parts), "c")).toBe(false);
+  });
+});
 
 describe("applyMessage", () => {
   it("snapshot replaces previous rows for that cluster", () => {
@@ -44,6 +100,7 @@ describe("applyMessage", () => {
     expect(base.rows.c).toBe(rowsC);
     expect(next.rows.c).not.toBe(rowsC);
     expect(next.rows.d).toBe(base.rows.d);
+    expect(next.snapshotReady).toBe(base.snapshotReady);
   });
   it("reconnect resets cluster state but keeps rows until the new snapshot", () => {
     let s = applyMessage(emptyWatchState(), snap(["a"]));
@@ -142,6 +199,8 @@ describe("applyMessages", () => {
       clusters: s.clusters,
       rows: Object.fromEntries(Object.entries(s.rows).map(([k, v]) => [k, [...v.keys()]])),
       pending: s.pending,
+      snapshotReady: s.snapshotReady,
+      nextSnapshotPart: s.nextSnapshotPart,
     });
     expect(view(batch)).toEqual(view(one));
     expect([...batch.rows.e.keys()]).toEqual(["e0", "e1", "e2", "e3"]);

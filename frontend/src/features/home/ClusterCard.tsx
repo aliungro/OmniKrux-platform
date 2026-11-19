@@ -1,3 +1,4 @@
+import { connectionProblem } from "./incidentHealth";
 import { bandLocation } from "../territories/ClusterBand";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { clusterPoolSummary, statusClass, type Territory } from "../territories/model";
@@ -9,11 +10,11 @@ export function ClusterCard({ territory: t, onOpen }: { territory: Territory; on
   const pools = clusterPoolSummary(cluster);
   const warnings = t.state === "ready" ? t.rows.filter(row => statusClass(row) === "warn").length : 0;
   const failed = t.state === "error" || (t.state === "ready" && t.failing > 0);
-  const health = t.state === "error" ? `Can't reach it: ${t.message ?? "This cluster reported an error without details"}`
-    : t.state !== "ready" ? "Connecting…"
+  const health = connectionProblem(t) ?? (t.state === "absent" ? "Pods unavailable" : null)
+    ?? (t.state !== "ready" ? "Connecting…"
     : t.failing > 0 ? `${t.failing} of ${t.total} pods failing`
     : warnings > 0 ? `${t.total} pods, ${warnings} need attention`
-    : `${t.total} pods, all healthy`;
+    : `${t.total} pods, all healthy`);
   return <button type="button" className={`${s.card} ${pc[knownProvider(cluster.provider)]}`} onClick={onOpen}>
     <ProviderBadge provider={knownProvider(cluster.provider)} />
     <b className={s.name}>{cluster.name}</b>

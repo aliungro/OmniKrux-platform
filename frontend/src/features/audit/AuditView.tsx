@@ -12,7 +12,7 @@ import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { Status } from "../territories/Status";
 import { formatAgo } from "../territories/model";
 import { ACTION_LABELS, actionLabel, diffKind, messageOf, outcomeOf, whatOf } from "./labels";
-import { useAudit, type AuditFilters } from "./useAudit";
+import { auditQueryKey, useAudit, type AuditFilters } from "./useAudit";
 import pc from "../territories/provider.module.css";
 import s from "./AuditView.module.css";
 
@@ -178,6 +178,18 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
   const getGuideRect = useCallback(() => scrollRef.current?.getBoundingClientRect() ?? null, []);
   const focusPending = useRef(false);
 
+  function changeOutcome(outcome: AuditFilters["outcome"]) {
+    if (outcome === filters.outcome) return;
+    const next = { ...filters, text: typed, outcome };
+    // Clear the destination before observing it so cached pages cannot flash on return.
+    void client.resetQueries({ queryKey: auditQueryKey(next), exact: true });
+    focusPending.current = false;
+    setFocusId(null);
+    setExpanded(null);
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    setFilters(next);
+  }
+
   // The search goes to the server once typing pauses.
   useEffect(() => {
     const t = setTimeout(() => { if (filters.text !== typed) setFilters({ ...filters, text: typed }); }, SEARCH_DEBOUNCE_MS);
@@ -242,7 +254,7 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
   });
 
   const tabId = focusId !== null && indexById.has(focusId) ? focusId : (records[0]?.id ?? null);
-  const filtered = filters.cluster !== "" || filters.action !== "" || filters.text.trim() !== "";
+  const filtered = filters.cluster !== "" || filters.action !== "" || filters.text.trim() !== "" || filters.outcome !== "";
   const loading = query.isPending;
   const failed = query.isError ? failure(query.error, "try again") : null;
 
@@ -316,6 +328,14 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
     <section className={s.view} aria-label="Audit log">
       <div className={s.bar}>
         <h1 className={s.title}>Audit log</h1>
+        <div className={s.modes} role="group" aria-label="Audit outcome">
+          <button type="button" className={s.btn} aria-pressed={filters.outcome === ""} onClick={() => changeOutcome("")}>
+            All activity
+          </button>
+          <button type="button" className={s.btn} aria-pressed={filters.outcome === "failed"} onClick={() => changeOutcome("failed")}>
+            Failed only
+          </button>
+        </div>
         <div className={s.filters}>
           <label className={s.field}>
             <span className={s.lbl}>Cluster</span>

@@ -4,10 +4,16 @@ export interface WatchState {
   clusters: Record<string, { state: ClusterState; message: string | null }>;
   rows: Record<string, Map<string, ResourceRow>>;
   pending: Record<string, ResourceRow[]>;
+  snapshotReady: ReadonlySet<string>;
+  nextSnapshotPart: Readonly<Record<string, number>>;
 }
 
 export function emptyWatchState(): WatchState {
-  return { clusters: {}, rows: {}, pending: {} };
+  return { clusters: {}, rows: {}, pending: {}, snapshotReady: new Set(), nextSnapshotPart: {} };
+}
+
+export function hasCurrentSnapshot(watch: WatchState, clusterId: string): boolean {
+  return watch.clusters[clusterId]?.state === "ready" && watch.snapshotReady.has(clusterId);
 }
 
 export function applyMessage(s: WatchState, m: WatchMessage): WatchState {
@@ -21,6 +27,8 @@ export function applyMessage(s: WatchState, m: WatchMessage): WatchState {
  */
 export function applyMessages(s: WatchState, ms: readonly WatchMessage[]): WatchState {
   let { clusters, rows, pending } = s;
+  let snapshotReady: Set<string> | undefined;
+  let nextSnapshotPart: Record<string, number> | undefined;
   let changed = false;
   // Records and per-cluster containers created by this batch, so safe to write in place.
   let ownClusters = false;
@@ -51,17 +59,41 @@ export function applyMessages(s: WatchState, ms: readonly WatchMessage[]): Watch
     ownMaps.add(id);
     return next;
   };
+  const setSnapshotReady = (id: string, ready: boolean) => {
+    if ((snapshotReady ?? s.snapshotReady).has(id) === ready) return;
+    snapshotReady ??= new Set(s.snapshotReady);
+    changed = true;
+    if (ready) snapshotReady.add(id);
+    else snapshotReady.delete(id);
+  };
+  const setNextSnapshotPart = (id: string, part: number | undefined) => {
+    const parts = nextSnapshotPart ?? s.nextSnapshotPart;
+    if ((Object.hasOwn(parts, id) ? parts[id] : undefined) === part) return;
+    nextSnapshotPart ??= { ...s.nextSnapshotPart };
+    changed = true;
+    if (part === undefined) delete nextSnapshotPart[id];
+    else nextSnapshotPart[id] = part;
+  };
 
   for (const m of ms) {
     const id = m.cluster_id;
     switch (m.type) {
       case "cluster_status": {
+        if (m.state !== "ready") {
+          setSnapshotReady(id, false);
+          setNextSnapshotPart(id, undefined);
+        }
         const prev = Object.hasOwn(clusters, id) ? clusters[id] : undefined;
         if (prev && prev.state === m.state && prev.message === m.message) break;
         clustersW()[id] = { state: m.state, message: m.message };
         break;
       }
       case "snapshot": {
+        // Row buffering stays independent of the sequence required for freshness.
+        const parts = nextSnapshotPart ?? s.nextSnapshotPart;
+        const ordered = m.part === 0 || (Object.hasOwn(parts, id) && parts[id] === m.part);
+        setSnapshotReady(id, ordered && m.last);
+        setNextSnapshotPart(id, ordered && !m.last ? m.part + 1 : undefined);
         // A new part 0 discards any parts buffered from an earlier, unfinished snapshot.
         const buffered = m.part !== 0 && Object.hasOwn(pending, id) ? pending[id] : undefined;
         if (m.last) {
@@ -87,6 +119,8 @@ export function applyMessages(s: WatchState, ms: readonly WatchMessage[]): Watch
         if (Object.hasOwn(rows, id) && rows[id].has(m.uid)) mapW(id).delete(m.uid);
         break;
       case "cluster_removed":
+        setSnapshotReady(id, false);
+        setNextSnapshotPart(id, undefined);
         if (Object.hasOwn(clusters, id)) delete clustersW()[id];
         if (Object.hasOwn(rows, id)) delete rowsW()[id];
         if (Object.hasOwn(pending, id)) delete pendingW()[id];
@@ -97,7 +131,13 @@ export function applyMessages(s: WatchState, ms: readonly WatchMessage[]): Watch
         break;
     }
   }
-  return changed ? { clusters, rows, pending } : s;
+  return changed ? {
+    clusters,
+    rows,
+    pending,
+    snapshotReady: snapshotReady ?? s.snapshotReady,
+    nextSnapshotPart: nextSnapshotPart ?? s.nextSnapshotPart,
+  } : s;
 }
 
 export function resetForReconnect(s: WatchState): WatchState {
@@ -105,5 +145,11 @@ export function resetForReconnect(s: WatchState): WatchState {
   for (const id of new Set([...Object.keys(s.clusters), ...Object.keys(s.rows)])) {
     clusters[id] = { state: "syncing", message: null };
   }
-  return { clusters, rows: s.rows, pending: {} };
+  return {
+    clusters,
+    rows: s.rows,
+    pending: {},
+    snapshotReady: s.snapshotReady.size ? new Set() : s.snapshotReady,
+    nextSnapshotPart: {},
+  };
 }

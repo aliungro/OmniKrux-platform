@@ -118,39 +118,85 @@ it("header and row checkboxes are native checkboxes with a decorative mark", () 
   expect(status().textContent).toBe("3 selected");
 });
 
-it("bulk delete confirms with ctrl+enter and keeps focus on cancel", async () => {
+function stubBulkDelete(blockedByPod: Record<string, string[]> = {}, applyReady = Promise.resolve()) {
   const applies: string[] = [];
-  const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
-  vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/actions/plan") {
       const req = JSON.parse(String(init?.body)) as PlanRequest;
       return json({
         plan_id: `plan-${req.target.name}`, action: "delete", target: req.target, kind: "Pod",
         cluster: { id: "c1", name: "big", provider: "gke", environment: "development" },
-        title: `Delete Pod ${req.target.name}`, summary: [], warnings: [], blocked: [], diff: null, confirm_text: null,
-        apply_label: "Delete", expires_at: "",
+        title: `Delete Pod ${req.target.name}`, summary: [], warnings: [], blocked: blockedByPod[req.target.name] ?? [],
+        diff: null, confirm_text: null, apply_label: "Delete", expires_at: "",
       } satisfies Plan);
     }
     if (url.endsWith("/apply")) {
       applies.push(url);
+      await applyReady;
       return json({ outcome: "succeeded", message: "Deleted.", job_id: null, audit_id: 1 });
     }
-    return Promise.resolve(new Response("{}", { status: 200 }));
+    return new Response("{}", { status: 200 });
   }));
+  return applies;
+}
+
+function openTwoPodDeleteReview() {
   renderTable(3);
   fireEvent.click(screen.getByRole("checkbox", { name: "Select pod-0" }));
   fireEvent.click(screen.getByRole("checkbox", { name: "Select pod-1" }));
   fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
-  const dialog = within(screen.getByRole("dialog", { name: "Delete 2 resources" }));
-  await waitFor(() => expect(dialog.getByRole<HTMLButtonElement>("button", { name: "Delete 2 resources" }).disabled).toBe(false));
+  return screen.getByRole("dialog", { name: "Delete 2 resources" });
+}
+
+it("bulk delete confirms with ctrl+enter and keeps focus on cancel", async () => {
+  let releaseApplies!: () => void;
+  const applyReady = new Promise<void>(resolve => { releaseApplies = resolve; });
+  const applies = stubBulkDelete({}, applyReady);
+  const dialog = within(openTwoPodDeleteReview());
+  const confirm = dialog.getByRole<HTMLButtonElement>("button", { name: "Delete 2 resources" });
+  await waitFor(() => expect(confirm.disabled).toBe(false));
   const cancel = dialog.getByRole("button", { name: "Cancel" });
   expect(document.activeElement).toBe(cancel);
-  expect(fireEvent.keyDown(cancel, { key: "Enter", ctrlKey: true })).toBe(false);
+  expect(fireEvent.keyDown(confirm, { key: "Enter", repeat: true })).toBe(false);
+  expect(fireEvent.keyDown(confirm, { key: "Enter", ctrlKey: true, repeat: true })).toBe(false);
+  expect(applies).toEqual([]);
+
+  const expectedApplies = ["/api/actions/plan-pod-0/apply", "/api/actions/plan-pod-1/apply"];
+  act(() => {
+    expect(fireEvent.keyDown(cancel, { key: "Enter", ctrlKey: true })).toBe(false);
+    expect([...applies].sort()).toEqual(expectedApplies);
+    // The click can still reach the handler before React disables the button.
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+  });
+  expect([...applies].sort()).toEqual(expectedApplies);
+
+  releaseApplies();
   expect(await dialog.findByText("2 of 2 deleted.")).toBeTruthy();
-  expect(applies.sort()).toEqual(["/api/actions/plan-pod-0/apply", "/api/actions/plan-pod-1/apply"]);
   // Done: Ctrl+Enter has nothing more to confirm.
   fireEvent.keyDown(dialog.getByRole("button", { name: "Close" }), { key: "Enter", ctrlKey: true });
-  expect(applies).toHaveLength(2);
+  expect([...applies].sort()).toEqual(expectedApplies);
+});
+
+it("a blocked bulk review sends no applies for any selected resource", async () => {
+  const reason = "This pod is protected from deletion.";
+  const applies = stubBulkDelete({ "pod-1": [reason] });
+  const review = openTwoPodDeleteReview();
+  const dialog = within(review);
+  expect(await dialog.findByText(reason)).toBeTruthy();
+  expect(dialog.getByText(/Pod pod-0/)).toBeTruthy();
+  const confirm = dialog.getByRole<HTMLButtonElement>("button", { name: "Delete 2 resources" });
+  const cancel = dialog.getByRole("button", { name: "Cancel" });
+  expect(confirm.disabled).toBe(true);
+
+  await act(async () => {
+    expect(fireEvent.keyDown(cancel, { key: "Enter", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(cancel, { key: "Enter", metaKey: true })).toBe(false);
+    fireEvent.click(confirm);
+  });
+  expect(applies).toEqual([]);
+  expect(screen.getByRole("dialog", { name: "Delete 2 resources" })).toBe(review);
 });
 
 it("ctrl+enter on a bulk delete whose review is still loading sends nothing", async () => {

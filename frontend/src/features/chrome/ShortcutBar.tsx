@@ -1,3 +1,4 @@
+import { registerDialogRoot } from "./dialogLifecycle";
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { allGroups, barFor, capsOf, keysFor, pageKey, pressed, type KeyboardZone, type ShortcutGroup } from "./shortcuts";
 import k from "./key.module.css";
@@ -14,12 +15,15 @@ function Keys({ keys }: { keys: readonly string[] }) {
 }
 
 export function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGroup[]; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
+    const release = registerDialogRoot(dialogRef.current!);
     const back = document.activeElement;
     closeRef.current?.focus();
     return () => {
       if (back instanceof HTMLElement && back.isConnected) back.focus();
+      release();
     };
   }, []);
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -31,7 +35,7 @@ export function AllShortcuts({ groups, onClose }: { groups: readonly ShortcutGro
   };
   return (
     <div className={s.backdrop} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label="All shortcuts" className={s.sheet} onKeyDown={onKey}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="All shortcuts" className={s.sheet} onKeyDown={onKey}>
         <div className={s.sheetHead}>
           <h2 className={s.title}>Keyboard shortcuts</h2>
           <button ref={closeRef} type="button" className={s.close} onClick={onClose}>

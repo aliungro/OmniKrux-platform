@@ -1,3 +1,6 @@
+import { registerDialogRoot } from "../chrome/dialogLifecycle";
+import { requestSelectedRowFocus } from "../chrome/tableFocus";
+import { AllShortcuts } from "../chrome/ShortcutBar";
 import { FILE_CLUSTER_METADATA } from "../../test/clusters";
 // frontend/src/features/territories/selection.test.tsx
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Plan, PlanRequest, ResourceRow } from "../../api/types";
 import type { Territory } from "./model";
-import type { TerritoryTableProps } from "./TerritoryTable";
+import { TerritoryTable, type TerritoryTableProps } from "./TerritoryTable";
 import { resourceDescribe, secretDescribe } from "../../test/describe";
 import { DEPLOYMENTS, NODES, PODS, SERVICES } from "../../test/kinds";
 import { Table } from "../../test/table";
@@ -692,35 +695,54 @@ describe("keys per kind", () => {
     expect(document.activeElement).toBe(screen.getByRole("grid").parentElement);
   });
 
-  it("a row deleted while its review is open gives focus to a row once the review closes", () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    try {
-      const client = new QueryClient();
-      const ui = (rs: ResourceRow[]) => (
-        <QueryClientProvider client={client}>
-          <Table territories={[territory(rs)]} kind={PODS} onRetry={() => {}} />
-        </QueryClientProvider>
-      );
-      const all = rows(3);
-      const { rerender } = render(ui(all));
-      fireEvent.click(podRow("pod-1"));
-      const review = document.createElement("div");
-      review.setAttribute("aria-modal", "true");
-      const apply = document.createElement("button");
-      review.append(apply);
-      document.body.append(review);
-      apply.focus();
-      rerender(ui(all.filter((r) => r.uid !== "1")));
-      expect(document.activeElement).toBe(apply);
-      act(() => vi.advanceTimersByTime(300));
-      expect(document.activeElement).toBe(apply);
-      // The review closes; the row it would hand focus back to is gone.
-      review.remove();
-      act(() => vi.advanceTimersByTime(100));
-      expect(document.activeElement).toBe(podRow("pod-2"));
-    } finally {
-      vi.useRealTimers();
+  it("a row deleted under a modal gives focus to its successor once the modal closes", async () => {
+    const client = new QueryClient();
+    const ui = (rs: ResourceRow[], modal = false) => (
+      <QueryClientProvider client={client}>
+        <Table territories={[territory(rs)]} kind={PODS} onRetry={() => {}} />
+        {modal && <AllShortcuts groups={[]} onClose={() => {}} />}
+      </QueryClientProvider>
+    );
+    const all = rows(3);
+    const { rerender } = render(ui(all));
+    const opener = podRow("pod-1");
+    fireEvent.click(opener);
+    opener.focus();
+    rerender(ui(all, true));
+    const remaining = all.filter(r => r.uid !== "1");
+    rerender(ui(remaining, true));
+    await act(async () => {});
+    expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+    rerender(ui(remaining));
+    await act(async () => {});
+    expect(document.activeElement).toBe(podRow("pod-2"));
+  });
+
+  it.each(["unrelated opener", "other grid inspector", "different missing selection"])("skips modal rescue with %s", async (reason) => {
+    const client = new QueryClient();
+    const all = rows(3);
+    function ui(modal: boolean, removed: boolean) {
+      const uid = removed && reason === "different missing selection" ? "missing" : "1";
+      return <QueryClientProvider client={client}>
+        <TerritoryTable territories={[territory(removed ? all.filter(r => r.uid !== "1") : all)]}
+          kind={PODS} onRetry={() => {}} selection={{ selected: { clusterId: "c1", uid }, open: false }}
+          onSelection={() => {}} />
+        {!removed && (reason === "other grid inspector"
+          ? <div role="grid"><div data-inspector-key="c1/1"><button>Outside</button></div></div>
+          : <button>Outside</button>)}
+        {modal && <AllShortcuts groups={[]} onClose={() => {}} />}
+      </QueryClientProvider>;
     }
+    const { rerender } = render(ui(false, false));
+    const opener = reason === "different missing selection" ? podRow("pod-1") : screen.getByRole("button", { name: "Outside" });
+    opener.focus();
+    rerender(ui(true, false));
+    rerender(ui(true, true));
+    expect(opener.isConnected).toBe(false);
+    expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+    rerender(ui(false, true));
+    await act(async () => {});
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("y opens the details on the YAML tab", async () => {
@@ -837,5 +859,91 @@ describe("keys per kind", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
     expect(screen.queryByText("hunter2")).toBeNull();
+  });
+});
+
+describe("pending dock returns", () => {
+  function setup() {
+    const data = rows(140);
+    const onSelection = vi.fn();
+    const initial = {
+      territories: [territory(data)], kind: PODS, onRetry: vi.fn(), onSelection,
+      selection: { selected: { clusterId: "c1", uid: "0" }, open: false }, paneActive: true,
+    };
+    const ui = (props: Partial<TerritoryTableProps> = {}, mounted = true) => (
+      <main tabIndex={-1}>
+        <button>Logs</button><input aria-label="Other field" />
+        {mounted && <TerritoryTable {...initial} {...props} />}
+      </main>
+    );
+    const view = render(ui());
+    const grid = screen.getByRole("grid");
+    const viewport = grid.parentElement!;
+    const origin = screen.getByText("Logs");
+    origin.focus();
+    fireEvent.scroll(viewport, { target: { scrollTop: 3600 } });
+    expect(grid.querySelector('[aria-selected="true"]')).toBeNull();
+    const remountRows = () => fireEvent.scroll(viewport, { target: { scrollTop: 0 } });
+    return { data, origin, grid, onSelection, remountRows, update: (props: Partial<TerritoryTableProps>, mounted = true) => view.rerender(ui(props, mounted)) };
+  }
+
+  it.each(["pane", "modal", "field", "uid", "unmount"])("delayed row return yields permanently after %s ownership changes", change => {
+    const t = setup();
+    expect(requestSelectedRowFocus(t.grid)).toBe(true);
+    if (change === "pane") {
+      t.update({ paneActive: false });
+      expect(requestSelectedRowFocus(t.grid)).toBe(false);
+      t.update({});
+    } else if (change === "modal") {
+      const dialog = document.createElement("dialog");
+      document.body.append(dialog);
+      const close = registerDialogRoot(dialog);
+      close();
+      dialog.remove();
+    } else if (change === "field") {
+      screen.getByLabelText("Other field").focus();
+      t.origin.focus();
+    } else if (change === "uid") {
+      t.update({ selection: { selected: { clusterId: "c1", uid: "1" }, open: false } });
+      t.update({});
+    } else {
+      t.update({}, false);
+      // Reconnect the old root so the registry's connectedness guard alone cannot pass this check.
+      document.querySelector("main")!.append(t.grid);
+      expect(requestSelectedRowFocus(t.grid)).toBe(false);
+    }
+    t.remountRows();
+    expect(document.activeElement).toBe(t.origin);
+    expect(t.onSelection).not.toHaveBeenCalled();
+  });
+
+  it.each(["deleted", "filtered", "not ready"])("uses the owned main fallback when the accepted row is %s", change => {
+    const t = setup();
+    expect(requestSelectedRowFocus(t.grid)).toBe(true);
+    const replacement = { ...t.data[0], uid: "replacement" };
+    const remaining = change === "deleted" ? [replacement, ...t.data.slice(1)] : t.data.slice(1);
+    t.update({ territories: [territory(remaining, change === "not ready" ? "syncing" : "ready")],
+      pickSource: [territory(change === "filtered" ? t.data : remaining)] });
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    expect(requestSelectedRowFocus(t.grid)).toBe(false);
+    t.remountRows();
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    expect(t.onSelection).not.toHaveBeenCalled();
+  });
+
+  it("consumes the latest return once and rejects empty or unverified selection", () => {
+    const t = setup();
+    expect(requestSelectedRowFocus(t.grid)).toBe(true);
+    expect(requestSelectedRowFocus(t.grid)).toBe(true);
+    const focused = vi.fn();
+    t.grid.addEventListener("focusin", focused);
+    t.remountRows();
+    expect(document.activeElement).toBe(podRow("pod-0"));
+    expect(focused).toHaveBeenCalledTimes(1);
+    t.update({ selection: { selected: null, open: false } });
+    expect(requestSelectedRowFocus(t.grid)).toBe(false);
+    t.update({ territories: [territory(t.data, "syncing")] });
+    expect(requestSelectedRowFocus(t.grid)).toBe(false);
+    expect(t.onSelection).not.toHaveBeenCalled();
   });
 });

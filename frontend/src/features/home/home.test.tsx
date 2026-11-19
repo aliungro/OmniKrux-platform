@@ -6,6 +6,8 @@ import type { Cluster, ResourceRow } from "../../api/types";
 import { KINDS } from "../../test/kinds";
 import { removePinned } from "../../test/pinnedKinds";
 import { describeBody } from "../../test/describe";
+import userEvent from "@testing-library/user-event";
+import { EditorView } from "@codemirror/view";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import { Shell } from "../shell/Shell";
 import { defaultWorkspace, HOME, kindView, type KubeView } from "../shell/workspace";
@@ -42,13 +44,398 @@ function show() {
   return render(<QueryClientProvider client={client}><Shell /></QueryClientProvider>);
 }
 const search = () => screen.getByRole("combobox", { name: "Search Kubernetes" });
+const failingPod: ResourceRow = { ...pod, columns: { status: "CrashLoopBackOff", status_class: "bad" } };
+const podLink = () => screen.getByRole("button", { name: /web-pod.*demo.*prod-east.*CrashLoopBackOff/ });
+const coldTable = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
+vi.mock("../territories/TerritoryTable", async importOriginal => {
+  await coldTable.wait;
+  return importOriginal();
+});
+// Records the table's scroll requests; the real virtualizer still performs them.
+const scrollRequests = vi.hoisted(() => [] as Array<{ index: number; align: string | undefined }>);
+vi.mock("@tanstack/react-virtual", async importOriginal => {
+  const actual = await importOriginal<typeof import("@tanstack/react-virtual")>();
+  const wrapped = new WeakSet<object>();
+  return { ...actual, useVirtualizer: ((options: Parameters<typeof actual.useVirtualizer>[0]) => {
+    const instance = actual.useVirtualizer(options);
+    if (!wrapped.has(instance)) {
+      wrapped.add(instance);
+      const scrollToIndex = instance.scrollToIndex;
+      instance.scrollToIndex = (index, opts) => { scrollRequests.push({ index, align: opts?.align }); scrollToIndex(index, opts); };
+    }
+    return instance;
+  }) as typeof actual.useVirtualizer };
+});
+// jsdom has no scrolling layout. Deliver the browser's scroll notification on
+// demand so the real virtualizer mounts the distant row in a separate commit.
+function delayQueueScroll() {
+  const originalFetch = vi.mocked(fetch);
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("/api/kinds")
+    ? json({ ...KINDS, kinds: KINDS.kinds.map(k => k.key === "pods" ? { ...k, sort: "recent" } : k) })
+    : originalFetch(url)));
+  const peers = Array.from({ length: 180 }, (_, i) => ({ ...pod, created_at: "2026-11-18T12:00:00Z", uid: `other-${i}`, name: `api-${i}` }));
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(16000);
+  let scroll: (() => void) | undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value(this: HTMLElement, options: ScrollToOptions) {
+    if (options.top && options.top > 600) {
+      const offset = options.top;
+      scroll = () => { this.scrollTop = offset; fireEvent.scroll(this); };
+    }
+  } });
+  return {
+    rows: [...peers, failingPod],
+    async mountRow(beforeMount?: () => void) {
+      await waitFor(() => expect(scroll).toBeTypeOf("function"));
+      expect(document.querySelector('[data-row-key="c1/p1"]')).toBeNull();
+      beforeMount?.();
+      act(() => scroll!());
+      return waitFor(() => {
+        const exact = document.querySelector<HTMLElement>('[data-row-key="c1/p1"]');
+        expect(exact).toBeTruthy();
+        return exact!;
+      });
+    },
+    restore() {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "scrollTo", descriptor);
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+    },
+  };
+}
+it("focuses the verified offscreen queue Pod after the cold table and its row mount separately", async () => {
+  let release!: () => void;
+  coldTable.wait = new Promise<void>(resolve => { release = resolve; });
+  const delayed = delayQueueScroll();
+  try {
+    show(); await ready(delayed.rows);
+    fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+    podLink().focus(); await userEvent.keyboard("{Enter}");
+    await screen.findByText(/Loading resources/);
+    await waitFor(() => expect(screen.queryByText(/Opening Pod/)).toBeNull());
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("expected_uid=p1"))).toBe(true);
+    await act(async () => { release(); await vi.dynamicImportSettled(); });
+    const exact = await delayed.mountRow();
+    await waitFor(() => expect(document.activeElement).toBe(exact));
+  } finally { release(); delayed.restore(); }
+});
+it("mounting the offscreen queue Pod preserves focus moved to the filter", async () => {
+  const delayed = delayQueueScroll();
+  try {
+    show(); await ready(delayed.rows);
+    fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+    podLink().focus(); await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByText(/Opening Pod/)).toBeNull());
+    const filter = screen.getByPlaceholderText("Filter by name, label or image");
+    filter.focus();
+    await delayed.mountRow();
+    expect(document.activeElement).toBe(filter);
+  } finally { delayed.restore(); }
+});
+it.each(["help", "dock"] as const)("a proved Home Pod deleted during a %s return retains its owned fallback", async source => {
+  const peers = Array.from({ length: 160 }, (_, i) => ({ ...pod, uid: `z${i}`, name: `z${i}` }));
+  show(); await ready([failingPod, ...peers]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  const exact = await waitFor(() => {
+    const row = document.querySelector<HTMLElement>('[data-row-key="c1/p1"]');
+    expect(row).toBeTruthy();
+    expect(document.activeElement).toBe(row);
+    return row!;
+  });
+  const watch = FakeWebSocket.last;
+  const grid = exact.closest<HTMLElement>('[role="grid"]')!;
+  if (source === "help") {
+    fireEvent.keyDown(exact, { key: "?" });
+    await screen.findByRole("dialog", { name: "All shortcuts" });
+  } else {
+    fireEvent.click(await screen.findByRole("button", { name: "Logs" }));
+    const tab = await screen.findByRole("tab", { name: /Logs.*web-pod/ });
+    tab.focus();
+    const viewport = grid.parentElement!;
+    Object.defineProperty(viewport, "scrollHeight", { value: 9000 });
+    fireEvent.scroll(viewport, { target: { scrollTop: 3200 } });
+    expect(exact.isConnected).toBe(false);
+    viewport.scrollTo = vi.fn();
+    fireEvent.keyDown(tab, { key: "Escape" });
+    expect(viewport.scrollTo).toHaveBeenCalled();
+    expect(document.activeElement).toBe(tab);
+  }
+  act(() => watch.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true,
+    rows: [{ ...pod, uid: "replacement" }, ...peers] }));
+  await screen.findByText("This Pod is no longer available");
+  if (source === "help") fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  await waitFor(() => {
+    const focus = document.activeElement;
+    expect(focus === grid.closest("main") || (source === "help" && grid.contains(focus) && focus?.hasAttribute("data-row-key"))).toBe(true);
+  });
+  expect(grid.querySelector('[aria-selected="true"]')).toBeNull();
+  expect(screen.queryByRole("tab", { name: "Describe" })).toBeNull();
+});
+it.each(["upsert", "multipart"] as const)("same-UID %s watch updates preserve the queue Pod's pending YAML draft and focus", async (update) => {
+  // jsdom supplies DOM ranges but not browser layout measurements used by real CodeMirror.
+  const createRange = document.createRange.bind(document);
+  vi.spyOn(document, "createRange").mockImplementation(() => {
+    const range = createRange();
+    range.getClientRects = () => [] as unknown as DOMRectList;
+    range.getBoundingClientRect = () => new DOMRect();
+    return range;
+  });
+  const originalFetch = vi.mocked(fetch);
+  let updating = false;
+  let completeDescribe!: (response: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((url: string) => {
+    if (url.startsWith("/api/kinds")) return json({ ...KINDS, kinds: KINDS.kinds.map(k => k.key === "pods" ? { ...k, verbs: [...k.verbs, "update"] } : k) });
+    if (url.includes("/yaml")) return json({ yaml: "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-pod\n" });
+    if (url.includes("/describe") && updating) return new Promise<Response>(resolve => { completeDescribe = resolve; });
+    return originalFetch(url);
+  }));
+  show(); await ready([{ ...failingPod, columns: { ...failingPod.columns, resource_version: "1" } }]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" })); fireEvent.click(podLink());
+  await screen.findByRole("tab", { name: /Describe/ });
+  fireEvent.click(screen.getByRole("button", { name: /^Edit/ }));
+  const editor = await screen.findByRole("textbox", { name: "Edit Pod YAML" });
+  const cm = EditorView.findFromDOM(editor)!;
+  const draft = "# keep my unsaved change\n";
+  act(() => cm.dispatch({ changes: { from: 0, insert: draft } }));
+  editor.focus();
+  expect((screen.getByRole("button", { name: /Review changes/ }) as HTMLButtonElement).disabled).toBe(false);
+  updating = true;
+  const updated = { ...failingPod, columns: { ...failingPod.columns, resource_version: "2" } };
+  if (update === "multipart") {
+    act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: false, rows: [updated] }));
+    // Cross the shared watch's publication frame before checking mounted editor state.
+    await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+    expect(editor.isConnected).toBe(true);
+    expect(screen.getByRole("textbox", { name: "Edit Pod YAML" })).toBe(editor);
+    expect(document.activeElement).toBe(editor);
+    expect(cm.state.doc.toString()).toContain(draft);
+    expect(screen.getByRole("tab", { name: /YAML/ }).getAttribute("aria-selected")).toBe("true");
+    expect((screen.getByRole("button", { name: /Review changes/ }) as HTMLButtonElement).disabled).toBe(false);
+    act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 1, last: true, rows: [] }));
+  } else {
+    act(() => FakeWebSocket.last.emit({ type: "upsert", cluster_id: "c1", row: updated }));
+  }
+  await waitFor(() => expect(completeDescribe).toBeTypeOf("function"));
+  expect(editor.isConnected).toBe(true);
+  expect(document.activeElement).toBe(editor);
+  expect(cm.state.doc.toString()).toContain(draft);
+  expect(screen.getByRole("tab", { name: /YAML/ }).getAttribute("aria-selected")).toBe("true");
+  expect((screen.getByRole("button", { name: /Review changes/ }) as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => completeDescribe(await json(describeBody())));
+  expect(screen.getByRole("textbox", { name: "Edit Pod YAML" })).toBe(editor);
+  expect(cm.state.doc.toString()).toContain(draft);
+  expect(document.activeElement).toBe(editor);
+});
+it("shows connections before the collapsed Pod queue and preserves discovery", async () => {
+  clusters = [cluster, { ...cluster, id: "offline", name: "offline-cloud", source: "cloud", state: "error", message: "https://private.example:6443 refused" }];
+  show(); await ready([failingPod]);
+  const queue = screen.getByRole("heading", { name: "Problems right now" }).closest("section")!;
+  const disclosure = within(queue).getByRole("button", { name: "Show 1 failing Pods" });
+  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+  expect(within(queue).getByRole("button", { name: /offline-cloud/ }).compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(document.body.textContent).not.toContain("private.example");
+  fireEvent.click(disclosure); expect(podLink()).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Discovered clusters" })).toBeTruthy();
+});
+it("Home does not display retained or incomplete health", async () => {
+  show(); await ready([failingPod]);
+  act(() => FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "syncing", message: "retry" }));
+  act(() => FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null }));
+  await waitFor(() => expect(screen.queryByText("1 of 1 pods failing")).toBeNull());
+  expect(screen.queryByRole("button", { name: "Show 1 failing Pods" })).toBeNull();
+  act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: false, rows: [failingPod] }));
+  expect(screen.queryByRole("button", { name: "Show 1 failing Pods" })).toBeNull();
+  act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [] }));
+  expect(await screen.findByText("No failing Pods")).toBeTruthy();
+});
+it("caps the Pod preview per cluster and offers the matched filter", async () => {
+  show(); await screen.findByRole("button", { name: /prod-east/ });
+  act(() => { FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: Array.from({ length: 7 }, (_, i) => ({ ...failingPod, uid: `bad-${i}`, name: `bad-${i}` })) }); FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null }); });
+  fireEvent.click(await screen.findByRole("button", { name: "Show 7 failing Pods" }));
+  expect(screen.getAllByRole("button", { name: /bad-.*CrashLoopBackOff/ })).toHaveLength(5);
+  fireEvent.click(screen.getByRole("button", { name: "View all 7 failing Pods in prod-east" }));
+  act(() => window.dispatchEvent(new Event("pagehide")));
+  expect(JSON.parse(localStorage.getItem("omnikrux.workspace")!).kubernetes.tabs[0].view).toMatchObject({ clusters: ["c1"], filters: { status: "failing", namespace: null } });
+});
+it("Back restores the Pod link and the expanded queue", async () => {
+  show(); await ready([failingPod]); fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); fireEvent.click(podLink());
+  await landingSnapshot();
+  await screen.findByRole("tab", { name: /Describe/ });
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("expected_uid=p1"))).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  await landingSnapshot();
+  expect(await screen.findByRole("button", { name: "Hide 1 failing Pods" })).toBeTruthy();
+  expect(document.activeElement).toBe(podLink());
+});
+it("recovers focus when the active link disappears", async () => {
+  show(); await ready([failingPod]); fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" })); podLink().focus();
+  act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [] }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Problems right now" })));
+});
+it("missing or replaced Pod never opens by name", async () => {
+  const originalFetch = vi.mocked(fetch);
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe") ? json({ detail: "Not found" }, 404) : originalFetch(url)));
+  show(); await ready([failingPod]); fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" })); fireEvent.click(podLink());
+  await landingSnapshot();
+  expect(await screen.findByText("This Pod is no longer available")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+});
+it("a guarded landing waits for current completion and never selects a same-name replacement", async () => {
+  const ws = defaultWorkspace();
+  ws.kubernetes.tabs[0].view = { ...kindView(HOME, "pods", ["c1"]), filters: { ...kindView(HOME, "pods").filters, namespace: "demo" }, selected: { clusterId: "c1", uid: "p1" }, open: true, fromAttention: { clusterId: "c1", uid: "p1", namespace: "demo" } };
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+  show(); await screen.findByText(/Opening Pod/);
+  act(() => { FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null }); FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: false, rows: [failingPod] }); });
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull());
+  expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/describe"))).toHaveLength(0);
+  await landingSnapshot([{ ...failingPod, uid: "replacement" }]);
+  expect(await screen.findByText("This Pod is no longer available")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+  expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/describe"))).toHaveLength(0);
+});
+it("an unresolved queue landing stays held through a multipart refresh and requires fresh proof", async () => {
+  const originalFetch = vi.mocked(fetch);
+  const reads: Array<(response: Response) => void> = [];
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe")
+    ? new Promise<Response>(resolve => reads.push(resolve)) : originalFetch(url)));
+  show(); await ready([failingPod]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" })); fireEvent.click(podLink());
+  await waitFor(() => expect(reads).toHaveLength(1));
+  act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: false, rows: [failingPod] }));
+  await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+  await act(async () => reads[0](await json(describeBody())));
+  expect(screen.getByText(/Opening Pod/)).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+  act(() => FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 1, last: true, rows: [] }));
+  await waitFor(() => expect(reads).toHaveLength(2));
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+  await act(async () => reads[1](await json(describeBody())));
+  expect(await screen.findByRole("tab", { name: /Describe/ })).toBeTruthy();
+});
+it("the first move after a queue landing does not reveal the next row again", async () => {
+  const peers = Array.from({ length: 40 }, (_, i) => ({ ...pod, uid: `z${i}`, name: `z${i}` }));
+  show(); await ready([failingPod, ...peers]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  const landed = await waitFor(() => {
+    const row = document.querySelector<HTMLElement>('[data-row-key="c1/p1"]');
+    expect(document.activeElement).toBe(row);
+    return row!;
+  });
+  await screen.findByRole("tab", { name: /Describe/ });
+  scrollRequests.length = 0;
+  fireEvent.keyDown(landed, { key: "ArrowDown" });
+  await waitFor(() => expect(document.activeElement?.getAttribute("data-row-key")).not.toBe("c1/p1"));
+  await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+  // An ordinary move keeps the list where it is; only a new landing aligns to the top.
+  expect(scrollRequests.filter(r => r.align === "start")).toEqual([]);
+});
+it("each queue visit rechecks identity and late proof preserves deliberate focus", async () => {
+  const originalFetch = vi.mocked(fetch);
+  let resolve!: (value: Response) => void;
+  let delayed = false;
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe") && delayed ? new Promise<Response>(r => { resolve = r; }) : originalFetch(url)));
+  show(); await ready([failingPod]); fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  await screen.findByRole("tab", { name: /Describe/ });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  await screen.findByRole("button", { name: "Hide 1 failing Pods" });
+  delayed = true; fireEvent.click(podLink());
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+  const filter = await screen.findByPlaceholderText("Filter by name, label or image"); filter.focus();
+  await waitFor(() => expect(resolve).toBeTypeOf("function"));
+  await act(async () => resolve(await json(describeBody())));
+  await screen.findByRole("tab", { name: /Describe/ });
+  expect(document.activeElement).toBe(filter);
+});
+it("a recovering exact UID remains selectable and Back creates only one step", async () => {
+  const originalFetch = vi.mocked(fetch);
+  let resolve!: (value: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe") ? new Promise<Response>(r => { resolve = r; }) : originalFetch(url)));
+  show(); await ready([failingPod]); fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" })); fireEvent.click(podLink());
+  await landingSnapshot([pod]);
+  await waitFor(() => expect(resolve).toBeTypeOf("function"));
+  await act(async () => resolve(await json(describeBody())));
+  await screen.findByRole("tab", { name: /Describe/ });
+  act(() => window.dispatchEvent(new Event("pagehide")));
+  const saved = JSON.parse(localStorage.getItem("omnikrux.workspace")!);
+  expect(saved.kubernetes.tabs[0].back).toHaveLength(1);
+  expect(saved.kubernetes.tabs[0].view.filters).toMatchObject({ status: "all", namespace: "demo" });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Problems right now" }));
+});
+it("last-cluster removal recovers Home search and unrelated updates preserve focus", async () => {
+  show(); await ready([failingPod]); fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  search().focus(); await landingSnapshot([failingPod, { ...pod, uid: "healthy" }]);
+  expect(document.activeElement).toBe(search());
+  podLink().focus();
+  act(() => FakeWebSocket.last.emit({ type: "cluster_removed", cluster_id: "c1" }));
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "Problems right now" })).toBeNull());
+  expect(document.activeElement).toBe(search());
+});
+it("View all returns to its own surviving button", async () => {
+  show(); await ready([failingPod]);
+  const rows = Array.from({ length: 7 }, (_, i) => ({ ...failingPod, uid: `bad-${i}`, name: `bad-${i}` }));
+  await landingSnapshot(rows);
+  fireEvent.click(await screen.findByRole("button", { name: "Show 7 failing Pods" }));
+  const label = "View all 7 failing Pods in prod-east";
+  screen.getByRole("button", { name: label }).focus(); fireEvent.click(screen.getByRole("button", { name: label }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(document.activeElement).toBe(await screen.findByRole("button", { name: label }));
+});
+it("a keyboard queue link stays in its initiating split pane among duplicate names", async () => {
+  const ws = defaultWorkspace();
+  ws.kubernetes.tabs.push({ id: "peer", view: HOME, back: [], forward: [], scrollTop: 0 });
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+  show(); await ready([failingPod, { ...failingPod, uid: "other", namespace: "other" }]);
+  const tabs = within(screen.getByRole("tablist", { name: "Kubernetes tabs" }));
+  fireEvent.contextMenu(tabs.getAllByRole("tab", { name: "Home" })[1]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Split side by side" }));
+  const panes = screen.getAllByRole("region", { name: "Home" });
+  const right = panes[1];
+  fireEvent.click(within(right).getByRole("button", { name: "Show 2 failing Pods" }));
+  const target = within(right).getByRole("button", { name: /web-pod.*demo.*prod-east.*CrashLoopBackOff/ });
+  target.focus(); await userEvent.keyboard("{Enter}");
+  await within(right).findByRole("tab", { name: /Describe/ });
+  await waitFor(() => expect((document.activeElement as HTMLElement)?.dataset.rowKey).toBe("c1/p1"));
+  expect(right.getAttribute("data-active-pane")).toBe("true");
+  expect(within(panes[0]).getByRole("heading", { name: "Where do you want to look?" })).toBeTruthy();
+  expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/describe")).every(([url]) => String(url).includes("/demo/web-pod/describe?expected_uid=p1"))).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(document.activeElement).toBe(within(right).getByRole("button", { name: /web-pod.*demo.*prod-east.*CrashLoopBackOff/ }));
+});
+it("a late guarded result cannot reveal after navigating away", async () => {
+  const originalFetch = vi.mocked(fetch);
+  let resolve!: (value: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe") ? new Promise<Response>(r => { resolve = r; }) : originalFetch(url)));
+  show(); await ready([failingPod]); fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" })); fireEvent.click(podLink());
+  await waitFor(() => expect(resolve).toBeTypeOf("function"));
+  fireEvent.click(screen.getByRole("button", { name: "Back" })); search().focus();
+  await act(async () => resolve(await json(describeBody())));
+  expect(document.activeElement).toBe(search());
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+});
+it("removing the opening Pod's last cluster keeps focus in its pane", async () => {
+  const originalFetch = vi.mocked(fetch);
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/describe") ? new Promise<Response>(() => {}) : originalFetch(url)));
+  show(); await ready([failingPod]); fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  const pane = document.querySelector<HTMLElement>('[data-active-pane="true"]')!;
+  act(() => FakeWebSocket.last.emit({ type: "cluster_removed", cluster_id: "c1" }));
+  await screen.findByText(/No clusters yet/);
+  expect(document.activeElement).toBe(pane);
+});
+async function landingSnapshot(rows = [failingPod]) {
+  act(() => { FakeWebSocket.last.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows }); FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null }); });
+}
 async function ready(rows = [pod]) {
   const ws = FakeWebSocket.last;
   act(() => {
     ws.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows });
     ws.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
   });
-  await screen.findByText(rows.some(r => r.columns.status_class === "bad") ? `1 of ${rows.length} pods failing` : `${rows.length} pods, all healthy`);
+  await screen.findByText(rows.some(r => r.columns.status_class === "bad") ? `${rows.filter(r => r.columns.status_class === "bad").length} of ${rows.length} pods failing` : `${rows.length} pods, all healthy`);
 }
 function seedClosed(view: KubeView, back: KubeView[] = [HOME]) {
   const ws = defaultWorkspace();
@@ -182,7 +569,7 @@ it("a card never shows counts before its cluster is ready", async () => {
 it("a cluster that can't be reached says so", async () => {
   show(); await screen.findByRole("button", { name: /prod-east/ });
   act(() => FakeWebSocket.last.emit({ type: "cluster_status", cluster_id: "c1", state: "error", message: "certificate expired" }));
-  expect(await screen.findByText("Can't reach it: certificate expired")).toBeTruthy();
+  expect((await screen.findAllByText("Can't reach it: certificate expired")).length).toBeGreaterThan(0);
 });
 it("opening a card scopes the tab to that cluster and back returns home", async () => {
   show(); fireEvent.click(await screen.findByRole("button", { name: /prod-east/ }));

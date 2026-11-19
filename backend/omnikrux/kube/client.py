@@ -240,6 +240,22 @@ async def make_ws_api_client(kubeconfig: dict, *, token: TokenSource | None = No
     api_type = CloudWsApiClient if isinstance(token, CloudTokenSource) else WsApiClient
     api = api_type(configuration=configuration, heartbeat=WS_HEARTBEAT_SECONDS)
     _reject_on_401(api, token)
+    if token is not None:
+        # WsApiClient bypasses REST. Observe the HTTP upgrade response before aiohttp
+        # validates it, retaining aiohttp's own awaitable/context-manager lifecycle.
+        async def on_upgrade_response(session, context, params):
+            response = params.response
+            if response.status == 401:
+                headers = response.request_info.headers
+                if headers.get("Upgrade", "").lower() == "websocket":
+                    scheme, _, value = headers.get("Authorization", "").partition(" ")
+                    if scheme.lower() == "bearer" and value:
+                        reject_token(token, value)
+
+        trace = aiohttp.TraceConfig()
+        trace.on_request_end.append(on_upgrade_response)
+        trace.freeze()
+        api.rest_client.pool_manager.trace_configs.append(trace)
     if configuration.tls_server_name:
         # kubernetes_asyncio sets the certificate name on plain requests but not on WebSocket
         # ones, so a rewritten loopback server (kind in the container) would fail verification.

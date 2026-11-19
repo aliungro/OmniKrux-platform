@@ -34,6 +34,9 @@
 }
 
 .tab {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
   margin-bottom: -1px;
   padding: 9px 11px 8px;
   border: 0;
@@ -95,11 +98,11 @@
   cursor: pointer;
 }
 
-.btn:hover:not(:disabled) {
+.btn:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--ink-3);
 }
 
-.btn:disabled {
+.btn:disabled, .btn[aria-disabled="true"] {
   color: var(--ink-3);
   cursor: default;
 }

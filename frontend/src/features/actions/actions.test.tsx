@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import type { Job, Plan, ResourceRow } from "../../api/types";
 import { resourceDescribe } from "../../test/describe";
 import { DEPLOYMENTS } from "../../test/kinds";
+import { AllShortcuts } from "../chrome/ShortcutBar";
 import { Table } from "../../test/table";
 import type { RowRequest } from "../territories/TerritoryTable";
 import { Inspector } from "../inspector/Inspector";
@@ -914,6 +915,86 @@ describe("changes from the details", () => {
   });
 });
 
+describe("detail tab shortcuts", () => {
+  it.each([
+    {
+      kindKey: "pods",
+      row: deployment({ uid: "p-1", kind: "Pod" }),
+      describeRoute: "GET /api/clusters/c1/pods/demo/web/describe",
+      metrics: true,
+    },
+    { kindKey: "nodes", row: node(), describeRoute: NODE_DESCRIBE, metrics: true },
+    { kindKey: "deployments.apps", row: deployment(), describeRoute: DESCRIBE, metrics: false },
+  ])("detail tabs show their existing shortcut numbers without changing tab names ($kindKey)", ({
+    kindKey, row, describeRoute, metrics,
+  }) => {
+    serve({ [describeRoute]: [ok(resourceDescribe())] });
+    wrap(<ActionsProvider><Inspector row={row} provider="aks" kindKey={kindKey} /></ActionsProvider>);
+
+    const tablist = within(screen.getByRole("tablist", { name: "Details" }));
+    const names = metrics ? ["Describe", "YAML", "Events", "Metrics"] : ["Describe", "YAML", "Events"];
+    const tabs = tablist.getAllByRole("tab");
+    const panel = screen.getByRole("tabpanel", { name: "Describe" });
+    expect(tabs).toEqual(names.map((name) => tablist.getByRole("tab", { name })));
+    expect(new Set(tabs.map((tab) => tab.id)).size).toBe(names.length);
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs[0].id);
+    tabs.forEach((tab, index) => {
+      const number = String(index + 1);
+      const hint = within(tab).getByText(number);
+      expect(hint.getAttribute("aria-hidden")).toBe("true");
+      expect(hint.closest("[hidden]")).toBeNull();
+      expect(hint.tabIndex).toBe(-1);
+      expect(tab.lastElementChild).toBe(hint);
+      expect(tab.getAttribute("aria-keyshortcuts")).toBe(number);
+      expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+      expect(tab.tabIndex).toBe(index === 0 ? 0 : -1);
+    });
+
+    fireEvent.click(tablist.getByRole("tab", { name: "Events" }));
+    expect(screen.getByRole("tabpanel", { name: "Events" })).toBe(panel);
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs[2].id);
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual(names.map((_, index) => index === 2 ? 0 : -1));
+  });
+
+  it("tab hints preserve existing editing and tab-navigation guards", async () => {
+    serve({ [DESCRIBE]: [ok(resourceDescribe())], [YAML]: [ok({ yaml: "kind: Deployment\n" })] });
+    wrap(
+      <ActionsProvider>
+        <Inspector row={deployment()} provider="aks" kindKey="deployments.apps" verbs={VERBS} />
+      </ActionsProvider>,
+    );
+    const user = userEvent.setup();
+    const activeTab = (name: string) => screen.getByRole("tab", { name, selected: true });
+    activeTab("Describe").focus();
+    for (const [key, name] of [
+      ["{ArrowRight}", "YAML"], ["{ArrowLeft}", "Describe"], ["{End}", "Events"],
+      ["{Home}", "Describe"], ["2", "YAML"], ["3", "Events"], ["1", "Describe"], ["4", "Describe"],
+    ]) {
+      await user.keyboard(key);
+      expect(document.activeElement).toBe(activeTab(name));
+    }
+
+    await user.click(button("Scale", tools()));
+    const replicas = screen.getByLabelText<HTMLInputElement>("Replicas");
+    await user.clear(replicas);
+    await user.type(replicas, "2");
+    expect(replicas.value).toBe("2");
+    expect(document.activeElement).toBe(replicas);
+    expect(activeTab("Describe")).toBeTruthy();
+    await user.click(button("Cancel"));
+
+    await user.click(button("Edit", tools()));
+    const editor = await screen.findByLabelText<HTMLTextAreaElement>("Edit Deployment YAML");
+    await waitFor(() => expect(document.activeElement).toBe(editor));
+    const before = editor.value;
+    editor.setSelectionRange(before.length, before.length);
+    await user.keyboard("13");
+    expect(editor.value).toBe(before + "13");
+    expect(document.activeElement).toBe(editor);
+    expect(activeTab("YAML")).toBeTruthy();
+  });
+});
+
 describe("yaml editor keys", () => {
   const BEFORE = "kind: Deployment\nspec:\n  replicas: 3\n";
   const EDITED = BEFORE.replace("replicas: 3", "replicas: 4");
@@ -1302,6 +1383,59 @@ describe("tool keys on rows", () => {
       region: null, environment: "development" as const, state: "ready" as const, message: null },
     state: "ready" as const, message: null, rows: [deployment()], total: 1, failing: 0, pending: 0,
   };
+
+  async function deletedReview() {
+    const calls = serve({ [DESCRIBE]: [ok(resourceDescribe())], "POST /api/actions/plan": [ok(plan({ action: "delete" }))] });
+    const worker = deployment({ name: "worker", uid: "worker" });
+    function view(rows: ResourceRow[], active = true, mounted = true, help = false) {
+      return <ActionsProvider><button>Elsewhere</button>{mounted && <Table territories={[{ ...territory, rows }]}
+        kind={{ ...DEPLOYMENTS, verbs: VERBS }} paneActive={active} onRetry={() => {}} />}{help && <AllShortcuts groups={[]} onClose={() => {}} />}</ActionsProvider>;
+    }
+    const app = wrap(view([deployment(), worker]));
+    const opener = document.querySelector<HTMLElement>("[data-row-key]")!;
+    act(() => opener.focus());
+    fireEvent.keyDown(opener, { key: "Delete", ctrlKey: true });
+    await screen.findByRole("dialog");
+    const intervals = vi.spyOn(window, "setInterval");
+    const update = (active = true, mounted = true, help = false) => app.rerender(view([worker], active, mounted, help));
+    update();
+    expect(opener.isConnected).toBe(false);
+    return { calls, update, intervals };
+  }
+
+  it("deleted opener restores focus after the last review closes", async () => {
+    const { calls, intervals } = await deletedReview();
+    expect(button("Cancel")).toBe(document.activeElement);
+    fireEvent.click(button("Cancel"));
+    await act(async () => {});
+    expect(document.activeElement?.textContent).toContain("worker");
+    expect(document.activeElement?.hasAttribute("data-row-key")).toBe(true);
+    expect(intervals.mock.calls.some(([, delay]) => delay === 100)).toBe(false);
+    expect(calls.filter(c => c.url.endsWith("/apply"))).toHaveLength(0);
+  });
+
+  it("waits for shortcut help when it outlives the deleted opener's review", async () => {
+    const { update, calls } = await deletedReview();
+    update(true, true, true);
+    fireEvent.click(button("Cancel"));
+    await act(async () => {});
+    expect(screen.getByRole("dialog", { name: "All shortcuts" }).contains(document.activeElement)).toBe(true);
+    update();
+    await act(async () => {});
+    expect(document.activeElement?.hasAttribute("data-row-key")).toBe(true);
+    expect(calls.some(c => c.url.endsWith("/apply"))).toBe(false);
+  });
+
+  it.each(["pane", "focus", "blur", "unmount"])("closing a review never rescues an inactive pane or overrides deliberate focus (%s)", async (loss) => {
+    const { update } = await deletedReview();
+    if (loss === "pane") { update(false); update(true); }
+    if (loss === "unmount") update(true, false);
+    fireEvent.click(button("Cancel"));
+    if (loss === "focus" || loss === "blur") button("Elsewhere").focus();
+    if (loss === "blur") button("Elsewhere").blur();
+    await act(async () => {});
+    expect(document.activeElement).toBe(loss === "focus" ? button("Elsewhere") : document.body);
+  });
 
   it.each([
     [{ key: "r" }, "restart"],

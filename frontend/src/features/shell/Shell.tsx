@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { clusterLifecycle } from "../../api/clusterLifecycle";
 import { useClusters } from "../../api/useClusters";
 import { failure } from "../../api/http";
 import { useKinds } from "../../api/useKinds";
 import { ActionsProvider } from "../actions/ActionDialog";
-import { AuditView } from "../audit/AuditView";
+import { ViewBoundary } from "./lazyView";
 import { focusTableRow } from "../chrome/pageKeys";
 import { useKeyboardZone } from "../chrome/useKeyboardZone";
 import { AllShortcuts, ShortcutBar } from "../chrome/ShortcutBar";
@@ -17,7 +17,6 @@ import { KubernetesTab, type KubernetesTabProps } from "../kubernetes/Kubernetes
 import { CommandPalette, usePaletteKeys, type PaletteMode } from "../palette/CommandPalette";
 import { ForwardsMenu } from "../portforward/ForwardsMenu";
 import { forgetClusterForwards, usePortForwards } from "../portforward/usePortForwards";
-import { SettingsView } from "../settings/SettingsView";
 import { StorageSaveNotices } from "../settings/StorageSaveNotices";
 import { APPS, appForKey } from "./apps";
 import { usePaneNav, useWorkspaceNav, type WorkspaceNav } from "./browserHistory";
@@ -67,6 +66,9 @@ function KubePane({ tab, title, history, active, split, zoneActive, onFocusPane,
     </section>
   );
 }
+
+const AuditView = lazy(() => import("../audit/AuditView").then(m => ({ default: m.AuditView })));
+const SettingsView = lazy(() => import("../settings/SettingsView").then(m => ({ default: m.SettingsView })));
 
 export function Shell() {
   const client = useQueryClient();
@@ -155,7 +157,7 @@ export function Shell() {
     const land = () => {
       if (document.querySelector('[aria-modal="true"]')) return;
       const pane = main.current?.querySelector<HTMLElement>('[data-active-pane="true"]');
-      if (pane && focusTableRow(pane, { selectedOnly: true })) return;
+      if (pane && focusTableRow(pane, { selectedOnly: true, revealSelected: opts?.now })) return;
       main.current?.focus({ preventScroll: true });
     };
     if (opts?.now) {
@@ -236,8 +238,14 @@ export function Shell() {
                 </div>
               </>
             ) : ws.app === "audit" ? (
-              <AuditView filters={ws.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />
-            ) : <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection} />}
+              <ViewBoundary key="audit" label="the audit log">
+                <AuditView filters={ws.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />
+              </ViewBoundary>
+            ) : (
+              <ViewBoundary key="settings" label="settings">
+                <SettingsView kinds={kinds} saveProblem={saveProblem} section={settingsSection} />
+              </ViewBoundary>
+            )}
           </main>
           {/* A shell is in the dock: the dock keeps its outline, the bar says how to leave the terminal. */}
           <Dock ref={dockRef} dock={dock} zoneActive={zone === "logs" || zone === "shell"} onFocusWorkspace={focusWorkspaceFromDock} />

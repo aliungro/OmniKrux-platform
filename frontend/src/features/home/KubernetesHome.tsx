@@ -12,6 +12,8 @@ import { tabLabel } from "../shell/tabLabel";
 import { bandLocation } from "../territories/ClusterBand";
 import { buildTerritories, kindTitle, NO_FILTER } from "../territories/model";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
+import { AttentionQueue } from "./AttentionQueue";
+import { currentHealth } from "./incidentHealth";
 import { ClusterCard } from "./ClusterCard";
 import { DiscoveryList } from "./DiscoveryList";
 import { searchHome, type HomeResult } from "./homeSearch";
@@ -51,7 +53,7 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
     onUnknownCluster: () => void clusters.refetch(),
   });
   const now = useNow(60_000);
-  const territories = useMemo(() => buildTerritories(clusters.data ?? [], watch, NO_FILTER, now), [clusters.data, watch, now]);
+  const territories = useMemo(() => currentHealth(buildTerritories(clusters.data ?? [], watch, NO_FILTER, now), watch), [clusters.data, watch, now]);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -126,6 +128,7 @@ export function KubernetesHome({ nav, closed, onReopen, loadProblem, onDismissLo
         {results.length === 0 && !catalogIncomplete && <p role="status" className={s.empty}>Nothing matches "{query.trim()}".</p>}
       </div>}
     </div>
+    <AttentionQueue territories={territories} nav={nav} paneActive={paneActive} searchRef={input} loading={clusters.data === undefined} />
     <section aria-labelledby={`${listId}-clusters`}>
       <h2 id={`${listId}-clusters`}>Clusters</h2>
       {clusters.data === undefined ? clusters.isError ? <div role="alert" className={s.note}>Can't load clusters: {clusters.error.message} <button type="button" onClick={() => void clusters.refetch()}>Try again</button></div> : <p role="status" className={s.note}>Loading clusters…</p>
