@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { mkdirSync, writeFileSync } from "node:fs";
 import { relative } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -15,7 +16,9 @@ export default defineConfig({
         dynamicImports: chunk.dynamicImports,
         modules: Object.keys(chunk.modules).map(id => "/" + relative(process.cwd(), id).replaceAll("\\", "/")),
       }));
-      this.emitFile({ type: "asset", fileName: ".vite/startup-graph.json", source: JSON.stringify({ chunks }) });
+      // Outside dist on purpose: the app serves every file in dist.
+      mkdirSync("node_modules/.cache/omnikrux", { recursive: true });
+      writeFileSync("node_modules/.cache/omnikrux/startup-graph.json", JSON.stringify({ chunks }));
     },
   }],
   server: {

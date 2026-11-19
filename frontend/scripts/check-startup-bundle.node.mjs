@@ -10,7 +10,9 @@ test("checks emitted bytes and HTML modulepreloads against reachable chunks", t 
   const dir = mkdtempSync(join(tmpdir(), "omnikrux-startup-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const dist = join(dir, "dist");
-  mkdirSync(join(dist, ".vite"), { recursive: true });
+  const meta = join(dir, "node_modules/.cache/omnikrux");
+  mkdirSync(dist, { recursive: true });
+  mkdirSync(meta, { recursive: true });
   const chunk = (file, entry = false) => ({ file, entry, imports: [], bytes: 1, gzipBytes: 1, modules: [] });
   const feature = chunk("features.js");
   feature.modules = [
@@ -19,7 +21,7 @@ test("checks emitted bytes and HTML modulepreloads against reachable chunks", t 
   ].map(name => "/features/" + name + ".tsx").concat("/node_modules/@xterm/xterm/x", "/node_modules/@codemirror/view/x");
   const entry = chunk("entry.js", true);
   const chunks = [entry, chunk("preload.js"), feature];
-  const saveGraph = () => writeFileSync(join(dist, ".vite/startup-graph.json"), JSON.stringify({ chunks }));
+  const saveGraph = () => writeFileSync(join(meta, "startup-graph.json"), JSON.stringify({ chunks }));
   saveGraph();
   for (const { file } of chunks) writeFileSync(join(dist, file), " ");
   const html = href => writeFileSync(join(dist, "index.html"),
@@ -39,6 +41,12 @@ test("checks emitted bytes and HTML modulepreloads against reachable chunks", t 
   assert.throws(run, /missing.js/);
   entry.imports = [];
   saveGraph();
+  // Build-only metadata must never be served with the app.
+  mkdirSync(join(dist, ".vite"));
+  writeFileSync(join(dist, ".vite/startup-graph.json"), "{}");
+  assert.throws(run, /served/);
+  rmSync(join(dist, ".vite"), { recursive: true });
+  run();
   rmSync(join(dist, "entry.js"));
   assert.throws(run, /ENOENT.*entry.js/);
 });

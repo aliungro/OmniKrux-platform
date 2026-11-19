@@ -1,11 +1,12 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
 const args = process.argv.slice(2);
 const snapshot = args[0] === "--snapshot" && args.length === 2;
 if (args.length && !snapshot) throw new Error("Usage: check-startup-bundle.mjs [--snapshot captured-graph.json]");
-const graph = JSON.parse(readFileSync(snapshot ? args[1] : "dist/.vite/startup-graph.json", "utf8"));
+// Kept out of dist: everything in dist is served by the app.
+const graph = JSON.parse(readFileSync(snapshot ? args[1] : "node_modules/.cache/omnikrux/startup-graph.json", "utf8"));
 const chunks = new Map(graph.chunks.map(chunk => [chunk.file, chunk]));
 const initial = new Set();
 function visit(file) {
@@ -23,6 +24,7 @@ if (snapshot) {
     chunk.bytes = code.byteLength;
     chunk.gzipBytes = gzipSync(code).byteLength;
   }
+  if (existsSync("dist/.vite")) throw new Error("Build metadata in dist/.vite would be served with the app");
   const html = readFileSync("dist/index.html", "utf8");
   let hasEntry = false;
   for (const [tag, kind] of html.matchAll(/<(script|link)\b[^>]*>/gi)) {
