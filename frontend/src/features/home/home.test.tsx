@@ -478,6 +478,19 @@ function seedClosed(view: KubeView, back: KubeView[] = [HOME]) {
   localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
 }
 
+it("a fresh page load puts the keyboard in the workspace, not on the page body", async () => {
+  show();
+  await nextFrame();
+  expect(document.activeElement).toBe(screen.getByRole("main"));
+});
+it("a pane that claims focus as the page loads keeps it", async () => {
+  const ws = defaultWorkspace();
+  ws.kubernetes.tabs[0].view = { page: "home", section: "discovered" };
+  localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+  show();
+  await nextFrame();
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Discovered clusters" }));
+});
 it("home leads with the search", () => {
   show();
   const heading = screen.getByRole("heading", { name: "Where do you want to look?" });
