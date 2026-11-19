@@ -51,6 +51,21 @@ vi.mock("../territories/TerritoryTable", async importOriginal => {
   await coldTable.wait;
   return importOriginal();
 });
+// Records the table's scroll requests; the real virtualizer still performs them.
+const scrollRequests = vi.hoisted(() => [] as Array<{ index: number; align: string | undefined }>);
+vi.mock("@tanstack/react-virtual", async importOriginal => {
+  const actual = await importOriginal<typeof import("@tanstack/react-virtual")>();
+  const wrapped = new WeakSet<object>();
+  return { ...actual, useVirtualizer: ((options: Parameters<typeof actual.useVirtualizer>[0]) => {
+    const instance = actual.useVirtualizer(options);
+    if (!wrapped.has(instance)) {
+      wrapped.add(instance);
+      const scrollToIndex = instance.scrollToIndex;
+      instance.scrollToIndex = (index, opts) => { scrollRequests.push({ index, align: opts?.align }); scrollToIndex(index, opts); };
+    }
+    return instance;
+  }) as typeof actual.useVirtualizer };
+});
 // jsdom has no scrolling layout. Deliver the browser's scroll notification on
 // demand so the real virtualizer mounts the distant row in a separate commit.
 function delayQueueScroll() {
@@ -297,6 +312,24 @@ it("an unresolved queue landing stays held through a multipart refresh and requi
   expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
   await act(async () => reads[1](await json(describeBody())));
   expect(await screen.findByRole("tab", { name: /Describe/ })).toBeTruthy();
+});
+it("the first move after a queue landing does not reveal the next row again", async () => {
+  const peers = Array.from({ length: 40 }, (_, i) => ({ ...pod, uid: `z${i}`, name: `z${i}` }));
+  show(); await ready([failingPod, ...peers]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  const landed = await waitFor(() => {
+    const row = document.querySelector<HTMLElement>('[data-row-key="c1/p1"]');
+    expect(document.activeElement).toBe(row);
+    return row!;
+  });
+  await screen.findByRole("tab", { name: /Describe/ });
+  scrollRequests.length = 0;
+  fireEvent.keyDown(landed, { key: "ArrowDown" });
+  await waitFor(() => expect(document.activeElement?.getAttribute("data-row-key")).not.toBe("c1/p1"));
+  await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+  // An ordinary move keeps the list where it is; only a new landing aligns to the top.
+  expect(scrollRequests.filter(r => r.align === "start")).toEqual([]);
 });
 it("each queue visit rechecks identity and late proof preserves deliberate focus", async () => {
   const originalFetch = vi.mocked(fetch);

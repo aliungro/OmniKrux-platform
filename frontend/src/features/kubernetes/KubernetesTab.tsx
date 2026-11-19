@@ -125,6 +125,10 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
   const tableMount = useCallback((element: HTMLDivElement | null) => setTableReady(element !== null), []);
   const landing = useAttentionLanding(attention, watch, list ? list.some(c => c.id === attention?.clusterId) : undefined, paneActive, tableReady);
   const held = !!attention && !landing.ready;
+  // The table reveals on every change of `reveal`, so count proved landings upward only:
+  // leaving a landing must not reveal (and align) whatever row is selected next.
+  const [landings, setLandings] = useState({ count: 0, ready: false });
+  if (landings.ready !== landing.ready) setLandings({ count: landings.count + (landing.ready ? 1 : 0), ready: landing.ready });
   const selection = useMemo<Selection>(() => ({ selected: held ? null : view.selected, open: !held && view.open }), [view.selected, view.open, held]);
   const latestSelection = useRef(selection);
   latestSelection.current = selection;
@@ -372,7 +376,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
                 attentionFocusOwner={attention}
                 missingFocusOwner={!!attention && landing.state === "missing"}
                 onSelection={onSelection}
-                reveal={nav.reveal + (landing.ready ? 1 : 0)}
+                reveal={nav.reveal + landings.count}
                 expectedUid={attention && landing.ready ? attention.uid : undefined}
                 onRetry={onRetry}
                 podCounts={podCounts}
