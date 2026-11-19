@@ -88,7 +88,7 @@ Startup size matters: `npm run build` fails when the initial JavaScript exceeds 
 
 ## How an app is added to the rail
 
-Each OmniKrux app has its own life: its own code area, versions, plans and improvement list, and work on one app does not change another as a side effect. Kubernetes is the first app; Audit and Settings are shared pages that sit in the same rail. The intent is written down in `docs/apps/README.md` (present on the branches that carry the per-app notes).
+Each OmniKrux app has its own life: its own code area, versions, plans and improvement list, and work on one app does not change another as a side effect. Kubernetes is the first app; Audit and Settings are shared pages that sit in the same rail.
 
 To add an app, in the shared shell:
 

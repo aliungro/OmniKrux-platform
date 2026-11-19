@@ -6,3 +6,7 @@ __pycache__/
 node_modules/
 frontend/dist/
 backend/omnikrux/static/
+# Planning material (designs, plans, reviews, mockups, per-app notes) is internal only.
+docs/superpowers/
+docs/design/
+docs/apps/
