@@ -45,6 +45,8 @@ function show() {
 }
 const search = () => screen.getByRole("combobox", { name: "Search Kubernetes" });
 const failingPod: ResourceRow = { ...pod, columns: { status: "CrashLoopBackOff", status_class: "bad" } };
+const nextFrame = () => act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+const pod2 = (): ResourceRow => ({ ...pod, uid: "p2", name: "api-pod" });
 const podLink = () => screen.getByRole("button", { name: /web-pod.*demo.*prod-east.*CrashLoopBackOff/ });
 const coldTable = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
 vi.mock("../territories/TerritoryTable", async importOriginal => {
@@ -330,6 +332,39 @@ it("the first move after a queue landing does not reveal the next row again", as
   await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
   // An ordinary move keeps the list where it is; only a new landing aligns to the top.
   expect(scrollRequests.filter(r => r.align === "start")).toEqual([]);
+});
+it("a reconnect keeps an opened queue Pod selected like any other selection", async () => {
+  show(); await ready([failingPod, pod2()]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  await screen.findByRole("tab", { name: /Describe/ });
+  const ws = FakeWebSocket.last;
+  act(() => ws.emit({ type: "cluster_status", cluster_id: "c1", state: "syncing", message: "Watch restarted" }));
+  await nextFrame();
+  expect(screen.queryByText(/Opening Pod/)).toBeNull();
+  act(() => {
+    ws.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    ws.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [failingPod, pod2()] });
+  });
+  await nextFrame();
+  expect(screen.queryByText(/Opening Pod/)).toBeNull();
+  await screen.findByRole("tab", { name: /Describe/ });
+  expect(document.querySelector('[data-row-key="c1/p1"]')?.getAttribute("aria-selected")).toBe("true");
+});
+it("a reconnect that loses the opened queue Pod says it is gone", async () => {
+  show(); await ready([failingPod, pod2()]);
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 failing Pods" }));
+  podLink().focus(); await userEvent.keyboard("{Enter}");
+  await screen.findByRole("tab", { name: /Describe/ });
+  const ws = FakeWebSocket.last;
+  act(() => {
+    ws.emit({ type: "cluster_status", cluster_id: "c1", state: "syncing", message: null });
+    ws.emit({ type: "cluster_status", cluster_id: "c1", state: "ready", message: null });
+    ws.emit({ type: "snapshot", cluster_id: "c1", part: 0, last: true, rows: [{ ...failingPod, uid: "p1-new" }, pod2()] });
+  });
+  expect(await screen.findByText("This Pod is no longer available")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: /Describe/ })).toBeNull();
+  expect(document.querySelector('[data-row-key="c1/p1-new"]')?.getAttribute("aria-selected")).not.toBe("true");
 });
 it("each queue visit rechecks identity and late proof preserves deliberate focus", async () => {
   const originalFetch = vi.mocked(fetch);
