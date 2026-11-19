@@ -37,7 +37,7 @@ _CACHE = "msal_token_cache.json"
 _WINDOWS_CACHE = "msal_token_cache.bin"
 _MSAL_ENVIRONMENT = "login.microsoftonline.com"
 _MAX_REFRESH_ATTEMPTS = 4
-_BAD_LOGIN = "Omnikrux couldn't read the Azure CLI login. Run `az login`, then try again."
+_BAD_LOGIN = "OmniKrux couldn't read the Azure CLI login. Run `az login`, then try again."
 _BAD_CLUSTER = "Azure sent unreadable cluster details. Check the subscription, then try again."
 _BAD_TOKEN = "Azure sent an unreadable token. Check the login, then try again."
 

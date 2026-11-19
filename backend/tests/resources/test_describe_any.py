@@ -190,7 +190,7 @@ def test_workload_pods_owned_directly_and_controller_link():
     assert texts(section(d, "Pods"))[0][0] == "db-0" and len(section(d, "Pods").rows) == 1
     assert fields(d)["Replicas"] == "2 desired, 2 current, 1 ready"
     assert fields(d)["Controlled by"] == "Cluster pg"
-    assert d.owner is None  # a kind Omnikrux can't name has no link
+    assert d.owner is None  # a kind OmniKrux can't name has no link
 
     rs = replicaset("web-new", "u-rs2", "2", "u-web", 3)
     rs["metadata"]["ownerReferences"][0]["name"] = "web"

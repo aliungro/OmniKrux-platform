@@ -31,7 +31,7 @@ function audit(x: unknown): AuditFilters {
 export function parseWorkspace(raw: string | null): {workspace:Workspace;problem:Problem|null} {
   if (raw===null) return {workspace:defaultWorkspace(),problem:null};
   let value: unknown; try { value=JSON.parse(raw); } catch { return {workspace:defaultWorkspace(),problem:{text:"they aren't valid JSON",reset:true}}; }
-  if (!record(value) || value.version!==1) return {workspace:defaultWorkspace(),problem:{text:"they're from another version of Omnikrux",reset:true}};
+  if (!record(value) || value.version!==1) return {workspace:defaultWorkspace(),problem:{text:"they're from another version of OmniKrux",reset:true}};
   const malformedTabs=!record(value.kubernetes) || !Array.isArray(value.kubernetes.tabs);
   const k=record(value.kubernetes)?value.kubernetes:{}; const seen=new Set<string>(); let dropped=0;
   const tabs: Tab<KubeView>[]=[];
@@ -56,7 +56,7 @@ export function useWorkspace(storage?: Storage | null): {ws:Workspace;dispatch:(
   });
   const [ws,reduceDispatch] = useReducer(workspaceReducer,initial.workspace);
   const dispatch = useCallback((action: WorkspaceAction) => reduceDispatch(prepareWorkspaceAction(action)), []);
-  const [loadProblem,setLoadProblem]=useState<string|null>(()=>initial.problem ? initial.problem.reset ? `Your saved tabs couldn't be read (${initial.problem.text}), so Omnikrux started with a fresh Home tab.` : `${initial.problem.text}; the rest are back.` : null);
+  const [loadProblem,setLoadProblem]=useState<string|null>(()=>initial.problem ? initial.problem.reset ? `Your saved tabs couldn't be read (${initial.problem.text}), so OmniKrux started with a fresh Home tab.` : `${initial.problem.text}; the rest are back.` : null);
   const [saveProblem,setSaveProblem]=useState<string|null>(null);
   const latest=useRef(ws); const pending=useRef(false); const timer=useRef<ReturnType<typeof setTimeout> | null>(null);
   const flush=useCallback(() => { if (!pending.current) return; pending.current=false; if (timer.current!==null) {clearTimeout(timer.current); timer.current=null;} try { if (initial.accessProblem !== null) { setSaveProblem(initial.accessProblem); return; } initial.store?.setItem(STORAGE_KEY,serializeWorkspace(latest.current)); setSaveProblem(null); } catch (error) { setSaveProblem(storageProblem(error)); } },[initial.store,initial.accessProblem]);

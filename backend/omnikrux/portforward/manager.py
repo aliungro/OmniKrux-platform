@@ -40,14 +40,14 @@ EXHAUSTED = "All {n} port-forward ports ({first}–{last}) are in use. Stop one 
 NO_READY_PODS = "Service {name} has no ready pods to forward to."
 POD_GONE = "Pod {name} is gone; stop this forward and start a new one."
 SERVICE_GONE = "Service {name} is gone; stop this forward and start a new one."
-CLUSTER_REMOVED = "The cluster was removed from Omnikrux."
+CLUSTER_REMOVED = "The cluster was removed from OmniKrux."
 CONSOLE_STOPPED = "The console stopped."
 NOT_RUNNING = "This port-forward isn't running any more."
 POD_NOT_RUNNING = (
     "Pod {name} isn't running ({phase}), so nothing in it can be reached. "
     "Wait for it to start, or pick a running pod."
 )
-CLUSTER_GONE_NOW = "The cluster was removed from Omnikrux; stop this forward."
+CLUSTER_GONE_NOW = "The cluster was removed from OmniKrux; stop this forward."
 UNEXPECTED = (
     "The port-forward connection failed unexpectedly ({type}). "
     "Connect again; if it keeps failing, stop this forward and start a new one."

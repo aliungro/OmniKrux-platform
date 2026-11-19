@@ -314,7 +314,7 @@ async def test_refresh_throttling_is_safe_and_does_not_retry(cli_folder, gcp_clo
     assert calls == ["/token"]
     assert str(failure.value) == (
         "Google Cloud is limiting requests while trying to refresh the login. "
-        "Omnikrux tries again at the next check."
+        "OmniKrux tries again at the next check."
     )
     assert detail not in repr([record.__dict__ for record in caplog.records])
 

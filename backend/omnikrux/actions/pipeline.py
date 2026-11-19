@@ -74,9 +74,9 @@ TYPE_TO_CONFIRM = "Type {name} to confirm"
 PRODUCTION = "This is a production cluster."
 CANCELLED = "The request stopped before the cluster answered; the change may or may not be made."
 ONLY_PLAN_ID = "An apply takes only the plan id and the typed confirmation."
-HELM_READ_ONLY = "Helm releases are read-only in Omnikrux. Use helm to change them."
+HELM_READ_ONLY = "Helm releases are read-only in OmniKrux. Use helm to change them."
 SECRET_EDIT = (
-    "Secrets can't be edited in Omnikrux: their values never reach the browser. "
+    "Secrets can't be edited in OmniKrux: their values never reach the browser. "
     "Use kubectl to change them."
 )
 
@@ -456,7 +456,7 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
     target = body.target
     handler = ACTIONS.get(body.action)
     if handler is None:
-        raise HTTPException(status_code=422, detail=f"Omnikrux can't {body.action} yet.")
+        raise HTTPException(status_code=422, detail=f"OmniKrux can't {body.action} yet.")
     if not is_kind_key(target.kind_key) or (
         handler.kinds is not None and target.kind_key not in handler.kinds
     ):

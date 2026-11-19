@@ -551,7 +551,7 @@ async def test_drain_timeout_names_why_pods_couldnt_be_checked(env):
     assert current["state"] == "failed"
     message = current["message"]
     assert message.startswith(
-        "Drain stopped after 1 s: Omnikrux couldn't check that 1 pods left worker (demo/slow-1): "
+        "Drain stopped after 1 s: OmniKrux couldn't check that 1 pods left worker (demo/slow-1): "
         "Not allowed to list the pods on worker: pods is forbidden"
     )
     assert message.endswith(" worker stays cordoned.")

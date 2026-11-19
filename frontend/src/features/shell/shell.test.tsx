@@ -262,7 +262,7 @@ it("labels scoped tabs and renders the provider-colour stripes",()=>{
 it("reopening Audit refetches its first page",async()=>{
  renderShell();
  fireEvent.click(screen.getByRole("button",{name:"Audit log"}));
- await screen.findByText("Nothing has been changed from Omnikrux yet.");
+ await screen.findByText("Nothing has been changed from OmniKrux yet.");
  const calls=()=>vi.mocked(fetch).mock.calls.filter(([url])=>String(url).startsWith("/api/audit"));
  const first=calls().length;
  fireEvent.click(screen.getByRole("button",{name:"Settings"}));

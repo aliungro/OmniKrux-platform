@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 JOB_KEEP_SECONDS = 3600
 STOPPED = "The console stopped during the {action}."
-REMOVED = "The cluster was removed from Omnikrux, so the {action} stopped."
+REMOVED = "The cluster was removed from OmniKrux, so the {action} stopped."
 UNEXPECTED = "The {action} stopped: something unexpected went wrong ({error})."
 
 JobState = Literal["running", "succeeded", "failed", "cancelled"]

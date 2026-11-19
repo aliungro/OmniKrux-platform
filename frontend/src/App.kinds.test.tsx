@@ -158,7 +158,7 @@ it("a removed scoped cluster falls back to all clusters with a note", async () =
   localStorage.setItem("omnikrux.workspace", JSON.stringify(saved));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
-  expect(await screen.findByText("The cluster this tab looked at is gone from Omnikrux, so it shows every cluster.")).toBeTruthy();
+  expect(await screen.findByText("The cluster this tab looked at is gone from OmniKrux, so it shows every cluster.")).toBeTruthy();
   const filters = within(screen.getByRole("group", { name: "Filter rows" }));
   expect(filters.getByText("kind-omnikrux-dev")).toBeTruthy();
   expect(filters.queryByRole("button", { name: "Show all clusters" })).toBeNull();
@@ -249,7 +249,7 @@ it("keeps the removed-scope notice when no clusters remain", async () => {
   vi.stubGlobal("fetch", vi.fn((url: string) => json(url.startsWith("/api/kinds") ? KINDS : [])));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
-  expect(await screen.findByText("The cluster this tab looked at is gone from Omnikrux, so it shows every cluster.")).toBeTruthy();
+  expect(await screen.findByText("The cluster this tab looked at is gone from OmniKrux, so it shows every cluster.")).toBeTruthy();
 });
 
 it("a removed-scope notice disappears when Back restores a different scope", async () => {
@@ -260,7 +260,7 @@ it("a removed-scope notice disappears when Back restores a different scope", asy
   localStorage.setItem("omnikrux.workspace", JSON.stringify(saved));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><Console /></QueryClientProvider>);
-  const notice = "The cluster this tab looked at is gone from Omnikrux, so it shows every cluster.";
+  const notice = "The cluster this tab looked at is gone from OmniKrux, so it shows every cluster.";
   expect(await screen.findByText(notice)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   const filters = within(screen.getByRole("group", { name: "Filter rows" }));

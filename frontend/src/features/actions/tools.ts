@@ -7,7 +7,7 @@ export type ToolId = Extract<ShortcutId, "edit" | "scale" | "restart" | "cordon"
 
 const SCALABLE = new Set(["deployments.apps", "statefulsets.apps", "replicasets.apps"]);
 const RESTARTABLE = new Set(["deployments.apps", "statefulsets.apps", "daemonsets.apps"]);
-/** Helm releases are Helm's Secrets: read-only in Omnikrux (Ruling R10). */
+/** Helm releases are Helm's Secrets: read-only in OmniKrux (Ruling R10). */
 const READ_ONLY = new Set(["helm-releases"]);
 
 export const TOOL_LABEL: Record<ToolId, string> = {

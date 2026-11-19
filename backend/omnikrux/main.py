@@ -167,7 +167,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             if ("cloud_discovery_seconds",) in fields:
                 raise SystemExit(
-                    "Omnikrux can't start: OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be a whole "
+                    "OmniKrux can't start: OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be a whole "
                     "number of at least 60."
                 ) from None
             raise
@@ -181,7 +181,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 f"not {settings.cloud_discovery_seconds}."
             )
     except ValueError as exc:  # said in plain words, without a traceback
-        raise SystemExit(f"Omnikrux can't start: {exc}") from None
+        raise SystemExit(f"OmniKrux can't start: {exc}") from None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -265,7 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await http.close()
             await engine.dispose()
 
-    app = FastAPI(title="Omnikrux", lifespan=lifespan)
+    app = FastAPI(title="OmniKrux", lifespan=lifespan)
     app.add_exception_handler(RequestValidationError, validation_error)
     app.state.settings = settings
     # No login yet, so no session cookie to check either: refuse writes that another site's

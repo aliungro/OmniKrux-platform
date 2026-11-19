@@ -146,7 +146,7 @@ describe("Audit log route", () => {
     renderConsole();
     fireEvent.click(await screen.findByRole("button", { name: "Audit log" }));
     expect(window.location.hash).toBe("#/audit");
-    expect(await screen.findByText("Nothing has been changed from Omnikrux yet.")).toBeTruthy();
+    expect(await screen.findByText("Nothing has been changed from OmniKrux yet.")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Pods" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Kubernetes" }));
     expect(window.location.hash).toMatch(/^#\/kubernetes\//);

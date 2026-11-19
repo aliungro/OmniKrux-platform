@@ -30,7 +30,7 @@ const row = (id: string, name: string, changes: Partial<Discovered> = {}): Disco
 });
 
 const registered = {
-  ...FILE_CLUSTER_METADATA, id: "registered", name: "Omnikrux cluster", context_name: "ctx", provider: "kind",
+  ...FILE_CLUSTER_METADATA, id: "registered", name: "OmniKrux cluster", context_name: "ctx", provider: "kind",
   server: "https://kube.test", original_server: null, region: null, environment: "development", state: "ready", message: null,
 };
 
@@ -94,7 +94,7 @@ it("adds exactly the checked IDs and retains only the selection that failed", as
     added: [registered], failed: [{ id: "c", message: "Check this cluster's permissions." }],
   }))));
   expect(await screen.findByText(/Gamma.*Check this cluster's permissions/)).toBeTruthy();
-  expect(await within(group).findByText("In Omnikrux")).toBeTruthy();
+  expect(await within(group).findByText("In OmniKrux")).toBeTruthy();
   expect(within(group).queryByRole("checkbox", { name: "Alpha" })).toBeNull();
   expect(within(group).getByRole<HTMLInputElement>("checkbox", { name: "Gamma" }).checked).toBe(true);
   expect(within(group).getByRole<HTMLInputElement>("checkbox", { name: "Beta" }).checked).toBe(false);
@@ -187,6 +187,6 @@ it("can add an eligible dismissed discovery again while blocked and missing rows
   expect(restored.checked).toBe(true);
 
   await user.click(await screen.findByRole("button", { name: "Add 1 cluster" }));
-  expect(await group.findByText("In Omnikrux")).toBeTruthy();
+  expect(await group.findByText("In OmniKrux")).toBeTruthy();
   expect(writes.at(-1)).toEqual({ url: "/api/cloud/discovered/add", ids: ["a"] });
 });

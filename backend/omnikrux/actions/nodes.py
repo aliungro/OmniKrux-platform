@@ -67,14 +67,14 @@ STILL_THERE = (
     "{node} stays cordoned."
 )
 UNCHECKED = (
-    "Drain stopped after {duration}: Omnikrux couldn't check that {n} pods left {node} "
+    "Drain stopped after {duration}: OmniKrux couldn't check that {n} pods left {node} "
     "({names}): {reason} {node} stays cordoned."
 )
 CANCELLED = "Drain cancelled. {node} stays cordoned; uncordon it to schedule pods there again."
 DRAINED = "Drained {node}: {n} pods evicted."
 ALREADY_GONE = "{n} pods were already gone."
 NOT_REVIEWED = "{n} pods on {node} weren't in the review and stay: {names}."
-UNCHECKED_ARRIVALS = "Omnikrux couldn't check for pods that arrived since the review: {reason}"
+UNCHECKED_ARRIVALS = "OmniKrux couldn't check for pods that arrived since the review: {reason}"
 STAYS_CORDONED = "{node} stays cordoned."
 PDB_NONE = (
     "PodDisruptionBudget {pdb} allows no evictions right now: {names} {verb} until it does, "

@@ -52,7 +52,7 @@ export function TopBar({
   return (
     <header className={s.top} data-page-keys>
       <div className={s.logo}>
-        {appName ?? <><Logo /> Omnikrux</>}
+        {appName ?? <><Logo /> OmniKrux</>}
       </div>
       {nav && <><button className={s.audit} aria-label="Back" title="Back (Alt ←)" disabled={!nav.canBack} onClick={nav.back}>←</button><button className={s.audit} aria-label="Forward" title="Forward (Alt →)" disabled={!nav.canForward} onClick={nav.forward}>→</button></>}
       {clusters.length > 0 && (

@@ -149,7 +149,7 @@ function Detail({ record }: { record: AuditRecord }) {
 
 /**
  * The audit log as a full view (`#audit`): every change, shell, debug container, node shell,
- * port-forward and secret reveal Omnikrux made, newest first. The table is virtualized, so
+ * port-forward and secret reveal OmniKrux made, newest first. The table is virtualized, so
  * thousands of records stay smooth; older ones come a page at a time. A row opens to show what
  * changed (a diff) and its details, exactly as the server recorded them.
  */
@@ -273,7 +273,7 @@ export function AuditView({ filters, onFilters }: { filters: AuditFilters; onFil
   } else if (records.length === 0) {
     body = (
       <div className={s.state}>
-        {filtered ? "No records match these filters." : "Nothing has been changed from Omnikrux yet."}
+        {filtered ? "No records match these filters." : "Nothing has been changed from OmniKrux yet."}
       </div>
     );
   } else {

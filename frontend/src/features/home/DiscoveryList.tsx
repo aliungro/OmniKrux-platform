@@ -24,7 +24,7 @@ function DiscoveryRow({ row, checked, disabled, onChange, showLastSeen, now }: {
 }) {
   const name = useId();
   const blocked = row.why_not || (row.private ? "Private API endpoint." : null);
-  const state = row.state === "added" ? "In Omnikrux" : blocked ? `Can't add: ${blocked}`
+  const state = row.state === "added" ? "In OmniKrux" : blocked ? `Can't add: ${blocked}`
     : row.state === "dismissed" ? "Dismissed" : "New";
   return <li className={s.row}>
     <div className={s.identity}>

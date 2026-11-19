@@ -26,7 +26,7 @@ class _Stop(NamedTuple):
     code: int
 
 
-_REMOVED = _Stop("The cluster was removed from Omnikrux.", 4404)
+_REMOVED = _Stop("The cluster was removed from OmniKrux.", 4404)
 _SHUTDOWN = _Stop("The console is stopping.", 1001)
 
 

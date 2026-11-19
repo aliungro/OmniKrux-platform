@@ -1,4 +1,4 @@
-"""Actions: every change Omnikrux makes to a cluster, each a handler registered with the
+"""Actions: every change OmniKrux makes to a cluster, each a handler registered with the
 pipeline (`omnikrux.actions.pipeline`) under its action name."""
 
 from omnikrux.actions.delete import DeleteAction

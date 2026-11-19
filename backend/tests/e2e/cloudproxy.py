@@ -217,7 +217,7 @@ class CloudKubeProxy:
     """A fake cloud Kubernetes API backed by kind over mutual TLS.
 
     Deliberately stricter than the real API server: expiry cleanly ends existing
-    watch, follow-log, and WebSocket streams. Omnikrux must reopen using a new token.
+    watch, follow-log, and WebSocket streams. OmniKrux must reopen using a new token.
     """
 
     def __init__(self, kubeconfig: dict, token_check: Callable[[str | None], bool]):

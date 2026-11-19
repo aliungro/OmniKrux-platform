@@ -453,7 +453,7 @@ describe("audit view", () => {
   it("empty state", async () => {
     serve(() => ({ records: [], next_before: null }));
     show();
-    expect(await screen.findByText("Nothing has been changed from Omnikrux yet.")).toBeTruthy();
+    expect(await screen.findByText("Nothing has been changed from OmniKrux yet.")).toBeTruthy();
   });
 
   it("a failed read says why and offers a retry", async () => {

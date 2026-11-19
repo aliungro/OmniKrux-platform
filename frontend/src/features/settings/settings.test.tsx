@@ -418,13 +418,13 @@ it("edit pinned kinds reaches the section without writing its anchor into the ro
 
 it.each([
   ["broken", "they aren't valid JSON"],
-  ['{"version":2,"kinds":["pods"]}', "they're from another version of Omnikrux"],
+  ['{"version":2,"kinds":["pods"]}', "they're from another version of OmniKrux"],
   ['{"version":1,"kinds":["bad/key"]}', "the saved list contains an invalid kind"],
 ])("unreadable pinned storage explains its own reset once: %s", (raw, reason) => {
   localStorage.setItem("omnikrux.pinnedKinds",raw);
   const view=render(<SettingsView kinds={KINDS.kinds}/>);
   expect(rows()[0].querySelector("strong")!.textContent).toBe("Pods");
-  expect(screen.getByRole("alert").textContent).toContain(`Your saved pinned kinds couldn't be read (${reason}), so Omnikrux restored the default pinned kinds.`);
+  expect(screen.getByRole("alert").textContent).toContain(`Your saved pinned kinds couldn't be read (${reason}), so OmniKrux restored the default pinned kinds.`);
   removePinned("Services");
   expect(screen.getAllByRole("alert")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button",{name:"Dismiss pinned kinds notice"}));
@@ -781,7 +781,7 @@ it("remove account confirms with its added cluster count", async () => {
   await user.click(await screen.findByRole("button", { name: /^Remove(?: Engineering)?$/ }));
   const dialog = within(await screen.findByRole("alertdialog"));
   expect(dialog.getByText(/Remove the AWS account Engineering\?/i)).toBeTruthy();
-  expect(dialog.getByText(/Its 2 clusters leave Omnikrux too\. Nothing changes in AWS\./)).toBeTruthy();
+  expect(dialog.getByText(/Its 2 clusters leave OmniKrux too\. Nothing changes in AWS\./)).toBeTruthy();
 });
 
 it("removing an account replaces a pending initial cluster read and moves focus to Cloud accounts", async () => {
@@ -815,7 +815,7 @@ it("removing an account replaces a pending initial cluster read and moves focus 
   await act(async () => reads[0](json([cluster])));
   expect(client.getQueryData(CLUSTERS_QUERY_KEY)).toBeUndefined();
   await act(async () => reads[1](json([])));
-  expect(await screen.findByText("No clusters in Omnikrux yet.")).toBeTruthy();
+  expect(await screen.findByText("No clusters in OmniKrux yet.")).toBeTruthy();
   expect(client.getQueryData(CLUSTERS_QUERY_KEY)).toEqual([]);
 });
 
@@ -825,7 +825,7 @@ it("remove file cluster says it comes back and initially focuses Cancel", async 
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: /^Remove(?: Local East)?$/ }));
   const dialog = within(await screen.findByRole("alertdialog"));
-  expect(dialog.getByText(/Remove Local East from Omnikrux\?/)).toBeTruthy();
+  expect(dialog.getByText(/Remove Local East from OmniKrux\?/)).toBeTruthy();
   expect(dialog.getByText("kubeconfig file · Context local-east")).toBeTruthy();
   expect(dialog.getByText(/comes back on the next start unless you remove its context/)).toBeTruthy();
   expect(document.activeElement).toBe(dialog.getByRole("button", { name: "Cancel" }));
@@ -836,10 +836,10 @@ it("identifies the uploaded kubeconfig when cluster names and contexts match", a
   serve({ clusters: [fileCluster, upload] });
   show();
   const user = userEvent.setup();
-  const list = within(await screen.findByRole("list", { name: "Clusters in Omnikrux" }));
+  const list = within(await screen.findByRole("list", { name: "Clusters in OmniKrux" }));
   const uploaded = list.getByText(/uploaded kubeconfig/).closest("li")!;
   await user.click(within(uploaded).getByRole("button", { name: "Remove Local East" }));
-  const confirmation = within(screen.getByRole("alertdialog", { name: "Remove Local East from Omnikrux?" }));
+  const confirmation = within(screen.getByRole("alertdialog", { name: "Remove Local East from OmniKrux?" }));
   expect(confirmation.getByText("uploaded kubeconfig · Context local-east")).toBeTruthy();
   expect(confirmation.queryByText(/comes back on the next start/)).toBeNull();
 });
@@ -852,10 +852,10 @@ it("identifies the chosen account and region when cloud clusters share a name", 
   serve({ clusters: [east, west] });
   show();
   const user = userEvent.setup();
-  const list = within(await screen.findByRole("list", { name: "Clusters in Omnikrux" }));
+  const list = within(await screen.findByRole("list", { name: "Clusters in OmniKrux" }));
   const westRow = list.getByText("West team · us-west-2").closest("li")!;
   await user.click(within(westRow).getByRole("button", { name: "Remove Production" }));
-  const confirmation = within(screen.getByRole("alertdialog", { name: "Remove Production from Omnikrux?" }));
+  const confirmation = within(screen.getByRole("alertdialog", { name: "Remove Production from OmniKrux?" }));
   expect(confirmation.getByText("West team · us-west-2")).toBeTruthy();
   expect(confirmation.queryByText("East team · us-east-1")).toBeNull();
 });
@@ -875,7 +875,7 @@ it("evicts the removed cluster from the shared cache before the next registry re
   await user.click(await screen.findByRole("button", { name: `Remove ${fileCluster.name}` }));
   const dialog = within(await screen.findByRole("alertdialog"));
   await user.click(dialog.getByRole("button", { name: "Remove" }));
-  expect(await screen.findByText("No clusters in Omnikrux yet.")).toBeTruthy();
+  expect(await screen.findByText("No clusters in OmniKrux yet.")).toBeTruthy();
   expect(client.getQueryData(CLUSTERS_QUERY_KEY)).toEqual([]);
   expect(remove).toHaveBeenCalledTimes(1);
   expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Clusters" }));

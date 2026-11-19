@@ -5,7 +5,7 @@ PRIVATE = (
     "Private clusters arrive with the in-cluster agent."
 )
 AKS_LOCAL_ACCOUNTS = (
-    "This cluster uses local accounts, not Microsoft Entra ID. Omnikrux signs in to AKS only "
+    "This cluster uses local accounts, not Microsoft Entra ID. OmniKrux signs in to AKS only "
     "with short-lived Entra tokens: turn on Entra ID integration, or import its kubeconfig."
 )
 WORKLOAD = "Workload identity arrives with deployed mode."
@@ -17,9 +17,9 @@ DISCOVERED_MISSING = (
     "The last check didn't find this cluster. Check the account again before adding it."
 )
 DISCOVERY_CHANGED = "The cluster discovery changed. Refresh the list and try adding it again."
-ACCOUNT_SAVE_FAILED = "Couldn't save the cloud account in Omnikrux. Try again."
-ACCOUNT_REMOVE_FAILED = "Couldn't remove the cloud account from Omnikrux. Try again."
-CLUSTER_ADD_FAILED = "Couldn't add the cloud cluster to Omnikrux. Check the cluster and try again."
+ACCOUNT_SAVE_FAILED = "Couldn't save the cloud account in OmniKrux. Try again."
+ACCOUNT_REMOVE_FAILED = "Couldn't remove the cloud account from OmniKrux. Try again."
+CLUSTER_ADD_FAILED = "Couldn't add the cloud cluster to OmniKrux. Check the cluster and try again."
 CHECK_FAILED = "Couldn't check the cloud account. Check the login, then try again."
 CHECK_TIMED_OUT = "The cloud account check didn't finish within 60 s. Try again in a minute."
 ACCOUNT_KINDS = {
@@ -122,7 +122,7 @@ def not_found(cloud: str, action: str, reason: str, id_label: str) -> str:
 def throttled(cloud: str, action: str) -> str:
     return (
         f"{cloud} is limiting requests while trying to {action}. "
-        "Omnikrux tries again at the next check."
+        "OmniKrux tries again at the next check."
     )
 
 
@@ -148,7 +148,7 @@ def region_problem(region: str, message: str) -> str:
 def missing_from_cloud(account: str) -> str:
     return (
         f"Not found in {account} any more: it may have been deleted. "
-        "Remove it from Omnikrux under Settings."
+        "Remove it from OmniKrux under Settings."
     )
 
 

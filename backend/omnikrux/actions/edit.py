@@ -36,7 +36,7 @@ NOT_TEXT = "Send the edited YAML as text."
 UNREADABLE = "The edited YAML can't be read: {problem}. Fix it and review again."
 NOT_ONE_OBJECT = "The edited YAML must hold one object, a mapping such as the YAML tab shows."
 NO_VERSION = (
-    "The edited YAML has no metadata.resourceVersion, so Omnikrux can't tell whether it was "
+    "The edited YAML has no metadata.resourceVersion, so OmniKrux can't tell whether it was "
     "made from the object as it is now. Open the YAML again and edit that."
 )
 NOT_UPDATABLE = (

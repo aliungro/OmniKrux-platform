@@ -1,7 +1,7 @@
 [project]
 name = "omnikrux"
 version = "0.1.0"
-description = "Omnikrux: web console for Kubernetes and multicloud"
+description = "OmniKrux: web console for Kubernetes and multicloud"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

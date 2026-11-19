@@ -39,7 +39,7 @@ function AccountCard({ account, now, onRemove }: { account: CloudAccount; now: D
       <p>{account.principal}</p>
       <p>{source}</p>
       <p>{check.checked_at ? <time dateTime={check.checked_at} title={new Date(check.checked_at).toLocaleString()}>Checked {formatAgo(check.checked_at, now)}</time> : "Never checked"}</p>
-      <p>{counts.found} clusters · {counts.added} in Omnikrux</p>
+      <p>{counts.found} clusters · {counts.added} in OmniKrux</p>
       {error && <p className={s.warning} role="alert">{error}</p>}
       {check.message && <p className={s.warning}>{check.message}</p>}
       {check.problems.map((problem, index) => <p className={s.warning} key={`${index}:${problem}`}>{problem}</p>)}
@@ -79,7 +79,7 @@ export function AccountsSection() {
     {target && <SettingsRemovalDialog provider={target.kube_provider}
       title={`Remove the ${CLOUD_PROVIDERS[target.provider].account} ${target.name}?`}
       onRemove={() => removeAccount(client, target.id)} onClose={() => setRemoving(null)} focusAfterRemoval={heading}>
-      <p>Its {target.counts.added} {target.counts.added === 1 ? "cluster leaves" : "clusters leave"} Omnikrux too. Nothing changes in {CLOUD_PROVIDERS[target.provider].cloud}.</p>
+      <p>Its {target.counts.added} {target.counts.added === 1 ? "cluster leaves" : "clusters leave"} OmniKrux too. Nothing changes in {CLOUD_PROVIDERS[target.provider].cloud}.</p>
     </SettingsRemovalDialog>}
   </section>;
 }

@@ -11,7 +11,7 @@ const MAX_PINNED = 40;
 
 type Loaded = { pinned: string[]; loadProblem: string | null };
 function fallback(reason: string): Loaded {
-  return { pinned: [...DEFAULT_PINNED], loadProblem: `Your saved pinned kinds couldn't be read (${reason}), so Omnikrux restored the default pinned kinds.` };
+  return { pinned: [...DEFAULT_PINNED], loadProblem: `Your saved pinned kinds couldn't be read (${reason}), so OmniKrux restored the default pinned kinds.` };
 }
 function readPinned(storage: Storage | null): Loaded {
   try {
@@ -20,7 +20,7 @@ function readPinned(storage: Storage | null): Loaded {
     let value: unknown;
     try { value = JSON.parse(raw); } catch { return fallback("they aren't valid JSON"); }
     if (value === null || typeof value !== "object") return fallback("the saved list isn't valid");
-    if (!("version" in value) || value.version !== 1) return fallback("they're from another version of Omnikrux");
+    if (!("version" in value) || value.version !== 1) return fallback("they're from another version of OmniKrux");
     if (!("kinds" in value) || !Array.isArray(value.kinds)) return fallback("the saved list isn't valid");
     if (!value.kinds.every((k: unknown) => typeof k === "string" && isKindKey(k))) return fallback("the saved list contains an invalid kind");
     return { pinned: [...new Set<string>(value.kinds)].slice(0, MAX_PINNED), loadProblem: null };

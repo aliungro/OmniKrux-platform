@@ -231,7 +231,7 @@ async def test_removed_cluster_stops_its_forwards(env):
     removed, record = await env.records()
     assert (removed.action, removed.outcome) == ("cluster_remove", "succeeded")
     assert record.action == "port_forward"
-    assert (record.outcome, record.message) == ("ended", "The cluster was removed from Omnikrux.")
+    assert (record.outcome, record.message) == ("ended", "The cluster was removed from OmniKrux.")
 
 
 async def test_forwards_stopped_on_shutdown(fake_api, tmp_path):
@@ -263,7 +263,7 @@ def test_bad_port_range_plain_startup_error(tmp_path, value):
     with pytest.raises(SystemExit) as stopped:
         create_app(Settings(data_dir=tmp_path, kubeconfig="", port_forward_ports=value))
     assert str(stopped.value) == (
-        "Omnikrux can't start: OMNIKRUX_PORT_FORWARD_PORTS must be a range of ports like "
+        "OmniKrux can't start: OMNIKRUX_PORT_FORWARD_PORTS must be a range of ports like "
         f"30000-30019 (each from 1 to 65535, the first no larger than the last), not {value!r}."
     )
 

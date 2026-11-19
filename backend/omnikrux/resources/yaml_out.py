@@ -1,6 +1,6 @@
 """The one way an object becomes YAML text, and the one place Secret values are masked.
 
-Every YAML Omnikrux shows or stores (the YAML tab, a plan's before/after, the audit diff) goes
+Every YAML OmniKrux shows or stores (the YAML tab, a plan's before/after, the audit diff) goes
 through `dump_yaml`, which masks any core v1 Secret: each `data` and `stringData` value becomes
 `•••••• ({n} bytes)` and the `last-applied-configuration` annotation (which holds the values) is
 dropped. Callers that know they hold a Secret without `kind`/`apiVersion` pass `secret=True`;

@@ -152,7 +152,7 @@ function KindView({ nav: tabNav, dock, onEditPinned, onOpenView, paneActive }: P
     if (!gone.length) return;
     const rest = view.clusters.filter(id => ids.has(id));
     const names = gone.map(id => clusterNames.current.get(id) ?? id).join(", ");
-    const text = rest.length ? `${names} ${gone.length === 1 ? "is" : "are"} gone from Omnikrux, so this tab shows the rest.` : `The ${gone.length === 1 ? "cluster" : "clusters"} this tab looked at ${gone.length === 1 ? "is" : "are"} gone from Omnikrux, so it shows every cluster.`;
+    const text = rest.length ? `${names} ${gone.length === 1 ? "is" : "are"} gone from OmniKrux, so this tab shows the rest.` : `The ${gone.length === 1 ? "cluster" : "clusters"} this tab looked at ${gone.length === 1 ? "is" : "are"} gone from OmniKrux, so it shows every cluster.`;
     let next: KubeView | null = null;
     tabNav.navigate(v => {
       if (v.page !== "kind" || v.clusters !== view.clusters) return v;

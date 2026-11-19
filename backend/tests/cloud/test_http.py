@@ -75,7 +75,7 @@ async def test_cloud_http_cannot_reopen_after_close(cloud_http):
             429,
             (
                 "Azure is limiting requests while trying to list clusters. "
-                "Omnikrux tries again at the next check."
+                "OmniKrux tries again at the next check."
             ),
         ),
         (500, "Azure had a problem while trying to list clusters (500). Try again in a minute."),

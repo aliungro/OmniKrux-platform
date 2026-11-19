@@ -198,7 +198,7 @@ class CloudHttp:
     ):
         if self._closed:
             raise CloudError(
-                "The cloud connection is shutting down. Try again when Omnikrux is running."
+                "The cloud connection is shutting down. Try again when OmniKrux is running."
             )
         url_text = str(url)
         if not same_origin(url_text, url_text):

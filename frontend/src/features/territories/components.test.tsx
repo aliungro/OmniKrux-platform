@@ -108,7 +108,7 @@ describe("cluster band copy", () => {
     expect(screen.queryByText(/0 node pools/)).toBeNull();
   });
   it("vanished cluster note shows on the band", () => {
-    const note = "Not found in Production AWS any more: it may have been deleted. Remove it from Omnikrux under Settings.";
+    const note = "Not found in Production AWS any more: it may have been deleted. Remove it from OmniKrux under Settings.";
     const metricsNote = "Metrics server is unavailable";
     render(<ClusterBand t={terr({ cluster: cloud({ cloud_note: note }) })} kind={PODS} metricsNote={metricsNote} onRetry={() => {}} />);
     expect(screen.getByText(note).title).toBe(note);

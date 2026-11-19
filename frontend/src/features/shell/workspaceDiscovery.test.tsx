@@ -274,7 +274,7 @@ it("evicts a removed cluster before the pending registry response and falls back
   expect.soft(cachedIds(client)).toEqual([west.id]);
   expect.soft(band(/East/)).toBeNull();
   expect.soft(band(/West/)).toBeTruthy();
-  expect.soft(screen.queryByText(/gone from Omnikrux, so it shows every cluster/i)).toBeTruthy();
+  expect.soft(screen.queryByText(/gone from OmniKrux, so it shows every cluster/i)).toBeTruthy();
 
   await act(async () => refreshed.resolve([west]));
 });
@@ -435,7 +435,7 @@ it.each(["watch", "Settings"] as const)("closes matching dock sockets and forwar
   if (source === "Settings") {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove East" }));
-    const dialog = screen.getByRole("alertdialog", { name: "Remove East from Omnikrux?" });
+    const dialog = screen.getByRole("alertdialog", { name: "Remove East from OmniKrux?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
   } else {
     removed = true;

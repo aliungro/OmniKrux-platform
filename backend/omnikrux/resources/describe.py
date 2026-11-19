@@ -36,7 +36,7 @@ def link_to(kind_key: str | None, namespace: str | None, name: object) -> Link |
 
 
 def owner_link(ref: dict, namespace: str | None) -> Link | None:
-    """The link for an ownerReference or an involvedObject, when Omnikrux can name its kind."""
+    """The link for an ownerReference or an involvedObject, when OmniKrux can name its kind."""
     key = known_kind_key(ref.get("apiVersion"), ref.get("kind"))
     return link_to(key, namespace, ref.get("name"))
 

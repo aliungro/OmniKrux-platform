@@ -151,7 +151,7 @@ async def delete_cluster(cluster_id: str, request: Request) -> None:
                 await audit.finish(record, "failed", "Unknown cluster")
                 raise HTTPException(status_code=404, detail="Unknown cluster") from None
             except Exception:  # noqa: BLE001 (the removal could not be committed)
-                message = "Couldn't remove this cluster from Omnikrux. Try again."
+                message = "Couldn't remove this cluster from OmniKrux. Try again."
                 await audit.finish(record, "failed", message)
                 raise HTTPException(status_code=503, detail=message) from None
             await audit.finish(record, "succeeded")

@@ -41,7 +41,7 @@ NOT_DELETABLE = (
     "Use kubectl if your access allows it."
 )
 NO_UID = (
-    "{kind} {name} has no uid, so Omnikrux can't make sure it deletes the object you reviewed. "
+    "{kind} {name} has no uid, so OmniKrux can't make sure it deletes the object you reviewed. "
     "Use kubectl to delete it."
 )
 

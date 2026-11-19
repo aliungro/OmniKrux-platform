@@ -25,7 +25,7 @@ describe("workspace storage", () => {
   });
   it("reports corrupt and future storage", () => {
     expect(parseWorkspace("{").problem).toEqual({text:"they aren't valid JSON",reset:true});
-    expect(parseWorkspace('{"version":2}').problem).toEqual({text:"they're from another version of Omnikrux",reset:true});
+    expect(parseWorkspace('{"version":2}').problem).toEqual({text:"they're from another version of OmniKrux",reset:true});
   });
   it("drops invalid tabs, duplicate IDs and history while preserving valid filters", () => {
     const result = parseWorkspace(raw([{...tab(kind),back:[kind,{...kind,kind:"bad key"}],forward:[{...kind,filters:{...kind.filters,text:"x".repeat(501)}}]},tab(kind),tab({...kind,kind:"bad key"})]));

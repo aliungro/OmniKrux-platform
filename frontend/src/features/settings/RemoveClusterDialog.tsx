@@ -50,7 +50,7 @@ export function RemoveClusterDialog({ cluster, location, onClose, focusAfterRemo
   cluster: Cluster; location: string; onClose: () => void; focusAfterRemoval: RefObject<HTMLElement | null>;
 }) {
   const client = useQueryClient();
-  return <SettingsRemovalDialog provider={cluster.provider} title={`Remove ${cluster.name} from Omnikrux?`}
+  return <SettingsRemovalDialog provider={cluster.provider} title={`Remove ${cluster.name} from OmniKrux?`}
     onRemove={() => removeCluster(client, cluster.id)} onClose={onClose} focusAfterRemoval={focusAfterRemoval}>
     <p>{location}</p>
     <p>This doesn't change the cluster. Its port-forwards stop and its sessions close.</p>

@@ -18,7 +18,7 @@ from omnikrux.watch.hub import WatchHub
 
 log = logging.getLogger(__name__)
 MAX_CONCURRENT_ACCOUNTS = 4
-_SHUTTING_DOWN = "Cloud discovery is shutting down. Try again when Omnikrux is running."
+_SHUTTING_DOWN = "Cloud discovery is shutting down. Try again when OmniKrux is running."
 
 
 class CloudDiscovery:

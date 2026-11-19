@@ -175,13 +175,13 @@ async def test_helm_releases_and_secret_edits_refused_centrally(env, monkeypatch
         r = await plan(env, action=action, kind_key="helm-releases", name="db")
         assert r.status_code == 422, action
         assert r.json() == {
-            "detail": "Helm releases are read-only in Omnikrux. Use helm to change them."
+            "detail": "Helm releases are read-only in OmniKrux. Use helm to change them."
         }
 
     r = await plan(env, action="edit", kind_key="secrets", name="db")
     assert r.status_code == 422
     assert r.json() == {
-        "detail": "Secrets can't be edited in Omnikrux: their values never reach the browser. "
+        "detail": "Secrets can't be edited in OmniKrux: their values never reach the browser. "
         "Use kubectl to change them."
     }
     assert handler.plans == []

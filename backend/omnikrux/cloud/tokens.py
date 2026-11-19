@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from omnikrux.cloud.discovery import CloudDiscovery
 
 _CLUSTER_FORGOTTEN = "The cloud cluster connection was removed. Reopen the cluster and try again."
-_SHUTTING_DOWN = "The cloud connection is shutting down. Try again when Omnikrux is running."
+_SHUTTING_DOWN = "The cloud connection is shutting down. Try again when OmniKrux is running."
 
 
 class _ClusterToken:

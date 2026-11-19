@@ -390,7 +390,7 @@ async def test_private_and_local_account_clusters_not_addable(
     )
     assert not local.private and not local.addable
     assert local.why_not == (
-        "This cluster uses local accounts, not Microsoft Entra ID. Omnikrux signs in to AKS only "
+        "This cluster uses local accounts, not Microsoft Entra ID. OmniKrux signs in to AKS only "
         "with short-lived Entra tokens: turn on Entra ID integration, or import its kubeconfig."
     )
 

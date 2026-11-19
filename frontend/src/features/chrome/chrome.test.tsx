@@ -173,7 +173,7 @@ describe("TopBar", () => {
       { cluster: cluster(), state: "ready", message: null, failing: 1 },
       { cluster: cluster({ id: "c2", name: "kind-dev", provider: "kind" }), state: "ready", message: null, failing: 0 },
     ]} />);
-    expect(screen.getByText("Omnikrux")).toBeTruthy();
+    expect(screen.getByText("OmniKrux")).toBeTruthy();
     const tokens = screen.getAllByTestId("scope-token");
     expect(tokens.map((t) => t.textContent)).toEqual(["AKSaks-prod-weu1 failing", "KINDkind-dev"]);
   });

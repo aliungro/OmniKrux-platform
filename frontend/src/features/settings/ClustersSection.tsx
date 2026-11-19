@@ -24,8 +24,8 @@ export function ClustersSection() {
     <h2 id="settings-clusters-heading" ref={heading} tabIndex={-1}>Clusters</h2>
     {clusters.isPending && <p className={s.muted}>Loading clusters…</p>}
     {clusters.isError && <p className={s.warning} role="alert">{failure(clusters.error)} <button type="button" onClick={() => void clusters.refetch()}>Retry clusters</button></p>}
-    {clusters.data?.length === 0 && <p className={s.muted}>No clusters in Omnikrux yet.</p>}
-    {!!clusters.data?.length && <ul className={s.items} aria-label="Clusters in Omnikrux">
+    {clusters.data?.length === 0 && <p className={s.muted}>No clusters in OmniKrux yet.</p>}
+    {!!clusters.data?.length && <ul className={s.items} aria-label="Clusters in OmniKrux">
       {clusters.data.map(cluster => <li key={cluster.id} className={s.item}>
         <div className={s.details}>
           <div className={s.identity}><ProviderBadge provider={cluster.provider} /><strong>{cluster.name}</strong></div>

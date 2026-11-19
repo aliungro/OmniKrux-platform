@@ -72,7 +72,7 @@ def test_bad_port_forward_bind_plain_startup_error(tmp_path, value):
     with pytest.raises(SystemExit) as stopped:
         create_app(Settings(data_dir=tmp_path, kubeconfig="", port_forward_bind=value))
     assert str(stopped.value) == (
-        "Omnikrux can't start: OMNIKRUX_PORT_FORWARD_BIND must be an IP address like 127.0.0.1 "
+        "OmniKrux can't start: OMNIKRUX_PORT_FORWARD_BIND must be an IP address like 127.0.0.1 "
         f"or 0.0.0.0, not {value!r}."
     )
 
@@ -82,7 +82,7 @@ def test_bad_override_stops_startup_plain(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as stopped:
         create_app(Settings(data_dir=tmp_path, kubeconfig=""))
     assert str(stopped.value) == (
-        "Omnikrux can't start: OMNIKRUX_CLOUD_ENDPOINTS may only point at this machine "
+        "OmniKrux can't start: OMNIKRUX_CLOUD_ENDPOINTS may only point at this machine "
         "(127.0.0.1, localhost, [::1] or host.docker.internal): it exists for testing "
         "against fake clouds, not https://evil.example."
     )
@@ -136,5 +136,5 @@ def test_discovery_interval_minimum(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as stopped:
         create_app(Settings(data_dir=tmp_path, kubeconfig=""))
     assert str(stopped.value) == (
-        "Omnikrux can't start: OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be at least 60, not 59."
+        "OmniKrux can't start: OMNIKRUX_CLOUD_DISCOVERY_SECONDS must be at least 60, not 59."
     )

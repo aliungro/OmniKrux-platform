@@ -14,7 +14,7 @@ IDENTITY = (
 )
 NOTHING = "Nothing changes: the edited YAML matches the cluster."
 SECRET = (
-    "Secrets can't be edited in Omnikrux: their values never reach the browser. "
+    "Secrets can't be edited in OmniKrux: their values never reach the browser. "
     "Use kubectl to change them."
 )
 PATH = "/apis/apps/v1/namespaces/demo/deployments/web"

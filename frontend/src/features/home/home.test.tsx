@@ -649,7 +649,7 @@ it("recently closed tabs reopen with their state", async () => {
 it("reopening a closed tab whose cluster left says so", async () => {
   seedClosed(kindView(HOME, "pods", ["gone"])); show();
   fireEvent.click(await screen.findByRole("button", { name: /Pods · gone.*2 min ago/ }));
-  expect(await screen.findByText("The cluster this tab looked at is gone from Omnikrux, so it shows every cluster.")).toBeTruthy();
+  expect(await screen.findByText("The cluster this tab looked at is gone from OmniKrux, so it shows every cluster.")).toBeTruthy();
 });
 it("a storage problem is said once on home", async () => {
   localStorage.setItem("omnikrux.workspace", "bad json"); show();

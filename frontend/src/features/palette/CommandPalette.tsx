@@ -58,7 +58,7 @@ function Empty({ kindsOnly, query, loading, error }: { kindsOnly: boolean; query
     if (loading) return <p className={s.empty} role="status">Loading the list of kinds…</p>;
     return (
       <p className={s.empty} role="status">
-        {query === "" ? "None of your clusters serves a kind Omnikrux can list." : `No kind your clusters serve matches “${query}”.`}
+        {query === "" ? "None of your clusters serves a kind OmniKrux can list." : `No kind your clusters serve matches “${query}”.`}
       </p>
     );
   }

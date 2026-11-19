@@ -234,7 +234,7 @@ async def test_close_and_stop_cluster_end_every_forward(env):
     assert env.fake.forwards_open == 0
     records = await env.records()
     assert [(r.outcome, r.message) for r in records] == [
-        ("ended", "The cluster was removed from Omnikrux."),
+        ("ended", "The cluster was removed from OmniKrux."),
     ] * 2
     assert forward_tasks() == []
 
