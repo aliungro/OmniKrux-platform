@@ -2,6 +2,10 @@
 
 Web console for Kubernetes and multicloud infrastructure, shipped as a single Docker image.
 
+## Documentation
+
+Task-oriented guides for using and working on OmniKrux are in [docs/guide](docs/guide/README.md): getting started, the Kubernetes app, cloud accounts, Audit and Settings, and developer setup, testing, architecture and releasing.
+
 ## Run
 
 Build the image:
