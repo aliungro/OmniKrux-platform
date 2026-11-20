@@ -344,11 +344,36 @@ class ProjectStore:
         """Which projects deleting the source would take it from. Pass the delete's own session
         to recompute it in the same transaction before deleting."""
         if session is not None:
-            projects = await self._using(session, source.id)
-        else:
-            async with self._sessionmaker() as own:
-                projects = await self._using(own, source.id)
-        return _sealed(SourceDeleteReview(source.id, source.name, tuple(projects), token=""))
+            return await self._source_review(session, source.id, source.name)
+        async with self._sessionmaker() as own:
+            return await self._source_review(own, source.id, source.name)
+
+    async def _source_review(
+        self, session: AsyncSession, source_id: str, name: str
+    ) -> SourceDeleteReview:
+        projects = await self._using(session, source_id)
+        return _sealed(SourceDeleteReview(source_id, name, tuple(projects), token=""))
+
+    async def delete_source(
+        self, source_id: str, token: str, sources: SourceStore
+    ) -> SourceDeleteReview:
+        """Delete the source and every project's link to it, in one transaction. KeyError if it
+        doesn't exist; ReviewChanged (nothing changed) when the review no longer matches `token`."""
+        async with self._sessionmaker.begin() as session:
+            # Write first: SQLite then holds the write lock, so no link can be made in between.
+            name = await session.scalar(
+                update(SourceRecord)
+                .where(SourceRecord.id == source_id)
+                .values(updated_at=SourceRecord.updated_at)
+                .returning(SourceRecord.name)
+            )
+            if name is None:
+                raise KeyError(source_id)
+            review = await self._source_review(session, source_id, name)
+            if review.token != token:
+                raise ReviewChanged()
+            await sources.delete(source_id, session=session)
+        return review
 
 
 class GroupStore:

@@ -96,3 +96,6 @@ class SourceConfig:
     created_at: datetime
     updated_at: datetime
     check: SourceCheck | None
+    # The stored secrets can't be decrypted (the key changed): `secrets` is empty and the user
+    # has to enter them again.
+    secrets_unreadable: bool = False

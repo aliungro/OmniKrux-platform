@@ -26,7 +26,7 @@ from omnikrux.monitoring.sources.types import (
     SourceType,
     clean_name,
 )
-from omnikrux.security.secrets import SecretBox
+from omnikrux.security.secrets import SecretBox, SecretError
 
 KIND = "source"
 # Non-secret authentication settings, and the type that uses each.
@@ -96,10 +96,15 @@ class SourceStore:
 
     # -- reading -------------------------------------------------------------------------------
 
-    def _secrets(self, row: SourceRecord) -> SourceSecrets:
+    def _secrets(self, row: SourceRecord) -> SourceSecrets | None:
+        """The row's secrets; None when they can't be decrypted (one such row never stops the
+        others from being read)."""
         if row.secret_encrypted is None:
             return SourceSecrets()
-        values = json.loads(self._box.decrypt(row.secret_encrypted))
+        try:
+            values = json.loads(self._box.decrypt(row.secret_encrypted))
+        except SecretError:
+            return None
         return SourceSecrets(
             password=values.get("password"),
             token=values.get("token"),
@@ -127,6 +132,7 @@ class SourceStore:
                 version=row.version,
                 checked_at=utc(row.checked_at),
             )
+        secrets = self._secrets(row)
         return SourceConfig(
             id=row.id,
             name=row.name,
@@ -141,11 +147,12 @@ class SourceStore:
             client_cert_pem=settings.get("client_cert_pem"),
             ca_pem=row.ca_pem,
             header_names=tuple(json.loads(row.header_names)),
-            secrets=self._secrets(row),
+            secrets=secrets or SourceSecrets(),
             created_by_project_id=row.created_by_project_id,
             created_at=utc(row.created_at),
             updated_at=utc(row.updated_at),
             check=check,
+            secrets_unreadable=secrets is None,
         )
 
     async def list(self) -> list[SourceConfig]:
@@ -279,7 +286,10 @@ class SourceStore:
                 ),
                 headers={**stored.headers, **given.headers},
             )
-            row.secret_encrypted = self._encrypt(_only_for(auth_type, merged, header_names))
+            if not (old.secrets_unreadable and given == SourceSecrets()):
+                # Unreadable secrets stay as they are until new ones are given; then only the
+                # given ones are kept.
+                row.secret_encrypted = self._encrypt(_only_for(auth_type, merged, header_names))
             row.updated_at = now()
             await _flush(session, row.name)
             return self._config(row)
