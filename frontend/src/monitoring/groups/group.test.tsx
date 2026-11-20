@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GroupOut } from "../api/types";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
@@ -99,5 +99,52 @@ describe("Groups", () => {
     expect(within(sidebar).getByText("Dev")).toBeTruthy();
     expect(within(sidebar).getByText("Stage")).toBeTruthy();
     expect(document.activeElement).not.toBe(document.body);
+  });
+});
+
+describe("Group focus and arrival", () => {
+  const onMain = () => document.activeElement?.tagName === "MAIN";
+
+  it("after Create group the keyboard is on the workspace and the group is never called gone", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: projects() }, fallback);
+    // The tree answers slowly, as a real server can: the new group must not look gone meanwhile.
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (url === "/api/monitoring/tree") await new Promise((r) => setTimeout(r, 30));
+      return real(url, init);
+    });
+    renderMonitoringApp({ tabs: tabsWith({ page: "newGroup" }) });
+    let saidGone = false;
+    const watch = new MutationObserver(() => { if (document.body.textContent?.includes("no longer exists")) saidGone = true; });
+    watch.observe(document.body, { childList: true, subtree: true, characterData: true });
+    await user.type(await screen.findByLabelText("Name"), "Everything dev");
+    await user.click(await screen.findByRole("checkbox", { name: "Dev" }));
+    await user.click(screen.getByRole("button", { name: "Create group" }));
+    expect(await screen.findByRole("heading", { name: "Everything dev" })).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 50));
+    watch.disconnect();
+    expect(saidGone).toBe(false);
+    expect(onMain()).toBe(true);
+  });
+
+  it("the shortcut hands the keyboard to the workspace, in this tab or a new one", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1", "p2"])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    const shortcuts = await screen.findByRole("list", { name: "Projects in this group" });
+    await user.click(within(shortcuts).getByRole("button", { name: /Dev/ }));
+    expect(await screen.findByRole("heading", { name: "Dev" })).toBeTruthy();
+    expect(onMain()).toBe(true);
+
+    cleanup();
+    installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1", "p2"])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    const stage = within(await screen.findByRole("list", { name: "Projects in this group" })).getByRole("button", { name: /Stage/ });
+    stage.focus();
+    fireEvent.click(stage, { ctrlKey: true });
+    expect(await screen.findByRole("heading", { name: "Stage" })).toBeTruthy();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(onMain()).toBe(true);
   });
 });

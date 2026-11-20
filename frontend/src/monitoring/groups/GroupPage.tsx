@@ -6,7 +6,6 @@ import { invalidateMonitoring, useGroups, useProjects } from "../api/hooks";
 import type { GroupOut } from "../api/types";
 import { DeleteReviewDialog } from "../DeleteReviewDialog";
 import { EditableName } from "../EditableName";
-import { focusMainFrom } from "../focus";
 import { projectDot } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
@@ -61,7 +60,6 @@ export default function GroupPage({ view, nav, openInNewTab }: MonitoringPagePro
   const client = useQueryClient();
   const groups = useGroups();
   const projects = useProjects();
-  const page = useRef<HTMLElement>(null);
   const editButton = useRef<HTMLButtonElement>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(false);
@@ -107,7 +105,6 @@ export default function GroupPage({ view, nav, openInNewTab }: MonitoringPagePro
     setError(null);
     try {
       await deleteGroup(group.id);
-      focusMainFrom(page.current);
       nav.navigate(MONITORING_HOME, "replace");
       void invalidateMonitoring(client);
     } catch (err) {
@@ -117,7 +114,7 @@ export default function GroupPage({ view, nav, openInNewTab }: MonitoringPagePro
   };
 
   return (
-    <section ref={page} className={s.page} aria-labelledby="monitoring-group-title">
+    <section className={s.page} aria-labelledby="monitoring-group-title">
       <header className={s.head}>
         <EditableName key={group.id} name={group.name} titleId="monitoring-group-title" onRename={rename} />
         <p className={s.sub}>{members.length === 1 ? "1 project" : `${members.length} projects`}</p>

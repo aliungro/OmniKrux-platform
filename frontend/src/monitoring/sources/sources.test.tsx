@@ -259,3 +259,14 @@ describe("fix round", () => {
     expect((api.requests.find((r) => r.method === "PATCH")!.body as { ca_pem?: string }).ca_pem).toBe("");
   });
 });
+
+describe("Source page focus", () => {
+  it("Back to Sources keeps the keyboard on the workspace", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ sources: [source("s1", "Prom")] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "source", id: "s1" }) });
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("heading", { name: "Sources" })).toBeTruthy();
+    expect(document.activeElement?.tagName).toBe("MAIN");
+  });
+});

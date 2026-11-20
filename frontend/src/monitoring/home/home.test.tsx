@@ -147,3 +147,28 @@ describe("healthSummary", () => {
     expect(healthSummary(sources, { a: health("up"), b: health("down") })).toEqual({ up: 1, down: 1, unknown: 1 });
   });
 });
+
+describe("Home focus on leaving", () => {
+  const onMain = () => document.activeElement?.tagName === "MAIN";
+
+  it("a card hands the keyboard to the workspace", async () => {
+    seedHealthy();
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Dev cluster/ });
+    card.focus();
+    fireEvent.click(card);
+    await waitFor(() => expect(selectedTab().textContent).toContain("Dev cluster"));
+    expect(onMain()).toBe(true);
+  });
+
+  it("Enter in the search hands the keyboard to the workspace", async () => {
+    seedHealthy();
+    renderMonitoringApp();
+    const search = (await screen.findByRole("combobox", { name: "Search Monitoring" })) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(search));
+    fireEvent.change(search, { target: { value: "every" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(selectedTab().textContent).toContain("Everything"));
+    expect(onMain()).toBe(true);
+  });
+});

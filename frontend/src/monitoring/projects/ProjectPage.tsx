@@ -6,7 +6,6 @@ import { deleteProject, linkSource, projectDeleteReview, renameProject, sourceFi
 import { invalidateMonitoring, useGroups, useProject, useSourceHealth, useSources } from "../api/hooks";
 import type { FilterOrigin, HealthOut, LinkOut, ProjectDeleteReviewOut, ProjectOut } from "../api/types";
 import { EditableName } from "../EditableName";
-import { focusMainFrom } from "../focus";
 import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
@@ -221,7 +220,6 @@ export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageP
   const groups = useGroups();
   const healthQuery = useSourceHealth();
   const clusters = useClusters();
-  const page = useRef<HTMLElement>(null);
   const sourcesHeading = useRef<HTMLHeadingElement>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const addExisting = useRef<HTMLButtonElement>(null);
@@ -286,8 +284,7 @@ export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageP
     setReviewError(null);
     try {
       await deleteProject(project.id, review.token);
-      // The tab shows Home in place of this project; the keyboard goes to the workspace first.
-      focusMainFrom(page.current);
+      // The tab shows Home in place of this project (MonitoringApp hands the keyboard to the workspace).
       nav.navigate(MONITORING_HOME, "replace");
       void invalidateMonitoring(client);
     } catch (err) {
@@ -331,7 +328,7 @@ export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageP
     e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push");
 
   return (
-    <section ref={page} className={s.page} aria-labelledby="monitoring-project-title">
+    <section className={s.page} aria-labelledby="monitoring-project-title">
       <header className={s.head}>
         <EditableName key={project.id} name={project.name} titleId="monitoring-project-title" dot={projectDot(project)} onRename={rename} />
         <p className={s.sub}>{kindLine(project, clusterName)}</p>

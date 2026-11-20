@@ -6,7 +6,6 @@ import { invalidateMonitoring, useProjects } from "../api/hooks";
 import type { ProjectOut } from "../api/types";
 import { projectDot } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
-import { focusMainFrom } from "../focus";
 import s from "./GroupPage.module.css";
 
 /** A checkbox per project, with its colour dot: the projects a group combines. */
@@ -35,7 +34,6 @@ export default function GroupForm({ nav }: MonitoringPageProps) {
   const client = useQueryClient();
   const ids = useId();
   const projects = useProjects();
-  const page = useRef<HTMLElement>(null);
   const name = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
@@ -57,9 +55,9 @@ export default function GroupForm({ nav }: MonitoringPageProps) {
       // In the order they are listed, not the order they were ticked.
       const project_ids = (projects.data ?? []).filter((p) => picked.has(p.id)).map((p) => p.id);
       const made = await createGroup({ name: text.trim(), project_ids });
-      focusMainFrom(page.current);
+      // Read the lists again first: the group page then opens on a list that names it.
+      await invalidateMonitoring(client);
       nav.navigate({ page: "group", id: made.id }, "replace");
-      void invalidateMonitoring(client);
     } catch (err) {
       setError(failure(err, "try again"));
       setBusy(false);
@@ -67,7 +65,7 @@ export default function GroupForm({ nav }: MonitoringPageProps) {
   };
 
   return (
-    <section ref={page} className={s.page} aria-labelledby={`${ids}-t`}>
+    <section className={s.page} aria-labelledby={`${ids}-t`}>
       <h1 id={`${ids}-t`} className={s.title}>New group</h1>
       <p className={s.lead}>A group combines projects you pick. The projects stay where they are.</p>
       <form className={s.form} onSubmit={(e) => { e.preventDefault(); void submit(); }}>

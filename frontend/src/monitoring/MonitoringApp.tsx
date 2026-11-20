@@ -94,12 +94,22 @@ function goneKind(view: MonitoringView, tree: TreeOut | undefined, sources: Sour
   return null;
 }
 
+/** A list as PageView reads it: its data, and whether a newer copy is on its way. */
+interface Listed<T> { data: T | undefined; fetching: boolean }
+
 /** Renders the page for a view, after checking that what it names still exists. */
-function PageView({ page, tree, sources, onHome }: { page: MonitoringPageProps; tree: TreeOut | undefined; sources: SourceOut[] | undefined; onHome(): void }) {
+function PageView({ page, tree, sources, onHome }: { page: MonitoringPageProps; tree: Listed<TreeOut>; sources: Listed<SourceOut[]>; onHome(): void }) {
   const { view } = page;
-  const gone = goneKind(view, tree, sources);
   const id = "id" in view ? view.id : null;
-  if (gone) return <Gone key={`${view.page}:${id}`} what={gone} onHome={onHome} />;
+  const key = `${view.page}:${id}`;
+  // A list being read again may be about to name something just made: it isn't called gone until
+  // that answer is in. Once a view is shown as gone, a later re-read doesn't take that back early.
+  const shownGone = useRef<string | null>(null);
+  let gone = goneKind(view, tree.data, sources.data);
+  const fetching = view.page === "source" ? sources.fetching : tree.fetching;
+  if (gone && fetching && shownGone.current !== key) gone = null;
+  shownGone.current = gone ? key : null;
+  if (gone) return <Gone key={key} what={gone} onHome={onHome} />;
   const Component = PAGES[view.page];
   return <Component {...page} />;
 }
@@ -132,19 +142,27 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     };
   }, [tree.data, sources.data]);
 
+  // A page about to be replaced takes the keyboard with it: hand it to the workspace first, so it
+  // never falls to <body>. The tree and Find keep their own focus.
+  const handOff = useCallback(() => {
+    const active = document.activeElement;
+    if (active === null || active === document.body || scroller.current?.contains(active)) focusMainFrom(root.current);
+  }, []);
   const openInNewTab = useCallback((v: MonitoringView) => {
+    handOff();
     dispatchTabs({ type: "newTab", view: v });
     recordOpened(v);
-  }, [dispatchTabs]);
+  }, [dispatchTabs, handOff]);
   // The tab's navigation as pages see it: going to a project or group records it as opened.
   // Back, Forward, switching tabs and reloading show a page without opening it again.
   const pageNav = useMemo<TabNav<MonitoringView>>(() => ({
     ...nav,
     navigate: (move, mode) => {
+      handOff();
       nav.navigate(move, mode);
       recordOpened(typeof move === "function" ? move(nav.view) : move);
     },
-  }), [nav]);
+  }), [nav, handOff]);
   const open = useCallback((v: MonitoringView, newTab: boolean) => {
     if (newTab) openInNewTab(v);
     else pageNav.navigate(v, "push");
@@ -173,7 +191,8 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
           onClose={(id) => dispatchTabs({ type: "closeTab", id })}
           onNew={() => dispatchTabs({ type: "newTab" })} />
         <div ref={scroller} className={s.page} data-monitoring-page onScroll={(e) => nav.setScroll(e.currentTarget.scrollTop)}>
-          <PageView key={tabId} page={page} tree={tree.data} sources={sources.data} onHome={goHome} />
+          <PageView key={tabId} page={page} onHome={goHome}
+            tree={{ data: tree.data, fetching: tree.isFetching }} sources={{ data: sources.data, fetching: sources.isFetching }} />
         </div>
       </div>
     </div>

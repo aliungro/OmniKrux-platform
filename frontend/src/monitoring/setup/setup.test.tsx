@@ -368,3 +368,17 @@ describe("Setup page", () => {
     expect(api.requests.filter((r) => r.url === "/api/monitoring/discovery/c1")).toHaveLength(2);
   });
 });
+
+describe("Setup focus on arrival", () => {
+  it("after Create project the keyboard is on the workspace", async () => {
+    const user = userEvent.setup();
+    install();
+    startFromCluster();
+    await screen.findByRole("group", { name: "Prometheus" });
+    await user.click(continueButton());
+    await screen.findByRole("heading", { name: "Name and review" });
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await waitFor(() => expect(selectedTab().textContent).toContain(CLUSTER));
+    expect(document.activeElement?.tagName).toBe("MAIN");
+  });
+});
