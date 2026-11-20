@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
 import { DialogShell } from "../features/dock/ConfirmDialog";
-import s from "./sources/SourceForm.module.css";
+import s from "./DeleteReviewDialog.module.css";
 
 /**
  * The question before a delete: a title, what it affects (`children`), then the action button
@@ -29,8 +29,8 @@ export function DeleteReviewDialog({ title, action, busy, error, restoreFocusTo,
       <div id={`${id}-b`} className={s.dialogBody}>{children}</div>
       {error && <p className={s.error} role="alert">{error}</p>}
       <div className={s.dialogActions}>
-        <button type="button" className={s.secondary} onClick={onCancel} disabled={busy}>Cancel</button>
-        <button ref={go} type="button" className={s.danger} onClick={onConfirm} disabled={busy}>{action}</button>
+        <button type="button" className={s.secondary} aria-disabled={busy || undefined} onClick={() => { if (!busy) onCancel(); }}>Cancel</button>
+        <button ref={go} type="button" className={s.danger} aria-disabled={busy || undefined} onClick={() => { if (!busy) onConfirm(); }}>{action}</button>
       </div>
     </DialogShell>
   );

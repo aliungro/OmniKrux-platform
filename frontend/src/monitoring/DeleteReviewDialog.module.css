@@ -1,0 +1,76 @@
+/* The question before a delete, inside the shared dialog shell. Territories tokens only. */
+.dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 18px 20px 16px;
+}
+
+.dialogTitle {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.dialogBody {
+  margin: 0 0 14px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.dialogBody p {
+  margin: 0 0 8px;
+}
+
+.dialogBody p:last-child {
+  margin-bottom: 0;
+}
+
+.error {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.secondary,
+.danger {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.danger {
+  border: 0;
+  background: var(--bad);
+  color: var(--bg);
+}
+
+.secondary[aria-disabled="true"],
+.danger[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.secondary:focus-visible,
+.danger:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

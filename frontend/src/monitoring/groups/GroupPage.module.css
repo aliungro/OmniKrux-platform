@@ -199,7 +199,8 @@
   outline-offset: 2px;
 }
 
-[aria-disabled="true"] {
+.primary[aria-disabled="true"],
+.secondary[aria-disabled="true"] {
   opacity: 0.55;
   cursor: default;
 }

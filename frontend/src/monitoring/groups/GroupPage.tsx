@@ -21,7 +21,9 @@ function EditProjects({ group, onDone }: { group: GroupOut; onDone(): void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const first = useRef<HTMLDivElement>(null);
-  useEffect(() => { first.current?.querySelector("input")?.focus(); }, [projects.data !== undefined]);
+  const cancel = useRef<HTMLButtonElement>(null);
+  // The first project, or Cancel when there are none to tick: the button that opened this is gone.
+  useEffect(() => { (first.current?.querySelector("input") ?? cancel.current)?.focus(); }, [projects.data?.length]);
 
   const save = async () => {
     if (busy) return;
@@ -48,7 +50,7 @@ function EditProjects({ group, onDone }: { group: GroupOut; onDone(): void }) {
       {error && <p className={s.bad} role="alert">{error}</p>}
       <div className={s.actions}>
         <button type="button" className={s.primary} aria-disabled={busy || undefined} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
-        <button type="button" className={s.secondary} aria-disabled={busy || undefined} onClick={() => { if (!busy) onDone(); }}>Cancel</button>
+        <button ref={cancel} type="button" className={s.secondary} aria-disabled={busy || undefined} onClick={() => { if (!busy) onDone(); }}>Cancel</button>
       </div>
     </div>
   );

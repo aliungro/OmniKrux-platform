@@ -131,6 +131,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   const client = useQueryClient();
   const sources = useSources();
   const select = useRef<HTMLSelectElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
   const asked = useRef(0);
   const touched = useRef(false);
   const [sourceId, setSourceId] = useState("");
@@ -144,7 +145,8 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   const choices = (sources.data ?? []).filter((x) => !linked.has(x.id));
   const invalid = validFilter(filter) !== null;
 
-  useEffect(() => { select.current?.focus(); }, [choices.length > 0]);
+  // The keyboard goes to the choice, or to Cancel when there is nothing to choose: the button that opened this is gone.
+  useEffect(() => { (select.current ?? cancel.current)?.focus(); }, [choices.length > 0]);
 
   const choose = (id: string) => {
     setSourceId(id);
@@ -206,7 +208,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
             {busy ? "Linking…" : "Link source"}
           </button>
         )}
-        <button type="button" className={s.secondary} aria-disabled={busy || undefined} onClick={() => { if (!busy) onClose(); }}>Cancel</button>
+        <button ref={cancel} type="button" className={s.secondary} aria-disabled={busy || undefined} onClick={() => { if (!busy) onClose(); }}>Cancel</button>
       </div>
     </div>
   );
@@ -295,7 +297,7 @@ export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageP
         try {
           setReview(await projectDeleteReview(project.id));
         } catch (again) {
-          setReviewError(failure(again));
+          setReviewError(`${STALE_REVIEW} ${failure(again, "try again")}`);
         }
       } else {
         setReviewError(failure(err, "try again"));

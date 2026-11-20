@@ -4,6 +4,7 @@ import type { TabNav } from "../features/shell/browserHistory";
 import type { AppTabs } from "../features/shell/workspace";
 import { useMonitoringTree, useSources } from "./api/hooks";
 import type { SourceOut, TreeOut } from "./api/types";
+import { focusMainFrom } from "./focus";
 import { recordRecent } from "./home/recent";
 import GroupForm from "./groups/GroupForm";
 import GroupPage from "./groups/GroupPage";
@@ -58,12 +59,6 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   explore: later("Explore", EXPLORE_LATER),
   alerts: later("Alerts", ALERTS_LATER),
 };
-
-/** Focus the workspace's <main>: never leave the keyboard on <body>. */
-function focusMain(from: Element | null) {
-  const main = from?.closest("main") ?? document.querySelector("main");
-  main?.focus({ preventScroll: true });
-}
 
 /** Opening a project or group (in this tab or a new one) puts it first in Recently opened. */
 function recordOpened(view: MonitoringView) {
@@ -154,9 +149,9 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     if (newTab) openInNewTab(v);
     else pageNav.navigate(v, "push");
   }, [pageNav, openInNewTab]);
-  const leave = useCallback(() => focusMain(root.current), []);
+  const leave = useCallback(() => focusMainFrom(root.current), []);
   const goHome = useCallback(() => {
-    focusMain(root.current);
+    focusMainFrom(root.current);
     nav.navigate(MONITORING_HOME, "push");
   }, [nav]);
 

@@ -62,6 +62,14 @@ describe("Groups", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit projects" }));
   });
 
+  it("keeps the keyboard on Cancel when there are no projects to tick", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: [], groups: [group("g1", "Prod", [])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    await user.click(await screen.findByRole("button", { name: "Edit projects" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" })));
+  });
+
   it("renames a group", async () => {
     const user = userEvent.setup();
     const api = installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1"])] }, fallback);

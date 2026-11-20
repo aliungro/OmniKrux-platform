@@ -104,6 +104,18 @@ describe("Project page", () => {
     expect(api.state.sources).toHaveLength(1);
   });
 
+  it("keeps the keyboard on Cancel when every source is already linked", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    installFakeMonitoringApi({ sources: [prom], projects: [project("p1", "Dev", [link(prom)])] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
+    expect(await screen.findByText(/Every source is already linked/)).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" })));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Use an existing source" })));
+  });
+
   it("links an existing source with a suggested filter", async () => {
     const user = userEvent.setup();
     const prom = source("s1", "Prom");
@@ -229,6 +241,27 @@ describe("Project delete review", () => {
     await screen.findByRole("alertdialog");
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(api.state.projects).toHaveLength(1));
+  });
+
+  it("keeps the stale words when the review cannot be reloaded", async () => {
+    const user = userEvent.setup();
+    withEverything();
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (init?.method === "DELETE" && url.includes("/projects/p1")) {
+        return new Response(JSON.stringify({ detail: "That changed since you looked. Review it again." }), { status: 409, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/projects/p1/delete-review")) throw new TypeError("down");
+      return real(input, init);
+    }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete project" }));
+    const alert = await within(screen.getByRole("alertdialog")).findByRole("alert");
+    expect(alert.textContent).toContain("Something changed since the review. Review it again.");
+    expect(alert.textContent).toContain("Can't reach the console's server.");
   });
 
   it("a stale review says so and reloads", async () => {
