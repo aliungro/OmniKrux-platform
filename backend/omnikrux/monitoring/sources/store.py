@@ -286,9 +286,14 @@ class SourceStore:
                 ),
                 headers={**stored.headers, **given.headers},
             )
-            if not (old.secrets_unreadable and given == SourceSecrets()):
-                # Unreadable secrets stay as they are until new ones are given; then only the
-                # given ones are kept.
+            if not (
+                old.secrets_unreadable
+                and given == SourceSecrets()
+                and change.auth_type is None
+                and change.header_names is None
+            ):
+                # Unreadable secrets stay as they are until the authentication, the headers or
+                # a secret is given again; then only what is given is kept.
                 row.secret_encrypted = self._encrypt(_only_for(auth_type, merged, header_names))
             row.updated_at = now()
             await _flush(session, row.name)

@@ -31,6 +31,7 @@ from omnikrux.monitoring.sources.transport import (
     validate_url,
 )
 from omnikrux.monitoring.sources.types import (
+    AUTH_SECRET,
     MAX_NAME,
     NAME_RULE,
     AuthType,
@@ -288,15 +289,17 @@ def _check_auth(
     secrets: SourceSecrets,
     stored: set[str],
 ) -> None:
-    """Each type has the fields it needs: given now, or (`stored`) kept from before."""
+    """Each type has the fields it needs: given now (never empty), or, when not given, kept from
+    before (`stored`)."""
 
     def has(secret: str) -> bool:
-        return getattr(secrets, secret) is not None or secret in stored
+        value = getattr(secrets, secret)
+        return bool(value) if value is not None else secret in stored
 
     needed = {
         "none": True,
         "basic": bool(username) and has("password"),
-        "bearer": bool(secrets.token) or "token" in stored,
+        "bearer": has("token"),
         "api_key": bool(header_name) and has("api_key"),
         "mtls": bool(client_cert_pem) and has("client_key_pem"),
     }
@@ -675,9 +678,17 @@ async def _change(registry: ClusterRegistry, old: SourceConfig, body: SourcePatc
             client_cert_pem or "",
         )
 
+    if old.secrets_unreadable and (body.auth is not None or body.headers is not None):
+        # Nothing readable is left to keep: every secret the source still uses is entered again.
+        if body.auth is None and AUTH_SECRET.get(old.auth_type) is not None:
+            raise _refuse(AUTH_NEEDS[old.auth_type])
+        if body.headers is None and old.header_names:
+            raise _refuse(HEADER_VALUE.format(name=old.header_names[0]))
+
     header_names = None
     if body.headers is not None:
-        header_names, values = _headers(body.headers, kept=old.header_names)
+        kept = () if old.secrets_unreadable else old.header_names
+        header_names, values = _headers(body.headers, kept=kept)
         secrets = replace(secrets, headers=values)
 
     return SourceChange(

@@ -3,12 +3,14 @@
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from omnikrux.audit.store import AuditLog, AuditUnavailable
 from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.monitoring.audit import begin_change, finish_change
-from omnikrux.monitoring.router import router
+from omnikrux.monitoring.router import adopt, router
 
 
 @pytest.fixture(autouse=True)
@@ -83,3 +85,56 @@ async def test_begin_change_refuses_without_an_audit_log():
     assert caught.value.detail == (
         "Nothing was changed: the audit log can't be written (disk I/O error)."
     )
+
+
+class Shown(BaseModel):
+    kept: str
+
+
+def test_adopt_keeps_every_route_setting():
+    ran: list[str] = []
+
+    def dependency(label: str):
+        async def run() -> None:
+            ran.append(label)
+
+        return Depends(run)
+
+    feature = APIRouter(prefix="/things", dependencies=[dependency("feature")])
+
+    @feature.post(
+        "/{id}",
+        status_code=202,
+        response_model=Shown,
+        dependencies=[dependency("route")],
+        responses={418: {"description": "Teapot"}},
+        summary="Make a thing",
+        tags=["things"],
+    )
+    async def make(id: str) -> dict:
+        return {"kept": id, "dropped": "never shown"}
+
+    @feature.get("/hidden", include_in_schema=False)
+    async def hidden() -> dict:
+        return {}
+
+    target = APIRouter(prefix="/api/x", dependencies=[dependency("outer")])
+    adopt(feature, into=target)
+    app = FastAPI()
+    app.include_router(target)
+    with TestClient(app) as client:
+        r = client.post("/api/x/things/a")
+        assert r.status_code == 202 and r.json() == {"kept": "a"}
+        assert ran == ["outer", "feature", "route"]
+        schema = client.get("/openapi.json").json()["paths"]
+    operation = schema["/api/x/things/{id}"]["post"]
+    assert operation["summary"] == "Make a thing" and operation["tags"] == ["things"]
+    assert "418" in operation["responses"] and "202" in operation["responses"]
+    assert "/api/x/things/hidden" not in schema
+
+
+def test_adopt_refuses_what_it_cannot_carry():
+    feature = APIRouter()
+    feature.add_api_websocket_route("/ws", lambda websocket: None)
+    with pytest.raises(TypeError):
+        adopt(feature, into=APIRouter())

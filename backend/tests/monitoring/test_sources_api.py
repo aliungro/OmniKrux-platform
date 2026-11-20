@@ -1,6 +1,7 @@
 """The sources API: write-only secrets, audit before every change, validation words, health,
 delete reviews and the per-project field catalog."""
 
+import logging
 import socket
 
 from cryptography.fernet import Fernet
@@ -9,8 +10,10 @@ from omnikrux.audit.store import AuditUnavailable
 from omnikrux.monitoring.projects.types import Matcher
 from omnikrux.monitoring.sources import messages
 from omnikrux.monitoring.sources.api import (
+    AUTH_NEEDS,
     CLUSTER_ONLY,
     FIXED_KIND,
+    HEADER_VALUE,
     NOT_LINKED,
     SECRETS_UNREADABLE,
 )
@@ -44,6 +47,7 @@ async def audit_records(http) -> list[dict]:
 
 
 async def test_source_secrets_are_write_only(monitoring_app, fake_prometheus, caplog):
+    caplog.set_level(logging.DEBUG)
     http, _ = monitoring_app
     body = {
         "type": "prometheus",
@@ -334,7 +338,7 @@ async def test_undecryptable_source_still_lists_and_takes_new_secrets(
     http, app = monitoring_app
     fake_prometheus.require = Bearer("tok-NEW-6")
     created = (await http.post(BASE, json=bearer_body(fake_prometheus.url))).json()
-    app.state.monitoring.sources._box = SecretBox(Fernet.generate_key())  # the key changed
+    lose_the_key(app)
 
     listed = await http.get(BASE)
     assert listed.status_code == 200
@@ -362,3 +366,72 @@ async def test_source_reads_refuse_cross_origin(monitoring_app):
         response = await http.get(path, headers={"Origin": "http://evil.example"})
         assert response.status_code == 403
         assert response.json() == {"detail": "Cross-origin request refused"}
+
+
+async def test_empty_secrets_are_refused(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    url = {"type": "prometheus", "reach": "url", "url": fake_prometheus.url}
+    cases = [
+        ({"type": "basic", "username": "admin", "password": ""}, "basic"),
+        ({"type": "bearer", "token": ""}, "bearer"),
+        ({"type": "api_key", "header_name": "X-Api-Key", "api_key": ""}, "api_key"),
+        ({"type": "mtls", "client_cert_pem": "cert", "client_key_pem": ""}, "mtls"),
+    ]
+    for auth, kind in cases:
+        response = await http.post(BASE, json=url | {"auth": auth})
+        assert response.status_code == 422, auth
+        assert response.json()["detail"] == AUTH_NEEDS[kind]
+    # On PATCH too: an empty value never replaces a stored one.
+    created = (await http.post(BASE, json=bearer_body(fake_prometheus.url))).json()
+    emptied = await http.patch(
+        f"{BASE}/{created['id']}", json={"auth": {"type": "bearer", "token": ""}}
+    )
+    assert emptied.status_code == 422 and emptied.json()["detail"] == AUTH_NEEDS["bearer"]
+
+
+def lose_the_key(app) -> None:
+    app.state.monitoring.sources._box = SecretBox(Fernet.generate_key())
+
+
+async def test_undecryptable_source_recovers_without_credentials(monitoring_app, fake_prometheus):
+    http, app = monitoring_app
+    created = (await http.post(BASE, json=bearer_body(fake_prometheus.url))).json()
+    lose_the_key(app)
+
+    patched = await http.patch(
+        f"{BASE}/{created['id']}", json={"auth": {"type": "none"}, "headers": []}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["health"]["state"] in ("unknown", "up")
+    assert patched.json()["health"]["message"] != SECRETS_UNREADABLE
+    health = (await http.get(f"{BASE}/health")).json()[created["id"]]
+    assert health["state"] == "up" and health["message"] is None
+    fields = await http.get(f"{BASE}/{created['id']}/alerting")
+    assert fields.status_code == 200
+
+
+async def test_undecryptable_source_needs_every_secret_again(monitoring_app, fake_prometheus):
+    http, app = monitoring_app
+    created = (await http.post(BASE, json=bearer_body(fake_prometheus.url))).json()
+    lose_the_key(app)
+    path = f"{BASE}/{created['id']}"
+    header_value = HEADER_VALUE.format(name="X-Scope-OrgID")
+
+    token_only = await http.patch(path, json={"auth": {"type": "bearer", "token": "tok-NEW"}})
+    assert token_only.status_code == 422 and token_only.json()["detail"] == header_value
+    unvalued = await http.patch(
+        path,
+        json={
+            "auth": {"type": "bearer", "token": "tok-NEW"},
+            "headers": [{"name": "X-Scope-OrgID"}],
+        },
+    )
+    assert unvalued.status_code == 422 and unvalued.json()["detail"] == header_value
+    headers_only = await http.patch(
+        path, json={"headers": [{"name": "X-Scope-OrgID", "value": "hv-NEW"}]}
+    )
+    assert headers_only.status_code == 422
+    assert headers_only.json()["detail"] == AUTH_NEEDS["bearer"]
+    # Nothing was changed: the source still asks for its credentials.
+    listed = (await http.get(BASE)).json()[0]
+    assert listed["health"]["message"] == SECRETS_UNREADABLE
