@@ -14,7 +14,11 @@ from typing import Any, Literal, Protocol
 from omnikrux.monitoring.projects.types import Matcher
 from omnikrux.monitoring.query.series import QueryResult
 from omnikrux.monitoring.sources import messages
-from omnikrux.monitoring.sources.transport import SourceTransport, TransportResponse
+from omnikrux.monitoring.sources.transport import (
+    SourceTransport,
+    TransportResponse,
+    scrub_text,
+)
 from omnikrux.monitoring.sources.types import SourceType
 
 QueryLanguage = Literal["promql", "logql"]
@@ -167,7 +171,14 @@ def tool_text(body: bytes) -> str:
         text = text if isinstance(text, str) else ""
     else:
         text = body.decode("utf-8", "replace")
-    return " ".join(text.split())[:MAX_TOOL_MESSAGE]
+    return " ".join(scrub_text(text).split())[:MAX_TOOL_MESSAGE]
+
+
+def status_message(name: str, status: int) -> str:
+    """What a non-2xx answer to a probe says."""
+    if status in (401, 403):
+        return messages.REJECTED.format(name=name, status=status)
+    return TOOL_ERROR.format(name=name, status=status)
 
 
 def reject(response: TransportResponse, name: str) -> QueryRejected:
@@ -176,10 +187,8 @@ def reject(response: TransportResponse, name: str) -> QueryRejected:
     if status in (400, 422):
         message = tool_text(response.body) or QUERY_REFUSED.format(name=name)
         return QueryRejected("bad_query", message, 400)
-    if status in (401, 403):
-        message = messages.REJECTED.format(name=name, status=status)
-        return QueryRejected("unauthorized", message, 502)
-    return QueryRejected("tool_error", TOOL_ERROR.format(name=name, status=status), 502)
+    code = "unauthorized" if status in (401, 403) else "tool_error"
+    return QueryRejected(code, status_message(name, status), 502)
 
 
 def checked_json(response: TransportResponse, name: str, what: str) -> dict[str, Any]:

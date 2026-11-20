@@ -89,8 +89,14 @@ def streams_result(data: dict, warnings: list[str]) -> QueryResult:
                 labels=_labels(item.get("stream")),
                 entries=[(str(e[0]), str(e[1])) for e in item.get("values") or []],
             )
-            for item in data.get("result") or []
+            for item in (data.get("result") or [])[: MAX_SERIES + 1]
         ]
     except (TypeError, KeyError, IndexError, AttributeError) as exc:
         raise ValueError("Not a result shape") from exc
-    return QueryResult(result_type="streams", streams=streams, warnings=warnings)
+    truncated = len(streams) > MAX_SERIES
+    if truncated:
+        streams = streams[:MAX_SERIES]
+        warnings = [*warnings, TRUNCATED_WARNING]
+    return QueryResult(
+        result_type="streams", streams=streams, warnings=warnings, truncated=truncated
+    )

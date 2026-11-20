@@ -136,29 +136,29 @@ async def direct(registry):
     """`direct(url, type="prometheus", name=...)`: the transport of a URL-reached source."""
     factory = TransportFactory(ClusterConnections(registry), registry)
 
-    def make(url: str, type: str = "prometheus", name: str = "Source · test"):
+    def make(url: str, type: str = "prometheus", name: str = "Source · test", **over):
         now = datetime.now(UTC)
-        config = SourceConfig(
-            id="src-1",
-            name=name,
-            type=type,
-            reach="url",
-            url=url,
-            cluster=None,
-            path_prefix="",
-            auth_type="none",
-            username=None,
-            header_name=None,
-            client_cert_pem=None,
-            ca_pem=None,
-            header_names=(),
-            secrets=SourceSecrets(),
-            created_by_project_id=None,
-            created_at=now,
-            updated_at=now,
-            check=None,
-        )
-        return factory.for_source(config)
+        values = {
+            "id": "src-1",
+            "name": name,
+            "type": type,
+            "reach": "url",
+            "url": url,
+            "cluster": None,
+            "path_prefix": "",
+            "auth_type": "none",
+            "username": None,
+            "header_name": None,
+            "client_cert_pem": None,
+            "ca_pem": None,
+            "header_names": (),
+            "secrets": SourceSecrets(),
+            "created_by_project_id": None,
+            "created_at": now,
+            "updated_at": now,
+            "check": None,
+        }
+        return factory.for_source(SourceConfig(**(values | over)))
 
     yield make
     await factory.close()

@@ -6,19 +6,10 @@ from omnikrux.monitoring.query.filters import Matcher
 from omnikrux.monitoring.query.series import MAX_SERIES, TRUNCATED_WARNING
 from omnikrux.monitoring.sources.connector import ConnectorQuery, QueryRejected, TestResult
 from omnikrux.monitoring.sources.prometheus import PrometheusConnector
-from omnikrux.monitoring.sources.transport import SourceUnreachable, TransportResponse
+from omnikrux.monitoring.sources.transport import SourceUnreachable
+from tests.monitoring.fakes import Canned
 
 NAME = "Prometheus · test"
-
-
-class Canned:
-    """A transport that answers every request the same, as a cluster's service proxy would."""
-
-    def __init__(self, status: int, body: bytes = b"") -> None:
-        self.answer = TransportResponse(status, body, "")
-
-    async def request(self, method, path, **kwargs):
-        return self.answer
 
 
 class Probe:
@@ -236,3 +227,47 @@ async def test_prometheus_alerting_needs_operator(fake_prometheus, direct):
     yes = await connector.alerting(t, cluster=probe)
     assert (yes.omnikrux_engine, yes.tool_engine, yes.reason) == (True, "prometheus_rule", None)
     assert probe.asked == [("monitoring.coreos.com", "v1", "prometheusrules")]
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_test_names_rejected_credentials(status):
+    got = await PrometheusConnector().test(Canned(status), NAME)
+    assert got == TestResult(
+        False,
+        None,
+        f"{NAME} rejected the credentials (HTTP {status}). Check the source's authentication.",
+    )
+
+
+async def test_a_tool_echoing_secrets_in_a_refusal_never_reaches_the_message(direct, caplog):
+    from aiohttp import web
+
+    from omnikrux.monitoring.sources.types import SourceSecrets
+    from tests.monitoring.test_transport import serve
+
+    bearer, header_value = "tok-9f8e7d6c5b4a", "custom-secret-77"
+
+    async def handler(request):
+        echo = (
+            f"bad query; Authorization={request.headers.get('Authorization')} "
+            f"X-Custom={request.headers.get('X-Custom')} token {bearer}"
+        )
+        return web.Response(status=400, text=echo)
+
+    secrets = SourceSecrets(token=bearer, headers={"X-Custom": header_value})
+    async with serve(handler) as url:
+        t = direct(url, name=NAME, auth_type="bearer", secrets=secrets, header_names=("X-Custom",))
+        with pytest.raises(QueryRejected) as caught:
+            await PrometheusConnector().query(t, ConnectorQuery("instant", "up"), NAME)
+    shown = [caught.value.message, repr(caught.value), str(caught.value), caplog.text]
+    for text in shown:
+        assert bearer not in text
+        assert header_value not in text
+    assert "bad query" in caught.value.message
+
+
+def test_a_bearer_pattern_is_scrubbed_even_without_known_secrets():
+    from omnikrux.monitoring.sources.connector import tool_text
+
+    text = tool_text(b"oops Authorization: Bearer abcdef123456 and Bearer zzzzzz999999 done")
+    assert "abcdef123456" not in text and "zzzzzz999999" not in text

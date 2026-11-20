@@ -368,3 +368,15 @@ async def serve_fake_grafana():
     server = FakeGrafana()
     async with _serve(server, None):
         yield server
+
+
+class Canned:
+    """A transport that answers every request the same, as a cluster's service proxy would."""
+
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        from omnikrux.monitoring.sources.transport import TransportResponse
+
+        self.answer = TransportResponse(status, body, "")
+
+    async def request(self, method, path, **kwargs):
+        return self.answer

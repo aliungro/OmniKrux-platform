@@ -9,7 +9,6 @@ from omnikrux.monitoring.query.series import QueryResult, series_result
 from omnikrux.monitoring.sources.connector import (
     NO_OPERATOR,
     NOT_LIKE,
-    TOOL_ERROR,
     AlertingCapability,
     ClusterProbe,
     ConnectorQuery,
@@ -20,6 +19,7 @@ from omnikrux.monitoring.sources.connector import (
     checked_json,
     json_object,
     number_text,
+    status_message,
 )
 from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreachable
 
@@ -52,7 +52,7 @@ class PrometheusConnector:
             if isinstance(info, dict) and isinstance(info.get("version"), str):
                 version = info["version"]
         if got.status != 200:
-            return TestResult(False, None, TOOL_ERROR.format(name=name, status=got.status))
+            return TestResult(False, None, status_message(name, got.status))
         data = json_object(got.body)
         if data is None or data.get("status") != "success":
             return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))

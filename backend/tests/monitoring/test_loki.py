@@ -5,7 +5,7 @@ import pytest
 from omnikrux.monitoring.query.filters import Matcher
 from omnikrux.monitoring.sources.connector import ConnectorQuery, QueryRejected, TestResult
 from omnikrux.monitoring.sources.loki import LokiConnector
-from tests.monitoring.test_prometheus import Canned
+from tests.monitoring.fakes import Canned
 
 NAME = "Loki · test"
 A = [Matcher("cluster", "=", "a")]
@@ -99,3 +99,28 @@ async def test_loki_refuses_with_plain_text(status):
         )
     assert caught.value.code == "bad_query"
     assert caught.value.message == "parse error at line 1, col 1: bad"
+
+
+async def test_streams_beyond_2000_are_truncated(fake_loki, direct):
+    fake_loki.results['{app=~".+"}'] = {
+        "resultType": "streams",
+        "result": [
+            {"stream": {"i": str(i)}, "values": [["1700000000000000000", "x"]]} for i in range(2001)
+        ],
+    }
+    got = await LokiConnector().query(
+        direct(fake_loki.url, "loki", NAME), ConnectorQuery("instant", '{app=~".+"}'), NAME
+    )
+    assert len(got.streams) == 2000
+    assert got.truncated is True
+    assert got.warnings == ["Showing the first 2000 series."]
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_loki_test_names_rejected_credentials(status):
+    got = await LokiConnector().test(Canned(status), NAME)
+    assert got == TestResult(
+        False,
+        None,
+        f"{NAME} rejected the credentials (HTTP {status}). Check the source's authentication.",
+    )

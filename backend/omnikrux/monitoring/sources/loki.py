@@ -9,7 +9,6 @@ from omnikrux.monitoring.query.series import QueryResult, series_result, streams
 from omnikrux.monitoring.sources.connector import (
     NOT_LIKE,
     RULER_OFF,
-    TOOL_ERROR,
     AlertingCapability,
     ClusterProbe,
     ConnectorQuery,
@@ -19,6 +18,7 @@ from omnikrux.monitoring.sources.connector import (
     checked_json,
     json_object,
     number_text,
+    status_message,
 )
 from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreachable
 
@@ -43,12 +43,12 @@ class LokiConnector:
         if got.status == 404:
             ready = await t.request("GET", "/ready", timeout=PROBE_SECONDS)
             if ready.status != 200:
-                return TestResult(False, None, TOOL_ERROR.format(name=name, status=ready.status))
+                return TestResult(False, None, status_message(name, ready.status))
             if ready.body.strip().lower() != b"ready":
                 return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))
             return TestResult(True, None, None)
         if got.status != 200:
-            return TestResult(False, None, TOOL_ERROR.format(name=name, status=got.status))
+            return TestResult(False, None, status_message(name, got.status))
         data = json_object(got.body)
         if data is None:
             return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))

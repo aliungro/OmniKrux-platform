@@ -247,6 +247,35 @@ def build_ssl_context(config: SourceConfig) -> ssl.SSLContext:
     return context
 
 
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)authorization\s*[:=]\s*(?:(?:basic|bearer)\s+)?[^\s,;\"']+"),
+    re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=\-]{6,}"),
+)
+
+
+def scrub_text(text: str) -> str:
+    """The text without anything that looks like an Authorization header or a bearer token."""
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("…", text)
+    return text
+
+
+def _scrub_body(body: bytes, config: SourceConfig, headers: dict[str, str]) -> bytes:
+    """A tool's error body without the source's own secrets (a tool may echo the request back)."""
+    secrets = config.secrets
+    values = {v for v in (secrets.password, secrets.token, secrets.api_key) if v}
+    values.update(v for v in headers.values() if v)
+    values.update(v for v in secrets.headers.values() if v)
+    for header in headers.values():  # "Bearer tok" and "Basic xyz": the credential part too
+        scheme, _, credential = header.partition(" ")
+        if credential and scheme.lower() in ("bearer", "basic"):
+            values.add(credential)
+    text = body.decode("utf-8", "replace")
+    for value in sorted(values, key=len, reverse=True):
+        text = text.replace(value, "…")
+    return scrub_text(text).encode()
+
+
 def _auth_headers(config: SourceConfig) -> dict[str, str]:
     """The authentication header, then the custom headers; SourceUnreachable when one can't be
     sent (the message never repeats a header value)."""
@@ -326,6 +355,8 @@ class DirectTransport:
                         "unauthorized", messages.REJECTED.format(name=name, status=status)
                     )
                 body = await _read_capped(response.content.iter_any(), name)
+                if status >= 400:
+                    body = _scrub_body(body, config, headers)
                 return TransportResponse(status, body, response.headers.get("Content-Type", ""))
         except SourceUnreachable:
             raise
