@@ -17,8 +17,9 @@ A service can be reached through the API server's proxy
 (`/api/v1/namespaces/{ns}/services/{name:port}/proxy/...`): `service_backends` maps
 (namespace, "name:port") or (namespace, "https:name:port") to the base URL of a real local server,
 and the request (method, rest of the path, query, body) is relayed to it, its status, body,
-content type and any `Location` relayed back (a redirect is passed on, never followed). An unknown service answers 503 "no endpoints available"; with
-`proxy_forbidden` set every proxy request answers 403.
+content type and any `Location` relayed back (a redirect is passed on, never followed). An
+unknown service answers 503 "no endpoints available"; with `proxy_forbidden` set every proxy
+request answers 403.
 
 Any served object can be replaced (PUT, honouring `metadata.resourceVersion` with a 409 like the
 API server, and `dryRun=All`) and patched (`application/merge-patch+json`, or
