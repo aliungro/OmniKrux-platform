@@ -290,3 +290,28 @@ describe("Project delete review", () => {
     await waitFor(() => expect(api.state.projects).toHaveLength(1));
   });
 });
+
+describe("Check data stays current", () => {
+  it("an old count goes away when the filter is edited or saved", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom)])],
+      fields: { s1: { metrics: [{ name: "up", type: null, help: null, unit: null }], labels: ["a"], truncated: false } },
+    }, fallback);
+    open("p1");
+    const check = await screen.findByRole("button", { name: "Check data for Prom" });
+    await user.click(check);
+    expect(await screen.findByText("1 metric and 1 label visible to this project")).toBeTruthy();
+    const field = screen.getByRole("textbox", { name: "Filter for Prom" });
+    await user.type(field, 'job="a"');
+    expect(screen.queryByText("1 metric and 1 label visible to this project")).toBeNull();
+
+    // A count asked for before the save belongs to the old filter: it is never shown under the new one.
+    await user.click(check);
+    expect(await screen.findByText("1 metric and 1 label visible to this project")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^Save filter/ }));
+    expect(await screen.findByText("Filter saved.")).toBeTruthy();
+    expect(screen.queryByText("1 metric and 1 label visible to this project")).toBeNull();
+  });
+});

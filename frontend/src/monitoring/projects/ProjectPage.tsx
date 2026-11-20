@@ -39,6 +39,10 @@ function LinkRow({ project, link, health, onUnlinked }: {
   const [problem, setProblem] = useState<string | null>(null);
   const [check, setCheck] = useState<"busy" | { ok: boolean; text: string } | null>(null);
   const [unlinking, setUnlinking] = useState(false);
+  // Which filter a Check data answer belongs to: editing or saving the filter starts a new one, and
+  // an answer for an older one is dropped.
+  const checkRound = useRef(0);
+  const forgetCheck = () => { checkRound.current += 1; setCheck(null); };
 
   const value = draft ?? link.filter;
   const dirty = draft !== null && draft !== link.filter;
@@ -55,6 +59,7 @@ function LinkRow({ project, link, health, onUnlinked }: {
       await invalidateMonitoring(client);
       setDraft(null);
       setSaved(true);
+      forgetCheck();
     } catch (err) {
       setProblem(failure(err, "save again"));
     } finally {
@@ -64,16 +69,18 @@ function LinkRow({ project, link, health, onUnlinked }: {
 
   const runCheck = async () => {
     if (check === "busy") return;
+    const round = checkRound.current;
     setCheck("busy");
+    const answer = (next: { ok: boolean; text: string }) => { if (round === checkRound.current) setCheck(next); };
     try {
       const out = await sourceFields(link.source_id, project.id);
       const labels = plural(out.labels.length, "label", "labels");
       const text = link.source_type === "loki"
         ? `${labels} visible to this project`
         : `${plural(out.metrics.length, "metric", "metrics")} and ${labels} visible to this project`;
-      setCheck({ ok: true, text });
+      answer({ ok: true, text });
     } catch (err) {
-      setCheck({ ok: false, text: failure(err, "check again") });
+      answer({ ok: false, text: failure(err, "check again") });
     }
   };
 
@@ -103,7 +110,7 @@ function LinkRow({ project, link, health, onUnlinked }: {
         </div>
         <div className={s.filterLine}>
           <FilterField value={value} origin={draft === null ? link.filter_origin : "user"} reason={null} forName={link.source_name}
-            onChange={(v) => { setDraft(v); setSaved(false); }} />
+            onChange={(v) => { setDraft(v); setSaved(false); forgetCheck(); }} />
           <button type="button" className={s.secondary} aria-label={`Save filter for ${link.source_name}`}
             aria-disabled={!dirty || invalid || saving || undefined} onClick={() => void save()}>
             {saving ? "Saving…" : "Save filter"}
