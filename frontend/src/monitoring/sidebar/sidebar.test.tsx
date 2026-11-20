@@ -145,6 +145,8 @@ describe("Monitoring sidebar", () => {
     seedTwo();
     renderMonitoringApp();
     await screen.findByRole("treeitem", { name: "Both" });
+    // Home's own search takes the keyboard as it opens; "/" is for when it is elsewhere.
+    (document.activeElement as HTMLElement).blur();
     fireEvent.keyDown(document.body, { key: "/" });
     expect(document.activeElement).toBe(find());
     fireEvent.change(find(), { target: { value: "bo" } });

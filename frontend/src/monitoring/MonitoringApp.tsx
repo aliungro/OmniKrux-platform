@@ -5,6 +5,7 @@ import type { AppTabs } from "../features/shell/workspace";
 import { useMonitoringTree, useSources } from "./api/hooks";
 import type { SourceOut, TreeOut } from "./api/types";
 import { recordRecent } from "./home/recent";
+import MonitoringHome from "./home/MonitoringHome";
 import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
 import { buildSearchIndex } from "./search/search";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
@@ -42,7 +43,7 @@ const later = (name: string, text?: string): ComponentType<MonitoringPageProps> 
  * each later task replaces its entry (M2 adds `dashboard`).
  */
 const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
-  home: later("Home"),
+  home: MonitoringHome,
   sources: later("Sources"),
   source: later("Source"),
   setup: later("New project"),
