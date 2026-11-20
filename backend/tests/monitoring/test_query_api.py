@@ -303,6 +303,26 @@ async def test_tool_errors_are_plain(monitoring_app, fake_prometheus, linked_pro
     assert error(r) == (504, "timeout", messages.TIMEOUT.format(name="Shop", seconds="0.2"))
 
 
+async def test_a_language_without_a_filter_rule_is_refused(
+    monitoring_app, fake_prometheus, linked_project, monkeypatch
+):
+    """A connector whose language has no injector is refused in words, never filtered as LogQL."""
+    http, _ = monitoring_app
+    monkeypatch.setattr(prometheus.PrometheusConnector, "language", "sql")
+    before = len(fake_prometheus.requests)
+    r = await http.post(
+        QUERY,
+        json={
+            "source_id": linked_project.source_id,
+            "project_id": linked_project.project_id,
+            "kind": "instant",
+            "query": "up",
+        },
+    )
+    assert error(r) == (400, "bad_request", query_api.NO_FILTER_RULE)
+    assert len(fake_prometheus.requests) == before
+
+
 async def test_rejected_credentials_are_their_own_code(monitoring_app, fake_prometheus):
     from tests.monitoring.fakes import Bearer
 

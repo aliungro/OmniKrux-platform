@@ -10,7 +10,7 @@ that breaks a `QueryRequest` field limit (FastAPI's own 422 would be a list of e
 
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -55,6 +55,10 @@ PROJECT_GONE = "That project no longer exists."
 NOT_LINKED = "This source isn't linked to that project."
 RANGE_NEEDS = "A range query needs a start, an end after it, and a step."
 TOO_MANY_POINTS = "This range has too many points for the step. Use a larger step."
+NO_FILTER_RULE = (
+    "OmniKrux can't add a project's filter to this source's queries yet, so it doesn't run them "
+    "for a project."
+)
 
 # What a body that breaks a `QueryRequest` field limit is told, by field. Never the value sent.
 QUERY_LENGTH = "Write a query of 1 to 10000 characters."
@@ -134,6 +138,12 @@ def _check_range(q: QueryRequest) -> None:
         raise query_error(400, "bad_request", TOO_MANY_POINTS)
 
 
+_INJECTORS: dict[str, Callable[[str, Sequence[Matcher]], str]] = {
+    "promql": inject_promql,
+    "logql": inject_logql,
+}
+
+
 async def _source(services: MonitoringServices, id: str) -> SourceConfig:
     try:
         return await services.sources.get(id)
@@ -156,8 +166,14 @@ async def _link_matchers(
 
 
 def _filtered(language: QueryLanguage, query: str, matchers: Sequence[Matcher]) -> str:
-    """The query with the filter on every selector; 400 `bad_query` when it can't be added."""
-    inject = inject_promql if language == "promql" else inject_logql
+    """The query with the filter on every selector; 400 `bad_query` when it can't be added.
+
+    Each language names its own injector. A language without one is refused (400 `bad_request`):
+    a project's filter is never added by another language's rules.
+    """
+    inject = _INJECTORS.get(language)
+    if inject is None:
+        raise query_error(400, "bad_request", NO_FILTER_RULE)
     try:
         return inject(query, matchers)
     except FilterError as exc:
