@@ -1,6 +1,9 @@
 """Shared Monitoring fixtures: the stores over a fresh SQLite file, and the app."""
 
+import faulthandler
 import itertools
+import os
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +33,30 @@ from tests.monitoring.fakes import (
 )
 
 _names = itertools.count(1)
+
+# A Monitoring test that runs this long is stuck: print every thread's stack and end the run.
+WATCHDOG_SECONDS = 300
+
+
+@pytest.fixture(scope="session")
+def _terminal_fd(request):
+    """A copy of the real stderr, taken while capture is paused, so a dump reaches the terminal."""
+    capman = request.config.pluginmanager.getplugin("capturemanager")
+    if capman is None:
+        fd = os.dup(sys.__stderr__.fileno())
+    else:
+        with capman.global_and_fixture_disabled():
+            fd = os.dup(sys.__stderr__.fileno())
+    yield fd
+    os.close(fd)
+
+
+@pytest.fixture(autouse=True)
+def _watchdog(_terminal_fd):
+    """Bound every Monitoring test: a hang dumps all stacks and exits instead of waiting forever."""
+    faulthandler.dump_traceback_later(WATCHDOG_SECONDS, exit=True, file=_terminal_fd)
+    yield
+    faulthandler.cancel_dump_traceback_later()
 
 
 @dataclass
