@@ -208,13 +208,15 @@ const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs"
 
 /**
  * The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's.
- * The Monitoring group is there only while Monitoring is shown (`app`).
+ * The Monitoring group is there only while Monitoring is shown (`app`); there "/" is Find, so the
+ * Anywhere group leaves out Filter rows.
  */
 export function allGroups(kindKey?: string, app?: AppId): ShortcutGroup[] {
-  const scopes: Shortcut["scope"][] = app === "monitoring" ? ["shell", "monitoring", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
+  const monitoring = app === "monitoring";
+  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
   return scopes.map((scope) => [
     GROUP_TITLES[scope],
-    SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey))),
+    SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey)) && !(monitoring && s.id === "filter")),
   ]);
 }
 

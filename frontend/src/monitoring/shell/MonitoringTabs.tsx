@@ -1,0 +1,79 @@
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import type { AppTabs } from "../../features/shell/workspace";
+import s from "../../features/shell/WorkspaceTabs.module.css";
+import type { MonitoringView } from "./tabState";
+
+interface Props {
+  tabs: AppTabs<MonitoringView>;
+  labelFor(view: MonitoringView): string;
+  /** The tab's top stripe: the project's colour, lilac otherwise. */
+  colorFor(view: MonitoringView): string;
+  onActivate(id: string): void;
+  onClose(id: string): void;
+  onNew(): void;
+}
+
+/** Monitoring's tab strip, drawn like the Kubernetes one. */
+export function MonitoringTabs({ tabs, labelFor, colorFor, onActivate, onClose, onNew }: Props) {
+  const refs = useRef(new Map<string, HTMLButtonElement>());
+  const activeIndex = Math.max(0, tabs.tabs.findIndex((t) => t.id === tabs.active));
+  const [focused, setFocused] = useState(activeIndex);
+  const [refocus, setRefocus] = useState(false);
+  useEffect(() => setFocused(activeIndex), [activeIndex, tabs.tabs.length]);
+  // A closed tab's button is gone: the keyboard lands on the tab that is now active.
+  useEffect(() => {
+    if (!refocus) return;
+    setRefocus(false);
+    refs.current.get(tabs.active)?.focus();
+  }, [refocus, tabs.active]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const n = tabs.tabs.length;
+    let next: number;
+    if (e.key === "ArrowRight") next = (i + 1) % n;
+    else if (e.key === "ArrowLeft") next = (i + n - 1) % n;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = n - 1;
+    else return;
+    e.preventDefault();
+    setFocused(next);
+    refs.current.get(tabs.tabs[next].id)?.focus();
+  };
+
+  const close = (id: string) => {
+    onClose(id);
+    setRefocus(true);
+  };
+
+  return (
+    <div className={s.strip} role="tablist" aria-label="Monitoring tabs">
+      {tabs.tabs.map((tab, i) => {
+        const label = labelFor(tab.view);
+        const active = tab.id === tabs.active;
+        return (
+          <div className={s.wrap} key={tab.id} data-active={active}
+            onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+            onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); close(tab.id); } }}>
+            <div className={s.stripe}><span style={{ background: colorFor(tab.view) }} /></div>
+            <button
+              ref={(el) => { if (el) refs.current.set(tab.id, el); else refs.current.delete(tab.id); }}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              tabIndex={focused === i ? 0 : -1}
+              className={s.tab}
+              onClick={() => onActivate(tab.id)}
+              onKeyDown={(e) => onKeyDown(e, i)}
+            >
+              {tab.view.page === "home" && <span aria-hidden="true">⌂ </span>}
+              {label}
+            </button>
+            <button type="button" className={s.close} aria-label={`Close ${label}`} title="Close tab (Alt W)" onClick={() => close(tab.id)}>×</button>
+          </div>
+        );
+      })}
+      <button type="button" className={s.add} aria-label="New tab" title="New tab (Alt T)" onClick={onNew}>+</button>
+    </div>
+  );
+}

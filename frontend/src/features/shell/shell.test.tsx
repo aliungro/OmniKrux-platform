@@ -1035,6 +1035,21 @@ it("the lilac outline moves with the keyboard", async () => {
   expect(zoneDock().hasAttribute("data-keyboard-zone")).toBe(false);
 });
 
+it("/ still focuses Filter rows in Kubernetes after Monitoring", async () => {
+  await renderPods();
+  const filter = () => within(screen.getByRole("group", { name: "Filter rows" })).getByRole("textbox");
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  // Monitoring shows no Kubernetes filter, and its "/" leaves Kubernetes alone.
+  expect(screen.queryByRole("group", { name: "Filter rows" })).toBeNull();
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "1", code: "Digit1", altKey: true });
+  await waitFor(() => expect(screen.getByRole("group", { name: "Filter rows" })).toBeTruthy());
+  const main = screen.getByRole("main");
+  main.focus();
+  fireEvent.keyDown(main, { key: "/" });
+  expect(document.activeElement).toBe(filter());
+});
+
 it("a Home tab's pane has no keyboard zone outline", async () => {
   renderShell();
   expect(screen.getByRole("heading", { name: "Where do you want to look?" })).toBeTruthy();

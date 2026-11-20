@@ -123,4 +123,12 @@ describe("shortcut registry", () => {
       ["monitoringTree", ["↑ ↓", "← →", "Enter"], "In the sidebar: move, close or open a group, open the item"],
     ]);
   });
+
+  it("the sheet drops Filter rows while Monitoring is shown", () => {
+    const anywhere = (app?: Parameters<typeof allGroups>[1]) => allGroups(undefined, app).find(([t]) => t === "Anywhere")![1].map((s) => s.id);
+    expect(anywhere("monitoring")).not.toContain("filter");
+    expect(anywhere("monitoring")).toContain("help");
+    expect(anywhere("kubernetes")).toContain("filter");
+    expect(anywhere()).toContain("filter");
+  });
 });
