@@ -4,14 +4,13 @@ import { failure, HttpError } from "../../api/http";
 import { deleteSource, sourceDeleteReview, testSource } from "../api/client";
 import { invalidateMonitoring, useSourceHealth, useSources } from "../api/hooks";
 import type { HealthOut, SourceDeleteReviewOut, SourceOut } from "../api/types";
-import { ageNote, stateOf } from "../home/ProjectCard";
+import { ageNote, STATE_WORDS, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { SourceDeleteReview } from "./SourceDeleteReview";
 import { SourceForm } from "./SourceForm";
 import { sourceTypeLabel, whereLabel } from "./sourceLabels";
 import s from "./SourcesPage.module.css";
 
-const STATE_WORDS = { up: "Up", down: "Can't be reached", unknown: "Not checked yet" } as const;
 const UNKNOWN: HealthOut = { state: "unknown", message: null, version: null, checked_at: null };
 const STALE_REVIEW = "Something changed since the review. Review it again.";
 
@@ -32,10 +31,11 @@ export default function SourcesPage() {
 
   /** Put the keyboard back where the user was working; if that is gone, on the page title. */
   const returnFocus = useCallback(() => {
-    queueMicrotask(() => {
+    // After the form has closed and the page has drawn again.
+    setTimeout(() => {
       const back = opener.current;
-      (back && back.isConnected ? back : title.current)?.focus();
-    });
+      (back && back.isConnected && !(back as HTMLButtonElement).disabled ? back : title.current)?.focus();
+    }, 0);
   }, []);
 
   const openForm = (next: Editing, from: HTMLElement) => { opener.current = from; setEditing(next); };
@@ -103,7 +103,7 @@ export default function SourcesPage() {
     <section className={s.page} aria-labelledby="monitoring-sources-title">
       <header className={s.head}>
         <h1 id="monitoring-sources-title" ref={title} tabIndex={-1} className={s.title}>Sources</h1>
-        {!editing && <button type="button" className={s.primary} onClick={(e) => openForm({ kind: "new" }, e.currentTarget)}>Add a source</button>}
+        <button type="button" className={s.primary} disabled={editing !== null} onClick={(e) => openForm({ kind: "new" }, e.currentTarget)}>Add a source</button>
       </header>
 
       {editing?.kind === "new" && (
@@ -175,6 +175,16 @@ export function SourcePage({ view, nav }: MonitoringPageProps) {
   const id = view.page === "source" ? view.id : "";
   const source = sources.data?.find((x) => x.id === id);
   const back = () => nav.navigate({ page: "sources" }, "push");
+  if (!source && sources.isError && !sources.data) {
+    return (
+      <section className={s.page}>
+        <div className={s.note} role="alert">
+          <p>{sources.error?.message} Check that the console&apos;s server is running, then try again.</p>
+          <button type="button" className={s.secondary} onClick={() => void sources.refetch()}>Try again</button>
+        </div>
+      </section>
+    );
+  }
   if (!source) return <section className={s.page}><p className={s.note} role="status">Loading source…</p></section>;
   return (
     <section className={s.page} aria-labelledby="monitoring-source-title">

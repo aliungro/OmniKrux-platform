@@ -191,3 +191,71 @@ describe("collect mode", () => {
     expect(api.requests).toHaveLength(0);
   });
 });
+
+describe("fix round", () => {
+  it("a save-mode form that is not unmounted holds no secret after saving", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({}, fallback);
+    render(<QueryClientProvider client={new QueryClient()}><SourceForm mode="save" onSaved={() => {}} onCancel={() => {}} /></QueryClientProvider>);
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    await user.selectOptions(screen.getByLabelText("Authentication"), "bearer");
+    await user.type(screen.getByLabelText("Token"), TOKEN);
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(api.state.sources).toHaveLength(1));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Save source" }) as HTMLButtonElement).disabled).toBe(false));
+    expect((screen.getByLabelText("Token") as HTMLInputElement).value).toBe("");
+    expect(document.body.innerHTML).not.toContain(TOKEN);
+  });
+
+  it("two identical failed deletes in a row leave focus on Delete source", async () => {
+    const api = installFakeMonitoringApi({ sources: [source("s1", "Prom")] }, fallback);
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) =>
+      init?.method === "DELETE" ? new Response(JSON.stringify({ detail: "The server could not delete it." }), { status: 500, headers: { "content-type": "application/json" } }) : real(url, init));
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Prom" }));
+    const go = await screen.findByRole("button", { name: "Delete source" });
+    for (let i = 0; i < 2; i++) {
+      fireEvent.click(go);
+      await screen.findByText("The server could not delete it.");
+      await waitFor(() => expect(document.activeElement).toBe(go));
+      (document.activeElement as HTMLElement).blur();
+      fireEvent.click(go);
+      await waitFor(() => expect(document.activeElement).toBe(go));
+    }
+    expect(api.state.sources).toHaveLength(1);
+  });
+
+  it("focus returns to Add a source after Cancel", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add a source" })));
+  });
+
+  it("a failed source list on the source page says so and can retry", async () => {
+    installFakeMonitoringApi({}, fallback);
+    const real = globalThis.fetch;
+    let fail = true;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) =>
+      url === "/api/monitoring/sources" && fail ? new Response(JSON.stringify({ detail: "Sources could not be read." }), { status: 500, headers: { "content-type": "application/json" } }) : real(url, init));
+    renderMonitoringApp({ tabs: tabsWith({ page: "source", id: "s1" }) });
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Sources could not be read/);
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("Remove saved CA sends an empty ca_pem", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ sources: [source("s1", "Prom", { has_ca: true })] }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Prom" }));
+    await user.click(screen.getByLabelText("Remove saved CA"));
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(api.requests.some((r) => r.method === "PATCH")).toBe(true));
+    expect((api.requests.find((r) => r.method === "PATCH")!.body as { ca_pem?: string }).ca_pem).toBe("");
+  });
+});

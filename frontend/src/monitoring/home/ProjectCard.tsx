@@ -17,7 +17,7 @@ export function ageNote(checkedAt: string | null, now: number): string | null {
   return minutes >= 120 ? `checked ${Math.floor(minutes / 60)} h ago` : `checked ${minutes} min ago`;
 }
 
-const STATE_WORDS = { up: "Up", down: "Can't be reached", unknown: "Not checked yet" } as const;
+export const STATE_WORDS = { up: "Up", down: "Can't be reached", unknown: "Not checked yet" } as const;
 
 /** What a source's health reads as: a reading that was never taken is unknown, whatever the state says. */
 export function stateOf(h: HealthOut | undefined): HealthOut["state"] {

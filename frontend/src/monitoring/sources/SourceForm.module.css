@@ -54,7 +54,7 @@
 
 .pem {
   resize: vertical;
-  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-family: "Geist Mono", ui-monospace, monospace;
   font-size: 12px;
 }
 
@@ -205,4 +205,12 @@
   .headerRow {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-2);
+  font-size: 12px;
 }

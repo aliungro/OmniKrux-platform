@@ -15,15 +15,16 @@ const AUTH_LABELS: Record<AuthType, string> = {
 
 interface HeaderRow { key: number; name: string; value: string; saved: boolean }
 
-export interface SourceFormProps {
+interface CommonProps {
   initial?: SourceOut;
-  /** Called with the saved source (save mode). */
-  onSaved?(source: SourceOut): void;
   onCancel(): void;
-  /** `save` stores the source; `collect` hands the entered source to `onCollect` and stores nothing. */
-  mode: "save" | "collect";
-  onCollect?(body: SourceIn): void;
 }
+
+/** `save` stores the source and reports it; `collect` hands the entered source to `onCollect` and stores nothing. */
+export type SourceFormProps = CommonProps & (
+  | { mode: "save"; onSaved(source: SourceOut): void; onCollect?: never }
+  | { mode: "collect"; onCollect?(body: SourceIn): void; onSaved?: never }
+);
 
 type Secrets = { password: string; token: string; apiKey: string; certPem: string; keyPem: string };
 
@@ -75,7 +76,8 @@ function Secret({ label, value, onChange, saved, multiline = false }: {
   );
 }
 
-export function SourceForm({ initial, onSaved, onCancel, mode, onCollect }: SourceFormProps) {
+export function SourceForm(props: SourceFormProps) {
+  const { initial, onCancel, mode } = props;
   const client = useQueryClient();
   const ids = useId();
   const address = useRef<HTMLInputElement>(null);
@@ -94,6 +96,7 @@ export function SourceForm({ initial, onSaved, onCancel, mode, onCollect }: Sour
   const [headers, setHeaders] = useState<HeaderRow[]>(() =>
     (initial?.headers ?? []).map((h) => ({ key: ++keyCounter.current, name: h.name, value: "", saved: h.has_value })));
   const [ca, setCa] = useState("");
+  const [removeCa, setRemoveCa] = useState(false);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,9 +130,10 @@ export function SourceForm({ initial, onSaved, onCancel, mode, onCollect }: Sour
       ...(byCluster ? { cluster_id: initial?.cluster_id } : { url: url.trim() }),
       ...(auth ? { auth } : {}), ...(hdrs ? { headers: hdrs } : {}), ...(ca.trim() ? { ca_pem: ca } : {}),
     };
+    const caPatch = removeCa ? { ca_pem: "" } : ca.trim() ? { ca_pem: ca } : {};
     const patch: SourcePatch = {
       ...(typed ? { name: typed } : {}), type,
-      ...(byCluster ? {} : { url: url.trim(), auth, headers: hdrs }), ...(ca.trim() ? { ca_pem: ca } : {}),
+      ...(byCluster ? {} : { url: url.trim(), auth, headers: hdrs }), ...caPatch,
     };
     return { body, patch };
   }
@@ -139,13 +143,18 @@ export function SourceForm({ initial, onSaved, onCancel, mode, onCollect }: Sour
     setError(null);
     const built = build();
     if (typeof built === "string") return setError(built);
-    if (mode === "collect") return onCollect?.(built.body);
+    if (props.mode === "collect") return props.onCollect?.(built.body);
     setBusy(true);
     try {
       // A plain call, not a mutation: TanStack would keep this body (secrets in it) in its cache.
       const saved = initial ? await updateSource(initial.id, built.patch) : await createSource(built.body);
+      // Nothing typed stays in the form, whatever the caller does next.
+      setSecrets({ password: "", token: "", apiKey: "", certPem: "", keyPem: "" });
+      setHeaders((cur) => cur.map((h) => ({ ...h, value: "" })));
+      setCa("");
+      setBusy(false);
       await invalidateMonitoring(client);
-      onSaved?.(saved);
+      props.onSaved?.(saved);
     } catch (err) {
       setError(failure(err));
       setBusy(false);
@@ -259,9 +268,14 @@ export function SourceForm({ initial, onSaved, onCancel, mode, onCollect }: Sour
 
       <div className={s.field}>
         <label htmlFor={`${ids}-ca`}>CA certificate (PEM, optional)</label>
-        <textarea id={`${ids}-ca`} className={`${s.input} ${s.pem}`} rows={3} autoComplete="off" spellCheck={false} value={ca}
+        <textarea id={`${ids}-ca`} className={`${s.input} ${s.pem}`} rows={3} autoComplete="off" spellCheck={false} value={ca} disabled={removeCa}
           aria-describedby={initial?.has_ca ? `${ids}-cah` : undefined} onChange={(e) => setCa(e.target.value)} />
-        {initial?.has_ca && <span id={`${ids}-cah`} className={s.hint}>{KEEP}</span>}
+        {initial?.has_ca && <span id={`${ids}-cah`} className={s.hint}>{removeCa ? "The saved certificate is removed when you save." : KEEP}</span>}
+        {initial?.has_ca && (
+          <label className={s.check}>
+            <input type="checkbox" checked={removeCa} onChange={(e) => setRemoveCa(e.target.checked)} /> Remove saved CA
+          </label>
+        )}
       </div>
 
       {error && <p className={s.error} role="alert">{error}</p>}

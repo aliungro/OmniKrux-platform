@@ -14,8 +14,8 @@ export function SourceDeleteReview({ review, busy, error, restoreFocusTo, onCanc
 }) {
   const id = useId();
   const go = useRef<HTMLButtonElement>(null);
-  // After a refused delete the review is asked again with the keyboard where it started.
-  useEffect(() => { if (error) go.current?.focus(); }, [error]);
+  // While the delete runs both buttons are off and focus leaves; when it ends, the keyboard comes back to the action.
+  useEffect(() => { if (!busy) go.current?.focus(); }, [busy]);
   const names = review.projects.map((p) => p.name).join(", ");
   return (
     <DialogShell provider="monitoring" busy={busy} onCancel={onCancel} onConfirm={onConfirm} first={go}
