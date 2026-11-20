@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -181,11 +182,16 @@ class SourceStore:
             )
             return self._config(row) if row is not None else None
 
-    async def unique_name(self, base: str) -> str:
-        """`base`, or `base (2)`, `base (3)`… whichever is free (kept within the name limit)."""
+    async def count(self) -> int:
+        async with self._sessionmaker() as session:
+            return await session.scalar(select(func.count()).select_from(SourceRecord)) or 0
+
+    async def unique_name(self, base: str, *, also_taken: Iterable[str] = ()) -> str:
+        """`base`, or `base (2)`, `base (3)`… whichever is free (kept within the name limit) and
+        not one of `also_taken` (names chosen for sources not saved yet)."""
         base = clean_name(base)
         async with self._sessionmaker() as session:
-            taken = set(await session.scalars(select(SourceRecord.name)))
+            taken = set(await session.scalars(select(SourceRecord.name))) | set(also_taken)
         if base not in taken:
             return base
         n = 2

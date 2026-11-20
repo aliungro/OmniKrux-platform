@@ -6,8 +6,12 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import inspect
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from omnikrux.db import MIGRATIONS_DIR, init_db, make_engine
+from omnikrux.db import MIGRATIONS_DIR, init_db, make_engine, make_sessionmaker
+from omnikrux.monitoring.models import lock_first
+from omnikrux.monitoring.projects.store import GroupStore
 from omnikrux.monitoring.projects.types import (
     GroupRef,
     KeptSource,
@@ -386,3 +390,20 @@ async def test_migration_0007_upgrade_and_downgrade(tmp_path):
         assert not tables & names
     await init_db(engine)
     await engine.dispose()
+
+
+async def test_lock_first_takes_the_write_lock(stores, db_path):
+    """Once a write has taken the lock, what it reads next can't change under it: another
+    writer waits (here: gives up at once) instead of slipping in between."""
+    url = f"sqlite+aiosqlite:///{db_path}"
+    mine = create_async_engine(url)
+    theirs = create_async_engine(url, connect_args={"timeout": 0.1})
+    try:
+        async with make_sessionmaker(mine).begin() as session:
+            await lock_first(session)
+            with pytest.raises(OperationalError, match="locked"):
+                await GroupStore(make_sessionmaker(theirs)).create("Ops", [])
+        assert await GroupStore(make_sessionmaker(theirs)).list() == []
+    finally:
+        await mine.dispose()
+        await theirs.dispose()

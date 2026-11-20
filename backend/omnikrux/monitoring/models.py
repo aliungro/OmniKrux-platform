@@ -11,6 +11,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
+    update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
@@ -112,3 +114,13 @@ class GroupMemberRecord(Base):
 
     group_id: Mapped[str] = mapped_column(String, primary_key=True)
     project_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+
+
+async def lock_first(session: AsyncSession) -> None:
+    """Take SQLite's write lock now, before the transaction reads anything: a write that matches
+    no row still opens the write transaction, so a delete running beside it waits until this one
+    commits and what it reads next can't change under it (no link or member to a project or
+    source deleted in between)."""
+    await session.execute(
+        update(ProjectRecord).where(false()).values(updated_at=ProjectRecord.updated_at)
+    )

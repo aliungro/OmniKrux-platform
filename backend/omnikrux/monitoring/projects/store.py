@@ -2,7 +2,9 @@
 
 A group only lists projects: joining or leaving one never moves a project or changes its links.
 Deleting a project goes through a review; the delete recomputes it in the same transaction and
-refuses (`ReviewChanged`) when it no longer matches the token the user saw."""
+refuses (`ReviewChanged`) when it no longer matches the token the user saw. Writes that read
+what a delete could remove (a link's project and source, a group's members) take the write lock
+first, so a delete can't land between the read and the write."""
 
 from __future__ import annotations
 
@@ -10,7 +12,8 @@ import json
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -22,6 +25,7 @@ from omnikrux.monitoring.models import (
     ProjectRecord,
     ProjectSourceRecord,
     SourceRecord,
+    lock_first,
     now,
     utc,
     writing,
@@ -42,7 +46,7 @@ from omnikrux.monitoring.projects.types import (
     UnknownProject,
     review_token,
 )
-from omnikrux.monitoring.sources.store import SourceStore
+from omnikrux.monitoring.sources.store import NewSource, SourceStore
 from omnikrux.monitoring.sources.types import (
     FilterOrigin,
     NameTaken,
@@ -50,6 +54,17 @@ from omnikrux.monitoring.sources.types import (
     SourceConfig,
     clean_name,
 )
+
+
+@dataclass(frozen=True)
+class SetupLink:
+    """One source of a project being set up: a saved one (`source_id`) or a new one (`new`), and
+    the filter the project uses on it."""
+
+    matchers: tuple[Matcher, ...]
+    origin: FilterOrigin
+    source_id: str | None = None
+    new: NewSource | None = None
 
 
 def _matchers_json(matchers: Iterable[Matcher]) -> str:
@@ -200,6 +215,7 @@ class ProjectStore:
     async def rename(self, id: str, name: str) -> Project:
         name = clean_name(name)
         async with self._sessionmaker.begin() as session:
+            await lock_first(session)
             row = await _project_row(session, id)
             if row.name != name:
                 await _name_free(session, ProjectRecord, "project", name)
@@ -216,23 +232,60 @@ class ProjectStore:
         origin: FilterOrigin,
         *,
         session: AsyncSession | None = None,
+        created_at: datetime | None = None,
     ) -> Link:
         """Link the source to the project with that filter, or replace the filter of an existing
-        link. UnknownProject or KeyError (the source) if either doesn't exist."""
+        link. UnknownProject or KeyError (the source) if either doesn't exist. A new link is
+        dated `created_at` (default now): links are listed in that order."""
         async with writing(self._sessionmaker, session) as s:
+            await lock_first(s)
             await _project_row(s, project_id)
             if await s.get(SourceRecord, source_id) is None:
                 raise KeyError(source_id)
             row = await s.get(ProjectSourceRecord, (project_id, source_id))
             if row is None:
                 row = ProjectSourceRecord(
-                    project_id=project_id, source_id=source_id, created_at=now()
+                    project_id=project_id, source_id=source_id, created_at=created_at or now()
                 )
                 s.add(row)
             row.filter = _matchers_json(matchers)
             row.filter_origin = origin
             await s.flush()
             return _link(row)
+
+    async def set_up(
+        self,
+        name: str,
+        kind: ProjectKind,
+        cluster_id: str | None,
+        links: Sequence[SetupLink],
+        sources: SourceStore,
+    ) -> Project:
+        """Create the project, its new sources (created by it) and its links in one transaction:
+        all of them or, on NameTaken, UnknownProject or KeyError (a saved source that is gone),
+        none. The links keep the order given."""
+        async with self._sessionmaker.begin() as session:
+            await lock_first(session)
+            project = await self.create(name, kind, cluster_id, session=session)
+            moment = now()
+            for i, link in enumerate(links):
+                if link.new is not None:
+                    new = replace(link.new, created_by_project_id=project.id)
+                    source_id = (await sources.create(new, session=session)).id
+                elif link.source_id is not None:
+                    source_id = link.source_id
+                else:
+                    raise ValueError("A setup link needs a saved source or a new one")
+                # One moment for the whole setup; a microsecond apart keeps the order given.
+                await self.link(
+                    project.id,
+                    source_id,
+                    link.matchers,
+                    link.origin,
+                    session=session,
+                    created_at=moment + timedelta(microseconds=i),
+                )
+        return await self.get(project.id)
 
     async def unlink(self, project_id: str, source_id: str) -> None:
         """KeyError if the project doesn't link that source."""
@@ -418,6 +471,7 @@ class GroupStore:
         moment = now()
         row = GroupRecord(id=uuid.uuid4().hex, name=name, created_at=moment, updated_at=moment)
         async with self._sessionmaker.begin() as session:
+            await lock_first(session)
             members = await _known_projects(session, project_ids)
             await _name_free(session, GroupRecord, "group", name)
             session.add(row)
@@ -430,6 +484,7 @@ class GroupStore:
     ) -> Group:
         """Rename the group and/or replace its members. UnknownGroup, UnknownProject."""
         async with self._sessionmaker.begin() as session:
+            await lock_first(session)
             row = await session.get(GroupRecord, id)
             if row is None:
                 raise UnknownGroup(id)

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 from fastapi.routing import APIRoute
 
+from omnikrux.monitoring.projects.api import router as projects_router
 from omnikrux.monitoring.sources.api import finding_router
 from omnikrux.monitoring.sources.api import router as sources_router
 from omnikrux.monitoring.web import refuse_cross_origin
@@ -52,3 +53,4 @@ def adopt(feature: APIRouter, into: APIRouter = router) -> None:
 
 adopt(sources_router)
 adopt(finding_router)
+adopt(projects_router)
