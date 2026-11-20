@@ -239,7 +239,14 @@ async def test_mtls_without_client_certificate_fails(factory, fake_prometheus_mt
     source = factory.for_source(config(url=fake_prometheus_mtls.url, ca_pem=fake_tls.ca_pem))
     with pytest.raises(SourceUnreachable) as caught:
         await source.request("GET", BUILDINFO, timeout=5)
-    assert caught.value.code in ("tls", "unreachable")
+    # TLS 1.3 reports the server's refusal after the handshake: depending on the platform it
+    # arrives as an SSL alert (tls) or as a dropped connection (unreachable).
+    exc = caught.value
+    if exc.code == "tls":
+        assert exc.message.startswith(f"Can't open a secure connection to {NAME}: ")
+        assert exc.message.endswith(". Check the certificate settings.")
+    else:
+        assert (exc.code, exc.message) == ("unreachable", messages.DROPPED.format(name=NAME))
 
 
 async def test_client_key_folder_is_gone_after_loading(factory, fake_tls, monkeypatch):
@@ -504,14 +511,75 @@ async def test_cluster_transport_never_leaves_the_service_proxy(
     assert caught.value.code == "unreachable"
     assert caught.value.message == messages.BAD_ADDRESS.format(name=NAME)
     assert len(fake_api.requests) == before
-    with pytest.raises(ValueError):
-        await app.state.monitoring.transports.for_source(
-            config(
-                reach="cluster",
-                url=None,
-                cluster=ClusterTarget(kube_cluster, "monitoring", "prom", "80", "http"),
-            )
-        ).request("GET", "/../../secrets", timeout=5)
+
+
+async def test_a_connector_path_that_is_not_plain_is_a_programming_error(
+    fake_api, kube_cluster, monitoring_app
+):
+    _, app = monitoring_app
+    target = ClusterTarget(kube_cluster, "monitoring", "prom", "80", "http")
+    source = app.state.monitoring.transports.for_source(
+        config(reach="cluster", url=None, cluster=target)
+    )
+    before = len(fake_api.requests)
+    for path in ["/../../secrets", "api/v1/query", "/api/v1/query?x=1"]:
+        with pytest.raises(ValueError):
+            await source.request("GET", path, timeout=5)
+    assert len(fake_api.requests) == before
+
+
+@pytest.mark.parametrize(
+    ("method", "status"), [("GET", 302), ("POST", 307), ("GET", 301), ("POST", 308)]
+)
+async def test_cluster_transport_never_follows_a_redirect(
+    method, status, fake_api, kube_cluster, monitoring_app
+):
+    """A tool behind the proxy must not steer the cluster's login to another API path."""
+    _, app = monitoring_app
+    secrets = "/api/v1/namespaces/kube-system/secrets"
+
+    async def redirect(request: web.Request) -> web.Response:
+        return web.Response(status=status, headers={"Location": fake_api.url + secrets})
+
+    async with serve(redirect) as url:
+        fake_api.service_backends[("monitoring", "prom:80")] = url
+        target = ClusterTarget(kube_cluster, "monitoring", "prom", "80", "http")
+        source = app.state.monitoring.transports.for_source(
+            config(reach="cluster", url=None, cluster=target)
+        )
+        form = [("query", "up")] if method == "POST" else None
+        with pytest.raises(SourceUnreachable) as caught:
+            await source.request(method, "/api/v1/query", form=form, timeout=5)
+    assert caught.value.code == "redirect"
+    assert caught.value.message == messages.REDIRECT.format(name=NAME)
+    assert [p for _, p, _ in fake_api.requests if p.startswith(secrets)] == []
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"auth_type": "bearer", "secrets": SourceSecrets(token="tok-1")},
+        {"auth_type": "basic", "username": "ana", "secrets": SourceSecrets(password="pw")},
+        {
+            "header_names": ("X-Scope-OrgID",),
+            "secrets": SourceSecrets(headers={"X-Scope-OrgID": "a"}),
+        },
+    ],
+)
+async def test_cluster_sources_take_no_authentication_or_headers(
+    over, fake_api, fake_prometheus, kube_cluster, monitoring_app
+):
+    _, app = monitoring_app
+    fake_api.service_backends[("monitoring", "prom:80")] = fake_prometheus.url
+    target = ClusterTarget(kube_cluster, "monitoring", "prom", "80", "http")
+    source = app.state.monitoring.transports.for_source(
+        config(reach="cluster", url=None, cluster=target, **over)
+    )
+    with pytest.raises(SourceUnreachable) as caught:
+        await source.request("GET", BUILDINFO, timeout=5)
+    assert caught.value.code == "unreachable"
+    assert caught.value.message == messages.CLUSTER_AUTH.format(name=NAME)
+    assert fake_prometheus.requests == []
 
 
 def test_path_prefix_validation():
@@ -527,3 +595,25 @@ def test_header_values_must_be_printable():
     for value in ["bell\u0007", "snow\u2603"]:
         with pytest.raises(ValueError):
             validate_header("X-Ok", value)
+
+
+async def test_a_followed_redirect_is_still_refused(
+    fake_api, fake_prometheus, kube_cluster, monitoring_app, monkeypatch
+):
+    """Defence in depth: should a redirect be followed anyway, its answer is never handed on."""
+    _, app = monitoring_app
+    monkeypatch.setattr(transport, "_never_follow_redirects", lambda api: None)
+
+    async def redirect(request: web.Request) -> web.Response:
+        return web.Response(status=302, headers={"Location": fake_prometheus.url + BUILDINFO})
+
+    async with serve(redirect) as url:
+        fake_api.service_backends[("monitoring", "prom:80")] = url
+        target = ClusterTarget(kube_cluster, "monitoring", "prom", "80", "http")
+        source = app.state.monitoring.transports.for_source(
+            config(reach="cluster", url=None, cluster=target)
+        )
+        with pytest.raises(SourceUnreachable) as caught:
+            await source.request("GET", "/api/v1/query", timeout=5)
+    assert caught.value.code == "redirect"
+    assert [r.path for r in fake_prometheus.requests] == [BUILDINFO]  # followed, then refused

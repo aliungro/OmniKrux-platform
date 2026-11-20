@@ -16,8 +16,8 @@ ADDED, then the watch stays open until `release`). Objects live in `objects[kind
 A service can be reached through the API server's proxy
 (`/api/v1/namespaces/{ns}/services/{name:port}/proxy/...`): `service_backends` maps
 (namespace, "name:port") or (namespace, "https:name:port") to the base URL of a real local server,
-and the request (method, rest of the path, query, body) is relayed to it, its status, body and
-content type relayed back. An unknown service answers 503 "no endpoints available"; with
+and the request (method, rest of the path, query, body) is relayed to it, its status, body,
+content type and any `Location` relayed back (a redirect is passed on, never followed). An unknown service answers 503 "no endpoints available"; with
 `proxy_forbidden` set every proxy request answers 403.
 
 Any served object can be replaced (PUT, honouring `metadata.resourceVersion` with a 409 like the
@@ -436,13 +436,13 @@ class FakeKubeApi:
                 data=await request.read() or None,
                 headers=headers,
                 ssl=False,
+                allow_redirects=False,  # like the API server: a redirect is relayed, not followed
             ) as upstream,
         ):
-            return web.Response(
-                body=await upstream.read(),
-                status=upstream.status,
-                headers={"Content-Type": upstream.headers.get("Content-Type", "text/plain")},
-            )
+            relayed = {"Content-Type": upstream.headers.get("Content-Type", "text/plain")}
+            if "Location" in upstream.headers:
+                relayed["Location"] = upstream.headers["Location"]
+            return web.Response(body=await upstream.read(), status=upstream.status, headers=relayed)
 
     async def _metrics(self, path: str) -> web.Response:
         """The metrics.k8s.io API: discovery, lists and single reads, per `metrics_mode`."""

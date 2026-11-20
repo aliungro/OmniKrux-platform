@@ -21,6 +21,7 @@ import socket
 import ssl
 import tempfile
 from collections.abc import AsyncIterator, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
@@ -28,6 +29,7 @@ from urllib.parse import unquote, urlencode, urlsplit
 
 import aiohttp
 from aiohttp.http_exceptions import HttpProcessingError
+from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.clusters.registry import SOURCE_CLOUD, ClusterRegistry
@@ -355,6 +357,21 @@ def _content_type(response: object) -> str:
     return headers.get("Content-Type", "") if headers is not None else ""
 
 
+def _never_follow_redirects(api: ApiClient) -> None:
+    """Make this client (fresh for one request, closed right after) send without following
+    redirects. Its REST layer would otherwise follow a tool's 3xx, and a `Location` on the API
+    server's own host keeps the cluster's login: a tool could make OmniKrux read any Kubernetes
+    path. Other Kubernetes calls build their own clients and are unaffected."""
+    session = api.rest_client.pool_manager
+    send = session.request
+
+    def request(method, url, **kwargs):
+        kwargs["allow_redirects"] = False
+        return send(method, url, **kwargs)
+
+    session.request = request
+
+
 class ClusterServiceTransport:
     """A source inside a known cluster, reached through the Kubernetes API's service proxy with
     the cluster's own connection. Cloud clusters word every failure with `cloud_kube_error`."""
@@ -373,6 +390,10 @@ class ClusterServiceTransport:
             all(_DNS_LABEL.match(part) for part in (target.namespace, target.service))
             and _PORT.match(target.port) is not None
             and safe_path(config.path_prefix)
+        )
+        # The proxy request carries the cluster's login, never the source's own credentials.
+        self._unauthenticated = (
+            config.auth_type == "none" and not config.header_names and not config.secrets.headers
         )
         service = f"{target.service}:{target.port}"
         if target.scheme == "https":
@@ -395,6 +416,8 @@ class ClusterServiceTransport:
         _check_path(path)
         if not self._usable:
             raise SourceUnreachable("unreachable", messages.BAD_ADDRESS.format(name=name))
+        if not self._unauthenticated:
+            raise SourceUnreachable("unreachable", messages.CLUSTER_AUTH.format(name=name))
         cluster_id = self._target.cluster_id
         try:
             info = await self._registry.get(cluster_id)
@@ -408,10 +431,6 @@ class ClusterServiceTransport:
                 return await self._send(method, path, params, form, timeout, info.name, cloud)
         except SourceUnreachable:
             raise
-        except KeyError:  # the cluster went away between the lookup and the call
-            raise SourceUnreachable(
-                "unknown_cluster", messages.UNKNOWN_CLUSTER.format(name=name)
-            ) from None
         except TimeoutError as exc:
             message = (
                 cloud_kube_error(f"reach {name}", exc=exc).message
@@ -448,7 +467,16 @@ class ClusterServiceTransport:
             "Accept": "*/*",
             "Content-Type": FORM if form is not None else "application/json",
         }
-        async with self._connections.api(self._target.cluster_id) as api:
+        async with AsyncExitStack() as stack:
+            try:
+                api = await stack.enter_async_context(
+                    self._connections.api(self._target.cluster_id)
+                )
+            except KeyError:  # the cluster went away between the lookup and the call
+                raise SourceUnreachable(
+                    "unknown_cluster", messages.UNKNOWN_CLUSTER.format(name=name)
+                ) from None
+            _never_follow_redirects(api)
             response = await api.call_api(
                 self._base + path,
                 method,
@@ -461,6 +489,8 @@ class ClusterServiceTransport:
                 _request_timeout=timeout,
             )
             try:
+                if getattr(response, "history", ()):  # a redirect was followed after all
+                    raise SourceUnreachable("redirect", messages.REDIRECT.format(name=name))
                 content = getattr(response, "content", None)
                 if content is not None:
                     body = await _read_capped(content.iter_any(), name)

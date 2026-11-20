@@ -21,3 +21,4 @@ BAD_ADDRESS = (
     "{name} has a service, port or path prefix OmniKrux can't use. Check the source's address."
 )
 BAD_HEADER = "{name} has a header OmniKrux can't send. Check the source's custom headers."
+CLUSTER_AUTH = "{name} is reached through a cluster, which can't send credentials or custom headers. Set Authentication to None and remove the headers."
