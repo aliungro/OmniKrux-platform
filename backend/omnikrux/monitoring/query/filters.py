@@ -28,6 +28,9 @@ __all__ = [
 BAD_FILTER = 'Use label matchers like cluster="prod-east", separated by commas.'
 NO_METRIC_NAME = "A filter can't select by metric name."
 UNREADABLE = "The query has an unclosed quote or bracket."
+SELECTOR = (
+    "The query has a selector OmniKrux can't filter. Write its label matchers separated by commas."
+)
 
 
 class FilterError(ValueError):
@@ -108,6 +111,8 @@ def _render(m: Matcher) -> str:
     # A label or operator that isn't one would let a stored filter rewrite the query.
     if _LABEL.fullmatch(m.label) is None or m.op not in _OPS:
         raise FilterError(BAD_FILTER)
+    if m.label == "__name__":
+        raise FilterError(NO_METRIC_NAME)
     value = m.value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     return f'{m.label}{m.op}"{value}"'
 
@@ -126,7 +131,15 @@ def matchers_from_json(text: str) -> tuple[Matcher, ...]:
 # literal too and `//`, `/* */` are comments: skipping them as Loki does means a quote inside one
 # can never hide a selector.
 _QUOTES = "\"'`"
+_WORD_START = frozenset(string.ascii_letters + "_:")
+_WORD = _WORD_START | frozenset(string.digits)
 _CLOSER_OF = {")": "(", "]": "["}
+# The whitespace both lexers skip. Any other character is a token to them, so the scanner treats
+# it as one too (Prometheus and Loki refuse the ones they don't know).
+_SPACE = " \t\n\r"
+# Where a line comment ends: Prometheus stops at "\r" or "\n", Loki (and Go's scanner) at "\n".
+_PROMQL_LINE_ENDS = "\r\n"
+_LOGQL_LINE_ENDS = "\n"
 
 
 def _string_end(q: str, i: int) -> int:
@@ -140,21 +153,25 @@ def _string_end(q: str, i: int) -> int:
     raise FilterError(UNREADABLE)
 
 
-def _line_end(q: str, i: int) -> int:
-    j = q.find("\n", i)
-    return len(q) if j == -1 else j
+def _line_end(q: str, i: int, logql: bool) -> int:
+    """Index of the character that ends the line comment starting at `q[i]` (or the end)."""
+    ends = _LOGQL_LINE_ENDS if logql else _PROMQL_LINE_ENDS
+    j = i + 1
+    while j < len(q) and q[j] not in ends:
+        j += 1
+    return j
 
 
-def _literal_end(q: str, i: int, quotes: str, go_comments: bool) -> int | None:
+def _literal_end(q: str, i: int, logql: bool) -> int | None:
     """If a string or a comment starts at `q[i]`, the index just past it; otherwise None."""
     c = q[i]
-    if c in quotes:
+    if c in _QUOTES:
         return _string_end(q, i)
     if c == "#":
-        return _line_end(q, i)
-    if go_comments and c == "/" and q.startswith("//", i):
-        return _line_end(q, i)
-    if go_comments and c == "/" and q.startswith("/*", i):
+        return _line_end(q, i, logql)
+    if logql and c == "/" and q.startswith("//", i):
+        return _line_end(q, i, logql)
+    if logql and c == "/" and q.startswith("/*", i):
         j = q.find("*/", i + 2)
         if j == -1:
             raise FilterError(UNREADABLE)
@@ -162,26 +179,51 @@ def _literal_end(q: str, i: int, quotes: str, go_comments: bool) -> int | None:
     return None
 
 
-def _selector_end(q: str, i: int, quotes: str, go_comments: bool) -> tuple[int, bool]:
+# What a selector expects next: `name op "value"` items separated by commas, where a name is a
+# label or a quoted name, and a quoted name alone is a metric name (Prometheus 3).
+_ITEM, _OP_OR_END, _VALUE, _END = range(4)
+
+
+def _selector_end(q: str, i: int, logql: bool) -> tuple[int, bool]:
     """For the `{` at `q[i]`: the index of its `}`, and whether the matchers so far need a comma
-    before another one (false when the braces are empty or end with a comma)."""
-    j, needs_comma = i + 1, False
+    before another one (false when the braces are empty or end with a comma).
+
+    Anything but comma-separated matchers is refused: in MetricsQL's `{a="1" or b="2"}`, a
+    matcher added at the end would filter only the last alternative."""
+    j, expect = i + 1, _ITEM
     while j < len(q):
-        end = _literal_end(q, j, quotes, go_comments)
+        c = q[j]
+        if c in _SPACE:
+            j += 1
+            continue
+        end = _literal_end(q, j, logql)
         if end is not None:
-            needs_comma = needs_comma or q[j] in quotes
+            if c in _QUOTES:
+                if expect == _ITEM:
+                    expect = _OP_OR_END
+                elif expect == _VALUE:
+                    expect = _END
+                else:
+                    raise FilterError(SELECTOR)
             j = end
             continue
-        c = q[j]
         if c == "}":
-            return j, needs_comma
+            if expect == _VALUE:
+                raise FilterError(SELECTOR)
+            return j, expect != _ITEM
         if c in "{()[]":
             raise FilterError(UNREADABLE)
+        op = next((o for o in _OPS if q.startswith(o, j)), None)
         if c == ",":
-            needs_comma = False
-        elif not c.isspace():
-            needs_comma = True
-        j += 1
+            if expect not in (_OP_OR_END, _END):
+                raise FilterError(SELECTOR)
+            expect, j = _ITEM, j + 1
+        elif c in _WORD_START and expect == _ITEM:
+            expect, j = _OP_OR_END, _run_end(q, j, _WORD)
+        elif op is not None and expect == _OP_OR_END:
+            expect, j = _VALUE, j + len(op)
+        else:  # a bare word after a matcher, a stray operator, anything unknown
+            raise FilterError(SELECTOR)
     raise FilterError(UNREADABLE)
 
 
@@ -195,18 +237,15 @@ def _insert(q: str, inserts: list[tuple[int, str]]) -> str:
     return "".join(out)
 
 
-def _selector_insert(
-    q: str, i: int, quotes: str, go_comments: bool, rendered: str
-) -> tuple[int, tuple[int, str]]:
-    end, needs_comma = _selector_end(q, i, quotes, go_comments)
+def _selector_insert(q: str, i: int, logql: bool, rendered: str) -> tuple[int, tuple[int, str]]:
+    end, needs_comma = _selector_end(q, i, logql)
     return end, (end, ("," if needs_comma else "") + rendered)
 
 
 # --- PromQL ------------------------------------------------------------------------------------
 
-_WORD_START = frozenset(string.ascii_letters + "_:")
-_WORD = _WORD_START | frozenset(string.digits)
 _NUMBER = frozenset(string.ascii_letters + string.digits + "_.")  # 0.95, 1e3, 0x1f, 5m, 1h30m
+_DIGITS = frozenset(string.digits)  # ASCII only: str.isdigit() also accepts "²" and "٣"
 _OPERATOR_PAIRS = ("==", "!=", ">=", "<=", "=~", "!~")
 _OPERATOR_CHARS = "+-*/%^=!<>~"
 
@@ -234,14 +273,14 @@ def inject_promql(query: str, matchers: Sequence[Matcher]) -> str:
     state = _OPERAND
     i = 0
     while i < n:
-        c = q[i]
+        start, c = i, q[i]
         in_range = "[" in open_brackets  # ranges and subquery steps: never a selector
-        literal_end = _literal_end(q, i, _QUOTES, go_comments=False)
+        literal_end = _literal_end(q, i, logql=False)
         if literal_end is not None:
             if c != "#":
                 state = _AFTER_OPERAND
             i = literal_end
-        elif c.isspace():
+        elif c in _SPACE:
             i += 1
         elif c in "([":
             open_brackets.append(c)
@@ -255,13 +294,13 @@ def inject_promql(query: str, matchers: Sequence[Matcher]) -> str:
         elif c == "{":
             if in_range:
                 raise FilterError(UNREADABLE)
-            i, insert = _selector_insert(q, i, _QUOTES, False, rendered)
+            i, insert = _selector_insert(q, i, False, rendered)
             inserts.append(insert)
             state = _AFTER_OPERAND
             i += 1
         elif c == "}":
             raise FilterError(UNREADABLE)
-        elif c.isdigit() or (c == "." and i + 1 < n and q[i + 1].isdigit()):
+        elif c in _DIGITS or (c == "." and i + 1 < n and q[i + 1] in _DIGITS):
             i = _run_end(q, i, _NUMBER)
             state = _AFTER_OPERAND
         elif c in _WORD_START:
@@ -276,24 +315,34 @@ def inject_promql(query: str, matchers: Sequence[Matcher]) -> str:
         else:  # ",", "@", and anything Prometheus itself refuses: an operand comes next
             state = _OPERAND
             i += 1
+        _check_progress(start, i)
     if open_brackets:
         raise FilterError(UNREADABLE)
     return _insert(q, inserts)
 
 
 def _run_end(q: str, i: int, chars: frozenset[str]) -> int:
-    while i < len(q) and q[i] in chars:
-        i += 1
-    return i
+    """Past the run of `chars` starting at `i`, which must hold at least one of them."""
+    j = i
+    while j < len(q) and q[j] in chars:
+        j += 1
+    _check_progress(i, j)
+    return j
+
+
+def _check_progress(before: int, after: int) -> None:
+    # Every scanner step moves forward; a step that wouldn't is refused instead of looping.
+    if after <= before:
+        raise FilterError(UNREADABLE)
 
 
 def _skip_blank(q: str, i: int) -> int:
     """Past spaces and `#` comments."""
     while i < len(q):
-        if q[i].isspace():
+        if q[i] in _SPACE:
             i += 1
         elif q[i] == "#":
-            i = _line_end(q, i)
+            i = _line_end(q, i, logql=False)
         else:
             break
     return i
@@ -307,7 +356,7 @@ def _label_list_end(q: str, i: int) -> int:
         return i
     j += 1
     while j < len(q):
-        end = _literal_end(q, j, _QUOTES, go_comments=False)
+        end = _literal_end(q, j, logql=False)
         if end is not None:
             j = end
         elif q[j] == ")":
@@ -350,6 +399,8 @@ def _word(
 
 def _grouping_then_call(q: str, i: int) -> bool:
     """Whether `by (...) (` or `without (...) (` starts at `i`."""
+    if i >= len(q) or q[i] not in _WORD_START:
+        return False
     end = _run_end(q, i, _WORD)
     if q[i:end].lower() not in _GROUPING:
         return False
@@ -373,12 +424,12 @@ def inject_logql(query: str, matchers: Sequence[Matcher]) -> str:
     open_brackets: list[str] = []
     i = 0
     while i < len(q):
-        literal_end = _literal_end(q, i, _QUOTES, go_comments=True)
-        c = q[i]
+        start, c = i, q[i]
+        literal_end = _literal_end(q, i, logql=True)
         if literal_end is not None:
             i = literal_end
         elif c == "{":
-            i, insert = _selector_insert(q, i, _QUOTES, True, rendered)
+            i, insert = _selector_insert(q, i, True, rendered)
             inserts.append(insert)
             i += 1
         elif c == "}":
@@ -392,6 +443,7 @@ def inject_logql(query: str, matchers: Sequence[Matcher]) -> str:
             i += 1
         else:
             i += 1
+        _check_progress(start, i)
     if open_brackets:
         raise FilterError(UNREADABLE)
     return _insert(q, inserts)

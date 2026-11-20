@@ -274,3 +274,125 @@ def test_matchers_json_round_trip():
     ms = (Matcher("cluster", "=", "prod-east"), Matcher("ns", "!~", 'a"b'))
     assert matchers_from_json(matchers_json(ms)) == ms
     assert matchers_from_json(matchers_json(())) == ()
+
+
+# --- Review fixes: comment ends, non-ASCII input, MetricsQL `or`, stored metric names ----------
+
+SELECTOR = (
+    "The query has a selector OmniKrux can't filter. Write its label matchers separated by commas."
+)
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        # Prometheus ends a line comment at "\r" as well as "\n": what follows is query again.
+        ("up # x\r or y", 'up{cluster="a"} # x\r or y{cluster="a"}'),
+        ('up # "\r+ y', 'up{cluster="a"} # "\r+ y{cluster="a"}'),
+        ("sum by (job) # c\r (up)", 'sum by (job) # c\r (up{cluster="a"})'),
+        ('up{job="x" # "\r}', 'up{job="x" # "\r,cluster="a"}'),
+    ],
+)
+def test_promql_comment_ends_at_carriage_return(query, expected):
+    assert X(query) == expected
+
+
+def test_logql_comment_ends_only_at_newline():
+    # Loki reads to "\n": a "\r" stays inside the comment, so the selector after it is comment.
+    assert inject_logql('{a="1"} # x\r{b="2"}', M) == '{a="1",cluster="a"} # x\r{b="2"}'
+    assert inject_logql('{a="1"} # x\n{b="2"}', M) == '{a="1",cluster="a"} # x\n{b="2",cluster="a"}'
+
+
+NON_ASCII = [
+    "up + ²",
+    "²",
+    "up + ٣",
+    "x[٣m]",
+    ".²",
+    "up + x",
+    "up or x",
+    'up{a="1"} ²',
+    "up #   or y",
+    '²{a="1"}',
+]
+
+_RUN_ALL = """
+import json, sys
+from omnikrux.monitoring.query.filters import FilterError, Matcher, inject_logql, inject_promql
+M = (Matcher("cluster", "=", "a"),)
+out = {}
+for name, inject in (("promql", inject_promql), ("logql", inject_logql)):
+    for q in json.loads(sys.argv[1]):
+        try:
+            out[name + " " + q] = inject(q, M)
+        except FilterError:
+            out[name + " " + q] = None
+print(json.dumps(out))
+"""
+
+
+def test_non_ascii_input_never_hangs():
+    # In a child process with a timeout: a scanner that stops advancing fails the test instead of
+    # blocking the run.
+    import json
+    import subprocess
+    import sys
+
+    done = subprocess.run(
+        [sys.executable, "-c", _RUN_ALL, json.dumps(NON_ASCII)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=True,
+    )
+    results = json.loads(done.stdout)
+    assert len(results) == 2 * len(NON_ASCII)
+    # A non-ASCII digit is no number: the metric next to it is still filtered.
+    assert results["promql up + ²"] == 'up{cluster="a"} + ²'
+    assert results['promql ²{a="1"}'] == '²{a="1",cluster="a"}'
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        '{a="1" or b="2"}',
+        'up{a="1" or b="2"}',
+        'up{a="1" OR b="2"}',
+        'up{a="1"or b="2"}',
+        'up{a="1" b="2"}',
+        'up{a="1" "b"}',
+        'up{a b="1"}',
+        "up{a=}",
+        'up{a=="1"}',
+        'up{="1"}',
+        'up{,a="1"}',
+        'up{a="1",,}',
+        'up{a~"1"}',
+    ],
+)
+@pytest.mark.parametrize("inject", [inject_promql, inject_logql])
+def test_selector_with_anything_but_matchers_is_refused(inject, query):
+    with pytest.raises(FilterError) as caught:
+        inject(query, M)
+    assert str(caught.value) == SELECTOR
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ('{"a.b"="x"}', '{"a.b"="x",cluster="a"}'),
+        ('up{ job = "x" , env !~ "y" }', 'up{ job = "x" , env !~ "y" ,cluster="a"}'),
+        ('up{job="x", # note\n}', 'up{job="x", # note\ncluster="a"}'),
+    ],
+)
+def test_selector_grammar_still_reads_valid_matchers(query, expected):
+    assert X(query) == expected
+
+
+def test_render_refuses_a_stored_metric_name():
+    with pytest.raises(FilterError) as caught:
+        render_matchers((Matcher("__name__", "=", "up"),))
+    assert str(caught.value) == NO_NAME
+    with pytest.raises(FilterError):
+        inject_promql("up", (Matcher("__name__", "=~", ".+"),))
