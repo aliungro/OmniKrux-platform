@@ -86,6 +86,7 @@ const AuditRow = memo(function AuditRow({
   const outcome = outcomeOf(record.outcome);
   const message = messageOf(record);
   const provider = knownProvider(record.provider);
+  const monitoring = record.app === "monitoring";
   return (
     <div
       role="row"
@@ -93,7 +94,7 @@ const AuditRow = memo(function AuditRow({
       aria-expanded={expanded}
       tabIndex={focusable ? 0 : -1}
       data-id={record.id}
-      className={`${s.row} ${pc[provider]}`}
+      className={`${s.row} ${monitoring ? s.monitoring : pc[provider]}`}
       onClick={() => onToggle(record.id)}
     >
       <span role="gridcell" className={s.when} title={formatAgo(record.started_at, now)}>
@@ -102,8 +103,17 @@ const AuditRow = memo(function AuditRow({
       <span role="gridcell" className={s.cell}>{record.actor}</span>
       <span role="gridcell" className={`${s.cell} ${s.action}`}>{actionLabel(record.action)}</span>
       <span role="gridcell" className={`${s.cell} ${s.where}`}>
-        <ProviderBadge provider={provider} />
-        <span className={s.ellipsis}>{record.namespace ? `${record.cluster_name} / ${record.namespace}` : record.cluster_name}</span>
+        {monitoring ? (
+          <>
+            <span className={s.badge}>Monitoring</span>
+            <span className={s.ellipsis}>Monitoring</span>
+          </>
+        ) : (
+          <>
+            <ProviderBadge provider={provider} />
+            <span className={s.ellipsis}>{record.namespace ? `${record.cluster_name} / ${record.namespace}` : record.cluster_name}</span>
+          </>
+        )}
       </span>
       <span role="gridcell" className={`${s.cell} ${s.what}`}>
         {what.kind && <span className={s.kind}>{what.kind}</span>}
@@ -123,7 +133,7 @@ function Detail({ record }: { record: AuditRecord }) {
   const details = record.details && Object.keys(record.details).length > 0 ? JSON.stringify(record.details, null, 2) : null;
   const message = messageOf(record);
   return (
-    <div className={`${s.detail} ${pc[knownProvider(record.provider)]}`}>
+    <div className={`${s.detail} ${record.app === "monitoring" ? s.monitoring : pc[knownProvider(record.provider)]}`}>
       <p className={s.when2}>
         Started {localTime(record.started_at, FULL)}
         {record.finished_at ? `, finished ${localTime(record.finished_at, FULL)}` : ", not finished"}

@@ -35,7 +35,7 @@ const cluster = (id: string, name: string, provider: Cluster["provider"]): Clust
 const CLUSTERS = [cluster("c1", "prod-gke", "gke"), cluster("c2", "dev-aks", "aks")];
 
 const record = (id: number, over: Partial<AuditRecord> = {}): AuditRecord => ({
-  id, started_at: "2026-11-07T10:00:00Z", finished_at: "2026-11-07T10:00:01Z", actor: "local", action: "scale",
+  id, started_at: "2026-11-07T10:00:00Z", finished_at: "2026-11-07T10:00:01Z", actor: "local", action: "scale", app: "kubernetes",
   cluster_id: "c1", cluster_name: "prod-gke", provider: "gke", namespace: "payments", kind: "deployments.apps",
   name: `web-${id}`, outcome: "succeeded", message: "Scaled to 3 replicas.", diff: null, details: null, ...over,
 });
@@ -479,4 +479,40 @@ it("audit shows cluster and account verbs", async () => {
   }
   const connected = await screen.findByRole("row", { name: /Connected a cloud account/ });
   expect(within(connected).getByText("Cloud account")).toBeTruthy();
+});
+
+describe("monitoring entries", () => {
+  const monitoring = (over: Partial<AuditRecord> = {}) => record(7, {
+    app: "monitoring", action: "source_add", cluster_id: "", cluster_name: "", provider: "", namespace: null,
+    kind: "sources", name: "Prometheus main", message: null, ...over,
+  });
+
+  it("a monitoring entry reads as Monitoring", async () => {
+    serve(() => ({ records: [monitoring()], next_before: null }));
+    show();
+    const row = await screen.findByRole("row", { name: /Added a source/ });
+    expect(within(row).getAllByText("Monitoring")).toHaveLength(2);
+    expect(within(row).getByText("source")).toBeTruthy();
+    expect(within(row).getByText("Prometheus main")).toBeTruthy();
+    expect(within(row).queryByText("K8S")).toBeNull();
+  });
+
+  it("Kubernetes rows are unchanged", async () => {
+    serve(() => ({ records: [record(1, { app: "kubernetes" })], next_before: null }));
+    show();
+    const row = await screen.findByRole("row", { name: /web-1/ });
+    expect(within(row).getByText("GKE")).toBeTruthy();
+    expect(within(row).getByText("prod-gke / payments")).toBeTruthy();
+    expect(within(row).queryByText("Monitoring")).toBeNull();
+    expect(row.className).toMatch(/gke/);
+  });
+
+  it("the action filter offers the monitoring actions", async () => {
+    serve(() => ({ records: [record(1)], next_before: null }));
+    show();
+    const select = (await screen.findByLabelText("Action")) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    for (const l of ["Added a source", "Changed a source", "Removed a source", "Added a project", "Changed a project",
+      "Removed a project", "Added a group", "Changed a group", "Removed a group"]) expect(labels).toContain(l);
+  });
 });

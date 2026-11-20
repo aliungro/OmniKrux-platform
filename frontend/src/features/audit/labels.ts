@@ -20,6 +20,15 @@ export const ACTION_LABELS: readonly (readonly [action: string, label: string])[
   ["cluster_remove", "Removed a cluster"],
   ["cloud_account_add", "Connected a cloud account"],
   ["cloud_account_remove", "Removed a cloud account"],
+  ["source_add", "Added a source"],
+  ["source_change", "Changed a source"],
+  ["source_remove", "Removed a source"],
+  ["project_add", "Added a project"],
+  ["project_change", "Changed a project"],
+  ["project_remove", "Removed a project"],
+  ["group_add", "Added a group"],
+  ["group_change", "Changed a group"],
+  ["group_remove", "Removed a group"],
 ];
 
 const BY_ACTION = new Map(ACTION_LABELS);

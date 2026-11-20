@@ -261,6 +261,26 @@
   text-overflow: ellipsis;
 }
 
+/* A Monitoring entry has no provider: lilac stands in for the provider colour. */
+.monitoring {
+  --c: var(--focus);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: var(--focus);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
 .kind {
   flex: none;
   color: var(--ink-3);

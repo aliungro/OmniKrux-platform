@@ -655,7 +655,16 @@ export type AuditAction =
   | "cluster_add"
   | "cluster_remove"
   | "cloud_account_add"
-  | "cloud_account_remove";
+  | "cloud_account_remove"
+  | "source_add"
+  | "source_change"
+  | "source_remove"
+  | "project_add"
+  | "project_change"
+  | "project_remove"
+  | "group_add"
+  | "group_change"
+  | "group_remove";
 
 export type AuditOutcome = "started" | "succeeded" | "failed" | "ended" | "unknown";
 
@@ -665,6 +674,8 @@ export interface AuditRecord {
   finished_at: string | null;
   actor: string;
   action: AuditAction | string;
+  /** Which app made the change; Monitoring entries have no cluster or provider. */
+  app: "kubernetes" | "monitoring";
   cluster_id: string;
   cluster_name: string;
   provider: string;
