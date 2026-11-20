@@ -228,7 +228,9 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
           <p className={s.lead}>OmniKrux looked inside the cluster. Use what&apos;s there, or add a source by hand.</p>
           <div className={s.looking}>
             <span role="status">{discovery.isFetching ? `Looking inside ${clusterName}…` : ""}</span>
-            <button type="button" className={s.quiet} disabled={discovery.isFetching} onClick={() => void discovery.refetch()}>Look again</button>
+            {/* aria-disabled, not disabled: a button that disables itself would drop the keyboard onto <body>. */}
+            <button type="button" className={s.quiet} aria-disabled={discovery.isFetching || undefined}
+              onClick={() => { if (!discovery.isFetching) void discovery.refetch(); }}>Look again</button>
           </div>
           {discovery.isError && !d && <p className={s.problem} role="alert">{failure(discovery.error, "look again")}</p>}
           {d?.state === "error" && <p className={s.problem} role="alert">{d.message}</p>}
