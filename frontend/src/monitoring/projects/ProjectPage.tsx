@@ -6,6 +6,7 @@ import { deleteProject, linkSource, projectDeleteReview, renameProject, sourceFi
 import { invalidateMonitoring, useGroups, useProject, useSourceHealth, useSources } from "../api/hooks";
 import type { FilterOrigin, HealthOut, LinkOut, ProjectDeleteReviewOut, ProjectOut } from "../api/types";
 import { EditableName } from "../EditableName";
+import { escapeCloses } from "../focus";
 import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
@@ -189,7 +190,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   };
 
   return (
-    <div className={s.panel}>
+    <div className={s.panel} onKeyDown={escapeCloses(onClose, busy)}>
       {sources.isError && !sources.data && <p className={s.bad} role="alert">{failure(sources.error)}</p>}
       {sources.data && choices.length === 0 && <p className={s.muted}>Every source is already linked to this project. Add one by hand instead.</p>}
       {choices.length > 0 && (
@@ -364,7 +365,7 @@ export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageP
           <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} />
         ) : (
           <div className={s.panel}>
-            <SourceForm mode="save" onSaved={(saved) => linkNew(saved.id)} onCancel={closePanel} />
+            <SourceForm mode="save" closeOnEscape onSaved={(saved) => linkNew(saved.id)} onCancel={closePanel} />
           </div>
         )}
       </section>

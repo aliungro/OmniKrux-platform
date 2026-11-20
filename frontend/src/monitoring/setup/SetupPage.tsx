@@ -449,6 +449,7 @@ function SetupFlow({ view, nav, onOpenSettings }: MonitoringPageProps) {
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key === "Escape" && handOpen) {
       e.preventDefault();
+      e.stopPropagation(); // the hand form's Esc; nothing around the page takes it too
       setHandOpen(false);
     } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && draft.step === 4) {
       e.preventDefault();

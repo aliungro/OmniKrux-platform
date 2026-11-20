@@ -309,3 +309,32 @@ describe("Saving once", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Save source" }).getAttribute("aria-disabled")).toBeNull());
   });
 });
+
+/** Records every Escape that gets past the page to the document, where the shell's keys live. */
+function escapesToDocument() {
+  const seen: string[] = [];
+  const listen = (e: KeyboardEvent) => { if (e.key === "Escape") seen.push(e.key); };
+  document.addEventListener("keydown", listen);
+  return { seen, stop: () => document.removeEventListener("keydown", listen) };
+}
+
+describe("Esc closes the source forms", () => {
+  it("Esc closes Add a source and Edit, returning the keyboard to the button that opened each", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ sources: [source("s1", "Prom")] }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    const doc = escapesToDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByLabelText("Address")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add a source" })));
+
+    await user.click(screen.getByRole("button", { name: "Edit Prom" }));
+    expect(await screen.findByRole("form", { name: "Edit Prom" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    doc.stop();
+    expect(screen.queryByRole("form", { name: "Edit Prom" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit Prom" })));
+    expect(doc.seen).toEqual([]);
+  });
+});

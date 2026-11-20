@@ -315,3 +315,43 @@ describe("Check data stays current", () => {
     expect(screen.queryByText("1 metric and 1 label visible to this project")).toBeNull();
   });
 });
+
+/** Records every Escape that gets past the page to the document, where the shell's keys live. */
+function escapesToDocument() {
+  const seen: string[] = [];
+  const listen = (e: KeyboardEvent) => { if (e.key === "Escape") seen.push(e.key); };
+  document.addEventListener("keydown", listen);
+  return { seen, stop: () => document.removeEventListener("keydown", listen) };
+}
+
+describe("Esc closes the add panels", () => {
+  it("Esc closes Use an existing source and returns the keyboard to its button", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    installFakeMonitoringApi({ sources: [prom], projects: [project("p1", "Dev")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Source")));
+    const doc = escapesToDocument();
+    await user.keyboard("{Escape}");
+    doc.stop();
+    expect(screen.queryByLabelText("Source")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Use an existing source" })));
+    expect(doc.seen).toEqual([]);
+  });
+
+  it("Esc closes Add a source by hand and returns the keyboard to its button", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ projects: [project("p1", "Dev")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    const doc = escapesToDocument();
+    await user.keyboard("{Escape}");
+    doc.stop();
+    expect(screen.queryByLabelText("Address")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add a source by hand" })));
+    expect(doc.seen).toEqual([]);
+    expect(api.state.sources).toHaveLength(0);
+  });
+});

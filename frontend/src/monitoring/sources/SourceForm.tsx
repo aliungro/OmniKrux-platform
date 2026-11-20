@@ -4,6 +4,7 @@ import { failure } from "../../api/http";
 import { createSource, testNewSource, testSource, updateSource } from "../api/client";
 import { invalidateMonitoring } from "../api/hooks";
 import type { AuthIn, AuthType, HeaderIn, SourceIn, SourceOut, SourcePatch, SourceType, TestOut } from "../api/types";
+import { escapeCloses } from "../focus";
 import { sourceTypeLabel } from "./sourceLabels";
 import s from "./SourceForm.module.css";
 
@@ -18,6 +19,8 @@ interface HeaderRow { key: number; name: string; value: string; saved: boolean }
 interface CommonProps {
   initial?: SourceOut;
   onCancel(): void;
+  /** Shown as an inline panel: Esc cancels it, as Cancel does. */
+  closeOnEscape?: boolean;
 }
 
 /** `save` stores the source and reports it; `collect` hands the entered source to `onCollect` and stores nothing. */
@@ -78,7 +81,7 @@ function Secret({ label, value, onChange, saved, multiline = false }: {
 }
 
 export function SourceForm(props: SourceFormProps) {
-  const { initial, onCancel, mode } = props;
+  const { initial, onCancel, mode, closeOnEscape = false } = props;
   const client = useQueryClient();
   const ids = useId();
   const address = useRef<HTMLInputElement>(null);
@@ -191,7 +194,7 @@ export function SourceForm(props: SourceFormProps) {
   const editHeader = (key: number, patch: Partial<HeaderRow>) => setHeaders((cur) => cur.map((h) => (h.key === key ? { ...h, ...patch } : h)));
 
   return (
-    <form className={s.form} onSubmit={save} noValidate aria-label={initial ? `Edit ${initial.name}` : "Add a source by hand"}>
+    <form className={s.form} onSubmit={save} noValidate onKeyDown={closeOnEscape ? escapeCloses(onCancel, busy) : undefined} aria-label={initial ? `Edit ${initial.name}` : "Add a source by hand"}>
       <h2 className={s.title}>{initial ? `Edit ${initial.name}` : "Add a source by hand"}</h2>
       <div className={s.field}>
         <label htmlFor={`${ids}-type`}>Type</label>

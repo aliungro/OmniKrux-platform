@@ -6,6 +6,7 @@ import { invalidateMonitoring, useGroups, useProjects } from "../api/hooks";
 import type { GroupOut } from "../api/types";
 import { DeleteReviewDialog } from "../DeleteReviewDialog";
 import { EditableName } from "../EditableName";
+import { escapeCloses } from "../focus";
 import { projectDot } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
@@ -40,7 +41,7 @@ function EditProjects({ group, onDone }: { group: GroupOut; onDone(): void }) {
   };
 
   return (
-    <div ref={first} className={s.panel}>
+    <div ref={first} className={s.panel} onKeyDown={escapeCloses(onDone, busy)}>
       {projects.isError && !projects.data && <p className={s.bad} role="alert">{failure(projects.error)}</p>}
       {projects.data && (
         <ProjectPicker projects={projects.data} picked={picked} legend="Projects"

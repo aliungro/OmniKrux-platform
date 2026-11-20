@@ -148,3 +148,28 @@ describe("Group focus and arrival", () => {
     expect(onMain()).toBe(true);
   });
 });
+
+/** Records every Escape that gets past the page to the document, where the shell's keys live. */
+function escapesToDocument() {
+  const seen: string[] = [];
+  const listen = (e: KeyboardEvent) => { if (e.key === "Escape") seen.push(e.key); };
+  document.addEventListener("keydown", listen);
+  return { seen, stop: () => document.removeEventListener("keydown", listen) };
+}
+
+describe("Esc closes Edit projects", () => {
+  it("closes the panel, keeps the projects and returns the keyboard to Edit projects", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1"])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    await user.click(await screen.findByRole("button", { name: "Edit projects" }));
+    await user.click(screen.getByRole("checkbox", { name: "Stage" }));
+    const doc = escapesToDocument();
+    await user.keyboard("{Escape}");
+    doc.stop();
+    expect(screen.queryByRole("checkbox", { name: "Stage" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit projects" })));
+    expect(doc.seen).toEqual([]);
+    expect(api.state.groups[0].project_ids).toEqual(["p1"]);
+  });
+});

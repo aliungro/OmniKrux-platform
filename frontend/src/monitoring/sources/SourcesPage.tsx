@@ -107,10 +107,10 @@ export default function SourcesPage() {
       </header>
 
       {editing?.kind === "new" && (
-        <SourceForm mode="save" onSaved={closeForm} onCancel={closeForm} />
+        <SourceForm mode="save" closeOnEscape onSaved={closeForm} onCancel={closeForm} />
       )}
       {editing?.kind === "edit" && editingSource && (
-        <SourceForm key={editingSource.id} mode="save" initial={editingSource} onSaved={closeForm} onCancel={closeForm} />
+        <SourceForm key={editingSource.id} mode="save" closeOnEscape initial={editingSource} onSaved={closeForm} onCancel={closeForm} />
       )}
 
       {pageError && <p className={s.note} role="alert">{pageError}</p>}
