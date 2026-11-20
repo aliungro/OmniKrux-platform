@@ -13,6 +13,13 @@ ADDED, then the watch stays open until `release`). Objects live in `objects[kind
 (namespace, name), "" for the namespace of a cluster-scoped object; `pods` is `objects["pods"]` and
 `events` is a list of its own.
 
+A service can be reached through the API server's proxy
+(`/api/v1/namespaces/{ns}/services/{name:port}/proxy/...`): `service_backends` maps
+(namespace, "name:port") or (namespace, "https:name:port") to the base URL of a real local server,
+and the request (method, rest of the path, query, body) is relayed to it, its status, body and
+content type relayed back. An unknown service answers 503 "no endpoints available"; with
+`proxy_forbidden` set every proxy request answers 403.
+
 Any served object can be replaced (PUT, honouring `metadata.resourceVersion` with a 409 like the
 API server, and `dryRun=All`) and patched (`application/merge-patch+json`, or
 `application/json-patch+json` with `test` / `add` / `replace` / `remove`; a failed `test` answers
@@ -45,6 +52,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import aiohttp
 import pytest
 from aiohttp import web
 
@@ -181,6 +189,9 @@ POD_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods/(?P<name>[^/]+)(
 PODS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods$")
 EVENTS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/events$")
 # /api/v1/... or /apis/{group}/{version}/...: the group, the version and the rest of the path.
+SERVICE_PROXY_ROUTE = re.compile(
+    r"^/api/v1/namespaces/(?P<ns>[^/]+)/services/(?P<svc>[^/]+)/proxy(?P<rest>/.*)?$"
+)
 API_PATH = re.compile(
     r"^/(?:api/(?P<core>v1)|apis/(?P<group>[^/]+)/(?P<version>[^/]+))(?P<rest>/.*)?$"
 )
@@ -328,6 +339,10 @@ class FakeKubeApi:
         self._evicting = 0
         # Every PUT and PATCH of an object: method, path, query, content type and body.
         self.writes: list[dict] = []
+        # (namespace, "name:port" or "https:name:port") -> base URL the service proxy relays to.
+        self.service_backends: dict[tuple[str, str], str] = {}
+        # True: every service proxy request answers 403, as when RBAC lacks `services/proxy`.
+        self.proxy_forbidden = False
         # (namespace, pod) -> [status field, container, states still to go through]
         self._starting: dict[tuple[str, str], list[tuple[str, str, list[dict]]]] = {}
 
@@ -350,6 +365,8 @@ class FakeKubeApi:
 
     async def _route(self, request: web.Request) -> web.StreamResponse:
         method, path = request.method, request.path
+        if match := SERVICE_PROXY_ROUTE.match(path):
+            return await self._proxy(request, match)
         if method == "GET":
             if path == "/version":
                 return web.json_response(VERSION)
@@ -390,6 +407,42 @@ class FakeKubeApi:
         if method == "DELETE" and (match := API_PATH.match(path)):
             return await self._delete(request, match)
         return not_found()
+
+    async def _proxy(self, request: web.Request, match: re.Match) -> web.Response:
+        """Relay a service proxy request to its backend, or refuse it like the API server."""
+        ns, svc = match["ns"], match["svc"]
+        if self.proxy_forbidden:
+            message = (
+                f'services "{svc}" is forbidden: User "fake" cannot get resource '
+                f'"services/proxy" in API group "" in the namespace "{ns}"'
+            )
+            return web.json_response(status_body(403, "Forbidden", message), status=403)
+        backend = self.service_backends.get((ns, svc))
+        if backend is None:
+            message = f'no endpoints available for service "{svc}"'
+            return web.json_response(status_body(503, "ServiceUnavailable", message), status=503)
+        url = backend.rstrip("/") + (match["rest"] or "/")
+        headers = {
+            name: value
+            for name, value in request.headers.items()
+            if name.lower() in ("content-type", "accept", "x-scope-orgid")
+        }
+        async with (
+            aiohttp.ClientSession() as session,
+            session.request(
+                request.method,
+                url,
+                params=list(request.query.items()),
+                data=await request.read() or None,
+                headers=headers,
+                ssl=False,
+            ) as upstream,
+        ):
+            return web.Response(
+                body=await upstream.read(),
+                status=upstream.status,
+                headers={"Content-Type": upstream.headers.get("Content-Type", "text/plain")},
+            )
 
     async def _metrics(self, path: str) -> web.Response:
         """The metrics.k8s.io API: discovery, lists and single reads, per `metrics_mode`."""
@@ -1195,6 +1248,30 @@ async def serve_fake_api():
     finally:
         server.release.set()
         await runner.cleanup()
+
+
+def service(
+    namespace: str,
+    name: str,
+    *,
+    labels: dict[str, str] | None = None,
+    ports: list[dict],
+    cluster_ip: str = "10.96.0.10",
+    selector: dict[str, str] | None = None,
+) -> dict:
+    """A Service object as the API serves it, for `objects["services"][(namespace, name)]`."""
+    spec: dict = {"ports": ports, "clusterIP": cluster_ip}
+    if selector is not None:
+        spec["selector"] = selector
+    return {
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-svc-{namespace}-{name}",
+            "labels": dict(labels or {}),
+        },
+        "spec": spec,
+    }
 
 
 @pytest.fixture

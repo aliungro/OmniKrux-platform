@@ -4,15 +4,26 @@ import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
+from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.main import create_app
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
 from omnikrux.monitoring.sources.store import NewSource, SourceStore
 from omnikrux.security.secrets import SecretBox
+from tests.fakekube import kubeconfig_for
+from tests.monitoring.fakes import (
+    TlsMaterial,
+    make_tls_material,
+    serve_fake_grafana,
+    serve_fake_loki,
+    serve_fake_prometheus,
+)
 
 _names = itertools.count(1)
 
@@ -62,3 +73,55 @@ def monitoring_client(tmp_path):
     app = create_app(Settings(data_dir=tmp_path, kubeconfig="", in_container=False))
     with TestClient(app) as client:
         yield client
+
+
+@pytest.fixture
+async def monitoring_app(tmp_path):
+    """The real app with its lifespan running, and an httpx client talking to it in-process."""
+    app = create_app(
+        Settings(data_dir=tmp_path, kubeconfig="", in_container=False, rewrite_loopback=False)
+    )
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http:
+            yield http, app
+
+
+@pytest.fixture
+async def kube_cluster(fake_api, monitoring_app) -> str:
+    """Register the fake Kubernetes API as a cluster of the running app; return its id."""
+    _, app = monitoring_app
+    [info] = await app.state.registry.upsert_from_kubeconfig(
+        yaml.safe_dump(kubeconfig_for(fake_api)), rewrite_loopback=False, source=SOURCE_UPLOAD
+    )
+    return info.id
+
+
+@pytest.fixture
+async def fake_prometheus():
+    async with serve_fake_prometheus() as server:
+        yield server
+
+
+@pytest.fixture
+async def fake_loki():
+    async with serve_fake_loki() as server:
+        yield server
+
+
+@pytest.fixture
+async def fake_grafana():
+    async with serve_fake_grafana() as server:
+        yield server
+
+
+@pytest.fixture(scope="session")
+def fake_tls() -> TlsMaterial:
+    return make_tls_material()
+
+
+@pytest.fixture
+async def fake_prometheus_mtls(fake_tls):
+    """An HTTPS Prometheus that requires a client certificate signed by `fake_tls`'s CA."""
+    async with serve_fake_prometheus(fake_tls, mtls=True) as server:
+        yield server
