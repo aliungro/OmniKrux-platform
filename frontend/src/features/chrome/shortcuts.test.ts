@@ -109,4 +109,18 @@ describe("shortcut registry", () => {
     expect(SHORTCUTS.some((s) => (s.id as string) === "closeLog")).toBe(false);
     expect(SHORTCUTS.some((s) => s.label.includes("Close the focused log"))).toBe(false);
   });
+
+  it("the apps label lists Monitoring", () => {
+    expect(SHORTCUTS.find((s) => s.id === "apps")?.label).toBe("Switch app (Kubernetes 1, Monitoring 2, Audit 8, Settings 9)");
+  });
+
+  it("help shows the Monitoring group only in Monitoring", () => {
+    expect(allGroups(undefined, "kubernetes").map(([t]) => t)).not.toContain("Monitoring");
+    expect(allGroups("pods").map(([t]) => t)).not.toContain("Monitoring");
+    const monitoring = allGroups(undefined, "monitoring").find(([t]) => t === "Monitoring")![1];
+    expect(monitoring.map((s) => [s.id, s.keys, s.label])).toEqual([
+      ["monitoringFind", ["/"], "Find a project, group or source"],
+      ["monitoringTree", ["↑ ↓", "← →", "Enter"], "In the sidebar: move, close or open a group, open the item"],
+    ]);
+  });
 });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { hashFor, parseHash } from "../../route";
+import { sameMonitoringView, type MonitoringView } from "../../monitoring/shell/tabState";
 import { kindView, sameView, workspaceReducer, type KubeView, type Tab, type Workspace, type WorkspaceAction } from "./workspace";
 
 type Move<V> = V | ((view: V) => V);
@@ -38,7 +39,7 @@ export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceActio
   // keeps the tab needs no browser write at all.
   const replace = useCallback(() => {
     const state = current.current;
-    const hash = hashFor(state.app, state.kubernetes.active);
+    const hash = hashFor(state.app, state.app === "monitoring" ? state.monitoring.active : state.kubernetes.active);
     if (location.hash === hash && history.state?.omnikrux === seq.current) return;
     write("replaceState", seq.current, hash);
   }, []);
@@ -59,6 +60,9 @@ export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceActio
     if (target.app === "kubernetes" && target.tab && state.kubernetes.tabs.some((t) => t.id === target.tab)) {
       dispatch({ type: "activateTab", id: target.tab });
     }
+    if (target.app === "monitoring" && target.tab && state.monitoring.tabs.some((t) => t.id === target.tab)) {
+      dispatch({ type: "monitoring", action: { type: "activateTab", id: target.tab } });
+    }
   }, [dispatch]);
 
   useEffect(() => {
@@ -76,6 +80,11 @@ export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceActio
           current.current = workspaceReducer(state, action);
           dispatch(action);
         }
+        if (state.app === "monitoring" && n !== seq.current) {
+          const action = { type: "monitoring", action: { type: n < seq.current ? "back" : "forward", id: state.monitoring.active } } as const;
+          current.current = workspaceReducer(state, action);
+          dispatch(action);
+        }
         seq.current = n;
       }
       replace();
@@ -84,7 +93,7 @@ export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceActio
     return () => window.removeEventListener("popstate", onPopState);
   }, [applyLink, dispatch, replace]);
 
-  useEffect(() => { replace(); }, [ws.app, ws.kubernetes.active, replace]);
+  useEffect(() => { replace(); }, [ws.app, ws.kubernetes.active, ws.monitoring.active, replace]);
 
   const navigate = useCallback((id: string, view: Move<KubeView>, mode: Mode) => {
     const state = current.current;
@@ -108,6 +117,42 @@ export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceActio
     if (state.app === "kubernetes" && id === state.kubernetes.active) replace();
   }, [dispatch, replace]);
 
+  // Monitoring tabs: the same browser entries, written only while Monitoring is shown.
+  const monitoringView = useCallback((id: string): MonitoringView | undefined => current.current.monitoring.tabs.find((t) => t.id === id)?.view, []);
+
+  const navigateMonitoring = useCallback((id: string, view: MonitoringView, mode: Mode) => {
+    const state = current.current;
+    const tab = state.monitoring.tabs.find((t) => t.id === id);
+    if (!tab || sameMonitoringView(tab.view, view)) return;
+    const action = { type: "monitoring", action: { type: "navigate", id, view, mode } } as const;
+    current.current = workspaceReducer(state, action);
+    dispatch(action);
+    if (state.app !== "monitoring" || id !== state.monitoring.active) return;
+    if (mode === "push") write("pushState", ++seq.current, hashFor("monitoring", id));
+    else replace();
+  }, [dispatch, replace]);
+
+  const stepMonitoring = useCallback((id: string, direction: Direction) => {
+    const state = current.current;
+    const action = { type: "monitoring", action: { type: direction, id } } as const;
+    current.current = workspaceReducer(state, action);
+    dispatch(action);
+    if (state.app === "monitoring" && id === state.monitoring.active) replace();
+  }, [dispatch, replace]);
+
+  const monitoringScrolls = useRef(new Map<string, { top: number; timer: ReturnType<typeof setTimeout> }>());
+  const flushMonitoringScroll = useCallback((id: string) => {
+    const entry = monitoringScrolls.current.get(id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    monitoringScrolls.current.delete(id);
+    dispatch({ type: "monitoring", action: { type: "scroll", id, top: entry.top } });
+  }, [dispatch]);
+  const setMonitoringScroll = useCallback((id: string, top: number) => {
+    clearTimeout(monitoringScrolls.current.get(id)?.timer);
+    monitoringScrolls.current.set(id, { top, timer: setTimeout(() => flushMonitoringScroll(id), 200) });
+  }, [flushMonitoringScroll]);
+
   const pending = useRef(new Map<string, { top: number; timer: ReturnType<typeof setTimeout> }>());
   const flushScroll = useCallback((id: string) => {
     const entry = pending.current.get(id);
@@ -121,7 +166,10 @@ export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceActio
     pending.current.set(id, { top, timer: setTimeout(() => flushScroll(id), 200) });
   }, [flushScroll]);
 
-  return useMemo(() => ({ navigate, step, setScroll, flushScroll }), [navigate, step, setScroll, flushScroll]);
+  return useMemo(() => ({
+    navigate, step, setScroll, flushScroll,
+    monitoringView, navigateMonitoring, stepMonitoring, setMonitoringScroll, flushMonitoringScroll,
+  }), [navigate, step, setScroll, flushScroll, monitoringView, navigateMonitoring, stepMonitoring, setMonitoringScroll, flushMonitoringScroll]);
 }
 
 export type WorkspaceNav = ReturnType<typeof useWorkspaceNav>;
@@ -146,4 +194,24 @@ export function usePaneNav(history: WorkspaceNav, tab: Tab<KubeView>, flushOnUnm
 export function useTabNav(ws: Workspace, dispatch: (action: WorkspaceAction) => void): TabNav<KubeView> {
   const history = useWorkspaceNav(ws, dispatch);
   return usePaneNav(history, ws.kubernetes.tabs.find((t) => t.id === ws.kubernetes.active)!);
+}
+
+/** A Monitoring tab's navigation; a function view is resolved against the tab's latest view first. */
+export function useMonitoringNav(history: WorkspaceNav, tab: Tab<MonitoringView>): TabNav<MonitoringView> {
+  const id = tab.id;
+  const commands = useMemo(() => ({
+    navigate: (view: Move<MonitoringView>, mode: Mode) => {
+      const from = history.monitoringView(id);
+      if (!from) return;
+      history.navigateMonitoring(id, typeof view === "function" ? view(from) : view, mode);
+    },
+    back: () => history.stepMonitoring(id, "back"),
+    forward: () => history.stepMonitoring(id, "forward"),
+    setScroll: (top: number) => history.setMonitoringScroll(id, top),
+  }), [history, id]);
+  useEffect(() => () => history.flushMonitoringScroll(id), [history, id]);
+  return {
+    view: tab.view, canBack: tab.back.length > 0, canForward: tab.forward.length > 0,
+    scrollTop: tab.scrollTop, ...commands,
+  };
 }

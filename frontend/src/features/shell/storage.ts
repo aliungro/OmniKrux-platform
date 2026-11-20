@@ -3,6 +3,7 @@ import { isKindKey } from "../../route";
 import { NO_AUDIT_FILTER, type AuditFilters } from "../audit/useAudit";
 import { validColumnFilter, validSort } from "../territories/columnFilters";
 import { FILTER_STATUSES, type FilterStatus } from "../territories/model";
+import { parseMonitoringTabs } from "../../monitoring/shell/tabState";
 import { defaultWorkspace, HOME, MAX_BACK, MAX_CLOSED, newTabId, prepareWorkspaceAction, workspaceReducer, type AppId, type KubeView, type Tab, type Workspace, type WorkspaceAction } from "./workspace";
 
 export const STORAGE_KEY = "omnikrux.workspace";
@@ -40,8 +41,10 @@ export function parseWorkspace(raw: string | null): {workspace:Workspace;problem
   if (reset) tabs.push({id:newTabId(),view:HOME,back:[],forward:[],scrollTop:0});
   const closed: Workspace["kubernetes"]["closed"]=[];
   if (Array.isArray(k.closed)) for (const item of k.closed) { if (!record(item) || typeof item.closedAt!=="number" || !Number.isFinite(item.closedAt)) continue; const t=tab(item.tab); if (!t || seen.has(t.id)) continue; seen.add(t.id); closed.push({tab:t,closedAt:item.closedAt}); if (closed.length===MAX_CLOSED) break; }
-  const app: AppId = value.app === "audit" || value.app === "settings" ? value.app : "kubernetes";
-  const workspace: Workspace={version:1,app,kubernetes:{tabs,active:typeof k.active==="string" && tabs.some(t=>t.id===k.active) ? k.active : tabs[0].id,closed},audit:{filters:audit(record(value.audit)?value.audit.filters:null)}};
+  const app: AppId = value.app === "monitoring" || value.app === "audit" || value.app === "settings" ? value.app : "kubernetes";
+  // A workspace saved before Monitoring has none: a fresh Home tab, no notice.
+  const monitoring=parseMonitoringTabs(value.monitoring); dropped+=monitoring.dropped;
+  const workspace: Workspace={version:1,app,kubernetes:{tabs,active:typeof k.active==="string" && tabs.some(t=>t.id===k.active) ? k.active : tabs[0].id,closed},monitoring:monitoring.tabs,audit:{filters:audit(record(value.audit)?value.audit.filters:null)}};
   const message=dropped===1 ? "1 saved tab couldn't be read and was left out" : `${dropped} saved tabs couldn't be read and were left out`;
   return {workspace,problem:malformedTabs?{text:"the saved tab list is missing or invalid",reset:true}:dropped?{text:message,reset}:null};
 }

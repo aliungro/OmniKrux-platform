@@ -48,8 +48,11 @@ const deferredModules = [
   "/features/settings/AccountsSection.tsx", "/features/settings/ClustersSection.tsx",
   "/features/settings/ConnectAccountDialog.tsx", "/features/settings/ImportKubeconfig.tsx",
   "/features/territories/TerritoryTable.tsx", "/features/inspector/Inspector.tsx",
-  "/node_modules/@xterm/", "/node_modules/@codemirror/",
+  "/node_modules/@xterm/", "/node_modules/@codemirror/", "/monitoring/MonitoringApp.tsx",
 ];
+// The Monitoring app loads lazily: only its tab state ships with the shell.
+const MONITORING = "/src/monitoring/";
+const EAGER_MONITORING = new Set(["/src/monitoring/shell/tabState.ts"]);
 let bytes = 0;
 let gzipBytes = 0;
 for (const chunk of chunks.values()) {
@@ -65,5 +68,8 @@ for (const path of deferredModules) {
   const owners = [...chunks.values()].filter(chunk => chunk.modules.some(id => id.includes(path)));
   if (!owners.length || owners.some(chunk => initial.has(chunk.file))) errors.push(path);
 }
+const eagerMonitoring = [...chunks.values()].filter(chunk => initial.has(chunk.file))
+  .flatMap(chunk => chunk.modules.filter(id => id.includes(MONITORING) && !EAGER_MONITORING.has(id.slice(id.indexOf(MONITORING)))));
 console.log("Initial JavaScript (raw/gzip)", bytes, gzipBytes);
+if (eagerMonitoring.length) throw new Error("Monitoring must load lazily; in the initial bundle: " + eagerMonitoring.join(", "));
 if (errors.length || bytes > 512180) throw new Error("Startup budget 512180 bytes; missing or eager modules: " + errors.join(", "));

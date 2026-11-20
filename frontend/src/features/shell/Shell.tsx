@@ -19,13 +19,15 @@ import { ForwardsMenu } from "../portforward/ForwardsMenu";
 import { forgetClusterForwards, usePortForwards } from "../portforward/usePortForwards";
 import { StorageSaveNotices } from "../settings/StorageSaveNotices";
 import { APPS, appForKey } from "./apps";
-import { usePaneNav, useWorkspaceNav, type WorkspaceNav } from "./browserHistory";
+import { useMonitoringNav, usePaneNav, useWorkspaceNav, type WorkspaceNav } from "./browserHistory";
 import { Rail } from "./Rail";
 import { ShellBridge, type PaletteTarget } from "./ShellBridge";
 import { useWorkspace } from "./storage";
 import { tabLabel } from "./tabLabel";
 import { kindView, type AppId, type KubeView, type Tab } from "./workspace";
 import { WorkspaceTabs } from "./WorkspaceTabs";
+import type { MonitoringAppProps } from "../../monitoring/MonitoringApp";
+import type { MonitoringTabAction } from "../../monitoring/shell/tabState";
 import s from "./Shell.module.css";
 
 interface PaneProps extends Omit<KubernetesTabProps, "nav" | "paneActive"> {
@@ -69,6 +71,7 @@ function KubePane({ tab, title, history, active, split, zoneActive, onFocusPane,
 
 const AuditView = lazy(() => import("../audit/AuditView").then(m => ({ default: m.AuditView })));
 const SettingsView = lazy(() => import("../settings/SettingsView").then(m => ({ default: m.SettingsView })));
+const MonitoringApp = lazy(() => import("../../monitoring/MonitoringApp"));
 
 export function Shell() {
   const client = useQueryClient();
@@ -77,6 +80,8 @@ export function Shell() {
   const active = tabs.find((t) => t.id === activeId)!;
   const history = useWorkspaceNav(ws, dispatch);
   const nav = usePaneNav(history, active, false);
+  const monitoringTab = ws.monitoring.tabs.find((t) => t.id === ws.monitoring.active)!;
+  const monitoringNav = useMonitoringNav(history, monitoringTab);
   const clusters = useClusters().data ?? [];
   const kindsQuery = useKinds();
   const kinds = kindsQuery.data?.kinds;
@@ -93,6 +98,7 @@ export function Shell() {
   const main = useRef<HTMLElement>(null);
   const dockRef = useRef<DockHandle>(null);
   const kube = ws.app === "kubernetes";
+  const monitoring = ws.app === "monitoring";
   // Outside Kubernetes no view holds a watch. Dock sessions and forwards still learn of a removed
   // cluster from clusterLifecycle: the registry poll (useClusters, every 15 s) and removals made
   // here; the server closes the removed cluster's sockets itself.
@@ -142,6 +148,12 @@ export function Shell() {
   const closeTab = (id = activeId) => {
     dispatch({ type: "closeTab", id });
     if (id === activeId) focusView();
+  };
+  const dispatchMonitoring = useCallback((action: MonitoringTabAction) => dispatch({ type: "monitoring", action }), [dispatch]);
+  const openSettings = useCallback(() => switchApp("settings"), [switchApp]);
+  const openKubernetes = useCallback(() => switchApp("kubernetes"), [switchApp]);
+  const monitoringProps: MonitoringAppProps = {
+    tabs: ws.monitoring, nav: monitoringNav, dispatchTabs: dispatchMonitoring, onOpenSettings: openSettings, onOpenKubernetes: openKubernetes,
   };
   const editPinned = useCallback(() => { switchApp("settings"); setSettingsSection("pinned-kinds"); }, [switchApp]);
   const openView = useCallback((view: KubeView, split?: boolean) => {
@@ -204,6 +216,19 @@ export function Shell() {
     if (pressed("help", e)) { e.preventDefault(); setHelp(true); return; }
     // Alt+Down: into the logs, from any app (the dock is shared). Held, it moves in once.
     if (pressed("enterLogs", e)) { e.preventDefault(); if (!e.repeat) dockRef.current?.enter(); return; }
+    if (monitoring) {
+      // Monitoring's own tabs while it is shown; the Kubernetes tabs stay as they are.
+      if (pressed("newTab", e)) dispatchMonitoring({ type: "newTab" });
+      else if (pressed("closeTab", e)) dispatchMonitoring({ type: "closeTab", id: ws.monitoring.active });
+      else if (pressed("nextTab", e)) dispatchMonitoring({ type: "nextTab" });
+      else if (pressed("previousTab", e)) dispatchMonitoring({ type: "previousTab" });
+      else if (pressed("back", e)) monitoringNav.back();
+      else if (pressed("forward", e)) monitoringNav.forward();
+      else return;
+      e.preventDefault();
+      focusView();
+      return;
+    }
     if (!kube) return;
     if (pressed("newTab", e)) newTab();
     else if (pressed("closeTab", e)) closeTab();
@@ -227,10 +252,10 @@ export function Shell() {
         <Rail app={ws.app} onSelect={switchApp} />
         <div className={s.content}>
           <TopBar appName={APPS.find((a) => a.id === ws.app)?.title} clusters={activeScope}
-            nav={kube ? nav : undefined} forwards={<ForwardsMenu openRequest={forwardsAsk} />} onPalette={() => setPalette("all")} />
-          <WorkspaceTabs app={ws.app} tabs={tabs} active={activeId} clusters={clusters} kinds={kinds}
+            nav={kube ? nav : monitoring ? monitoringNav : undefined} forwards={<ForwardsMenu openRequest={forwardsAsk} />} onPalette={() => setPalette("all")} />
+          {!monitoring && <WorkspaceTabs app={ws.app} tabs={tabs} active={activeId} clusters={clusters} kinds={kinds}
             onActivate={activateTab} onClose={closeTab} onNew={newTab} onEditPinned={editPinned} onSplit={splitTab}
-            onOpenSplit={view => openView(view, true)} split={ws.split} />
+            onOpenSplit={view => openView(view, true)} split={ws.split} />}
           {ws.app !== "settings" && <StorageSaveNotices workspaceProblem={saveProblem} className={s.saveProblem} />}
           <main ref={main} className={s.main} tabIndex={-1} data-page-keys>
             {kube ? (
@@ -246,6 +271,10 @@ export function Shell() {
                   ))}
                 </div>
               </>
+            ) : monitoring ? (
+              <ViewBoundary key="monitoring" label="Monitoring">
+                <MonitoringApp {...monitoringProps} />
+              </ViewBoundary>
             ) : ws.app === "audit" ? (
               <ViewBoundary key="audit" label="the audit log">
                 <AuditView filters={ws.audit.filters} onFilters={(filters) => dispatch({ type: "auditFilters", filters })} />
@@ -261,7 +290,7 @@ export function Shell() {
           {(kind || zone === "logs" || zone === "shell") && <ShortcutBar kind={kind} zone={zone ?? "table"} onOpen={() => setHelp(true)} />}
         </div>
       </div>
-      {help && <AllShortcuts groups={allGroups(kind)} onClose={() => setHelp(false)} />}
+      {help && <AllShortcuts groups={allGroups(kind, ws.app)} onClose={() => setHelp(false)} />}
       {palette && <CommandPalette mode={palette} kinds={kinds} kindsError={kindsError}
         selection={activeTarget?.selection ?? null} onKind={onKind} onRowAction={activeTarget?.onRowAction ?? (() => {})}
         onAudit={() => switchApp("audit")} onSettings={() => switchApp("settings")} onNewTab={newTab}

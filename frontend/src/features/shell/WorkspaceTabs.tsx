@@ -50,6 +50,8 @@ export function WorkspaceTabs({ app, tabs, active, clusters, kinds, onActivate, 
     refs.current[next]?.focus();
   };
 
+  // Monitoring draws its own tabs inside the app.
+  if (app === "monitoring") return null;
   if (app !== "kubernetes") {
     const title = app === "audit" ? "Audit log" : "Settings";
     return <div className={s.strip} role="tablist" aria-label={`${title} tabs`} data-page-keys>

@@ -1,4 +1,5 @@
 import { APPS } from "../shell/apps";
+import type { AppId } from "../shell/workspace";
 /**
  * The one list of keyboard shortcuts. The table reads its row keys here, the inspector its tool
  * keys, the palette its keycaps, the dock and the log pane their keys, the shortcut bar its strip
@@ -42,7 +43,8 @@ export type ShortcutId =
   | "pinLogs" | "enterLogs" | "deleteFocused" | "backToTable" | "scrollLog" | "logEnds" | "pinFollow"
   | "leaveLogs"
   | "sessionTabs"
-  | "confirmReview";
+  | "confirmReview"
+  | "monitoringFind" | "monitoringTree";
 
 export interface Shortcut {
   id: ShortcutId;
@@ -56,7 +58,7 @@ export interface Shortcut {
    * Where it works: on a table row (and in its open details), anywhere on the page, in a log pane,
    * or in the dock. Also the "?" sheet's group.
    */
-  scope: "row" | "global" | "logs" | "dock" | "shell";
+  scope: "row" | "global" | "logs" | "dock" | "shell" | "monitoring";
   /** The kinds it acts on; absent: every kind (a row key still needs the row to offer it). */
   kinds?: string[];
   /** `KeyboardEvent.key` values that trigger it, where something reads them from here. */
@@ -132,6 +134,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "leaveLogs", scope: "logs", keys: ["Alt ↑"], match: ["ArrowUp"], alt: true, label: "Back to the table, from a log or a shell" },
   // In the dock.
   { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch the bottom dock between one pane and side by side" },
+  // In the Monitoring app; the "?" sheet lists them only there.
+  { id: "monitoringFind", scope: "monitoring", keys: ["/"], match: ["/"], label: "Find a project, group or source" },
+  { id: "monitoringTree", scope: "monitoring", keys: ["↑ ↓", "← →", "Enter"], label: "In the sidebar: move, close or open a group, open the item" },
 ];
 
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));
@@ -199,11 +204,15 @@ export function barFor(kindKey: string | undefined, zone: KeyboardZone, mac: boo
 
 export type ShortcutGroup = readonly [title: string, rows: readonly Shortcut[]];
 
-const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs", row: "Table", global: "Anywhere", logs: "Logs", dock: "Dock" };
+const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs", row: "Table", global: "Anywhere", logs: "Logs", dock: "Dock", monitoring: "Monitoring" };
 
-/** The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's. */
-export function allGroups(kindKey?: string): ShortcutGroup[] {
-  return (["shell", "row", "logs", "global", "dock"] as const).map((scope) => [
+/**
+ * The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's.
+ * The Monitoring group is there only while Monitoring is shown (`app`).
+ */
+export function allGroups(kindKey?: string, app?: AppId): ShortcutGroup[] {
+  const scopes: Shortcut["scope"][] = app === "monitoring" ? ["shell", "monitoring", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
+  return scopes.map((scope) => [
     GROUP_TITLES[scope],
     SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey))),
   ]);
