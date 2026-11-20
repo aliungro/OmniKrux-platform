@@ -2,6 +2,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type { QueryErrorCode, QueryRequest, QueryResponse } from "./types";
 
 export const NETWORK_MESSAGE = "OmniKrux didn't answer. Check that it's running, then try again.";
+export const UNREADABLE_ANSWER = "OmniKrux's answer couldn't be read. Check that nothing between you and it changes its answers, then try again.";
 
 const CODES: readonly QueryErrorCode[] = [
   "not_found", "not_linked", "bad_request", "bad_query", "unreachable", "timeout", "unauthorized", "too_large", "tool_error",
@@ -61,7 +62,12 @@ export async function runQuery(req: QueryRequest, signal?: AbortSignal): Promise
     throw new QueryFailure(0, "network", NETWORK_MESSAGE);
   }
   if (!res.ok) throw await failureOf(res);
-  return (await res.json()) as QueryResponse;
+  try {
+    return (await res.json()) as QueryResponse;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    throw new QueryFailure(res.status, "bad_request", UNREADABLE_ANSWER);
+  }
 }
 
 /** A query kept in the cache; `null` waits. Never retried: a failure's words are the answer. */

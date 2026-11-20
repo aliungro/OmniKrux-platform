@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QueryFailure, runQuery } from "./query";
+import { QueryFailure, runQuery, UNREADABLE_ANSWER } from "./query";
 import type { QueryRequest, QueryResponse } from "./types";
 
 const req: QueryRequest = { source_id: "s1", project_id: "p1", kind: "instant", query: "up" };
@@ -43,6 +43,13 @@ describe("runQuery", () => {
 
     vi.stubGlobal("fetch", answer({ detail: { code: "nonsense", message: "Odd." } }, 500));
     expect(await runQuery(req).catch((e) => e)).toMatchObject({ code: "bad_request", message: "Odd." });
+  });
+
+  it("an answer that isn't JSON fails in words, not as a parse error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<html>proxy page</html>", { status: 200, headers: { "content-type": "text/html" } })));
+    const odd = await runQuery(req).catch((e) => e);
+    expect(odd).toBeInstanceOf(QueryFailure);
+    expect(odd).toMatchObject({ status: 200, code: "bad_request", message: UNREADABLE_ANSWER });
   });
 
   it("lets an abort through unchanged", async () => {
