@@ -1,6 +1,6 @@
 # OmniKrux guides
 
-OmniKrux is a local infrastructure console: a FastAPI backend and a React frontend, shipped as one Docker image. Today it has one working app, Kubernetes, plus the shared Audit and Settings pages.
+OmniKrux is a local infrastructure console: a FastAPI backend and a React frontend, shipped as one Docker image. Today it has two apps, Kubernetes and Monitoring (in development), plus the shared Audit and Settings pages.
 
 These guides describe what the code does now. The [project README](../../README.md) stays the full reference for run options, environment variables and troubleshooting notes.
 
@@ -11,6 +11,7 @@ These guides describe what the code does now. The [project README](../../README.
 | [Getting started](user/getting-started.md) | Run the image, mount a kubeconfig, open the console and look around. |
 | [Kubernetes](user/kubernetes.md) | Browse clusters and kinds, read details, logs and shells, change things safely, forward ports, use tabs and shortcuts. |
 | [Cloud accounts and clusters](user/cloud.md) | Connect Azure, AWS, Google Cloud or Oracle Cloud and add the clusters OmniKrux finds. |
+| [Monitoring](user/monitoring.md) | Set up projects, sources and groups, and query them through OmniKrux. |
 | [Audit and Settings](user/audit-and-settings.md) | Read the audit log, manage pinned kinds, clusters and accounts. |
 
 ## For people working on OmniKrux
@@ -20,6 +21,7 @@ These guides describe what the code does now. The [project README](../../README.
 | [Setup](developer/setup.md) | Install the tools, run the backend and frontend, create the kind dev cluster. |
 | [Testing](developer/testing.md) | Run the exact gates before you commit. |
 | [Architecture](developer/architecture.md) | Find your way around the code; see how a change is applied and how a new app joins the rail. |
+| [Monitoring](developer/monitoring.md) | Find your way around the Monitoring code, its connectors and its tests. |
 | [Releasing](developer/releasing.md) | Build the image, tag a version and push. |
 
 ## Conventions

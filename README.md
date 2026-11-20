@@ -117,6 +117,10 @@ OMNIKRUX_LIVE_CLOUDS=gcp OMNIKRUX_LIVE_GCP_PROJECT=my-project python -m uv run p
 
 Run the command without the live opt-in to verify that the live checks are skipped.
 
+## Monitoring
+
+Monitoring (in development) is the second app in the rail, opened with `Alt 2`. It connects projects to the Prometheus-compatible and Loki tools you already run, shows each project only its own part of them through label filters, and records its changes in Audit. Dashboards, Explore and Alerts come in later updates. See the [user guide](docs/guide/user/monitoring.md) and the [developer guide](docs/guide/developer/monitoring.md).
+
 ## Finding your way
 
 The left rail switches between Kubernetes, Audit and Settings. Kubernetes starts on Home, with a search for clusters, kinds and pods and a live card for each cluster. Open a cluster card to browse its pods; Home health reports failing pods in rose and pods needing attention in amber. Connection issues appear first under **Problems right now**, with **Open cluster** to inspect that cluster. Cloud connection messages use safe retry guidance. Clusters that are updating or unavailable do not count as healthy; **Partial coverage** means only some clusters have current Pod status.
