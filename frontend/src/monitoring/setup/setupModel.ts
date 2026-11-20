@@ -16,6 +16,8 @@ export type SetupPick = {
   filter: string;
   origin: FilterOrigin;
   reason: string | null;
+  /** The cluster a filter suggestion was asked for; it goes with the pick, so a new pick is asked again. */
+  suggestedFor?: string;
 };
 
 export type SetupDraft = {

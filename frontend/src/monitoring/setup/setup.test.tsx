@@ -50,6 +50,19 @@ const continueButton = () => screen.getByRole("button", { name: "Continue" }) as
 const selectedTab = () => screen.getByRole("tab", { selected: true });
 const setupPosts = (api: ReturnType<typeof install>) => api.requests.filter((r) => r.method === "POST" && r.url === "/api/monitoring/setup");
 
+const PROD = "prod-east";
+const twoClusters = [...clusters, { id: "c2", name: PROD, provider: "aks", state: "ready" }];
+function installTwo(extra: Partial<FakeMonitoringState> = {}) {
+  return installFakeMonitoringApi({
+    discovery: { c1: PROM_AND_LOKI, c2: { ...found(tool("prometheus", "reachable")), cluster_id: "c2", cluster_name: PROD } },
+    suggestion: KEEPS, ...extra,
+  }, async (url: string) => json(url === "/api/clusters" ? twoClusters : []));
+}
+const pickCluster = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
+  await user.click(screen.getByRole("radio", { name: /A Kubernetes cluster/ }));
+  await user.click(await screen.findByRole("radio", { name: new RegExp(name) }));
+};
+
 describe("Setup page", () => {
   it("a cluster start opens on step 2 with what was found", async () => {
     install();
@@ -249,5 +262,109 @@ describe("Setup page", () => {
     expect(screen.getByText("Central Prometheus · existing")).toBeTruthy();
     expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("");
     expect((screen.getByRole("button", { name: "Create project" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("suggestions are asked again after going back to the same cluster", async () => {
+    const user = userEvent.setup();
+    installTwo();
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await screen.findByRole("heading", { name: "What to monitor" });
+    await pickCluster(user, CLUSTER);
+    await user.click(continueButton());
+    const first = await screen.findByRole("textbox", { name: "Filter for Prometheus" }) as HTMLInputElement;
+    await waitFor(() => expect(first.value).toBe('cluster="kind"'));
+    await user.click(screen.getByRole("button", { name: "+ Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    await user.click(screen.getByRole("button", { name: "Use this source" }));
+    const hand = await screen.findByRole("textbox", { name: "Filter for Prometheus · prom.example" }) as HTMLInputElement;
+    await waitFor(() => expect(hand.value).toBe('cluster="kind"'));
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByRole("radio", { name: new RegExp(PROD) }));
+    await user.click(screen.getByRole("radio", { name: new RegExp(CLUSTER) }));
+    await user.click(continueButton());
+    await screen.findByRole("heading", { name: `What we found in ${CLUSTER}` });
+    const again = await screen.findByRole("textbox", { name: "Filter for Prometheus" }) as HTMLInputElement;
+    await waitFor(() => expect(again.value).toBe('cluster="kind"'));
+    const handAgain = screen.getByRole("textbox", { name: "Filter for Prometheus · prom.example" }) as HTMLInputElement;
+    await waitFor(() => expect(handAgain.value).toBe('cluster="kind"'));
+    expect(within(screen.getByRole("group", { name: "Prometheus" })).getByText(KEEPS.reason as string)).toBeTruthy();
+  });
+
+  it("the default name follows the cluster until a name is typed", async () => {
+    const user = userEvent.setup();
+    installTwo({ sources: [source("s1", "Central Prometheus")] });
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await screen.findByRole("heading", { name: "What to monitor" });
+    const toReview = async () => {
+      await user.click(continueButton());
+      await waitFor(() => expect(continueButton().disabled).toBe(false));
+      await user.click(continueButton());
+      return await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    };
+    const backToStart = async () => {
+      await user.click(screen.getByRole("button", { name: "Back" }));
+      await user.click(screen.getByRole("button", { name: "Back" }));
+    };
+    await pickCluster(user, CLUSTER);
+    expect((await toReview()).value).toBe(CLUSTER);
+    await backToStart();
+    await user.click(screen.getByRole("radio", { name: new RegExp(PROD) }));
+    expect((await toReview()).value).toBe(PROD);
+    await backToStart();
+    await user.click(screen.getByRole("radio", { name: /Something of your own/ }));
+    await user.click(continueButton());
+    await user.click(within(screen.getByRole("group", { name: "Use an existing source" })).getByRole("checkbox", { name: /Central Prometheus/ }));
+    await user.click(continueButton());
+    const empty = await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    expect(empty.value).toBe("");
+    await user.type(empty, "Shop");
+    await backToStart();
+    await pickCluster(user, CLUSTER);
+    expect((await toReview()).value).toBe("Shop");
+  });
+
+  it("removing a row while the form is open keeps the keyboard on the page", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: found(tool("loki", "missing")) } });
+    startFromCluster();
+    await user.click(await screen.findByRole("button", { name: "+ Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    await user.click(screen.getByRole("button", { name: "Use this source" }));
+    const row = await screen.findByRole("group", { name: "Prometheus · prom.example" });
+    await user.click(screen.getByRole("button", { name: "+ Add a source by hand" }));
+    expect(screen.getByLabelText("Address")).toBeTruthy();
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    expect(screen.queryByRole("group", { name: "Prometheus · prom.example" })).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: `What we found in ${CLUSTER}` }));
+  });
+
+  it("look again says it is looking and keeps the keyboard on its button", async () => {
+    const user = userEvent.setup();
+    const api = install();
+    startFromCluster();
+    expect(within(await screen.findByRole("group", { name: "Prometheus" })).getByText("Reachable")).toBeTruthy();
+    // The second look finds Prometheus down, and is held until released.
+    api.state.discovery.c1 = found(tool("prometheus", "unreachable"), tool("loki", "unreachable"));
+    const inner = globalThis.fetch;
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/monitoring/discovery/")) await held;
+      return inner(input, init);
+    }));
+    const button = screen.getByRole("button", { name: "Look again" });
+    await user.click(button);
+    expect(await screen.findByText(`Looking inside ${CLUSTER}…`)).toBeTruthy();
+    expect(document.activeElement).toBe(button);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    release();
+    const prom = screen.getByRole("group", { name: "Prometheus" });
+    expect(await within(prom).findByText("Can't be reached")).toBeTruthy();
+    expect(screen.queryByText(`Looking inside ${CLUSTER}…`)).toBeNull();
+    expect(screen.getByRole("group", { name: "Prometheus" })).toBe(prom);
+    expect(document.activeElement).toBe(button);
+    expect(api.requests.filter((r) => r.url === "/api/monitoring/discovery/c1")).toHaveLength(2);
   });
 });

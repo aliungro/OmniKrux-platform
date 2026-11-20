@@ -51,7 +51,7 @@ function mergeFound(draft: SetupDraft, fresh: SetupPick[]): SetupDraft {
   const old = new Map(draft.picks.map((p) => [p.key, p]));
   const found = fresh.map((p) => {
     const was = old.get(p.key);
-    return was ? { ...p, use: was.use, filter: was.filter, origin: was.origin, reason: was.reason } : p;
+    return was ? { ...p, use: was.use, filter: was.filter, origin: was.origin, reason: was.reason, suggestedFor: was.suggestedFor } : p;
   });
   return { ...draft, picks: [...found, ...draft.picks.filter((p) => !p.key.startsWith("found:"))] };
 }
@@ -59,7 +59,9 @@ function mergeFound(draft: SetupDraft, fresh: SetupPick[]): SetupDraft {
 /** Another kind or cluster: what was found or chosen goes; sources added by hand stay, their suggestions asked again. */
 function retarget(draft: SetupDraft, kind: ProjectKind, clusterId: string | null): SetupDraft {
   if (draft.kind === kind && draft.clusterId === clusterId) return draft;
-  const picks = draft.picks.filter(isHand).map((p) => (p.origin === "user" ? p : { ...p, filter: "", origin: "none" as const, reason: null }));
+  const picks = draft.picks.filter(isHand).map((p): SetupPick => ({
+    ...p, suggestedFor: undefined, ...(p.origin === "user" ? {} : { filter: "", origin: "none" as const, reason: null }),
+  }));
   return { ...draft, kind, clusterId, picks };
 }
 
@@ -169,7 +171,7 @@ function KindStep({ draft, setDraft, heading, clusters, onOpenSettings }: StepPr
           {clusters.isPending && <p className={s.note} role="status">Loading clusters…</p>}
           {clusters.isError && !list && (
             <div className={s.note} role="alert">
-              <p>{clusters.error.message}</p>
+              <p>{failure(clusters.error, "try again")}</p>
               <button type="button" className={s.secondary} onClick={() => void clusters.refetch()}>Try again</button>
             </div>
           )}
@@ -207,7 +209,8 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
     setDraft((d) => ({ ...d, picks: d.picks.map((p) => (p.key === key ? { ...p, ...patch } : p)) }));
   const remove = (key: string) => {
     setDraft((d) => ({ ...d, picks: d.picks.filter((p) => p.key !== key) }));
-    addButton.current?.focus();
+    // While the add-by-hand form is open its button isn't there: the step's heading takes the keyboard.
+    (addButton.current ?? heading.current)?.focus();
   };
   const byKey = new Map(draft.picks.map((p) => [p.key, p]));
   const names = new Map((existing.data ?? EMPTY).map((x) => [x.id, x.name]));
@@ -240,7 +243,7 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
               {d.found.map((t) => {
                 const key = foundKey(t);
                 return (
-                  <FoundRow key={`${key}:${t.state}`} tool={t} pick={byKey.get(key)}
+                  <FoundRow key={key} tool={t} pick={byKey.get(key)}
                     existingName={t.existing_source_id ? names.get(t.existing_source_id) : undefined} onChange={edit(key)} />
                 );
               })}
@@ -254,7 +257,7 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
           <fieldset className={s.existing}>
             <legend>Use an existing source</legend>
             {existing.isPending && <p className={s.note} role="status">Loading sources…</p>}
-            {existing.isError && !existing.data && <p className={s.problem} role="alert">{existing.error.message}</p>}
+            {existing.isError && !existing.data && <p className={s.problem} role="alert">{failure(existing.error, "try again")}</p>}
             {existing.data?.length === 0 && <p className={s.empty}>No sources yet. Add one by hand below.</p>}
             {existing.data && existing.data.length > 0 && (
               <div className={s.rows}>
@@ -343,7 +346,6 @@ function SetupFlow({ view, nav, onOpenSettings }: MonitoringPageProps) {
   const addButton = useRef<HTMLButtonElement>(null);
   const nameTouched = useRef(false);
   const busyRef = useRef(false);
-  const asked = useRef(new Set<string>());
   const [handOpen, setHandOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
@@ -368,10 +370,11 @@ function SetupFlow({ view, nav, onOpenSettings }: MonitoringPageProps) {
   useEffect(() => {
     const clusterId = draft.clusterId;
     if (draft.kind !== "kubernetes" || clusterId === null) return;
-    for (const p of draft.picks) {
-      const id = `${clusterId}\n${p.key}`;
-      if (asked.current.has(id)) continue;
-      asked.current.add(id);
+    const ask = draft.picks.filter((p) => p.suggestedFor !== clusterId);
+    if (ask.length === 0) return;
+    const keys = new Set(ask.map((p) => p.key));
+    setDraftState((cur) => ({ ...cur, picks: cur.picks.map((x) => (keys.has(x.key) ? { ...x, suggestedFor: clusterId } : x)) }));
+    for (const p of ask) {
       const body: SuggestIn = {
         cluster_id: clusterId, kind: "kubernetes",
         ...("existingId" in p.source ? { source_id: p.source.existingId } : { source: p.source.new }),
@@ -405,7 +408,8 @@ function SetupFlow({ view, nav, onOpenSettings }: MonitoringPageProps) {
     setHandOpen(false);
     setDraftState((d) => ({
       ...d, step,
-      name: step === 4 && !nameTouched.current && d.kind === "kubernetes" && d.name === "" ? clusterName : d.name,
+      // Until a name is typed, it follows what is monitored: the cluster's name, or nothing.
+      name: step === 4 && !nameTouched.current ? (d.kind === "kubernetes" ? clusterName : "") : d.name,
     }));
   };
 
