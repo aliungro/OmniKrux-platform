@@ -48,7 +48,9 @@ Scheme = Literal["http", "https"]
 CLUSTER_GONE = "That cluster isn't connected to OmniKrux any more."
 LIST_ACTION = "list the cluster's services"
 PROBE_FAILED = "Couldn't check {name}. Try again."
-UNEXPECTED_LIST = "The cluster answered the list of its services with something unexpected."
+UNEXPECTED_LIST = (
+    "The cluster answered the list of its services with something unexpected. Try again."
+)
 
 LIST_SECONDS = 10.0
 PROBE_SECONDS = 5.0
@@ -109,7 +111,10 @@ def _named(name: str, patterns: Sequence[str]) -> bool:
 
 def tool_type(name: str, labels: Mapping[str, str]) -> FoundType | None:
     """Which tool a Service is, by its labels first and then its name; None when it is none
-    (or a part of a tool that doesn't answer queries, like an exporter or an operator)."""
+    (or a part of a tool that doesn't answer queries, like an exporter, an operator or the
+    gossip ring of a Loki)."""
+    if name.endswith("-memberlist") or labels.get("app.kubernetes.io/part-of") == "memberlist":
+        return None
     may_be_prometheus = _component(labels) not in NEVER_PROMETHEUS
     if may_be_prometheus and any(labels.get(k) == v for k, v in PROMETHEUS_LABELS):
         return "prometheus"
@@ -131,9 +136,12 @@ def _tcp(port: Mapping) -> bool:
     return (port.get("protocol") or "TCP") == "TCP" and isinstance(port.get("port"), int)
 
 
-def pick_port(type: FoundType, ports: Sequence[Mapping]) -> tuple[str, Scheme] | None:
-    """The port to reach the tool on and its scheme: a port with a usual HTTP name, else a
-    usual port number for that tool, else the first TCP port; None when there is no TCP port."""
+def pick_port(
+    type: FoundType, ports: Sequence[Mapping], *, any_tcp: bool = True
+) -> tuple[str, str | None, Scheme] | None:
+    """The port to reach the tool on (its number, its name and its scheme): a port with a usual
+    HTTP name, else a usual port number for that tool, else (with `any_tcp`) the first TCP port;
+    None when there is none of those."""
     usable = [p for p in ports if isinstance(p, Mapping) and _tcp(p)]
     chosen = next(
         (p for wanted in PORT_NAMES for p in usable if p.get("name") == wanted),
@@ -144,13 +152,14 @@ def pick_port(type: FoundType, ports: Sequence[Mapping]) -> tuple[str, Scheme] |
             (p for number in PORT_NUMBERS[type] for p in usable if p["port"] == number),
             None,
         )
-    if chosen is None and usable:
+    if chosen is None and any_tcp and usable:
         chosen = usable[0]
     if chosen is None:
         return None
-    port_name = str(chosen.get("name") or "")
-    scheme: Scheme = "https" if port_name.startswith("https") or chosen["port"] == 443 else "http"
-    return str(chosen["port"]), scheme
+    port_name = str(chosen.get("name") or "") or None
+    https = (port_name or "").startswith("https") or chosen["port"] == 443
+    scheme: Scheme = "https" if https else "http"
+    return str(chosen["port"]), port_name, scheme
 
 
 # --- Shapes ------------------------------------------------------------------------------------
@@ -193,11 +202,15 @@ class _Candidate:
     port_name: str | None
     scheme: Scheme
     headless: bool
+    selector: frozenset[tuple[str, str]] | None  # None: no selector, never merged with another
 
 
-def _candidates(items: Sequence) -> list[_Candidate]:
-    """The tools among the listed Services, one per (type, namespace, selector)."""
-    kept: dict[tuple, _Candidate] = {}
+def candidates(items: Sequence) -> list[_Candidate]:
+    """The tools among the listed Services. Services of one tool in one namespace whose
+    selectors are equal, or one a subset of the other (the operator's `prometheus-operated`
+    selects every Prometheus Pod its main Service selects), are one tool: the best ranked is
+    kept."""
+    found_all: list[_Candidate] = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -213,34 +226,41 @@ def _candidates(items: Sequence) -> list[_Candidate]:
             continue
         ports = spec.get("ports")
         ports = [p for p in ports if isinstance(p, dict)] if isinstance(ports, list) else []
-        picked = pick_port(found, ports)
+        # Without a component label the Service may be any part of the tool: only a port that
+        # looks like its HTTP API makes it one.
+        picked = pick_port(found, ports, any_tcp=_component(labels) is not None)
         if picked is None:
             continue
-        port, scheme = picked
-        port_name = next(
-            (str(p["name"]) for p in ports if str(p.get("port")) == port and p.get("name")),
-            None,
-        )
+        port, port_name, scheme = picked
         selector = spec.get("selector")
-        selector_key = (
-            tuple(sorted((str(k), str(v)) for k, v in selector.items()))
-            if isinstance(selector, dict) and selector
-            else None
+        found_all.append(
+            _Candidate(
+                type=found,
+                namespace=namespace,
+                service=name,
+                port=port,
+                port_name=port_name,
+                scheme=scheme,
+                headless=spec.get("clusterIP") == "None",
+                selector=(
+                    frozenset((str(k), str(v)) for k, v in selector.items())
+                    if isinstance(selector, dict) and selector
+                    else None
+                ),
+            )
         )
-        candidate = _Candidate(
-            type=found,
-            namespace=namespace,
-            service=name,
-            port=port,
-            port_name=port_name,
-            scheme=scheme,
-            headless=spec.get("clusterIP") == "None",
-        )
-        # Services without a selector stand for themselves; others are one tool per selector.
-        key = (found, namespace, selector_key if selector_key is not None else ("", name))
-        if key not in kept or _rank(candidate) < _rank(kept[key]):
-            kept[key] = candidate
-    return sorted(kept.values(), key=lambda c: (TYPE_ORDER.index(c.type), c.namespace, c.service))
+    kept = [c for c in found_all if not any(_outranked_by(c, other) for other in found_all)]
+    return sorted(kept, key=lambda c: (TYPE_ORDER.index(c.type), c.namespace, c.service))
+
+
+def _outranked_by(candidate: _Candidate, other: _Candidate) -> bool:
+    """`other` is the same tool as `candidate` and ranks better, so `candidate` is dropped."""
+    if other is candidate or (other.type, other.namespace) != (candidate.type, candidate.namespace):
+        return False
+    mine, theirs = candidate.selector, other.selector
+    if mine is None or theirs is None or not (mine <= theirs or theirs <= mine):
+        return False
+    return _rank(other) < _rank(candidate)
 
 
 def _rank(candidate: _Candidate) -> tuple[bool, bool, str]:
@@ -348,14 +368,14 @@ class Discovery:
             raise
         except Exception as exc:  # noqa: BLE001 - worded below, by type only for cloud clusters
             return self._result(info, "error", self._list_error(info, exc), ())
-        candidates = _candidates(items)
+        tools = candidates(items)
         limit = asyncio.Semaphore(self._concurrency)
 
         async def one(candidate: _Candidate) -> FoundTool:
             async with limit:
                 return await self._probe(cluster_id, candidate)
 
-        found = list(await asyncio.gather(*(one(c) for c in candidates)))
+        found = list(await asyncio.gather(*(one(c) for c in tools)))
         present = {tool.type for tool in found}
         for missing in REPORTED_MISSING:
             if missing not in present:

@@ -10,8 +10,8 @@ from omnikrux.monitoring.sources.connector import NO_OPERATOR
 from omnikrux.monitoring.sources.discovery import (
     CLUSTER_GONE,
     KubeClusterProbe,
+    candidates,
     pick_port,
-    tool_type,
 )
 from tests.fakekube import FakeResource, service
 
@@ -195,6 +195,55 @@ async def test_operated_and_main_service_are_one(
     assert (prometheus["port"], prometheus["state"]) == ("9090", "reachable")
 
 
+async def test_operated_service_with_a_broader_selector_is_the_same_tool(
+    monitoring_app, fake_api, kube_cluster, fake_prometheus
+):
+    """kube-prometheus-stack as installed: `prometheus-operated` selects every Prometheus Pod,
+    the main Service only its own (a superset of the selector)."""
+    http, _ = monitoring_app
+    seed(
+        fake_api,
+        service(
+            "monitoring",
+            "prometheus-operated",
+            labels={"operated-prometheus": "true"},
+            ports=[tcp("http-web", 9090)],
+            cluster_ip="None",
+            selector={"app.kubernetes.io/name": "prometheus"},
+        ),
+        service(
+            "monitoring",
+            "kps-kube-prometheus-stack-prometheus",
+            labels={"app": "kube-prometheus-stack-prometheus"},
+            ports=[tcp("http-web", 9090), tcp("reloader-web", 8080)],
+            selector={
+                "app.kubernetes.io/name": "prometheus",
+                "operator.prometheus.io/name": "kps-kube-prometheus-stack-prometheus",
+            },
+        ),
+        # Another Prometheus in another namespace stays its own tool.
+        service(
+            "other",
+            "prometheus-operated",
+            labels={"operated-prometheus": "true"},
+            ports=[tcp("http-web", 9090)],
+            cluster_ip="None",
+            selector={"app.kubernetes.io/name": "prometheus"},
+        ),
+    )
+    backend = ("monitoring", "kps-kube-prometheus-stack-prometheus:9090")
+    fake_api.service_backends[backend] = fake_prometheus.url
+
+    body = (await http.get(f"{BASE}/{kube_cluster}")).json()
+
+    found = by_type(body["found"])["prometheus"]
+    assert [(t["namespace"], t["service"]) for t in found] == [
+        ("monitoring", "kps-kube-prometheus-stack-prometheus"),
+        ("other", "prometheus-operated"),
+    ]
+    assert found[0]["state"] == "reachable"
+
+
 async def test_existing_source_is_recognised(
     monitoring_app, fake_api, kube_cluster, fake_prometheus
 ):
@@ -348,66 +397,108 @@ async def test_alerting_asks_the_cluster_for_the_operator(
     }
 
 
+HTTP = [tcp("http", 80)]
+# (Service name, labels, the tool it is), all with an `http` port.
+RULE_CASES = [
+    ("anything", {"app.kubernetes.io/name": "prometheus"}, "prometheus"),
+    ("anything", {"app": "prometheus"}, "prometheus"),
+    ("anything", {"app": "kube-prometheus-stack-prometheus"}, "prometheus"),
+    ("anything", {"operated-prometheus": "true"}, "prometheus"),
+    ("prometheus-k8s", {}, "prometheus"),
+    ("thanos-query-frontend", {}, "prometheus"),
+    ("vmsingle-main", {}, "prometheus"),
+    ("victoria-metrics-single-server", {}, "prometheus"),
+    ("mimir-query-frontend", {}, "prometheus"),
+    ("team-prometheus", {}, "prometheus"),
+    ("prometheus-server", {"app": "prometheus", "component": "alertmanager"}, None),
+    (
+        "x",
+        {"app.kubernetes.io/name": "prometheus", "app.kubernetes.io/component": "operator"},
+        None,
+    ),
+    ("kps-prometheus", {"app.kubernetes.io/component": "prometheus-operator"}, None),
+    ("prometheus-pushgateway", {"app": "prometheus", "component": "pushgateway"}, None),
+    ("ksm", {"app": "prometheus", "component": "kube-state-metrics"}, None),
+    ("x", {"app.kubernetes.io/name": "loki"}, "loki"),
+    ("x", {"app.kubernetes.io/name": "loki", "app.kubernetes.io/component": "read"}, "loki"),
+    ("x", {"app.kubernetes.io/name": "loki", "app.kubernetes.io/component": "gateway"}, "loki"),
+    (
+        "loki-write",
+        {"app.kubernetes.io/name": "loki", "app.kubernetes.io/component": "write"},
+        None,
+    ),
+    ("loki-gateway", {}, "loki"),
+    ("loki-query-frontend", {}, "loki"),
+    ("x", {"app.kubernetes.io/name": "grafana"}, "grafana"),
+    ("grafana", {}, "grafana"),
+    ("kps-grafana", {}, "grafana"),
+    ("prometheus-node-exporter", {}, None),
+    ("alertmanager", {}, None),
+    # A Loki's gossip ring is never a tool, whatever its ports.
+    ("loki-memberlist", {"app.kubernetes.io/name": "loki"}, None),
+    ("ring", {"app.kubernetes.io/name": "loki", "app.kubernetes.io/part-of": "memberlist"}, None),
+]
+GOSSIP = [tcp("tcp", 7946)]
+# (Service name, labels, ports, the tool it is): without a component label only a port that
+# looks like the tool's HTTP API makes it a candidate.
+PORT_CASES = [
+    ("loki-memberlist", {"app.kubernetes.io/name": "loki"}, [tcp("http", 3100)], None),
+    ("loki-memberlist", {"app.kubernetes.io/name": "loki"}, GOSSIP, None),
+    ("loki-ring", {"app.kubernetes.io/name": "loki"}, GOSSIP, None),
+    ("loki-ring", {"app.kubernetes.io/name": "loki"}, [tcp("tcp", 3100)], "loki"),
+    ("grafana", {}, [tcp("ui", 7777)], None),
+    ("grafana", {}, [tcp("ui", 3000)], "grafana"),
+    (
+        "x",
+        {"app.kubernetes.io/name": "loki", "app.kubernetes.io/component": "read"},
+        GOSSIP,
+        "loki",
+    ),
+    ("loki", {"app.kubernetes.io/name": "loki"}, [], None),
+]
+
+
 @pytest.mark.parametrize(
-    ("name", "labels", "expected"),
-    [
-        ("anything", {"app.kubernetes.io/name": "prometheus"}, "prometheus"),
-        ("anything", {"app": "prometheus"}, "prometheus"),
-        ("anything", {"app": "kube-prometheus-stack-prometheus"}, "prometheus"),
-        ("anything", {"operated-prometheus": "true"}, "prometheus"),
-        ("prometheus-k8s", {}, "prometheus"),
-        ("thanos-query-frontend", {}, "prometheus"),
-        ("vmsingle-main", {}, "prometheus"),
-        ("victoria-metrics-single-server", {}, "prometheus"),
-        ("mimir-query-frontend", {}, "prometheus"),
-        ("team-prometheus", {}, "prometheus"),
-        ("prometheus-server", {"app": "prometheus", "component": "alertmanager"}, None),
-        (
-            "x",
-            {"app.kubernetes.io/name": "prometheus", "app.kubernetes.io/component": "operator"},
-            None,
-        ),
-        ("kps-prometheus", {"app.kubernetes.io/component": "prometheus-operator"}, None),
-        ("prometheus-pushgateway", {"app": "prometheus", "component": "pushgateway"}, None),
-        ("ksm", {"app": "prometheus", "component": "kube-state-metrics"}, None),
-        ("x", {"app.kubernetes.io/name": "loki"}, "loki"),
-        ("x", {"app.kubernetes.io/name": "loki", "app.kubernetes.io/component": "read"}, "loki"),
-        ("x", {"app.kubernetes.io/name": "loki", "app.kubernetes.io/component": "gateway"}, "loki"),
-        (
-            "loki-write",
-            {"app.kubernetes.io/name": "loki", "app.kubernetes.io/component": "write"},
-            None,
-        ),
-        ("loki-gateway", {}, "loki"),
-        ("loki-query-frontend", {}, "loki"),
-        ("x", {"app.kubernetes.io/name": "grafana"}, "grafana"),
-        ("grafana", {}, "grafana"),
-        ("kps-grafana", {}, "grafana"),
-        ("prometheus-node-exporter", {}, None),
-        ("alertmanager", {}, None),
-    ],
+    ("name", "labels", "ports", "expected"),
+    [(name, labels, HTTP, expected) for name, labels, expected in RULE_CASES] + PORT_CASES,
 )
-def test_candidate_rules(name, labels, expected):
-    assert tool_type(name, labels) == expected
+def test_candidate_rules(name, labels, ports, expected):
+    found = candidates([service("monitoring", name, labels=labels, ports=ports)])
+    assert [c.type for c in found] == ([expected] if expected else [])
 
 
 @pytest.mark.parametrize(
     ("type", "ports", "expected"),
     [
-        ("prometheus", [tcp("grpc", 10901), tcp("http", 9090)], ("9090", "http")),
-        ("prometheus", [tcp("reloader-web", 8080), tcp("http-web", 9090)], ("9090", "http")),
-        ("prometheus", [tcp("a", 1234), tcp("b", 8481)], ("8481", "http")),
-        ("loki", [tcp("grpc", 9095), tcp("x", 3100)], ("3100", "http")),
-        ("grafana", [tcp("a", 1), tcp("b", 3000)], ("3000", "http")),
+        ("prometheus", [tcp("grpc", 10901), tcp("http", 9090)], ("9090", "http", "http")),
+        (
+            "prometheus",
+            [tcp("reloader-web", 8080), tcp("http-web", 9090)],
+            ("9090", "http-web", "http"),
+        ),
+        ("prometheus", [tcp("a", 1234), tcp("b", 8481)], ("8481", "b", "http")),
+        ("loki", [tcp("grpc", 9095), tcp("x", 3100)], ("3100", "x", "http")),
+        ("grafana", [tcp("a", 1), tcp("b", 3000)], ("3000", "b", "http")),
         (
             "grafana",
             [{"name": "udp", "port": 53, "protocol": "UDP"}, tcp("z", 7777)],
-            ("7777", "http"),
+            ("7777", "z", "http"),
         ),
-        ("prometheus", [tcp("https", 8443)], ("8443", "https")),
-        ("prometheus", [tcp("other", 443)], ("443", "https")),
+        ("prometheus", [tcp("https", 8443)], ("8443", "https", "https")),
+        ("prometheus", [tcp("other", 443)], ("443", "other", "https")),
         ("prometheus", [], None),
+        # The UDP port of the same number never lends its name.
+        (
+            "loki",
+            [{"name": "dns", "port": 3100, "protocol": "UDP"}, tcp("api", 3100)],
+            ("3100", "api", "http"),
+        ),
     ],
 )
 def test_port_rules(type, ports, expected):
     assert pick_port(type, ports) == expected
+
+
+def test_only_the_named_or_numbered_port_without_any_tcp():
+    assert pick_port("loki", [tcp("tcp", 7946)], any_tcp=False) is None
+    assert pick_port("loki", [tcp("tcp", 7946)]) == ("7946", "tcp", "http")

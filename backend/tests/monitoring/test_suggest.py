@@ -11,6 +11,7 @@ from omnikrux.clusters.registry import SOURCE_UPLOAD, ClusterInfo
 from omnikrux.monitoring.query.filters import render_matchers
 from omnikrux.monitoring.query.suggest import CANDIDATE_LABELS, suggest_filter
 from omnikrux.monitoring.sources import messages
+from omnikrux.monitoring.sources.api import ONE_SOURCE, SOURCE_GONE
 from omnikrux.monitoring.sources.connector import default_connectors
 from omnikrux.monitoring.sources.discovery import CLUSTER_GONE
 from omnikrux.monitoring.sources.types import SourceConfig, SourceSecrets
@@ -169,7 +170,8 @@ async def test_suggest_takes_exactly_one_source(monitoring_app, kind_cluster, fa
     both = {"kind": "kubernetes", "source_id": "x", "source": by_url(fake_prometheus.url)}
     for body in (both, {"kind": "kubernetes"}):
         response = await http.post(URL, json=body)
-        assert response.status_code == 422
+        assert (response.status_code, response.json()) == (422, {"detail": ONE_SOURCE})
+    assert ONE_SOURCE == "Give a saved source or a new one, but not both."
 
 
 async def test_suggest_for_an_unknown_cluster_or_source(monitoring_app, fake_prometheus):
@@ -180,7 +182,7 @@ async def test_suggest_for_an_unknown_cluster_or_source(monitoring_app, fake_pro
     )
     assert (response.status_code, response.json()) == (404, {"detail": CLUSTER_GONE})
     response = await http.post(URL, json={"kind": "kubernetes", "source_id": "gone"})
-    assert response.status_code == 404
+    assert (response.status_code, response.json()) == (404, {"detail": SOURCE_GONE})
 
 
 async def test_the_context_name_matches_too(fake_prometheus, direct):

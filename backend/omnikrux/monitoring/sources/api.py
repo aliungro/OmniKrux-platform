@@ -91,7 +91,7 @@ AUTH_NEEDS = {
 SOURCE_GONE = "That source doesn't exist anymore. It may have been removed."
 NOT_LINKED = "This source isn't linked to that project."
 NOT_SAVED = "The source couldn't be saved. Try again."
-ONE_SOURCE = "Give either a saved source or a new one, not both."
+ONE_SOURCE = "Give a saved source or a new one, but not both."
 
 
 # --- Shapes ------------------------------------------------------------------------------------
