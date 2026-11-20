@@ -8,6 +8,7 @@ import { recordRecent } from "./home/recent";
 import MonitoringHome from "./home/MonitoringHome";
 import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
+import SetupPage from "./setup/SetupPage";
 import { buildSearchIndex } from "./search/search";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
 import { MONITORING_HOME, monitoringTabLabel, type MonitoringTabAction, type MonitoringView } from "./shell/tabState";
@@ -47,7 +48,7 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   home: MonitoringHome,
   sources: SourcesPage,
   source: SourcePage,
-  setup: later("New project"),
+  setup: SetupPage,
   project: later("Project"),
   group: later("Group"),
   newGroup: later("New group"),
