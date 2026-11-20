@@ -44,7 +44,7 @@ To add a connector:
 2. Register it in `default_connectors()` in `sources/connector.py`.
 3. Add its fake to `backend/tests/monitoring/fakes.py` (see `FakePrometheus` and `FakeLoki`), and its tests next to `test_prometheus.py` and `test_loki.py`.
 4. Add its frontend label: the type in `frontend/src/monitoring/api/types.ts` and its name in `sources/sourceLabels.ts`, then the places that list types (`sources/SourceForm.tsx`, `setup/`).
-5. If the new tool has a query language, teach `query/filters.py` to inject a filter into it. Until it can, queries from a project must be refused, not sent as written.
+5. If the new tool has a query language, teach `query/filters.py` to inject a filter into it and map the language to that injector in `_INJECTORS` in `query/api.py`. Until then, a query from a project in that language is refused with `bad_request`, never sent as written.
 
 ## The query proxy and filter injection
 
@@ -67,7 +67,7 @@ python -m uv run --frozen ruff check .
 python -m uv run --frozen ruff format --check .
 ```
 
-Monitoring's tests are in `backend/tests/monitoring/`. They run against local fake tools (`tests/monitoring/fakes.py`: a Prometheus, a Loki and a Grafana, with every authentication type) and the fake cluster in `tests/fakekube.py`, so they need no cluster and no network.
+Monitoring's tests are in `backend/tests/monitoring/`. They run against local fake tools (`tests/monitoring/fakes.py`: a Prometheus, a Loki and a Grafana, with every authentication type) and the fake cluster in `tests/fakekube.py`, so they need no cluster and no network. A watchdog in `tests/monitoring/conftest.py` bounds each of them: a test still running after five minutes prints every thread's stack and ends the run, so a hang names itself.
 
 Frontend, from `frontend`:
 

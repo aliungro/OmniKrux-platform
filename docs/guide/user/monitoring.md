@@ -49,7 +49,7 @@ Each link between a project and a source has a filter. On the project's page, ev
 - An automatic filter is only a suggestion. You can change it at any time, and your change is kept.
 - Projects of other kinds start with no filter.
 
-**Check data** on a source in a project page reports how many metrics and labels the project can see through its filter (for a Loki source, how many labels). Use it to confirm that a filter keeps what you expect.
+**Check data** on a source in a project page reports how many metrics and labels the project can see through its filter (for a Loki source, how many labels). Use it to confirm that a filter keeps what you expect. The count belongs to the saved filter: it goes away when you edit or save the filter, so check again afterwards.
 
 ## Groups and shortcuts
 
