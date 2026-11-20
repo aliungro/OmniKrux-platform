@@ -1,12 +1,17 @@
-"""The series format every Monitoring query answers in; the dashboards and log views read it."""
+"""The series format every Monitoring query answers in; the dashboards and log views read it.
+Also what `POST /api/monitoring/query` takes and answers."""
 
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+from omnikrux.monitoring.sources.types import SourceType
 
 MAX_SERIES = 2000
 TRUNCATED_WARNING = "Showing the first 2000 series."
+MAX_QUERY_CHARS = 10000
+MAX_LOG_LIMIT = 5000
 
 
 class Series(BaseModel):
@@ -27,6 +32,35 @@ class QueryResult(BaseModel):
     streams: list[Stream] = []
     warnings: list[str] = []
     truncated: bool = False
+
+
+class QueryRequest(BaseModel):
+    """One query on one source. With `project_id`, the project's filter on that source is added
+    to every selector; without it the query runs as written. Times and the step are seconds."""
+
+    # NaN and the infinities pass `gt`/`le` checks and comparisons unnoticed: refuse them here.
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    source_id: str
+    project_id: str | None = None
+    kind: Literal["instant", "range"]
+    query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
+    time: float | None = None
+    start: float | None = None
+    end: float | None = None
+    step: float | None = Field(None, gt=0)
+    limit: int | None = Field(None, ge=1, le=MAX_LOG_LIMIT)
+    direction: Literal["backward", "forward"] = "backward"
+
+
+class QueryResponse(QueryResult):
+    source_id: str
+    source_name: str
+    source_type: SourceType
+    project_id: str | None
+    applied_filter: str
+    query: str  # the text actually sent to the tool, after the filter
+    took_ms: int
 
 
 def number(value: Any) -> float | None:

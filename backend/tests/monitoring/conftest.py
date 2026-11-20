@@ -41,6 +41,15 @@ class Stores:
     groups: GroupStore
 
 
+@dataclass(frozen=True)
+class LinkedProject:
+    """A custom project linked to one Prometheus source with the filter `cluster="a"`."""
+
+    project_id: str
+    source_id: str
+    project_name: str
+
+
 def new_source(**over) -> NewSource:
     """A URL-reached Prometheus without authentication; `over` replaces any field."""
     values = {
@@ -105,6 +114,30 @@ async def kube_cluster(fake_api, monitoring_app) -> str:
 async def fake_prometheus():
     async with serve_fake_prometheus() as server:
         yield server
+
+
+@pytest.fixture
+async def linked_project(monitoring_app, fake_prometheus) -> LinkedProject:
+    """A custom project linked to a Prometheus source over `fake_prometheus` with the filter
+    `cluster="a"`, created through the API as a user would (a source, then the setup)."""
+    http, _ = monitoring_app
+    source = await http.post(
+        "/api/monitoring/sources",
+        json={"type": "prometheus", "reach": "url", "url": fake_prometheus.url, "name": "Shop"},
+    )
+    assert source.status_code == 201, source.text
+    source_id = source.json()["id"]
+    project = await http.post(
+        "/api/monitoring/setup",
+        json={
+            "name": "Shop",
+            "kind": "custom",
+            "sources": [{"source_id": source_id, "filter": 'cluster="a"'}],
+        },
+    )
+    assert project.status_code == 201, project.text
+    body = project.json()
+    return LinkedProject(project_id=body["id"], source_id=source_id, project_name=body["name"])
 
 
 @pytest.fixture
