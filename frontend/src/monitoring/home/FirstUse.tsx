@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import { failure } from "../../api/http";
 import type { Cluster } from "../../api/types";
 import { DOT } from "../sidebar/Sidebar";
 import s from "./MonitoringHome.module.css";
@@ -25,7 +26,7 @@ export function FirstUse({ clusters, mayFocus, onSetup, onOpenSettings }: Props)
       {clusters.isPending && <p className={s.note} role="status">Loading clusters…</p>}
       {clusters.isError && !list && (
         <div className={s.note} role="alert">
-          <p>{clusters.error.message}</p>
+          <p>{failure(clusters.error, "try again")}</p>
           <div className={s.actions}>
             <button ref={first} type="button" className={s.secondary} onClick={() => void clusters.refetch()}>Try again</button>
             <button type="button" className={s.primary} onClick={() => onSetup()}>Set up a project</button>

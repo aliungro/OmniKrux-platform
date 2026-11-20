@@ -116,7 +116,7 @@ export default function SourcesPage() {
       {pageError && <p className={s.note} role="alert">{pageError}</p>}
       {sources.isError && !list && (
         <div className={s.note} role="alert">
-          <p>{sources.error?.message}</p>
+          <p>{failure(sources.error, "try again")}</p>
           <button type="button" className={s.secondary} onClick={() => void sources.refetch()}>Try again</button>
         </div>
       )}
@@ -179,7 +179,7 @@ export function SourcePage({ view, nav }: MonitoringPageProps) {
     return (
       <section className={s.page}>
         <div className={s.note} role="alert">
-          <p>{sources.error?.message} Check that the console&apos;s server is running, then try again.</p>
+          <p>{failure(sources.error, "try again")}</p>
           <button type="button" className={s.secondary} onClick={() => void sources.refetch()}>Try again</button>
         </div>
       </section>

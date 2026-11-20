@@ -172,3 +172,26 @@ describe("Home focus on leaving", () => {
     expect(onMain()).toBe(true);
   });
 });
+
+describe("Home errors in plain words", () => {
+  const DOWN = "Can't reach the console's server. Check that it's running, then try again.";
+
+  it("an unreachable server says so on Home, not the browser's words", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    renderMonitoringApp();
+    const page = document.querySelector<HTMLElement>("[data-monitoring-page]")!;
+    expect(await within(page).findByText(DOWN)).toBeTruthy();
+    expect(page.textContent).not.toContain("Failed to fetch");
+  });
+
+  it("first use says so when the clusters can't be read", async () => {
+    installFakeMonitoringApi({}, async (url: string) => {
+      if (url === "/api/clusters") throw new TypeError("Failed to fetch");
+      return json([]);
+    });
+    renderMonitoringApp();
+    expect(await screen.findByRole("heading", { name: "Set up your first project" })).toBeTruthy();
+    expect(await screen.findByText(DOWN)).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Failed to fetch");
+  });
+});

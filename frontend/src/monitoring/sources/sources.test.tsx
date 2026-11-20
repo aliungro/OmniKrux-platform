@@ -270,3 +270,18 @@ describe("Source page focus", () => {
     expect(document.activeElement?.tagName).toBe("MAIN");
   });
 });
+
+describe("Source errors in plain words", () => {
+  const DOWN = "Can't reach the console's server. Check that it's running, then try again.";
+
+  it("the Sources page and a source's page say the server can't be reached", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    open();
+    const list = document.querySelector<HTMLElement>("[data-monitoring-page]")!;
+    expect((await within(list).findByRole("alert")).textContent).toBe(`${DOWN}Try again`);
+    cleanup();
+    renderMonitoringApp({ tabs: tabsWith({ page: "source", id: "s1" }) });
+    const page = document.querySelector<HTMLElement>("[data-monitoring-page]")!;
+    expect((await within(page).findByRole("alert")).textContent).toBe(`${DOWN}Try again`);
+  });
+});

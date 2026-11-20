@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { failure } from "../../api/http";
 import { useClusters } from "../../api/useClusters";
 import { useMonitoringTree, useProjects, useSourceHealth, useSources } from "../api/hooks";
 import type { HealthOut, SourceOut } from "../api/types";
@@ -126,7 +127,7 @@ export default function MonitoringHome({ nav, openInNewTab, onOpenSettings }: Mo
       <section className={s.home}>
         <h1 className={s.title}>Monitoring</h1>
         <div className={s.note} role="alert">
-          <p>{error?.message}</p>
+          <p>{failure(error, "try again")}</p>
           <div className={s.actions}>
             <button type="button" className={s.primary} onClick={() => { void projects.refetch(); void tree.refetch(); }}>Try again</button>
           </div>
