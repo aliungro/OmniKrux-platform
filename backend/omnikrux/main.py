@@ -37,6 +37,8 @@ from omnikrux.kube.source import KubeResourceSource
 from omnikrux.logs.api import router as logs_router
 from omnikrux.metrics.api import router as metrics_router
 from omnikrux.metrics.cache import MetricsCache
+from omnikrux.monitoring.router import router as monitoring_router
+from omnikrux.monitoring.services import build_services
 from omnikrux.portforward.api import router as portforward_router
 from omnikrux.portforward.manager import PortForwardManager
 from omnikrux.resources.api import router as resources_router
@@ -247,6 +249,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         jobs = app.state.jobs = JobRunner(audit)
         app.state.forwards = forwards
         app.state.streams = streams
+        monitoring = app.state.monitoring = build_services(sessionmaker, box, connections, registry)
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
@@ -259,6 +262,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await streams.close()
             await hub.close()
             await metrics.close()
+            await monitoring.close()
             await catalog.close()
             await broker.close()
             await bridge.close()
@@ -286,6 +290,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(actions_router)
     app.include_router(metrics_router)
     app.include_router(portforward_router)
+    app.include_router(monitoring_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

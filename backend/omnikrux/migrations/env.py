@@ -6,6 +6,7 @@ from omnikrux.audit import models as audit_models  # noqa: F401
 from omnikrux.cloud import models as cloud_models  # noqa: F401
 from omnikrux.clusters import models  # noqa: F401
 from omnikrux.db import Base
+from omnikrux.monitoring import models as monitoring_models  # noqa: F401
 
 target_metadata = Base.metadata
 
