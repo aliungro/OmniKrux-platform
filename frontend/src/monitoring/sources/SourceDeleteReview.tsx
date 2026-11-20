@@ -1,7 +1,6 @@
-import { useEffect, useId, useRef, type RefObject } from "react";
-import { DialogShell } from "../../features/dock/ConfirmDialog";
+import type { RefObject } from "react";
+import { DeleteReviewDialog } from "../DeleteReviewDialog";
 import type { SourceDeleteReviewOut } from "../api/types";
-import s from "./SourceForm.module.css";
 
 /** Asks before a source is deleted: who loses it, then Delete source (focused) or Cancel. */
 export function SourceDeleteReview({ review, busy, error, restoreFocusTo, onCancel, onConfirm }: {
@@ -12,23 +11,11 @@ export function SourceDeleteReview({ review, busy, error, restoreFocusTo, onCanc
   onCancel(): void;
   onConfirm(): void;
 }) {
-  const id = useId();
-  const go = useRef<HTMLButtonElement>(null);
-  // While the delete runs both buttons are off and focus leaves; when it ends, the keyboard comes back to the action.
-  useEffect(() => { if (!busy) go.current?.focus(); }, [busy]);
   const names = review.projects.map((p) => p.name).join(", ");
   return (
-    <DialogShell provider="monitoring" busy={busy} onCancel={onCancel} onConfirm={onConfirm} first={go}
-      restoreFocusTo={restoreFocusTo} labelledBy={`${id}-t`} describedBy={`${id}-b`} className={s.dialog}>
-      <h2 id={`${id}-t`} className={s.dialogTitle}>Delete source {review.name}?</h2>
-      <p id={`${id}-b`} className={s.dialogBody}>
-        {review.projects.length > 0 ? `Projects that use it lose it: ${names}.` : "No project uses it."}
-      </p>
-      {error && <p className={s.error} role="alert">{error}</p>}
-      <div className={s.dialogActions}>
-        <button type="button" className={s.secondary} onClick={onCancel} disabled={busy}>Cancel</button>
-        <button ref={go} type="button" className={s.danger} onClick={onConfirm} disabled={busy}>Delete source</button>
-      </div>
-    </DialogShell>
+    <DeleteReviewDialog title={`Delete source ${review.name}?`} action="Delete source" busy={busy} error={error}
+      restoreFocusTo={restoreFocusTo} onCancel={onCancel} onConfirm={onConfirm}>
+      <p>{review.projects.length > 0 ? `Projects that use it lose it: ${names}.` : "No project uses it."}</p>
+    </DeleteReviewDialog>
   );
 }

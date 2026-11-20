@@ -1,0 +1,95 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { GroupOut } from "../api/types";
+import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
+import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
+
+beforeEach(() => localStorage.clear());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+const T = "2026-01-01T00:00:00Z";
+const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+const fallback = async () => json([]);
+const group = (id: string, name: string, project_ids: string[]): GroupOut => ({ id, name, project_ids, created_at: T, updated_at: T });
+const projects = () => [seedProject("p1", "Dev"), seedProject("p2", "Stage"), seedProject("p3", "Prod east")];
+
+describe("Groups", () => {
+  it("a group is made from picked projects and shows shortcuts", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ projects: projects() }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "newGroup" }) });
+    expect(await screen.findByRole("heading", { name: "New group" })).toBeTruthy();
+    await user.type(screen.getByLabelText("Name"), "Everything dev");
+    await user.click(await screen.findByRole("checkbox", { name: "Dev" }));
+    await user.click(screen.getByRole("checkbox", { name: "Stage" }));
+    await user.click(screen.getByRole("button", { name: "Create group" }));
+    await waitFor(() => expect(api.state.groups).toHaveLength(1));
+    const post = api.requests.find((r) => r.method === "POST" && r.url === "/api/monitoring/groups")!;
+    expect(post.body).toEqual({ name: "Everything dev", project_ids: ["p1", "p2"] });
+    expect(await screen.findByRole("heading", { name: "Everything dev" })).toBeTruthy();
+    const shortcuts = screen.getByRole("list", { name: "Projects in this group" });
+    expect(within(shortcuts).getAllByRole("button").map((b) => b.textContent)).toEqual(["↗Dev", "↗Stage"]);
+    expect(screen.getByText("Group dashboards arrive in the next update.")).toBeTruthy();
+    // The shortcut opens the project as it is.
+    await user.click(within(shortcuts).getByRole("button", { name: /Dev/ }));
+    expect(await screen.findByRole("heading", { name: "Dev" })).toBeTruthy();
+    expect(api.state.projects).toHaveLength(3);
+  });
+
+  it("shows the server's words when a group can't be made", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", [])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "newGroup" }) });
+    await user.type(await screen.findByLabelText("Name"), "prod");
+    await user.click(screen.getByRole("button", { name: "Create group" }));
+    expect((await screen.findByRole("alert")).textContent).toContain('A group named "prod" already exists.');
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("edits a group's projects", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1"])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    await user.click(await screen.findByRole("button", { name: "Edit projects" }));
+    expect((screen.getByRole("checkbox", { name: "Dev" }) as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole("checkbox", { name: "Dev" }));
+    await user.click(screen.getByRole("checkbox", { name: "Prod east" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.state.groups[0].project_ids).toEqual(["p3"]));
+    expect(api.requests.find((r) => r.method === "PATCH")!.body).toEqual({ project_ids: ["p3"] });
+    expect(await screen.findByRole("button", { name: "Edit projects" })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit projects" }));
+  });
+
+  it("renames a group", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1"])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    await user.click(await screen.findByRole("button", { name: "Rename" }));
+    await user.clear(screen.getByLabelText("Name"));
+    await user.type(screen.getByLabelText("Name"), "Live{Enter}");
+    await waitFor(() => expect(api.state.groups[0].name).toBe("Live"));
+    expect(await screen.findByRole("heading", { name: "Live" })).toBeTruthy();
+  });
+
+  it("deleting a group keeps its projects", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1", "p2"])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    await user.click(await screen.findByRole("button", { name: "Delete group…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByRole("heading", { name: "Delete group Prod?" })).toBeTruthy();
+    expect(within(dialog).getByText("Its projects stay as they are.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete group" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
+    expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
+    expect(api.state.groups).toHaveLength(0);
+    expect(api.state.projects).toHaveLength(3);
+    // Still in the sidebar.
+    const sidebar = document.querySelector("nav, aside") as HTMLElement;
+    expect(within(sidebar).getByText("Dev")).toBeTruthy();
+    expect(within(sidebar).getByText("Stage")).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+});

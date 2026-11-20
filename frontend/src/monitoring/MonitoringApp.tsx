@@ -5,8 +5,11 @@ import type { AppTabs } from "../features/shell/workspace";
 import { useMonitoringTree, useSources } from "./api/hooks";
 import type { SourceOut, TreeOut } from "./api/types";
 import { recordRecent } from "./home/recent";
+import GroupForm from "./groups/GroupForm";
+import GroupPage from "./groups/GroupPage";
 import MonitoringHome from "./home/MonitoringHome";
 import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
+import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
 import SetupPage from "./setup/SetupPage";
 import { buildSearchIndex } from "./search/search";
@@ -49,9 +52,9 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   sources: SourcesPage,
   source: SourcePage,
   setup: SetupPage,
-  project: later("Project"),
-  group: later("Group"),
-  newGroup: later("New group"),
+  project: ProjectPage,
+  group: GroupPage,
+  newGroup: GroupForm,
   explore: later("Explore", EXPLORE_LATER),
   alerts: later("Alerts", ALERTS_LATER),
 };

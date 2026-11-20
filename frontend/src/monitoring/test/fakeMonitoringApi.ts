@@ -202,22 +202,32 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
         refreshUsedBy();
         return empty();
       }
+      // What deleting `p` does to its sources: the ones it made that nobody else uses go; the ones it made that others use stay.
+      const split = () => {
+        const linked = state.sources.filter((s) => p.links.some((l) => l.source_id === s.id));
+        const others = (s: SourceOut) => usedBy(s.id).filter((u) => u.id !== p.id);
+        const mine = linked.filter((s) => s.created_by_project_id === p.id);
+        return {
+          removed: mine.filter((s) => others(s).length === 0),
+          kept: mine.filter((s) => others(s).length > 0).map((s) => ({ id: s.id, name: s.name, used_by: others(s).map((u) => u.name) })),
+          unlinked: linked.filter((s) => s.created_by_project_id !== p.id),
+        };
+      };
       if (is("GET", "projects", b, "delete-review")) {
-        const mine = p.links.map((l) => l.source_id);
-        const removed = state.sources.filter((s) => mine.includes(s.id) && s.created_by_project_id === p.id && usedBy(s.id).every((u) => u.id === p.id));
+        const { removed, kept, unlinked } = split();
         return json({
           project_id: p.id, name: p.name,
           sources_removed: removed.map((s) => ({ id: s.id, name: s.name })),
-          sources_kept: [],
-          sources_unlinked: state.sources.filter((s) => mine.includes(s.id) && !removed.includes(s)).map((s) => ({ id: s.id, name: s.name })),
+          sources_kept: kept,
+          sources_unlinked: unlinked.map((s) => ({ id: s.id, name: s.name })),
           groups_left: state.groups.filter((g) => g.project_ids.includes(p.id)).map((g) => ({ id: g.id, name: g.name })),
           token: TOKEN,
         });
       }
       if (is("DELETE", "projects", b)) {
         if (query.get("token") !== TOKEN) return refuse(REVIEW_CHANGED, 409);
-        const mine = new Set(p.links.map((l) => l.source_id));
-        state.sources = state.sources.filter((s) => !(mine.has(s.id) && s.created_by_project_id === p.id && usedBy(s.id).every((u) => u.id === p.id)));
+        const { removed } = split();
+        state.sources = state.sources.filter((s) => !removed.includes(s));
         state.projects = state.projects.filter((x) => x.id !== b);
         state.groups.forEach((g) => { g.project_ids = g.project_ids.filter((id) => id !== b); });
         refreshUsedBy();

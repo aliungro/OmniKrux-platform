@@ -1,0 +1,115 @@
+/* A page's name with Rename beside it. Territories tokens only. */
+.head,
+.edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+}
+
+.title:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+
+.label {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.input {
+  min-width: min(320px, 100%);
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.input:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.input[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--bad) 70%, var(--rule));
+}
+
+.primary,
+.secondary,
+.quiet {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.quiet {
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.quiet:hover {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.primary[aria-disabled="true"],
+.secondary[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.quiet:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.error {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+}

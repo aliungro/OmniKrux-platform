@@ -201,6 +201,14 @@
   line-height: 1.55;
 }
 
+.dialogBody p {
+  margin: 0 0 8px;
+}
+
+.dialogBody p:last-child {
+  margin-bottom: 0;
+}
+
 @media (max-width: 560px) {
   .headerRow {
     grid-template-columns: minmax(0, 1fr);

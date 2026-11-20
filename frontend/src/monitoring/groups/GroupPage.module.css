@@ -1,0 +1,205 @@
+/* A group's page and the New group form. Territories tokens only. */
+.page {
+  composes: page from "../projects/ProjectPage.module.css";
+}
+
+.head {
+  composes: head from "../projects/ProjectPage.module.css";
+}
+
+.sub {
+  composes: sub from "../projects/ProjectPage.module.css";
+}
+
+.section {
+  composes: section from "../projects/ProjectPage.module.css";
+}
+
+.heading {
+  composes: heading from "../projects/ProjectPage.module.css";
+}
+
+.muted {
+  composes: muted from "../projects/ProjectPage.module.css";
+}
+
+.later {
+  composes: later from "../projects/ProjectPage.module.css";
+}
+
+.note {
+  composes: note from "../projects/ProjectPage.module.css";
+}
+
+.bad {
+  composes: bad from "../projects/ProjectPage.module.css";
+}
+
+.panel {
+  composes: panel from "../projects/ProjectPage.module.css";
+}
+
+.primary {
+  composes: primary from "../projects/ProjectPage.module.css";
+}
+
+.secondary {
+  composes: secondary from "../projects/ProjectPage.module.css";
+}
+
+.foot {
+  composes: foot from "../projects/ProjectPage.module.css";
+}
+
+.dangerQuiet {
+  composes: dangerQuiet from "../projects/ProjectPage.module.css";
+}
+
+.fieldLabel {
+  composes: fieldLabel from "../projects/ProjectPage.module.css";
+}
+
+.title {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.lead {
+  margin: 0 0 20px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.form {
+  display: grid;
+  gap: 18px;
+  max-width: 640px;
+}
+
+.nameField {
+  display: grid;
+  gap: 6px;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.input:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.input[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--bad) 70%, var(--rule));
+}
+
+.picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.picker legend {
+  margin-bottom: 8px;
+  padding: 0;
+}
+
+.pickGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* A ticked project reads as chosen without relying on the box alone. */
+.pickItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surf);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.pickItem[data-on] {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+  background: color-mix(in srgb, var(--focus) 10%, var(--surf));
+  color: var(--ink);
+}
+
+.pickItem:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Shortcuts to projects: the ↗ says opening one goes to that project as it is. */
+.shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px 7px 11px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.shortcut > span {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.shortcut:hover {
+  border-color: var(--focus);
+}
+
+.shortcut:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
