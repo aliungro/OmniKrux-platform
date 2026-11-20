@@ -39,7 +39,7 @@
 .laterNote {
   margin: 0;
   padding: 12px 14px;
-  border: 1px dashed rgba(201, 184, 255, 0.4);
+  border: 1px dashed color-mix(in srgb, var(--focus) 40%, transparent);
   border-radius: 10px;
   color: var(--ink-2);
   font-size: 14px;
@@ -58,7 +58,7 @@
   border: 0;
   border-radius: 8px;
   background: var(--focus);
-  color: #1a1530;
+  color: var(--bg);
   font: inherit;
   font-weight: 600;
   cursor: pointer;

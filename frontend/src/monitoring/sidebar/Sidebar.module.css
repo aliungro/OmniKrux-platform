@@ -41,7 +41,7 @@
 
 .findField:focus-within {
   border-color: var(--focus);
-  box-shadow: 0 0 0 3px rgba(201, 184, 255, 0.14);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent);
 }
 
 .findIcon {
@@ -79,8 +79,8 @@
   padding: 5px;
   border: 1px solid var(--rule);
   border-radius: 9px;
-  background: #221e33;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  background: color-mix(in srgb, var(--surf-2) 60%, var(--surf));
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 70%, transparent);
 }
 
 .hits[hidden] {
@@ -102,7 +102,7 @@
 }
 
 .hit:hover {
-  background: rgba(38, 34, 56, 0.6);
+  background: color-mix(in srgb, var(--surf-2) 60%, transparent);
 }
 
 .hit[aria-selected="true"] {
@@ -157,7 +157,7 @@
 
 .navItem:hover {
   color: var(--ink);
-  background: rgba(38, 34, 56, 0.6);
+  background: color-mix(in srgb, var(--surf-2) 60%, transparent);
 }
 
 .navItem[aria-current="page"] {
@@ -224,7 +224,7 @@
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid rgba(201, 184, 255, 0.4);
+  border: 1px solid color-mix(in srgb, var(--focus) 40%, transparent);
   border-radius: 5px;
   background: transparent;
   color: var(--focus);
@@ -233,7 +233,7 @@
 }
 
 .plus:hover {
-  background: rgba(201, 184, 255, 0.12);
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
 }
 
 .emptyLine {
@@ -258,7 +258,7 @@
 }
 
 .row:hover {
-  background: rgba(38, 34, 56, 0.6);
+  background: color-mix(in srgb, var(--surf-2) 60%, transparent);
 }
 
 .group,
@@ -275,7 +275,7 @@
   margin-left: 13px;
   padding-left: 10px;
   border-radius: 0 6px 6px 0;
-  box-shadow: inset 1px 0 rgba(201, 184, 255, 0.3);
+  box-shadow: inset 1px 0 color-mix(in srgb, var(--focus) 30%, transparent);
 }
 
 .muted {
@@ -289,7 +289,7 @@
 }
 
 .row[aria-selected="true"] {
-  background: rgba(201, 184, 255, 0.12);
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
   box-shadow: inset 2px 0 var(--focus);
 }
 
@@ -344,7 +344,7 @@
 }
 
 .folderOpen {
-  background: rgba(201, 184, 255, 0.18);
+  background: color-mix(in srgb, var(--focus) 18%, transparent);
 }
 
 .dot {
@@ -406,9 +406,9 @@
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border: 1px solid rgba(201, 184, 255, 0.35);
+  border: 1px solid color-mix(in srgb, var(--focus) 35%, transparent);
   border-radius: 9px;
-  background: rgba(201, 184, 255, 0.1);
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
   color: var(--ink);
   font: inherit;
   font-weight: 500;
@@ -422,7 +422,7 @@
   place-items: center;
   border-radius: 6px;
   background: var(--focus);
-  color: #1a1530;
+  color: var(--bg);
   font: 600 14px/1 "Geist Mono", ui-monospace, monospace;
 }
 

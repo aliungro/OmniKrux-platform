@@ -45,6 +45,20 @@ describe("Monitoring app shell", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("Go to Home leaves the keyboard where the user is working", async () => {
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Kept")] });
+    renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "gone" }) });
+    // Typing in Find while the tree is still loading: the page appearing doesn't take the keyboard.
+    const find = screen.getByRole("combobox", { name: "Find anything" }) as HTMLInputElement;
+    find.focus();
+    fireEvent.change(find, { target: { value: "Ke" } });
+    expect(await screen.findByText("This project no longer exists.")).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(document.activeElement).toBe(find);
+    expect(find.value).toBe("Ke");
+    expect(screen.getByRole("button", { name: "Go to Home" })).toBeTruthy();
+  });
+
   it("a removed group or source says so too", async () => {
     installFakeMonitoringApi();
     renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g9" }, { page: "source", id: "s9" }) });

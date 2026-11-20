@@ -59,9 +59,24 @@ function focusMain(from: Element | null) {
   main?.focus({ preventScroll: true });
 }
 
+/** Opening a project or group (in this tab or a new one) puts it first in Recently opened. */
+function recordOpened(view: MonitoringView) {
+  if (view.page === "project" || view.page === "group") recordRecent({ kind: view.page, id: view.id });
+}
+
+/**
+ * Whether a page may take the keyboard as it appears: only when nothing else has it (`<body>`,
+ * the workspace's `<main>`, or the page area). Typing in Find or moving in the tree keeps it.
+ */
+function keyboardIsFree(): boolean {
+  const active = document.activeElement;
+  if (active === null || active === document.body || active.tagName === "MAIN") return true;
+  return active.closest("[data-monitoring-page]") !== null;
+}
+
 function Gone({ what, onHome }: { what: "project" | "group" | "source"; onHome(): void }) {
   const button = useRef<HTMLButtonElement>(null);
-  useEffect(() => button.current?.focus(), []);
+  useEffect(() => { if (keyboardIsFree()) button.current?.focus(); }, []);
   return (
     <section className={s.gone}>
       <p className={s.goneText}>This {what} no longer exists.</p>
@@ -82,11 +97,7 @@ function goneKind(view: MonitoringView, tree: TreeOut | undefined, sources: Sour
 function PageView({ page, tree, sources, onHome }: { page: MonitoringPageProps; tree: TreeOut | undefined; sources: SourceOut[] | undefined; onHome(): void }) {
   const { view } = page;
   const gone = goneKind(view, tree, sources);
-  const known = (view.page === "project" || view.page === "group") && tree !== undefined && gone === null;
   const id = "id" in view ? view.id : null;
-  useEffect(() => {
-    if (known && id && (view.page === "project" || view.page === "group")) recordRecent({ kind: view.page, id });
-  }, [known, view.page, id]);
   if (gone) return <Gone key={`${view.page}:${id}`} what={gone} onHome={onHome} />;
   const Component = PAGES[view.page];
   return <Component {...page} />;
@@ -120,11 +131,23 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     };
   }, [tree.data, sources.data]);
 
-  const openInNewTab = useCallback((v: MonitoringView) => dispatchTabs({ type: "newTab", view: v }), [dispatchTabs]);
+  const openInNewTab = useCallback((v: MonitoringView) => {
+    dispatchTabs({ type: "newTab", view: v });
+    recordOpened(v);
+  }, [dispatchTabs]);
+  // The tab's navigation as pages see it: going to a project or group records it as opened.
+  // Back, Forward, switching tabs and reloading show a page without opening it again.
+  const pageNav = useMemo<TabNav<MonitoringView>>(() => ({
+    ...nav,
+    navigate: (move, mode) => {
+      nav.navigate(move, mode);
+      recordOpened(typeof move === "function" ? move(nav.view) : move);
+    },
+  }), [nav]);
   const open = useCallback((v: MonitoringView, newTab: boolean) => {
     if (newTab) openInNewTab(v);
-    else nav.navigate(v, "push");
-  }, [nav, openInNewTab]);
+    else pageNav.navigate(v, "push");
+  }, [pageNav, openInNewTab]);
   const leave = useCallback(() => focusMain(root.current), []);
   const goHome = useCallback(() => {
     focusMain(root.current);
@@ -138,7 +161,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     // Only when the tab changes; scrolling itself updates nav.scrollTop.
   }, [tabId]);
 
-  const page: MonitoringPageProps = { view, nav, openInNewTab, onOpenSettings };
+  const page: MonitoringPageProps = { view, nav: pageNav, openInNewTab, onOpenSettings };
   return (
     <div ref={root} className={s.app}>
       <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
@@ -148,7 +171,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
           onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
           onClose={(id) => dispatchTabs({ type: "closeTab", id })}
           onNew={() => dispatchTabs({ type: "newTab" })} />
-        <div ref={scroller} className={s.page} onScroll={(e) => nav.setScroll(e.currentTarget.scrollTop)}>
+        <div ref={scroller} className={s.page} data-monitoring-page onScroll={(e) => nav.setScroll(e.currentTarget.scrollTop)}>
           <PageView key={tabId} page={page} tree={tree.data} sources={sources.data} onHome={goHome} />
         </div>
       </div>

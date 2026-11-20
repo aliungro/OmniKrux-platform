@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { GroupOut } from "../api/types";
-import { readRecent } from "../home/recent";
+import { readRecent, recordRecent } from "../home/recent";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
-import { renderMonitoringApp, seedProject } from "../test/renderMonitoringApp";
+import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import { treeRows } from "./treeModel";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -121,6 +121,26 @@ describe("Monitoring sidebar", () => {
     await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")).toHaveLength(3));
   });
 
+  it("switching to a tab or reloading doesn't reorder Recently opened", async () => {
+    seedTwo();
+    recordRecent({ kind: "group", id: "g1" }, 2);
+    recordRecent({ kind: "project", id: "p1" }, 1);
+    const before = () => readRecent().map((r) => `${r.kind}:${r.id}`);
+    expect(before()).toEqual(["group:g1", "project:p1"]);
+    // The active tab shows project A as the app loads: shown, not opened.
+    renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p1" }, { page: "group", id: "g1" }) });
+    await screen.findByRole("treeitem", { name: "Both" });
+    const strip = within(screen.getByRole("tablist", { name: "Monitoring tabs" }));
+    await waitFor(() => expect(strip.getAllByRole("tab")[0].textContent).toContain("A"));
+    fireEvent.click(strip.getAllByRole("tab")[1]);
+    fireEvent.click(strip.getAllByRole("tab")[0]);
+    await waitFor(() => expect(activeTab().textContent).toContain("A"));
+    expect(before()).toEqual(["group:g1", "project:p1"]);
+    // Opening it from the tree does record it.
+    fireEvent.click(screen.getByRole("treeitem", { name: "A" }));
+    expect(before()).toEqual(["project:p1", "group:g1"]);
+  });
+
   it("slash focuses Find and Enter opens the top hit", async () => {
     seedTwo();
     renderMonitoringApp();
@@ -135,10 +155,14 @@ describe("Monitoring sidebar", () => {
     await waitFor(() => expect(activeTab().textContent).toContain("Both"));
     expect(find().value).toBe("");
     expect(document.activeElement).toBe(screen.getByRole("main"));
-    // "/" typed into a field is the field's.
-    find().focus();
-    fireEvent.keyDown(find(), { key: "/" });
-    expect(document.activeElement).toBe(find());
+    // "/" typed into another field is that field's: Find doesn't take the keyboard.
+    for (const tag of ["input", "textarea"] as const) {
+      const field = document.body.appendChild(document.createElement(tag));
+      field.focus();
+      fireEvent.keyDown(field, { key: "/" });
+      expect(document.activeElement).toBe(field);
+      field.remove();
+    }
   });
 
   it("Esc in Find clears, then returns to main", async () => {
