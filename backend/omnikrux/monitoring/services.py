@@ -8,6 +8,7 @@ from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
 from omnikrux.monitoring.sources.connector import ConnectorRegistry, default_connectors
+from omnikrux.monitoring.sources.discovery import Discovery
 from omnikrux.monitoring.sources.health import HealthCache
 from omnikrux.monitoring.sources.store import SourceStore
 from omnikrux.monitoring.sources.transport import TransportFactory
@@ -22,6 +23,7 @@ class MonitoringServices:
     transports: TransportFactory
     connectors: ConnectorRegistry
     health: HealthCache
+    discovery: Discovery
 
     async def close(self) -> None:
         """Release what the services hold: the transports' HTTP session (the stores share the
@@ -46,4 +48,5 @@ def build_services(
         transports=transports,
         connectors=connectors,
         health=HealthCache(sources, transports, connectors, registry),
+        discovery=Discovery(connections, registry, transports, connectors, sources),
     )

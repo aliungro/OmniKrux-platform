@@ -1,4 +1,5 @@
-"""Routes for sources: add, change, test, check and remove them, and read what they hold.
+"""Routes for sources: add, change, test, check and remove them, and read what they hold; and
+the tools found in a known cluster, and the filter a project should use on a source.
 
 Secrets are write-only: they come in as `SecretStr`, go straight into the store (encrypted) and
 come back only as `has_*` flags. Audit `details` carry names and settings, never a value. The
@@ -18,8 +19,16 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.monitoring.audit import begin_change, finish_change
 from omnikrux.monitoring.projects.types import REVIEW_CHANGED, ReviewChanged, UnknownProject
+from omnikrux.monitoring.query.filters import render_matchers
+from omnikrux.monitoring.query.suggest import suggest_filter
 from omnikrux.monitoring.services import MonitoringServices
-from omnikrux.monitoring.sources.connector import QueryRejected
+from omnikrux.monitoring.sources.connector import ClusterProbe, QueryRejected
+from omnikrux.monitoring.sources.discovery import (
+    CLUSTER_GONE,
+    FoundState,
+    FoundType,
+    UnknownCluster,
+)
 from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE, HealthOut, run_test
 from omnikrux.monitoring.sources.store import NewSource, SourceChange
 from omnikrux.monitoring.sources.transport import (
@@ -36,7 +45,9 @@ from omnikrux.monitoring.sources.types import (
     NAME_RULE,
     AuthType,
     ClusterTarget,
+    FilterOrigin,
     NameTaken,
+    ProjectKind,
     Reach,
     SourceConfig,
     SourceSecrets,
@@ -44,9 +55,11 @@ from omnikrux.monitoring.sources.types import (
     clean_name,
 )
 
-__all__ = ["SECRETS_UNREADABLE", "config_from_in", "new_source_of", "router"]
+__all__ = ["SECRETS_UNREADABLE", "config_from_in", "finding_router", "new_source_of", "router"]
 
 router = APIRouter(prefix="/sources")
+# Discovery and filter suggestions live beside /sources, not under it.
+finding_router = APIRouter()
 
 MAX_HEADERS = 20
 TEST_SECONDS = 10.0
@@ -78,6 +91,7 @@ AUTH_NEEDS = {
 SOURCE_GONE = "That source doesn't exist anymore. It may have been removed."
 NOT_LINKED = "This source isn't linked to that project."
 NOT_SAVED = "The source couldn't be saved. Try again."
+ONE_SOURCE = "Give either a saved source or a new one, not both."
 
 
 # --- Shapes ------------------------------------------------------------------------------------
@@ -211,6 +225,45 @@ class FieldCatalogOut(BaseModel):
 class AlertingOut(BaseModel):
     omnikrux_engine: bool
     tool_engine: Literal["prometheus_rule", "loki_ruler"] | None
+    reason: str | None
+
+
+class FoundToolOut(BaseModel):
+    type: FoundType
+    state: FoundState
+    namespace: str | None
+    service: str | None
+    port: str | None
+    scheme: Literal["http", "https"]
+    version: str | None
+    message: str | None
+    existing_source_id: str | None
+    detail: str | None
+
+
+class DiscoveryOut(BaseModel):
+    cluster_id: str
+    cluster_name: str
+    state: Literal["ok", "error"]
+    message: str | None
+    found: list[FoundToolOut]
+    checked_at: datetime
+
+
+class SuggestIn(BaseModel):
+    """Exactly one of `source_id` (a saved source) and `source` (one as entered)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cluster_id: str | None = None
+    kind: ProjectKind
+    source_id: str | None = None
+    source: SourceIn | None = None
+
+
+class SuggestOut(BaseModel):
+    filter: str
+    origin: FilterOrigin
     reason: str | None
 
 
@@ -786,12 +839,81 @@ async def source_alerting(id: str, request: Request) -> AlertingOut:
     source = await _source(services, id)
     _readable(source)
     connector = services.connectors.get(source.type)
+    probe: ClusterProbe | None = None
+    if source.reach == "cluster" and source.cluster is not None:
+        try:
+            await _registry(request).get(source.cluster.cluster_id)
+        except KeyError:  # a cluster OmniKrux no longer knows serves nothing
+            pass
+        else:
+            probe = services.discovery.probe(source.cluster.cluster_id)
     try:
-        capability = await connector.alerting(services.transports.for_source(source), cluster=None)
+        capability = await connector.alerting(services.transports.for_source(source), cluster=probe)
     except (SourceUnreachable, QueryRejected) as exc:
         raise _unreachable(exc) from None
     return AlertingOut(
         omnikrux_engine=capability.omnikrux_engine,
         tool_engine=capability.tool_engine,
         reason=capability.reason,
+    )
+
+
+@finding_router.get("/discovery/{cluster_id}")
+async def discover_tools(cluster_id: str, request: Request) -> DiscoveryOut:
+    """The Prometheus, Loki and Grafana running in a known cluster, each probed now."""
+    try:
+        result = await _services(request).discovery.find(cluster_id)
+    except UnknownCluster:
+        raise HTTPException(status_code=404, detail=CLUSTER_GONE) from None
+    return DiscoveryOut(
+        cluster_id=result.cluster_id,
+        cluster_name=result.cluster_name,
+        state=result.state,
+        message=result.message,
+        found=[
+            FoundToolOut(
+                type=t.type,
+                state=t.state,
+                namespace=t.namespace,
+                service=t.service,
+                port=t.port,
+                scheme=t.scheme,
+                version=t.version,
+                message=t.message,
+                existing_source_id=t.existing_source_id,
+                detail=t.detail,
+            )
+            for t in result.found
+        ],
+        checked_at=result.checked_at,
+    )
+
+
+@finding_router.post("/suggest-filter")
+async def suggest_source_filter(body: SuggestIn, request: Request) -> SuggestOut:
+    """The label filter a project should use on a source; nothing is stored or audited."""
+    if (body.source_id is None) == (body.source is None):
+        raise _refuse(ONE_SOURCE)
+    services, registry = _services(request), _registry(request)
+    cluster = None
+    if body.cluster_id is not None:
+        try:
+            cluster = await registry.get(body.cluster_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=CLUSTER_GONE) from None
+    if body.source is not None:
+        source = await config_from_in(body.source, registry)
+    else:
+        source = await _source(services, body.source_id or "")
+    suggestion = await suggest_filter(
+        kind=body.kind,
+        cluster=cluster,
+        source=source,
+        connector=services.connectors.get(source.type),
+        transport=services.transports.for_source(source),
+    )
+    return SuggestOut(
+        filter=render_matchers(suggestion.matchers),
+        origin=suggestion.origin,
+        reason=suggestion.reason,
     )
