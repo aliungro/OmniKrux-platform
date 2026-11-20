@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
+from omnikrux.monitoring.sources.connector import ConnectorRegistry, default_connectors
 from omnikrux.monitoring.sources.store import SourceStore
 from omnikrux.monitoring.sources.transport import TransportFactory
 from omnikrux.security.secrets import SecretBox
@@ -18,6 +19,7 @@ class MonitoringServices:
     projects: ProjectStore
     groups: GroupStore
     transports: TransportFactory
+    connectors: ConnectorRegistry
 
     async def close(self) -> None:
         """Release what the services hold: the transports' HTTP session (the stores share the
@@ -37,4 +39,5 @@ def build_services(
         projects=ProjectStore(sessionmaker),
         groups=GroupStore(sessionmaker),
         transports=TransportFactory(connections, registry),
+        connectors=default_connectors(),
     )

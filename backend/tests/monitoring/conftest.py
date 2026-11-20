@@ -2,6 +2,7 @@
 
 import itertools
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -12,9 +13,12 @@ from fastapi.testclient import TestClient
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
+from omnikrux.kube.connections import ClusterConnections
 from omnikrux.main import create_app
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
 from omnikrux.monitoring.sources.store import NewSource, SourceStore
+from omnikrux.monitoring.sources.transport import TransportFactory
+from omnikrux.monitoring.sources.types import SourceConfig, SourceSecrets
 from omnikrux.security.secrets import SecretBox
 from tests.fakekube import kubeconfig_for
 from tests.monitoring.fakes import (
@@ -125,3 +129,36 @@ async def fake_prometheus_mtls(fake_tls):
     """An HTTPS Prometheus that requires a client certificate signed by `fake_tls`'s CA."""
     async with serve_fake_prometheus(fake_tls, mtls=True) as server:
         yield server
+
+
+@pytest.fixture
+async def direct(registry):
+    """`direct(url, type="prometheus", name=...)`: the transport of a URL-reached source."""
+    factory = TransportFactory(ClusterConnections(registry), registry)
+
+    def make(url: str, type: str = "prometheus", name: str = "Source · test"):
+        now = datetime.now(UTC)
+        config = SourceConfig(
+            id="src-1",
+            name=name,
+            type=type,
+            reach="url",
+            url=url,
+            cluster=None,
+            path_prefix="",
+            auth_type="none",
+            username=None,
+            header_name=None,
+            client_cert_pem=None,
+            ca_pem=None,
+            header_names=(),
+            secrets=SourceSecrets(),
+            created_by_project_id=None,
+            created_at=now,
+            updated_at=now,
+            check=None,
+        )
+        return factory.for_source(config)
+
+    yield make
+    await factory.close()

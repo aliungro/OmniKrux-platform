@@ -1,0 +1,197 @@
+"""What a connector is: one shape for every kind of monitoring tool.
+
+A connector knows a tool's API (what to ask, how to read the answer) and nothing about reaching
+it: the `SourceTransport` it is handed does that. `test` never raises for an unreachable tool (it
+reports it); every other call raises `SourceUnreachable` as the transport does, and
+`QueryRejected` when the tool itself refuses a request.
+"""
+
+import json
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
+
+from omnikrux.monitoring.projects.types import Matcher
+from omnikrux.monitoring.query.series import QueryResult
+from omnikrux.monitoring.sources import messages
+from omnikrux.monitoring.sources.transport import SourceTransport, TransportResponse
+from omnikrux.monitoring.sources.types import SourceType
+
+QueryLanguage = Literal["promql", "logql"]
+QueryRejectedCode = Literal["bad_query", "tool_error", "unauthorized"]
+
+MAX_TOOL_MESSAGE = 300
+TOOL_ERROR = "{name} answered HTTP {status}. Try again, or check the tool."
+QUERY_REFUSED = "{name} couldn't run that query."
+NOT_LIKE = "{name} answered, but not like {what}. Check the address and its path."
+RULER_OFF = "This Loki doesn't have its ruler turned on."
+NO_OPERATOR = (
+    "Rules can run in the tool only for a Prometheus run by the Prometheus Operator "
+    "in a known cluster."
+)
+
+
+@dataclass(frozen=True)
+class TestResult:
+    __test__ = False  # not a pytest test class, whatever module imports it
+
+    ok: bool
+    version: str | None
+    message: str | None
+
+
+@dataclass(frozen=True)
+class MetricField:
+    name: str
+    type: str | None
+    help: str | None
+    unit: str | None
+
+
+@dataclass(frozen=True)
+class FieldCatalog:
+    metrics: tuple[MetricField, ...]
+    labels: tuple[str, ...]
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class AlertingCapability:
+    omnikrux_engine: bool
+    tool_engine: Literal["prometheus_rule", "loki_ruler"] | None
+    reason: str | None
+
+
+class ClusterProbe(Protocol):
+    async def serves(self, group: str, version: str, plural: str) -> bool: ...
+
+
+@dataclass(frozen=True)
+class ConnectorQuery:
+    kind: Literal["instant", "range"]
+    query: str
+    time: float | None = None
+    start: float | None = None
+    end: float | None = None
+    step: float | None = None
+    limit: int | None = None
+    direction: Literal["backward", "forward"] = "backward"
+
+
+class QueryRejected(Exception):
+    """The tool answered, and refused the request. `message` is plain words for the user."""
+
+    def __init__(self, code: QueryRejectedCode, message: str, status: int) -> None:
+        super().__init__(message)
+        self.code: QueryRejectedCode = code
+        self.message = message
+        self.status = status
+
+
+class UnknownSourceType(Exception):
+    def __init__(self, type: str) -> None:
+        super().__init__(f'There\'s no connector for "{type}" sources.')
+        self.message = str(self)
+
+
+class Connector(Protocol):
+    type: SourceType
+    label: str
+    language: QueryLanguage
+
+    async def test(self, t: SourceTransport, name: str) -> TestResult: ...
+
+    async def query(self, t: SourceTransport, q: ConnectorQuery, name: str) -> QueryResult: ...
+
+    async def describe_fields(
+        self, t: SourceTransport, *, matchers: Sequence[Matcher], limit: int = 2000
+    ) -> FieldCatalog: ...
+
+    async def label_values(
+        self, t: SourceTransport, label: str, *, matchers: Sequence[Matcher], limit: int = 1000
+    ) -> list[str]: ...
+
+    async def alerting(
+        self, t: SourceTransport, *, cluster: ClusterProbe | None
+    ) -> AlertingCapability: ...
+
+
+class ConnectorRegistry:
+    def __init__(self) -> None:
+        self._connectors: dict[str, Connector] = {}
+
+    def register(self, c: Connector) -> None:
+        if c.type in self._connectors:
+            raise ValueError(f"A connector for {c.type} is already registered.")
+        self._connectors[c.type] = c
+
+    def get(self, type: str) -> Connector:
+        try:
+            return self._connectors[type]
+        except KeyError:
+            raise UnknownSourceType(type) from None
+
+    def types(self) -> list[SourceType]:
+        return [c.type for c in self._connectors.values()]
+
+
+def default_connectors() -> ConnectorRegistry:
+    # Imported here: the connectors import this module for the shapes above.
+    from omnikrux.monitoring.sources.loki import LokiConnector
+    from omnikrux.monitoring.sources.prometheus import PrometheusConnector
+
+    registry = ConnectorRegistry()
+    registry.register(PrometheusConnector())
+    registry.register(LokiConnector())
+    return registry
+
+
+# --- Helpers the connectors share --------------------------------------------------------------
+
+
+def json_object(body: bytes) -> dict | None:
+    """The body as a JSON object, or None when it isn't one."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def tool_text(body: bytes) -> str:
+    """What the tool said was wrong, capped; empty when it said nothing (a cluster's service
+    proxy hands back no error body)."""
+    data = json_object(body)
+    if data is not None:
+        text = data.get("error")
+        text = text if isinstance(text, str) else ""
+    else:
+        text = body.decode("utf-8", "replace")
+    return " ".join(text.split())[:MAX_TOOL_MESSAGE]
+
+
+def reject(response: TransportResponse, name: str) -> QueryRejected:
+    """The error a non-2xx answer to a query or a lookup stands for."""
+    status = response.status
+    if status in (400, 422):
+        message = tool_text(response.body) or QUERY_REFUSED.format(name=name)
+        return QueryRejected("bad_query", message, 400)
+    if status in (401, 403):
+        message = messages.REJECTED.format(name=name, status=status)
+        return QueryRejected("unauthorized", message, 502)
+    return QueryRejected("tool_error", TOOL_ERROR.format(name=name, status=status), 502)
+
+
+def checked_json(response: TransportResponse, name: str, what: str) -> dict[str, Any]:
+    """The JSON object of a 2xx answer; `QueryRejected` for any other status or a non-JSON body."""
+    if not 200 <= response.status < 300:
+        raise reject(response, name)
+    data = json_object(response.body)
+    if data is None:
+        raise QueryRejected("tool_error", NOT_LIKE.format(name=name, what=what), 502)
+    return data
+
+
+def number_text(value: float) -> str:
+    """A time or step in seconds as the tools read it."""
+    return f"{value:.3f}".rstrip("0").rstrip(".")
