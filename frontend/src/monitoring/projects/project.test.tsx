@@ -355,3 +355,13 @@ describe("Esc closes the add panels", () => {
     expect(api.state.sources).toHaveLength(0);
   });
 });
+
+describe("An empty filter", () => {
+  it("says there is no filter rather than showing an example value", async () => {
+    const prom = source("s1", "Prom");
+    installFakeMonitoringApi({ sources: [prom], projects: [project("p1", "Dev", [link(prom)])] }, fallback);
+    open("p1");
+    const field = await screen.findByRole("textbox", { name: "Filter for Prom" });
+    expect(field.getAttribute("placeholder")).toBe('No filter · label="value", …');
+  });
+});

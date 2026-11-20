@@ -79,7 +79,7 @@ export function FilterField({ value, origin, reason, onChange, forName }: Filter
         type="text"
         autoComplete="off"
         spellCheck={false}
-        placeholder='cluster="prod-east"'
+        placeholder='No filter · label="value", …'
         aria-label={forName ? `Filter for ${forName}` : undefined}
         aria-invalid={problem ? true : undefined}
         aria-describedby={described}

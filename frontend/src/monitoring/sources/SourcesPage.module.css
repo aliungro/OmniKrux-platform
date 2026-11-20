@@ -64,6 +64,13 @@
   cursor: default;
 }
 
+/* Add a source while a form is open: plainly off, not the lilac of a button that works. */
+.primary:disabled {
+  background: var(--surf-2);
+  color: var(--ink-3);
+  cursor: default;
+}
+
 .primary:focus-visible,
 .secondary:focus-visible,
 .quiet:focus-visible {
