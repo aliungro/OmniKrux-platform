@@ -7,6 +7,7 @@ import type { SourceOut, TreeOut } from "./api/types";
 import { recordRecent } from "./home/recent";
 import MonitoringHome from "./home/MonitoringHome";
 import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
+import SourcesPage, { SourcePage } from "./sources/SourcesPage";
 import { buildSearchIndex } from "./search/search";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
 import { MONITORING_HOME, monitoringTabLabel, type MonitoringTabAction, type MonitoringView } from "./shell/tabState";
@@ -44,8 +45,8 @@ const later = (name: string, text?: string): ComponentType<MonitoringPageProps> 
  */
 const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   home: MonitoringHome,
-  sources: later("Sources"),
-  source: later("Source"),
+  sources: SourcesPage,
+  source: SourcePage,
   setup: later("New project"),
   project: later("Project"),
   group: later("Group"),

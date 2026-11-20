@@ -1,0 +1,193 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { SourceOut } from "../api/types";
+import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
+import { render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { SourceForm } from "./SourceForm";
+import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
+import { sourceTypeLabel, whereLabel } from "./sourceLabels";
+
+beforeEach(() => localStorage.clear());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+const T = "2026-01-01T00:00:00Z";
+const TOKEN = "s3cret-bearer-token-value";
+const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+const fallback = async () => json([]);
+
+function source(id: string, name: string, over: Partial<SourceOut> = {}): SourceOut {
+  return {
+    id, name, type: "prometheus", reach: "url", url: "http://prom.example:9090", cluster_id: null, cluster_name: null, namespace: null,
+    service: null, port: null, scheme: "http", path_prefix: "",
+    auth: { type: "none", username: null, header_name: null, has_password: false, has_token: false, has_api_key: false, has_client_key: false, has_client_cert: false },
+    headers: [], has_ca: false, created_by_project_id: null, used_by: [], health: { state: "unknown", message: null, version: null, checked_at: null },
+    created_at: T, updated_at: T, ...over,
+  };
+}
+const bearer = (): SourceOut["auth"] => ({ type: "bearer", username: null, header_name: null, has_password: false, has_token: true, has_api_key: false, has_client_key: false, has_client_cert: false });
+
+const open = () => renderMonitoringApp({ tabs: tabsWith({ page: "sources" }) });
+
+describe("labels", () => {
+  it("names types and places", () => {
+    expect(sourceTypeLabel("prometheus")).toBe("Prometheus-compatible");
+    expect(sourceTypeLabel("loki")).toBe("Loki");
+    expect(whereLabel(source("a", "A"))).toBe("http://prom.example:9090");
+    expect(whereLabel(source("a", "A", { reach: "cluster", url: null, cluster_name: "prod", namespace: "mon", service: "prom" }))).toBe("prod · mon/prom");
+  });
+});
+
+describe("Sources page", () => {
+  it("lists sources and says when there are none", async () => {
+    installFakeMonitoringApi({}, fallback);
+    open();
+    expect(await screen.findByText("No sources yet. Add one here or while setting up a project.")).toBeTruthy();
+    cleanup();
+    installFakeMonitoringApi({ sources: [source("s1", "Prom", { used_by: [{ id: "p1", name: "Dev" }] }), source("s2", "Loki", { type: "loki" })] }, fallback);
+    open();
+    expect(await screen.findByText("Used by Dev")).toBeTruthy();
+    expect(screen.getByText("Not used by a project")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /^Delete/ })).toHaveLength(2);
+  });
+
+  it("adding a source by hand sends no secret back into the page", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({}, fallback);
+    const { client } = open();
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    await user.selectOptions(screen.getByLabelText("Authentication"), "bearer");
+    const field = screen.getByLabelText("Token") as HTMLInputElement;
+    expect(field.type).toBe("password");
+    expect(field.autocomplete).toBe("off");
+    await user.type(field, TOKEN);
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(api.state.sources).toHaveLength(1));
+    await screen.findByRole("button", { name: "Add a source" });
+    const inValue = Array.from(document.querySelectorAll("input,textarea")).some((el) => (el as HTMLInputElement).value === TOKEN);
+    expect(inValue).toBe(false);
+    expect(document.body.innerHTML).not.toContain(TOKEN);
+    expect(JSON.stringify(client.getQueryCache().getAll().map((q) => q.state))).not.toContain(TOKEN);
+    expect(JSON.stringify(client.getMutationCache().getAll().map((m) => ({ v: m.state.variables, d: m.state.data })))).not.toContain(TOKEN);
+    expect(api.requests.some((r) => r.url.includes(TOKEN))).toBe(false);
+  });
+
+  it("refuses an empty secret before sending, in words", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({}, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    await user.selectOptions(screen.getByLabelText("Authentication"), "bearer");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Enter the token/);
+    expect(api.requests.some((r) => r.method === "POST")).toBe(false);
+  });
+
+  it("stored secrets show the keep hint and PATCH omits them", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ sources: [source("s1", "Prom", { auth: bearer() })] }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Prom" }));
+    const token = screen.getByLabelText("Token") as HTMLInputElement;
+    expect(token.value).toBe("");
+    expect(screen.getByText("Saved. Leave empty to keep it.")).toBeTruthy();
+    const name = screen.getByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "Prom main");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(api.requests.some((r) => r.method === "PATCH")).toBe(true));
+    const body = api.requests.find((r) => r.method === "PATCH")!.body as { name: string; auth?: Record<string, unknown> };
+    expect(body.name).toBe("Prom main");
+    expect(body.auth?.token).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("\"token\"");
+    await waitFor(() => expect(api.state.sources[0].name).toBe("Prom main"));
+  });
+
+  it("test connection shows version or words", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    await user.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("Connected · version fake")).toBeTruthy();
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      url === "/api/monitoring/sources/test" ? Promise.resolve(json({ ok: false, version: null, message: "connection refused" })) : real(url, init));
+    await user.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("connection refused")).toBeTruthy();
+  });
+});
+
+describe("deleting a source", () => {
+  const seed = () => {
+    const prom = source("s1", "Prom", { used_by: [{ id: "p1", name: "Dev" }] });
+    const dev = { ...seedProject("p1", "Dev"), links: [{ source_id: "s1", source_name: "Prom", source_type: "prometheus" as const, filter: "", filter_origin: "none" as const, created_by_project: false }] };
+    return installFakeMonitoringApi({ sources: [prom], projects: [dev] }, fallback);
+  };
+
+  it("delete review opens on its action button and Ctrl+Enter confirms", async () => {
+    const api = seed();
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Prom" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete source Prom?" });
+    expect(await within(dialog).findByText("Projects that use it lose it: Dev.")).toBeTruthy();
+    const go = within(dialog).getByRole("button", { name: "Delete source" });
+    expect(document.activeElement).toBe(go);
+    fireEvent.keyDown(go, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(api.state.sources).toHaveLength(0));
+    expect(await screen.findByText("No sources yet. Add one here or while setting up a project.")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("stale delete review asks again", async () => {
+    const api = seed();
+    const real = globalThis.fetch;
+    let first = true;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/delete-review") && first) {
+        first = false;
+        return json({ source_id: "s1", name: "Prom", projects: [], token: "old" });
+      }
+      return real(url, init);
+    });
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Prom" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Delete source" }));
+    expect(await screen.findByText("Something changed since the review. Review it again.")).toBeTruthy();
+    expect(api.state.sources).toHaveLength(1);
+    expect(await screen.findByText("Projects that use it lose it: Dev.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete source" }));
+    await waitFor(() => expect(api.state.sources).toHaveLength(0));
+  });
+
+  it("Esc in the review returns focus to Delete", async () => {
+    seed();
+    open();
+    const row = await screen.findByRole("button", { name: "Delete Prom" });
+    row.focus();
+    fireEvent.click(row);
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.keyDown(within(dialog).getByRole("button", { name: "Delete source" }), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete Prom" }));
+  });
+});
+
+describe("collect mode", () => {
+  it("hands the entered source to the caller and stores nothing", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({}, fallback);
+    const onCollect = vi.fn();
+    render(<QueryClientProvider client={new QueryClient()}><SourceForm mode="collect" onCancel={() => {}} onCollect={onCollect} /></QueryClientProvider>);
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Use this source" }));
+    expect(onCollect).toHaveBeenCalledWith(expect.objectContaining({ type: "loki", reach: "url", url: "http://loki.example:3100" }));
+    expect(api.requests).toHaveLength(0);
+  });
+});
