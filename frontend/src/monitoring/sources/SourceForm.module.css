@@ -157,7 +157,7 @@
   font-weight: 500;
 }
 
-.quiet:hover:not(:disabled) {
+.quiet:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--rule);
   color: var(--ink);
 }
@@ -165,7 +165,11 @@
 .primary:disabled,
 .secondary:disabled,
 .danger:disabled,
-.quiet:disabled {
+.quiet:disabled,
+.primary[aria-disabled="true"],
+.secondary[aria-disabled="true"],
+.danger[aria-disabled="true"],
+.quiet[aria-disabled="true"] {
   opacity: 0.55;
   cursor: default;
 }

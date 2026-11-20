@@ -202,7 +202,7 @@ describe("fix round", () => {
     await user.type(screen.getByLabelText("Token"), TOKEN);
     await user.click(screen.getByRole("button", { name: "Save source" }));
     await waitFor(() => expect(api.state.sources).toHaveLength(1));
-    await waitFor(() => expect((screen.getByRole("button", { name: "Save source" }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save source" }).getAttribute("aria-disabled")).toBeNull());
     expect((screen.getByLabelText("Token") as HTMLInputElement).value).toBe("");
     expect(document.body.innerHTML).not.toContain(TOKEN);
   });
@@ -283,5 +283,29 @@ describe("Source errors in plain words", () => {
     renderMonitoringApp({ tabs: tabsWith({ page: "source", id: "s1" }) });
     const page = document.querySelector<HTMLElement>("[data-monitoring-page]")!;
     expect((await within(page).findByRole("alert")).textContent).toBe(`${DOWN}Try again`);
+  });
+});
+
+describe("Saving once", () => {
+  it("Save stays busy until the caller has finished, so a second press adds nothing", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({}, fallback);
+    let finish = () => {};
+    const onSaved = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    render(<QueryClientProvider client={new QueryClient()}><SourceForm mode="save" onSaved={onSaved} onCancel={() => {}} /></QueryClientProvider>);
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    const save = screen.getByRole("button", { name: "Save source" });
+    await user.click(save);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    const busy = screen.getByRole("button", { name: "Saving…" });
+    expect(busy.getAttribute("aria-disabled")).toBe("true");
+    await user.click(busy);
+    await user.type(screen.getByLabelText("Address"), "{Enter}");
+    expect(api.requests.filter((r) => r.method === "POST" && r.url === "/api/monitoring/sources")).toHaveLength(1);
+    expect(api.state.sources).toHaveLength(1);
+    // The pressed button keeps the keyboard while it waits.
+    expect(document.activeElement).not.toBe(document.body);
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save source" }).getAttribute("aria-disabled")).toBeNull());
   });
 });

@@ -22,7 +22,8 @@ interface CommonProps {
 
 /** `save` stores the source and reports it; `collect` hands the entered source to `onCollect` and stores nothing. */
 export type SourceFormProps = CommonProps & (
-  | { mode: "save"; onSaved(source: SourceOut): void; onCollect?: never }
+  /** The form stays busy until a promise `onSaved` returns has settled: Save can't be pressed twice. */
+  | { mode: "save"; onSaved(source: SourceOut): void | Promise<void>; onCollect?: never }
   | { mode: "collect"; onCollect?(body: SourceIn): void; onSaved?: never }
 );
 
@@ -83,6 +84,7 @@ export function SourceForm(props: SourceFormProps) {
   const address = useRef<HTMLInputElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const keyCounter = useRef(0);
+  const busyRef = useRef(false);
   const byCluster = initial?.reach === "cluster";
   const stored = initial?.auth;
 
@@ -140,10 +142,13 @@ export function SourceForm(props: SourceFormProps) {
 
   async function save(e: FormEvent) {
     e.preventDefault();
+    // One save at a time, until the caller has finished with it: a second press would add the source twice.
+    if (busyRef.current) return;
     setError(null);
     const built = build();
     if (typeof built === "string") return setError(built);
     if (props.mode === "collect") return props.onCollect?.(built.body);
+    busyRef.current = true;
     setBusy(true);
     try {
       // A plain call, not a mutation: TanStack would keep this body (secrets in it) in its cache.
@@ -152,16 +157,18 @@ export function SourceForm(props: SourceFormProps) {
       setSecrets({ password: "", token: "", apiKey: "", certPem: "", keyPem: "" });
       setHeaders((cur) => cur.map((h) => ({ ...h, value: "" })));
       setCa("");
-      setBusy(false);
       await invalidateMonitoring(client);
-      props.onSaved?.(saved);
+      await props.onSaved?.(saved);
     } catch (err) {
       setError(failure(err));
+    } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
 
   async function test() {
+    if (busyRef.current || testing) return;
     setError(null);
     setResult(null);
     const built = build();
@@ -179,7 +186,8 @@ export function SourceForm(props: SourceFormProps) {
     }
   }
 
-  const addHeader = () => setHeaders((cur) => [...cur, { key: ++keyCounter.current, name: "", value: "", saved: false }]);
+  const addHeader = () => setHeaders((cur) =>
+    (cur.length >= MAX_HEADERS ? cur : [...cur, { key: ++keyCounter.current, name: "", value: "", saved: false }]));
   const editHeader = (key: number, patch: Partial<HeaderRow>) => setHeaders((cur) => cur.map((h) => (h.key === key ? { ...h, ...patch } : h)));
 
   return (
@@ -259,7 +267,7 @@ export function SourceForm(props: SourceFormProps) {
               </div>
             ))}
             <div>
-              <button type="button" className={s.quiet} onClick={addHeader} disabled={headers.length >= MAX_HEADERS}>Add header</button>
+              <button type="button" className={s.quiet} onClick={addHeader} aria-disabled={headers.length >= MAX_HEADERS || undefined}>Add header</button>
               {headers.length >= MAX_HEADERS && <span className={s.hint}> The most is {MAX_HEADERS} headers.</span>}
             </div>
           </fieldset>
@@ -281,10 +289,13 @@ export function SourceForm(props: SourceFormProps) {
       {error && <p className={s.error} role="alert">{error}</p>}
       {result && <p className={result.ok ? s.ok : s.error} role="status">{result.text}</p>}
       <div className={s.actions}>
-        <button type="button" className={s.secondary} onClick={test} disabled={busy || testing}>{testing ? "Testing…" : "Test connection"}</button>
+        {/* aria-disabled, not disabled: a pressed button keeps the keyboard while it waits. */}
+        <button type="button" className={s.secondary} onClick={() => void test()} aria-disabled={busy || testing || undefined}>
+          {testing ? "Testing…" : "Test connection"}
+        </button>
         <span className={s.spacer} />
-        <button type="button" className={s.secondary} onClick={onCancel} disabled={busy}>Cancel</button>
-        <button type="submit" className={s.primary} disabled={busy}>{mode === "collect" ? "Use this source" : busy ? "Saving…" : "Save source"}</button>
+        <button type="button" className={s.secondary} onClick={() => { if (!busyRef.current) onCancel(); }} aria-disabled={busy || undefined}>Cancel</button>
+        <button type="submit" className={s.primary} aria-disabled={busy || undefined}>{mode === "collect" ? "Use this source" : busy ? "Saving…" : "Save source"}</button>
       </div>
     </form>
   );

@@ -364,7 +364,7 @@ export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageP
           <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} />
         ) : (
           <div className={s.panel}>
-            <SourceForm mode="save" onSaved={(saved) => void linkNew(saved.id)} onCancel={closePanel} />
+            <SourceForm mode="save" onSaved={(saved) => linkNew(saved.id)} onCancel={closePanel} />
           </div>
         )}
       </section>
