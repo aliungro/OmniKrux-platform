@@ -82,3 +82,19 @@ export async function deleteEmpty(path: string): Promise<void> {
   const res = await fetch(path, { method: "DELETE" });
   if (!res.ok) return fail(res);
 }
+
+async function sendJson<T>(method: "PATCH" | "PUT", path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) return fail(res);
+  return (await res.json()) as T;
+}
+
+/** PATCHes JSON and reads JSON back; the server's `detail` becomes the error's words. */
+export function patchJson<T>(path: string, body: unknown): Promise<T> {
+  return sendJson("PATCH", path, body);
+}
+
+/** PUTs JSON and reads JSON back; the server's `detail` becomes the error's words. */
+export function putJson<T>(path: string, body: unknown): Promise<T> {
+  return sendJson("PUT", path, body);
+}
