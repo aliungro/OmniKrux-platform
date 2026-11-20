@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from omnikrux.audit.store import (
     INTERRUPTED,
+    AppAuditEntry,
     AuditEntry,
     AuditLog,
     AuditUnavailable,
@@ -35,6 +36,11 @@ async def setup(tmp_path):
     )
     yield AuditLog(sessionmaker, registry), info, engine
     await engine.dispose()
+
+
+@pytest.fixture
+def audit_log(setup):
+    return setup[0]
 
 
 def entry(cluster_id: str, **overrides) -> AuditEntry:
@@ -209,3 +215,92 @@ async def test_finish_reports_whether_it_finished(setup):
     async with engine.begin() as conn:
         await conn.execute(text("DROP TABLE audit"))
     assert await audit.finish(other, "succeeded", "Scaled.") is False
+
+
+async def test_monitoring_entry_has_no_cluster(audit_log):
+    rid = await audit_log.begin_app(
+        AppAuditEntry(
+            "local",
+            "monitoring",
+            "source_add",
+            "source",
+            "Prometheus · prod-east",
+            {"type": "prometheus"},
+        )
+    )
+    await audit_log.finish(rid, "succeeded")
+    [rec] = (await audit_log.list()).records
+    assert (rec.app, rec.cluster_id, rec.cluster_name, rec.provider) == ("monitoring", "", "", "")
+    assert rec.namespace is None
+    assert (rec.action, rec.kind, rec.name, rec.outcome) == (
+        "source_add",
+        "source",
+        "Prometheus · prod-east",
+        "succeeded",
+    )
+    assert rec.details == {"type": "prometheus"}
+
+
+async def test_kubernetes_records_are_unchanged(setup):
+    audit, info, _ = setup
+    rid = await audit.begin(
+        entry(info.id, details={"summary": ["Scale from 1 to 2 replicas."]}, diff="-1\n+2")
+    )
+    await audit.finish(rid, "succeeded", "Scaled.")
+    [rec] = (await audit.list()).records
+    assert rec.app == "kubernetes"
+    assert rec.actor == "local"
+    assert rec.action == "scale"
+    assert rec.cluster_id == info.id
+    assert (rec.cluster_name, rec.provider) == ("prod-east", "onprem")
+    assert (rec.namespace, rec.kind, rec.name) == ("demo", "deployments.apps", "web")
+    assert (rec.outcome, rec.message) == ("succeeded", "Scaled.")
+    assert rec.diff == "-1\n+2"
+    assert rec.details == {"summary": ["Scale from 1 to 2 replicas."]}
+    assert rec.finished_at is not None
+
+
+async def test_cluster_filter_leaves_out_monitoring_entries(setup):
+    audit, info, _ = setup
+    kube = await audit.begin(entry(info.id))
+    mon = await audit.begin_app(
+        AppAuditEntry("local", "monitoring", "group_add", "group", "Production")
+    )
+    assert [r.id for r in (await audit.list(cluster_id=info.id)).records] == [kube]
+    assert [r.id for r in (await audit.list()).records] == [mon, kube]
+
+
+async def test_begin_app_without_audit_raises(setup):
+    audit, _, engine = setup
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE audit"))
+    with pytest.raises(AuditUnavailable):
+        await audit.begin_app(AppAuditEntry("local", "monitoring", "source_add", "source", "x"))
+
+
+async def test_migration_marks_existing_rows_as_kubernetes(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+
+    from omnikrux.db import MIGRATIONS_DIR
+
+    def migrate(conn, rev):
+        config = Config()
+        config.set_main_option("script_location", str(MIGRATIONS_DIR))
+        config.attributes["connection"] = conn
+        command.upgrade(config, rev)
+
+    engine = make_engine(Settings(data_dir=tmp_path, kubeconfig="", in_container=False).db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(migrate, "0005")
+        await conn.execute(
+            text(
+                "INSERT INTO audit (started_at, actor, action, cluster_id, cluster_name,"
+                " provider, namespace, kind, name, outcome) VALUES ('2026-11-07 10:00:00',"
+                " 'local', 'cordon', 'f', 'kind-dev', 'kind', NULL, 'nodes', 'worker', 'started')"
+            )
+        )
+        await conn.run_sync(migrate, "head")
+        app = (await conn.execute(text("SELECT app FROM audit"))).scalar_one()
+    await engine.dispose()
+    assert app == "kubernetes"

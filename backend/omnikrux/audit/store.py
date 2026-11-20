@@ -41,7 +41,17 @@ Action = Literal[
     "cluster_remove",
     "cloud_account_add",
     "cloud_account_remove",
+    "source_add",
+    "source_change",
+    "source_remove",
+    "project_add",
+    "project_change",
+    "project_remove",
+    "group_add",
+    "group_change",
+    "group_remove",
 ]
+App = Literal["kubernetes", "monitoring"]
 Outcome = Literal["started", "succeeded", "failed", "ended", "unknown"]
 STARTED: Outcome = "started"
 
@@ -69,6 +79,19 @@ class AuditEntry:
     diff: str | None = None
     cluster_name: str | None = None
     provider: str | None = None
+
+
+@dataclass
+class AppAuditEntry:
+    """An entry for an app whose changes belong to no cluster."""
+
+    actor: str
+    app: Literal["monitoring"]
+    action: Action
+    kind: str
+    name: str | None
+    details: dict | None = None
+    diff: str | None = None
 
 
 class AuditUnavailable(Exception):
@@ -113,6 +136,7 @@ class AuditOut(BaseModel):
     id: int
     started_at: datetime
     finished_at: datetime | None
+    app: App
     actor: str
     action: str
     cluster_id: str
@@ -135,6 +159,7 @@ class AuditPage(BaseModel):
 def _out(row: AuditRecord) -> AuditOut:
     return AuditOut(
         id=row.id,
+        app=row.app,
         started_at=_utc(row.started_at),
         finished_at=_utc(row.finished_at),
         actor=row.actor,
@@ -169,6 +194,7 @@ class AuditLog:
             row = AuditRecord(
                 started_at=_now(),
                 finished_at=None,
+                app="kubernetes",
                 actor=entry.actor,
                 action=entry.action,
                 cluster_id=entry.cluster_id,
@@ -182,6 +208,40 @@ class AuditLog:
                 diff=entry.diff,
                 details=(
                     json.dumps(entry.details, ensure_ascii=False)  # searchable as written
+                    if entry.details is not None
+                    else None
+                ),
+            )
+            async with self._sessionmaker() as session:
+                session.add(row)
+                await session.commit()
+            return row.id
+        except Exception as exc:
+            reason = _reason(exc)
+            log.warning("Could not write the audit record for %s (%s)", entry.action, reason)
+            raise AuditUnavailable(reason) from exc
+
+    async def begin_app(self, entry: AppAuditEntry) -> int:
+        """Write a `started` record for an app without clusters and return its id.
+        Raises AuditUnavailable."""
+        try:
+            row = AuditRecord(
+                started_at=_now(),
+                finished_at=None,
+                app=entry.app,
+                actor=entry.actor,
+                action=entry.action,
+                cluster_id="",
+                cluster_name="",
+                provider="",
+                namespace=None,
+                kind=entry.kind,
+                name=entry.name,
+                outcome=STARTED,
+                message=None,
+                diff=entry.diff,
+                details=(
+                    json.dumps(entry.details, ensure_ascii=False)
                     if entry.details is not None
                     else None
                 ),

@@ -17,6 +17,8 @@ class AuditRecord(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     actor: Mapped[str] = mapped_column(String)
     action: Mapped[str] = mapped_column(String)
+    # Which app made the entry; monitoring entries have no cluster (cluster_id is "").
+    app: Mapped[str] = mapped_column(String, server_default="kubernetes")
     cluster_id: Mapped[str] = mapped_column(String, index=True)
     # Snapshots: the record still reads right after the cluster is renamed or removed.
     cluster_name: Mapped[str] = mapped_column(String)

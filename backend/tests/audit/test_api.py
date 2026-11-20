@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from omnikrux.audit.store import AuditEntry
+from omnikrux.audit.store import AppAuditEntry, AuditEntry
 from omnikrux.config import Settings
 from omnikrux.main import create_app
 
@@ -44,6 +44,7 @@ async def test_audit_route_lists_filters_and_pages(http):
     oldest = body["records"][-1]
     assert set(oldest) == {
         "id",
+        "app",
         "started_at",
         "finished_at",
         "actor",
@@ -114,3 +115,11 @@ async def test_failed_audit_outcome_filters_before_pagination(http):
     for unsupported in ("succeeded", "Failed", ""):
         response = await client.get("/api/audit", params={"outcome": unsupported})
         assert response.status_code == 422
+
+
+async def test_audit_api_reports_app(http):
+    client, audit = http
+    await audit.begin(entry())
+    await audit.begin_app(AppAuditEntry("local", "monitoring", "source_add", "source", "Prom"))
+    rows = (await client.get("/api/audit")).json()["records"]
+    assert [(r["app"], r["cluster_id"]) for r in rows] == [("monitoring", ""), ("kubernetes", "c1")]
