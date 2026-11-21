@@ -152,3 +152,418 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Stat and gauge tiles */
+.stat {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.statGrid,
+.gaugeGrid {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  list-style: none;
+}
+
+.statTile,
+.gaugeTile {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  container-type: inline-size;
+}
+
+.statValue,
+.gaugeText {
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: clamp(22px, 16cqw, 48px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.statTile[data-tone="ok"] .statValue,
+.gaugeTile[data-tone="ok"] .gaugeText {
+  color: var(--ok);
+}
+
+.statTile[data-tone="warn"] .statValue,
+.gaugeTile[data-tone="warn"] .gaugeText {
+  color: var(--warn);
+}
+
+.statTile[data-tone="bad"] .statValue,
+.gaugeTile[data-tone="bad"] .gaugeText {
+  color: var(--bad);
+}
+
+.statName {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spark {
+  width: 100%;
+  height: 22px;
+  margin-top: 2px;
+}
+
+.sparkLine {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.note,
+.hint {
+  flex: none;
+  margin: 6px 0 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.hint {
+  align-self: center;
+  margin: auto;
+  color: var(--ink-2);
+}
+
+.gaugeTile {
+  align-items: center;
+}
+
+.gauge {
+  width: 100%;
+  max-width: 200px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.gaugeTrack,
+.gaugeBand,
+.gaugeValue {
+  fill: none;
+  stroke-linecap: butt;
+  stroke-width: 9;
+}
+
+.gaugeTrack {
+  stroke: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+
+.gaugeBand {
+  stroke: color-mix(in srgb, currentcolor 30%, transparent);
+}
+
+.gaugeValue {
+  stroke: currentcolor;
+  stroke-width: 5;
+}
+
+.gaugeText {
+  font-size: clamp(16px, 13cqw, 30px);
+}
+
+/* Bars */
+.barsH,
+.barsV {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.barsH {
+  align-content: start;
+  gap: 6px;
+}
+
+.barsV {
+  grid-auto-columns: minmax(56px, 1fr);
+  grid-auto-flow: column;
+  gap: 10px;
+}
+
+.barItem {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+
+.barsH .barItem {
+  grid-template-columns: minmax(80px, 28%) 1fr auto;
+}
+
+.barsV .barItem {
+  grid-template-rows: auto 1fr auto;
+  justify-items: center;
+  min-height: 0;
+}
+
+.barsV .barName {
+  grid-row: 3;
+}
+
+.barsV .barValue {
+  grid-row: 1;
+}
+
+.barsV .bar {
+  grid-row: 2;
+  width: 70%;
+  height: 100%;
+  min-height: 24px;
+}
+
+.barName {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar {
+  width: 100%;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.barTrack {
+  fill: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.barFill {
+  fill: currentcolor;
+}
+
+.barValue {
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Table */
+.table {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  font-size: 12px;
+}
+
+.tableScroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  border-radius: 6px;
+}
+
+.tableScroll:focus-visible,
+.logScroll:focus-visible,
+.th:focus-visible,
+.logLine:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.tableHead {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: grid;
+  min-width: max-content;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surf);
+}
+
+.th {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-weight: 600;
+  user-select: none;
+}
+
+.th:hover {
+  color: var(--ink);
+}
+
+.sortMark {
+  color: var(--focus);
+}
+
+.tableBody {
+  position: relative;
+  min-width: max-content;
+}
+
+.tr {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: grid;
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 60%, transparent);
+}
+
+.tr:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+.td {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 10px;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.num {
+  justify-content: flex-end;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Logs */
+.logs {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.logScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.logSpace {
+  position: relative;
+  min-width: 100%;
+}
+
+.logFlow {
+  min-width: 100%;
+}
+
+.logLine {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--ink);
+  line-height: 22px;
+}
+
+.logSpace .logLine {
+  position: absolute;
+  right: 0;
+  left: 0;
+  white-space: nowrap;
+}
+
+.logWrap {
+  align-items: flex-start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.logLine:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+.logLine[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
+}
+
+.logTime {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.logText {
+  min-width: 0;
+}
+
+.logSpace .logText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.logProject {
+  color: var(--focus);
+}
+
+.logLabels {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  max-height: 84px;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  gap: 4px 14px;
+  overflow-y: auto;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-2);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11px;
+}
+
+.logLabel {
+  display: flex;
+  gap: 6px;
+}
+
+.logLabel dt {
+  color: var(--ink-3);
+}
+
+.logLabel dd {
+  margin: 0;
+  color: var(--ink);
+}
