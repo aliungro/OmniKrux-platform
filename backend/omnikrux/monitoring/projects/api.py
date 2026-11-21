@@ -99,10 +99,12 @@ class GroupOut(BaseModel):
 
 
 class TreeDashboard(BaseModel):
-    """Empty in M1; dashboards arrive in M2."""
+    """A dashboard in the sidebar, under its project or group; `ready_made` views are generated,
+    never stored."""
 
     id: str
     title: str
+    ready_made: bool = False
 
 
 class TreeProject(BaseModel):
@@ -360,11 +362,17 @@ def _review_out(review: ProjectDeleteReview) -> ProjectDeleteReviewOut:
 
 @router.get("/tree")
 async def tree(request: Request) -> TreeOut:
-    """The sidebar: projects and groups by name (case-insensitive), and how many sources exist."""
+    """The sidebar: projects and groups by name (case-insensitive), each with its saved
+    dashboards by title (case-insensitive), and how many sources exist."""
     services = _services(request)
     clusters = {c.id: c for c in await _registry(request).list()}
     projects = await services.projects.list()
     names = {p.id: p.name for p in projects}
+    dashboards: dict[tuple[str, str], list[TreeDashboard]] = {}
+    for d in await services.dashboards.list():  # already in title order
+        dashboards.setdefault((d.owner_kind, d.owner_id), []).append(
+            TreeDashboard(id=d.id, title=d.title)
+        )
     return TreeOut(
         projects=[
             TreeProject(
@@ -373,11 +381,17 @@ async def tree(request: Request) -> TreeOut:
                 kind=p.kind,
                 cluster_id=p.cluster_id,
                 color=_color(p, clusters),
+                dashboards=dashboards.get(("project", p.id), []),
             )
             for p in projects
         ],
         groups=[
-            TreeGroup(id=g.id, name=g.name, project_ids=_in_name_order(g.project_ids, names))
+            TreeGroup(
+                id=g.id,
+                name=g.name,
+                project_ids=_in_name_order(g.project_ids, names),
+                dashboards=dashboards.get(("group", g.id), []),
+            )
             for g in await services.groups.list()
         ],
         source_count=await services.sources.count(),

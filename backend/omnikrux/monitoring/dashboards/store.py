@@ -146,16 +146,18 @@ def _version_row(
     id: str,
     version: int,
     spec: dict,
+    text: str,
     moment: datetime,
     origin: Origin,
     *,
     restored_from: int | None = None,
     copied_from: str | None = None,
 ) -> DashboardVersionRow:
+    """`text` is `spec` as stored (`_spec_text`), serialised once by the caller."""
     return DashboardVersionRow(
         dashboard_id=id,
         version=version,
-        spec=_spec_text(spec),
+        spec=text,
         title=spec["title"],
         panel_count=panel_count(spec),
         origin=origin,
@@ -325,13 +327,14 @@ class DashboardStore:
         """A new dashboard at version 1, titled after the document. UnknownProject or
         UnknownGroup (the owner), NameTaken."""
         title = spec["title"]
+        text = _spec_text(spec)
         moment = now()
         row = DashboardRow(
             id=uuid.uuid4().hex,
             owner_kind=owner_kind,
             owner_id=owner_id,
             title=title,
-            spec=_spec_text(spec),
+            spec=text,
             version=1,
             created_at=moment,
             updated_at=moment,
@@ -342,7 +345,9 @@ class DashboardStore:
             await _owner_exists(session, owner_kind, owner_id)
             await _title_free(session, owner_kind, owner_id, title)
             session.add(row)
-            session.add(_version_row(row.id, 1, spec, moment, origin, copied_from=copied_from))
+            session.add(
+                _version_row(row.id, 1, spec, text, moment, origin, copied_from=copied_from)
+            )
             await _flush(session, title)
         return _record(row)
 
@@ -363,6 +368,7 @@ class DashboardStore:
             raise VersionConflict(current)
         title = spec["title"]
         await _title_free(session, owner_kind, owner_id, title, besides=id)
+        text = _spec_text(spec)
         moment = now()
         try:
             version = await session.scalar(
@@ -371,7 +377,7 @@ class DashboardStore:
                 .values(
                     version=DashboardRow.version + 1,
                     title=title,
-                    spec=_spec_text(spec),
+                    spec=text,
                     updated_at=moment,
                 )
                 .returning(DashboardRow.version)
@@ -380,14 +386,16 @@ class DashboardStore:
             raise NameTaken("dashboard", title) from None
         if version is None:
             raise VersionConflict((await _current(session, id))[2])
-        session.add(_version_row(id, version, spec, moment, origin, restored_from=restored_from))
+        session.add(
+            _version_row(id, version, spec, text, moment, origin, restored_from=restored_from)
+        )
         await session.flush()
         return DashboardRecord(
             id=id,
             owner_kind=owner_kind,
             owner_id=owner_id,
             title=title,
-            spec=json.loads(_spec_text(spec)),
+            spec=json.loads(text),
             version=version,
             created_at=utc(created_at),
             updated_at=moment,
