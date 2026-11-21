@@ -12,13 +12,15 @@ export const LOGS_NEED_LOKI = "A logs panel needs a Loki query. Pick a Loki sour
 const CALCS = [["last", "Last"], ["mean", "Mean"], ["max", "Max"], ["min", "Min"], ["sum", "Sum"]] as const;
 const KEPT = ["unit", "decimals", "thresholds"] as const;
 
-/** The panel as another chart type: same queries, title and layout; that type's options. */
+/** The panel as another chart type: same queries (logs: the first), title and layout; that type's options. */
 export function changeType(p: PanelSpec, type: PanelType): PanelSpec {
   if (p.type === type) return p;
   const next = defaultOptions(type) as unknown as Record<string, unknown>;
   const was = p.options as unknown as Record<string, unknown>;
   for (const key of KEPT) if (key in next && key in was) next[key] = was[key];
-  return { ...p, type, options: next } as unknown as PanelSpec;
+  // A logs panel has exactly one query: it keeps the first.
+  const queries = type === "logs" ? p.queries.slice(0, 1) : p.queries;
+  return { ...p, type, queries, options: next } as unknown as PanelSpec;
 }
 
 // Small line drawings of each type, in the tile's own colour.
@@ -34,7 +36,7 @@ const TYPES: readonly [PanelType, string][] = [
   ["timeseries", "Time series"], ["stat", "Stat"], ["gauge", "Gauge"], ["bar", "Bar"], ["table", "Table"], ["logs", "Logs"],
 ];
 
-export function ChartTab({ panel, update }: { panel: PanelSpec; update: PanelUpdate }) {
+export function ChartTab({ panel, update, onRunNow }: { panel: PanelSpec; update: PanelUpdate; onRunNow?(): void }) {
   const radios = useRef<Partial<Record<PanelType, HTMLButtonElement | null>>>({});
   const pick = (type: PanelType) => update((p) => changeType(p, type));
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -76,7 +78,9 @@ export function ChartTab({ panel, update }: { panel: PanelSpec; update: PanelUpd
       {panel.type === "logs" && (
         <>
           {panel.queries.some((q) => q.source.type !== "loki") && <p className={s.warning} role="note">{LOGS_NEED_LOKI}</p>}
-          <NumberRow label="Lines" value={panel.options.limit} whole={[1, 1000]} onValue={(limit) => { if (limit !== null) set({ limit }); }} />
+          {/* Lines is part of the request: it runs with the queries, after the typing stops or on Ctrl+Enter. */}
+          <NumberRow label="Lines" value={panel.options.limit} whole={[1, 1000]} onRunNow={onRunNow}
+            onValue={(limit) => { if (limit !== null) set({ limit }); }} />
           <CheckRow label="Wrap long lines" checked={panel.options.wrap} onChange={(wrap) => set({ wrap })} />
           <SelectRow label="Order" value={panel.options.order} onChange={(order) => set({ order })}
             choices={[["newest", "Newest first"], ["oldest", "Oldest first"]] as const} />

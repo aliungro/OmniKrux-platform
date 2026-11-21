@@ -2,6 +2,7 @@
 // the option rows the Chart tab uses. Number fields take only finite numbers: anything else says
 // so and leaves the draft as it was.
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { pressed } from "../../../features/chrome/shortcuts";
 import { MAX_THRESHOLDS, type PanelSpec, type Threshold, type ThresholdColor, type Unit } from "../schema";
 import type { PanelUpdate } from "./SidePanel";
 import s from "./SidePanel.module.css";
@@ -93,9 +94,11 @@ export function useNumberText(value: number | null, onValue: (n: number | null) 
   return { text, problem, onText };
 }
 
-export function NumberRow({ label, value, onValue, allowEmpty = false, placeholder, whole }: {
+export function NumberRow({ label, value, onValue, allowEmpty = false, placeholder, whole, onRunNow }: {
   label: string; value: number | null; onValue(n: number | null): void; allowEmpty?: boolean; placeholder?: string;
   whole?: readonly [number, number];
+  /** Ctrl+Enter here runs the panel now (a field that is part of its request). */
+  onRunNow?(): void;
 }) {
   const id = useId();
   const field = useNumberText(value, onValue, { allowEmpty, whole });
@@ -103,7 +106,9 @@ export function NumberRow({ label, value, onValue, allowEmpty = false, placehold
     <Row label={label} htmlFor={id} problem={field.problem} problemId={`${id}-problem`}>
       <input id={id} type="text" inputMode="decimal" autoComplete="off" className={s.input} value={field.text}
         placeholder={placeholder} aria-invalid={field.problem ? true : undefined}
-        aria-describedby={field.problem ? `${id}-problem` : undefined} onChange={(e) => field.onText(e.target.value)} />
+        aria-describedby={field.problem ? `${id}-problem` : undefined} onChange={(e) => field.onText(e.target.value)}
+        aria-keyshortcuts={onRunNow ? "Control+Enter" : undefined}
+        onKeyDown={onRunNow ? (e) => { if (pressed("queryRun", e)) { e.preventDefault(); onRunNow(); } } : undefined} />
     </Row>
   );
 }

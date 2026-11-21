@@ -98,7 +98,7 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
         {tab === "query" && (
           <QueryTab panel={panel} update={update} owner={owner} ownerKind={ownerKind} data={panelData} live={live} />
         )}
-        {tab === "chart" && <ChartTab panel={panel} update={update} />}
+        {tab === "chart" && <ChartTab panel={panel} update={update} onRunNow={live?.flush} />}
         {tab === "options" && <OptionsTab panel={panel} update={update} />}
         {tab === "alert" && <AlertTab />}
       </div>

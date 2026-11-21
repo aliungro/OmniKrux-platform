@@ -57,6 +57,8 @@ const tile = (title: string) => {
   if (!found) throw new Error(`no tile ${title}`);
   return found;
 };
+type Item = { query: string; project_id: string; limit?: number };
+const lastLimit = (api: FakeMonitoringApi) => (batches(api).at(-1)?.queries[0] as Item | undefined)?.limit;
 const settings = () => screen.getByRole("complementary", { name: "Panel settings" });
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Only the debounce and flash timers are fake; promises and the page's own scheduling stay real. */
@@ -160,18 +162,82 @@ describe("Live editing", () => {
     vi.useRealTimers();
   });
 
-  it("under reduced motion the flash shows and hides without a fade", async () => {
+  it("under reduced motion there is no highlight", async () => {
     stubMotion(true);
     await openSettings();
     fireEvent.click(within(settings()).getByRole("tab", { name: "Options" }));
     fakeTimers();
     fireEvent.change(within(settings()).getByRole("textbox", { name: "Title" }), { target: { value: "Calm" } });
-    expect(tile("Calm").className).toMatch(/flash/);
+    expect(tile("Calm").className).not.toMatch(/flash/);
     expect(tile("Calm").getAttribute("data-motion")).toBe("off");
     expect(screen.getByTestId("chart-p-1").getAttribute("data-animate")).toBe("false");
     advance(451);
     expect(tile("Calm").className).not.toMatch(/flash/);
     vi.useRealTimers();
+  });
+
+  it("a logs panel's Lines run once the typing stops, or at once with Ctrl+Enter", async () => {
+    const { user, api } = await openSettings();
+    await user.click(within(settings()).getByRole("tab", { name: "Chart" }));
+    const runs = batches(api).length;
+    await user.click(within(settings()).getByRole("radio", { name: "Logs" }));
+    // A new type runs at once, with that type's request.
+    await waitFor(() => expect(batches(api)).toHaveLength(runs + 1));
+    expect(lastLimit(api)).toBe(100);
+    const lines = within(settings()).getByRole("textbox", { name: "Lines" });
+    const before = batches(api).length;
+    fakeTimers();
+    fireEvent.change(lines, { target: { value: "5" } });
+    advance(100);
+    fireEvent.change(lines, { target: { value: "50" } });
+    advance(100);
+    fireEvent.change(lines, { target: { value: "500" } });
+    advance(299);
+    expect(batches(api)).toHaveLength(before);
+    advance(1);
+    vi.useRealTimers();
+    await waitFor(() => expect(batches(api)).toHaveLength(before + 1));
+    expect(lastLimit(api)).toBe(500);
+    await pause(350);
+    expect(batches(api)).toHaveLength(before + 1);
+
+    fakeTimers();
+    fireEvent.change(lines, { target: { value: "250" } });
+    fireEvent.keyDown(lines, { key: "Enter", ctrlKey: true });
+    vi.useRealTimers();
+    await waitFor(() => expect(batches(api)).toHaveLength(before + 2));
+    expect(lastLimit(api)).toBe(250);
+    await pause(350);
+    expect(batches(api)).toHaveLength(before + 2);
+  });
+
+  it("saving within 300 ms of typing runs the saved text, never a partial one", async () => {
+    const { api } = await openSettings();
+    const field = within(settings()).getByRole("textbox", { name: "Query A" });
+    const before = batches(api).length;
+    fireEvent.change(field, { target: { value: "up1" } });
+    fireEvent.change(field, { target: { value: "up12" } });
+    fireEvent.keyDown(field, { key: "s", ctrlKey: true });
+    await screen.findByRole("button", { name: "Edit" });
+    await pause(400);
+    const sent = batches(api).slice(before).flatMap((b) => b.queries.map((q) => q.query)).filter((q) => q !== "errors");
+    expect(sent).not.toContain("up1");
+    expect(sent.at(-1)).toBe("up12");
+    expect(api.state.dashboards.d1.out.spec.panels[0].queries[0].expr).toBe("up12");
+  });
+
+  it("discarding within 300 ms of typing runs the saved text again, never the discarded one", async () => {
+    const { api } = await openSettings();
+    const field = within(settings()).getByRole("textbox", { name: "Query A" });
+    const before = batches(api).length;
+    fireEvent.change(field, { target: { value: "upx" } });
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Discard changes" }));
+    await screen.findByRole("button", { name: "Edit" });
+    await pause(400);
+    const sent = batches(api).flatMap((b) => b.queries.map((q) => q.query)).filter((q) => q !== "errors");
+    expect(sent.slice(before)).not.toContain("upx");
+    expect(sent.at(-1)).toBe("up");
   });
 
   it("the run line shows series, points and time", async () => {

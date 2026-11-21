@@ -78,13 +78,16 @@ export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, 
 
   const reduced = usePrefersReducedMotion();
   const changeId = useRisingCount(changes);
-  const flash = useFlash(changes, tile !== undefined);
-  // While editing, the queries run 300 ms after the typing stops; everything else applies at once.
+  // Morphs, counts and this highlight are all off under reduced motion.
+  const flash = useFlash(changes, tile !== undefined && !reduced);
+  // While editing, the queries (and a logs panel's Lines) run 300 ms after the typing stops;
+  // everything else applies at once.
   const debounced = useDebouncedQueries(panel, tile ? 300 : 0);
-  const runPanel = useMemo(
-    () => (debounced.queries === panel.queries ? panel : ({ ...panel, queries: debounced.queries } as PanelSpec)),
-    [panel, debounced.queries],
-  );
+  const runPanel = useMemo(() => {
+    if (debounced.queries === panel.queries && (panel.type !== "logs" || debounced.limit === panel.options.limit)) return panel;
+    const p = { ...panel, queries: debounced.queries } as PanelSpec;
+    return p.type === "logs" && debounced.limit !== null ? { ...p, options: { ...p.options, limit: debounced.limit } } : p;
+  }, [panel, debounced.queries, debounced.limit]);
   const built = useMemo(
     () => (owner ? buildPanelRun({ panel: runPanel, owner, vars, range, ownerName }) : NO_RUN),
     [runPanel, owner, vars, range, ownerName],

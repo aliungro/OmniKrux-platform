@@ -153,8 +153,15 @@ describe("The panel side panel", () => {
     const before = draftPanel("p-1");
     await user.click(tabNamed("Options"));
     await user.selectOptions(within(settings()).getByRole("combobox", { name: "Unit" }), "Seconds");
-    expect(draftPanel("p-1").options).toMatchObject({ unit: "s" });
+    await user.selectOptions(within(settings()).getByRole("combobox", { name: "Decimals" }), "2");
+    await user.type(within(settings()).getByRole("textbox", { name: "Min" }), "5");
+    await user.selectOptions(within(settings()).getByRole("combobox", { name: "Legend" }), "Hide");
+    await user.click(within(settings()).getByRole("button", { name: "+ Add threshold" }));
     await user.click(tabNamed("Chart"));
+    await user.selectOptions(within(settings()).getByRole("combobox", { name: "Style" }), "Area");
+    expect(draftPanel("p-1").options).toEqual({
+      unit: "s", decimals: 2, thresholds: [{ value: 80, color: "warn" }], min: 5, max: null, legend: "hidden", style: "area",
+    });
     const types = within(settings()).getByRole("radiogroup", { name: "Chart type" });
     expect(within(types).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Time series", "Stat", "Gauge", "Bar", "Table", "Logs"]);
     expect(within(types).getByRole("radio", { name: "Time series" }).getAttribute("aria-checked")).toBe("true");
@@ -164,13 +171,35 @@ describe("The panel side panel", () => {
     expect(after.queries).toEqual(before.queries);
     expect(after.title).toBe(before.title);
     expect(after.layout).toEqual(before.layout);
-    expect(after.options).toEqual({ unit: "s", decimals: null, thresholds: [], calc: "last", sparkline: true });
+    // Kept: unit, decimals, thresholds. Gone: what a stat panel doesn't have (min, max, legend, style).
+    expect(after.options).toEqual({ unit: "s", decimals: 2, thresholds: [{ value: 80, color: "warn" }], calc: "last", sparkline: true });
     expect(within(settings()).getByRole("combobox", { name: "Show" })).toBeTruthy();
     expect(within(settings()).getByRole("checkbox", { name: "Sparkline" })).toBeTruthy();
     // Arrows move and select.
     await user.keyboard("{ArrowRight}");
     expect(draftPanel("p-1").type).toBe("gauge");
     expect(document.activeElement).toBe(within(types).getByRole("radio", { name: "Gauge" }));
+    // Back to a time series: the kept three survive the trip, the rest start from the defaults.
+    await user.click(within(types).getByRole("radio", { name: "Time series" }));
+    expect(draftPanel("p-1").options).toEqual({
+      unit: "s", decimals: 2, thresholds: [{ value: 80, color: "warn" }], min: null, max: null, legend: "bottom", style: "lines",
+    });
+  });
+
+  it("switching to Logs keeps only the first query", async () => {
+    const { user } = await openSettings();
+    await user.click(within(settings()).getByRole("button", { name: "+ Add query" }));
+    await user.keyboard("rate(x)");
+    expect(draftPanel("p-1").queries.map((q) => q.ref)).toEqual(["A", "B"]);
+    const first = draftPanel("p-1").queries[0];
+    await user.click(tabNamed("Chart"));
+    await user.click(within(settings()).getByRole("radio", { name: "Logs" }));
+    const logs = draftPanel("p-1");
+    expect(logs.type).toBe("logs");
+    expect(logs.queries).toEqual([first]);
+    expect(logs.options).toEqual({ limit: 100, wrap: true, order: "newest" });
+    await user.click(tabNamed("Query"));
+    expect(within(settings()).queryByRole("textbox", { name: "Query B" })).toBeNull();
   });
 
   it("logs with Prometheus says to pick Loki", async () => {
