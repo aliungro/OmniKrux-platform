@@ -16,8 +16,9 @@ import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/
 import { isDirty } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
 import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
-import { DraftBanner, DraftsOffNotice } from "../drafts/DraftBanner";
+import { DraftBanner, DraftsOffNotice, EditedElsewhere } from "../drafts/DraftBanner";
 import { useDraftOffer } from "../drafts/useDraft";
+import { readDraft, type StoredDraft } from "../drafts/draftStore";
 import { DashboardHeader, type DashboardTab, type MenuAction } from "./DashboardHeader";
 import { pageLetter } from "./keys";
 import { RefreshControl } from "./RefreshControl";
@@ -50,7 +51,7 @@ function ReadyNote({ dashboard }: { dashboard: DashboardOut }) {
   );
 }
 
-function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: MonitoringPageProps & { view: DashboardViewState; dashboard: DashboardOut }) {
+function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTab }: MonitoringPageProps & { view: DashboardViewState; dashboard: DashboardOut }) {
   const ready = dashboard.ready_made;
   const editor = useDashboardEditor(dashboard.id, tabId);
   const editing = editor.state.mode === "edit" ? editor.state : null;
@@ -76,25 +77,35 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
   const [askDiscard, setAskDiscard] = useState(false);
 
   // A draft left behind (a reload, Browser Back, Keep draft and leave) is offered back when the
-  // page opens without a live session; not while another tab is editing this dashboard.
+  // page opens without a live session; not while another tab has unsaved changes to this dashboard.
   const offer = useDraftOffer(dashboard.id, !ready && editor.state.mode === "view"
-    && ![...editSessions.values()].some((x) => x.mode === "edit" && x.dashboardId === dashboard.id));
-  const dirty = isDirty(editor.state);
-  // New changes replace the stored draft: there is nothing left to offer.
+    && ![...editSessions.values()].some((x) => x.mode === "edit" && x.dashboardId === dashboard.id && isDirty(x)));
+  // Editing replaces the offer: the stored draft became the session's, or new changes replace it.
   const { dismiss: dismissOffer } = offer;
-  useEffect(() => { if (dirty) dismissOffer(); }, [dirty, dismissOffer]);
-  const restoreDraft = () => {
-    const d = offer.draft;
-    if (!d) return;
-    // The base stays the version the draft started from: a save over a newer one is reviewed first.
-    editor.dispatch({
-      type: "resume", dashboardId: dashboard.id, baseVersion: d.baseVersion, base: dashboard.spec, draft: d.draft,
-      jsonText: d.jsonText, ownerKind: dashboard.owner_kind,
-    });
-    offer.dismiss();
-    // Already editing, nothing else takes the keyboard from the banner as it goes.
-    if (editing) saveButton.current?.focus();
+  useEffect(() => { if (editing) dismissOffer(); }, [editing, dismissOffer]);
+
+  // One edit session per dashboard in this window: another tab already editing it is where to go.
+  const [elsewhere, setElsewhere] = useState<string | null>(null);
+  const goElsewhere = useRef<HTMLButtonElement>(null);
+  const editingTab = () => {
+    for (const [t, x] of editSessions) if (t !== tabId && x.mode === "edit" && x.dashboardId === dashboard.id) return t;
+    return null;
   };
+  /**
+   * Edit, or Restore draft: a stored draft is where editing starts (Discard draft starts afresh).
+   * Its base stays the version it started from, so a save over a newer one is reviewed first.
+   */
+  const startEditing = (offered: StoredDraft | null) => {
+    const other = editingTab();
+    setElsewhere(other);
+    if (other) return;
+    const d = readDraft(dashboard.id) ?? offered;
+    if (d) editor.restore(d, dashboard.spec, dashboard.owner_kind);
+    else editor.dispatch({ type: "start", dashboardId: dashboard.id, version: dashboard.version, spec: dashboard.spec });
+    offer.dismiss();
+  };
+  useLayoutEffect(() => { if (elsewhere) goElsewhere.current?.focus(); }, [elsewhere]);
+  const restoreDraft = () => startEditing(offer.draft);
   const discardDraft = () => {
     offer.discard();
     title.current?.focus({ preventScroll: true });
@@ -128,7 +139,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
     refreshButton.current?.focus();
   }, [ctx]);
   // Copy to edit (a ready-made view) arrives with creating and copying.
-  const edit = ready ? undefined : () => editor.dispatch({ type: "start", dashboardId: dashboard.id, version: dashboard.version, spec: dashboard.spec });
+  const edit = ready ? undefined : () => startEditing(null);
   const save = () => { void editor.save(); };
   const saveRef = useRef(save);
   saveRef.current = save;
@@ -235,13 +246,14 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
           onChange={(r: RefreshSpec) => replace({ refresh: r })} />}
         editRef={editButton} onEdit={edit} moreRef={moreButton} actions={actions}
         badge={editing ? <EditingPill /> : undefined}
-        afterTitle={offer.draft && !dirty
+        afterTitle={offer.draft && !editing
           ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft} />
           : undefined}
         editControls={editing
           ? <EditControls saving={editor.saving} onDiscard={discard} onSave={save} discardRef={discardButton} saveRef={saveButton} />
           : undefined} />
       {editing && !editor.draftsWork && <DraftsOffNotice />}
+      {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={() => activateTab(elsewhere)} />}
       {editing && conflict !== null && (
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />

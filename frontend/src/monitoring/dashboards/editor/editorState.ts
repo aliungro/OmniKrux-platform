@@ -25,14 +25,16 @@ export interface EditingState {
   jsonProblems: Problem[];
   /** Per panel: how many times it changed in this session. Absent: never. */
   changes: Record<string, number>;
+  /** This session's id in browser storage: it removes only a draft it wrote itself. */
+  writer: string;
 }
 
 export type EditorState = { mode: "view" } | EditingState;
 
 export type EditorAction =
-  | { type: "start"; dashboardId: string; version: number; spec: DashboardSpec }
+  | { type: "start"; dashboardId: string; version: number; spec: DashboardSpec; writer?: string }
   /** A stored draft or a live session back in edit mode; `ownerKind` re-checks kept JSON text for its problems. */
-  | { type: "resume"; dashboardId: string; baseVersion: number; base: DashboardSpec; draft: DashboardSpec; jsonText: string | null; ownerKind?: OwnerKind }
+  | { type: "resume"; dashboardId: string; baseVersion: number; base: DashboardSpec; draft: DashboardSpec; jsonText: string | null; ownerKind?: OwnerKind; writer?: string }
   | { type: "updatePanel"; id: string; update: (p: PanelSpec) => PanelSpec }
   | { type: "addPanel"; panelType: PanelType; at?: { x: number; y: number } }
   | { type: "removePanel"; id: string }
@@ -42,7 +44,8 @@ export type EditorAction =
   | { type: "sideTab"; tab: SideTab }
   | { type: "setJson"; text: string; ownerKind: OwnerKind }
   | { type: "setDashboard"; update: (d: DashboardSpec) => DashboardSpec }
-  | { type: "saved"; version: number; spec: DashboardSpec }
+  /** `sent`: the draft the save sent. A draft changed since then stays in edit mode on the new base. */
+  | { type: "saved"; version: number; spec: DashboardSpec; sent?: DashboardSpec }
   | { type: "rebase"; version: number; base: DashboardSpec }
   | { type: "discard" };
 
@@ -121,8 +124,14 @@ function withPanels(state: EditingState, next: PanelSpec[], touched: readonly st
 const moved = (prev: PanelSpec[], next: PanelSpec[], id: string) =>
   next !== prev && prev.find((p) => p.id === id) !== next.find((p) => p.id === id);
 
-function fresh(dashboardId: string, baseVersion: number, base: DashboardSpec, draft: DashboardSpec, jsonText: string | null): EditingState {
-  return { mode: "edit", dashboardId, baseVersion, base, draft, selected: null, sideTab: "query", jsonText, jsonProblems: [], changes: {} };
+let writers = 0;
+/** A new edit session's storage id. */
+export function newWriter(): string {
+  return typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `w${Date.now()}-${++writers}`;
+}
+
+function fresh(dashboardId: string, baseVersion: number, base: DashboardSpec, draft: DashboardSpec, jsonText: string | null, writer = newWriter()): EditingState {
+  return { mode: "edit", dashboardId, baseVersion, base, draft, selected: null, sideTab: "query", jsonText, jsonProblems: [], changes: {}, writer };
 }
 
 /**
@@ -130,14 +139,14 @@ function fresh(dashboardId: string, baseVersion: number, base: DashboardSpec, dr
  * that is valid after all (the rules changed) becomes the draft.
  */
 function resumed(action: Extract<EditorAction, { type: "resume" }>): EditingState {
-  const state = fresh(action.dashboardId, action.baseVersion, action.base, action.draft, action.jsonText);
+  const state = fresh(action.dashboardId, action.baseVersion, action.base, action.draft, action.jsonText, action.writer);
   if (action.jsonText === null || action.ownerKind === undefined) return state;
   const result = parseDashboardJson(action.jsonText, action.ownerKind);
   return result.ok ? applyDocument(state, result.spec) : { ...state, jsonProblems: result.problems };
 }
 
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
-  if (action.type === "start") return fresh(action.dashboardId, action.version, action.spec, action.spec, null);
+  if (action.type === "start") return fresh(action.dashboardId, action.version, action.spec, action.spec, null, action.writer);
   if (action.type === "resume") return resumed(action);
   if (state.mode !== "edit") return state;
   const panels = state.draft.panels;
@@ -192,6 +201,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "setDashboard":
       return applyDocument(state, action.update(state.draft));
     case "saved":
+      // Changed while the save was on its way: keep editing over the version just saved.
+      if (action.sent !== undefined && action.sent !== state.draft) return { ...state, baseVersion: action.version, base: action.spec };
       return VIEW;
     case "rebase":
       return { ...state, baseVersion: action.version, base: action.base };

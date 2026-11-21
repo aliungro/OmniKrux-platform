@@ -41,3 +41,13 @@ export function DraftBanner({ draft, version, onRestore, onDiscard, restoreRef }
 export function DraftsOffNotice() {
   return <p className={s.off}>This browser isn't keeping drafts, so a reload loses unsaved changes.</p>;
 }
+
+/** Edit pressed while another tab in this window edits the same dashboard. */
+export function EditedElsewhere({ onGo, buttonRef }: { onGo(): void; buttonRef?: RefObject<HTMLButtonElement | null> }) {
+  return (
+    <div role="status" className={s.elsewhere}>
+      <p className={s.line}>This dashboard is being edited in another tab.</p>
+      <button ref={buttonRef} type="button" className={s.quiet} onClick={onGo}>Go to that tab</button>
+    </div>
+  );
+}

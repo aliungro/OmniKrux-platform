@@ -10,6 +10,7 @@ import { KINDS } from "../../../test/kinds";
 import { readRecent } from "../../home/recent";
 import { installFakeMonitoringApi } from "../../test/fakeMonitoringApi";
 import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { MonitoringView } from "../../shell/tabState";
 import { editSessions } from "../editor/useDashboardEditor";
 
@@ -180,6 +181,43 @@ describe("Leaving a dashboard with unsaved changes", () => {
     await user.keyboard("{Escape}");
     expect(document.activeElement).toBe(close);
     expect(monitoringTabs()).toHaveLength(2);
+  });
+
+  it("a held close of a tab that isn't active closes that tab and keeps the draft", async () => {
+    setup();
+    const user = await editing();
+    // The other tab is shown; the edited one's session lives on in memory.
+    await user.click(monitoringTabs()[1]);
+    await waitFor(() => expect(monitoringTabs()[1].getAttribute("aria-selected")).toBe("true"));
+    const close = screen.getByRole("button", { name: "Close API latency" });
+    await user.click(close);
+    expect(document.activeElement).toBe(within(dialog()).getByRole("button", { name: "Stay" }));
+    await user.click(within(dialog()).getByRole("button", { name: "Keep draft and leave" }));
+    await waitFor(() => expect(monitoringTabs()).toHaveLength(1));
+    expect(monitoringTabs()[0].getAttribute("aria-selected")).toBe("true");
+    expect(monitoringTabs()[0].textContent).toContain("Home");
+    expect(JSON.parse(localStorage.getItem(KEY) ?? "null")?.draft.panels[0].layout.x).toBe(1);
+    expect(editSessions.size).toBe(0);
+    await frame();
+    notBody();
+  });
+
+  it("a held replace navigation is performed again as a replace", async () => {
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, spec("API latency", [panel("p-1", "Requests", "up", { x: 0, y: 0, w: 8, h: 8 })])) },
+      queryAnswers: { up: ok },
+    }, shellApi);
+    const app = renderMonitoringApp({ tabs: tabsWith(D1) });
+    await editing();
+    app.navigate({ page: "project", id: "p1" }, "replace");
+    expect(dialog()).toBeTruthy();
+    expect(app.current().tabs[0].view).toEqual(D1);
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Keep draft and leave" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Shop" })).toBeTruthy();
+    // Replaced, not pushed: Back doesn't return to the dashboard.
+    expect(app.current().tabs[0].view).toEqual({ page: "project", id: "p1" });
+    expect(app.current().tabs[0].back).toEqual([]);
   });
 
   it("without changes nothing is asked", async () => {

@@ -7,7 +7,7 @@ afterEach(() => vi.restoreAllMocks());
 
 const stored = (over: Partial<StoredDraft> = {}): StoredDraft => ({
   v: 1, dashboardId: "d1", baseVersion: 3, savedAt: 1_700_000_000_000,
-  draft: spec("API latency", [panel("p-1", "Requests", "up")]), jsonText: null, ...over,
+  draft: spec("API latency", [panel("p-1", "Requests", "up")]), jsonText: null, writer: "w1", ...over,
 });
 
 describe("draft store", () => {
@@ -37,6 +37,22 @@ describe("draft store", () => {
     vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
     expect(readDraft("d1")).toBeNull();
     expect(() => removeDraft("d1")).not.toThrow();
+  });
+
+  it("a session removes only a draft it wrote; one without a writer is nobody's", () => {
+    writeDraft(stored());
+    removeDraft("d1", "w2");
+    expect(readDraft("d1")?.writer).toBe("w1");
+    removeDraft("d1", "w1");
+    expect(readDraft("d1")).toBeNull();
+    const { writer: _, ...old } = stored();
+    localStorage.setItem("omnikrux.monitoring.draft.d1", JSON.stringify(old));
+    expect(readDraft("d1")?.writer).toBe("");
+    removeDraft("d1", "w1");
+    expect(readDraft("d1")).not.toBeNull();
+    // Without a writer (Discard draft on the offer), it goes.
+    removeDraft("d1");
+    expect(readDraft("d1")).toBeNull();
   });
 
   it("a malformed draft is dropped", () => {

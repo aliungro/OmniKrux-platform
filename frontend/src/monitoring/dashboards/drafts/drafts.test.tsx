@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { gate, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { DashboardSpec } from "../schema";
 import { editSessions } from "../editor/useDashboardEditor";
@@ -22,7 +22,7 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200
 const SHOP = { kind: "project" as const, id: "p1", name: "Shop" };
 const ok = { result_type: "matrix" as const, series: [{ labels: { job: "api" }, points: [[1, 1]] as [number, number][] }] };
 const KEY = "omnikrux.monitoring.draft.d1";
-const stored = () => JSON.parse(localStorage.getItem(KEY) ?? "null") as { baseVersion: number; savedAt: number; draft: DashboardSpec; jsonText: string | null } | null;
+const stored = () => JSON.parse(localStorage.getItem(KEY) ?? "null") as { baseVersion: number; savedAt: number; draft: DashboardSpec; jsonText: string | null; writer: string } | null;
 const two = (n: number) => String(n).padStart(2, "0");
 const hhmm = (ms: number) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}`; };
 
@@ -142,7 +142,7 @@ describe("Dashboard drafts", () => {
     const draft = doc();
     draft.panels[0].title = "Requests per second";
     const savedAt = new Date(2026, 2, 3, 9, 5).getTime();
-    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 1, savedAt, draft, jsonText: "{ half" });
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 1, savedAt, draft, jsonText: "{ half", writer: "elsewhere" });
     const user = userEvent.setup();
     await opened();
     const banner = screen.getByRole("region", { name: "Unsaved draft" });
@@ -208,5 +208,139 @@ describe("Dashboard drafts", () => {
     await waitFor(() => expect(screen.queryByText("Editing")).toBeNull());
     expect(unload()).toBe(false);
     expect(screen.queryByText("This browser isn't keeping drafts, so a reload loses unsaved changes.")).toBeNull();
+  });
+});
+
+describe("Drafts across tabs, windows and saves", () => {
+  const D1 = { page: "dashboard" as const, id: "d1" };
+  const dashboardTabs = () => within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab");
+  const foreign = (over: { title?: string; savedAt?: number; writer?: string } = {}) => {
+    const draft = doc();
+    draft.panels[0].title = over.title ?? "Requests per second";
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 1, savedAt: over.savedAt ?? new Date(2026, 2, 3, 9, 5).getTime(), draft, jsonText: null, writer: over.writer ?? "w-other" });
+  };
+
+  it("a second tab on the same dashboard is sent to the tab editing it", async () => {
+    shop();
+    const user = userEvent.setup();
+    renderMonitoringApp({ tabs: tabsWith(D1, D1) });
+    await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await screen.findAllByText("chart 1");
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await waitFor(() => expect(stored()).not.toBeNull(), { timeout: 1500 });
+
+    await user.click(dashboardTabs()[1]);
+    await screen.findAllByText("chart 1");
+    // The other tab's changes are not offered here as a draft: they are being edited.
+    expect(screen.queryByRole("region", { name: "Unsaved draft" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("This dashboard is being edited in another tab.")).toBeTruthy();
+    expect(screen.queryByText("Editing")).toBeNull();
+    expect(editSessions.has("start1")).toBe(false);
+    const go = screen.getByRole("button", { name: "Go to that tab" });
+    expect(document.activeElement).toBe(go);
+    await user.click(go);
+    await waitFor(() => expect(dashboardTabs()[0].getAttribute("aria-selected")).toBe("true"));
+    expect(await screen.findByText("Editing")).toBeTruthy();
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 2, row 1");
+    await waitFor(notBody);
+  });
+
+  it("a tab closed without changes leaves no session behind", async () => {
+    shop();
+    const user = userEvent.setup();
+    renderMonitoringApp({ tabs: tabsWith(D1, D1) });
+    await screen.findAllByText("chart 1");
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(editSessions.has("start0")).toBe(true);
+    // Meanwhile another window keeps a draft of this dashboard.
+    foreign();
+    await user.click(screen.getAllByRole("button", { name: "Close API latency" })[0]);
+    await waitFor(() => expect(dashboardTabs()).toHaveLength(1));
+    expect(editSessions.size).toBe(0);
+    expect(await screen.findByRole("region", { name: "Unsaved draft" })).toBeTruthy();
+  });
+
+  it("Edit starts from a stored draft; after Discard draft it starts afresh", async () => {
+    shop();
+    const savedAt = new Date(2026, 2, 3, 9, 5).getTime();
+    foreign({ savedAt });
+    const user = userEvent.setup();
+    await opened();
+    expect(screen.getByRole("region", { name: "Unsaved draft" })).toBeTruthy();
+    await user.keyboard("e");
+    expect(await screen.findByText("Editing")).toBeTruthy();
+    expect(tile("Requests per second")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Unsaved draft" })).toBeNull();
+    // The draft is this session's now, and keeps when it last changed.
+    expect(stored()?.writer).not.toBe("w-other");
+    expect(stored()?.savedAt).toBe(savedAt);
+    cleanup();
+    editSessions.clear();
+
+    await opened();
+    await user.click(within(screen.getByRole("region", { name: "Unsaved draft" })).getByRole("button", { name: "Discard draft" }));
+    await user.keyboard("e");
+    expect(await screen.findByText("Editing")).toBeTruthy();
+    expect(tile("Requests")).toBeTruthy();
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("another window removing or replacing the draft: the newest changes stay stored", async () => {
+    shop();
+    const { user } = await editing();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await waitFor(() => expect(stored()).not.toBeNull(), { timeout: 1500 });
+    const mine = JSON.parse(localStorage.getItem(KEY)!) as { writer: string; savedAt: number };
+    const fromElsewhere = () => act(() => { window.dispatchEvent(new StorageEvent("storage", { key: KEY, newValue: localStorage.getItem(KEY) })); });
+
+    // Another window saved or discarded its own and removed the entry: ours is written again.
+    localStorage.removeItem(KEY);
+    fromElsewhere();
+    expect(stored()).toMatchObject({ writer: mine.writer, savedAt: mine.savedAt });
+    expect(stored()!.draft.panels[0].layout.x).toBe(1);
+    // An older draft from another window is replaced by ours.
+    foreign({ savedAt: mine.savedAt - 1000 });
+    fromElsewhere();
+    expect(stored()?.writer).toBe(mine.writer);
+    // A newer one wins: the last dirty writer.
+    foreign({ savedAt: mine.savedAt + 1000 });
+    fromElsewhere();
+    expect(stored()?.writer).toBe("w-other");
+    // Until this session changes something again.
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await waitFor(() => expect(stored()?.writer).toBe(mine.writer), { timeout: 1500 });
+    expect(stored()!.draft.panels[0].layout.x).toBe(2);
+  });
+
+  it("a change made while a save is on its way stays in edit mode over the saved version", async () => {
+    const api = shop();
+    const held = gate();
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") await held.opened;
+      return inner(input, init);
+    }));
+    const { user } = await editing();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    // Still on its way: another change.
+    await user.click(tile("Requests"));
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 3, row 1");
+    held.open();
+    await waitFor(() => expect(api.state.dashboards.d1.out.version).toBe(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByText("Editing")).toBeTruthy();
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 3, row 1");
+    // The stored draft follows: the newer change, over version 2.
+    await waitFor(() => expect(stored()).toMatchObject({ baseVersion: 2 }), { timeout: 1500 });
+    expect(stored()!.draft.panels[0].layout.x).toBe(2);
+
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(screen.queryByText("Editing")).toBeNull());
+    expect(puts(api).map((r) => (r.body as { base_version: number }).base_version)).toEqual([1, 2]);
+    expect(localStorage.getItem(KEY)).toBeNull();
   });
 });

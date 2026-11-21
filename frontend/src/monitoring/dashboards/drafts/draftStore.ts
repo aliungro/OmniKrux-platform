@@ -16,9 +16,12 @@ export interface StoredDraft {
   draft: DashboardSpec;
   /** JSON text that didn't parse or validate when the draft was kept; else null. */
   jsonText: string | null;
+  /** The edit session that wrote it; "" (an entry without one) is nobody's. */
+  writer: string;
 }
 
 const MAX_TEXT = 4_000_000;
+const MAX_WRITER = 100;
 const key = (dashboardId: string) => `${DRAFT_PREFIX}${dashboardId}`;
 
 function store(): Storage | null {
@@ -41,7 +44,12 @@ export function writeDraft(d: StoredDraft): boolean {
   }
 }
 
-export function removeDraft(dashboardId: string): void {
+/**
+ * Removes the draft. With `writer`, only a draft that session wrote: another tab's or window's
+ * newer draft stays.
+ */
+export function removeDraft(dashboardId: string, writer?: string): void {
+  if (writer !== undefined && readDraft(dashboardId)?.writer !== writer) return;
   try {
     store()?.removeItem(key(dashboardId));
   } catch {
@@ -86,7 +94,8 @@ function parse(raw: string, dashboardId: string): StoredDraft | null {
   if (!record(x) || x.v !== 1 || x.dashboardId !== dashboardId || !count(x.baseVersion) || !Number.isInteger(x.baseVersion) || !count(x.savedAt)) return null;
   if (!(x.jsonText === null || (typeof x.jsonText === "string" && x.jsonText.length <= MAX_TEXT))) return null;
   if (!looksLikeDocument(x.draft)) return null;
-  return { v: 1, dashboardId, baseVersion: x.baseVersion, savedAt: x.savedAt, draft: x.draft, jsonText: x.jsonText };
+  const writer = typeof x.writer === "string" && x.writer.length <= MAX_WRITER ? x.writer : "";
+  return { v: 1, dashboardId, baseVersion: x.baseVersion, savedAt: x.savedAt, draft: x.draft, jsonText: x.jsonText, writer };
 }
 
 /** The draft kept for a dashboard; an entry that can't be read is removed and gives null. */
@@ -102,3 +111,6 @@ export function readDraft(dashboardId: string): StoredDraft | null {
   if (!draft) removeDraft(dashboardId);
   return draft;
 }
+
+/** The storage key of a dashboard's draft (for `storage` events from other windows). */
+export const draftKey = key;

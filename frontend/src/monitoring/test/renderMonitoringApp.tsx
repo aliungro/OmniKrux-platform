@@ -2,7 +2,7 @@
 // by the real reducer and a tab navigation that pushes onto the active tab's history. Like the
 // shell, a way out of a page asks the app's leave check first, and a held one changes nothing.
 import { useReducer } from "react";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TabNav } from "../../features/shell/browserHistory";
 import type { AppTabs } from "../../features/shell/workspace";
@@ -24,7 +24,9 @@ export function tabsWith(...views: MonitoringView[]): AppTabs<MonitoringView> {
   return { tabs, active: tabs[0].id, closed: [] };
 }
 
-function Harness({ initial, onOpenSettings, seen }: { initial: AppTabs<MonitoringView>; onOpenSettings(): void; seen: { tabs: AppTabs<MonitoringView> } }) {
+interface Seen { tabs: AppTabs<MonitoringView>; nav?: TabNav<MonitoringView> }
+
+function Harness({ initial, onOpenSettings, seen }: { initial: AppTabs<MonitoringView>; onOpenSettings(): void; seen: Seen }) {
   const [tabs, dispatch] = useReducer(
     (state: AppTabs<MonitoringView>, action: MonitoringTabAction) => monitoringTabsReducer(state, prepare(action)), initial,
   );
@@ -51,6 +53,7 @@ function Harness({ initial, onOpenSettings, seen }: { initial: AppTabs<Monitorin
     setScroll: (top) => dispatch({ type: "scroll", id: tab.id, top }),
     scrollTop: tab.scrollTop,
   };
+  seen.nav = nav;
   return (
     <main tabIndex={-1}>
       <MonitoringApp tabs={tabs} nav={nav} dispatchTabs={dispatchTabs} onOpenSettings={onOpenSettings} onOpenKubernetes={() => {}} />
@@ -61,7 +64,7 @@ function Harness({ initial, onOpenSettings, seen }: { initial: AppTabs<Monitorin
 export function renderMonitoringApp(opts: { tabs?: AppTabs<MonitoringView>; onOpenSettings?(): void } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const initial = opts.tabs ?? tabsWith({ page: "home" });
-  const seen = { tabs: initial };
+  const seen: Seen = { tabs: initial };
   const result = render(
     <QueryClientProvider client={client}>
       <Harness initial={initial} onOpenSettings={opts.onOpenSettings ?? (() => {})} seen={seen} />
@@ -69,7 +72,9 @@ export function renderMonitoringApp(opts: { tabs?: AppTabs<MonitoringView>; onOp
   );
   /** The tabs as last rendered: each tab's view and its Back history. */
   const current = () => seen.tabs;
-  return { ...result, client, current };
+  /** The active tab's navigation as the shell hands it to the app (asking its leave check first). */
+  const navigate: TabNav<MonitoringView>["navigate"] = (view, mode) => act(() => seen.nav?.navigate(view, mode));
+  return { ...result, client, current, navigate };
 }
 
 /** A saved project as the API returns it. */

@@ -61,6 +61,25 @@ describe("editorReducer", () => {
     expect(isDirty(VIEW)).toBe(false);
   });
 
+  it("a save of an older draft keeps editing the newer one over the saved version", () => {
+    const s1 = edit(run(start(), retitle("p-1", "New")));
+    const sent = s1.draft;
+    const s2 = edit(run(s1, retitle("p-2", "Newer")));
+    const s3 = edit(run(s2, { type: "saved", version: 2, spec: sent, sent }));
+    expect(s3.baseVersion).toBe(2);
+    expect(s3.base).toBe(sent);
+    expect(s3.draft).toBe(s2.draft);
+    expect(s3.writer).toBe(s1.writer);
+    expect(isDirty(s3)).toBe(true);
+    // Nothing changed since it was sent: edit mode ends.
+    expect(run(s1, { type: "saved", version: 2, spec: sent, sent })).toEqual(VIEW);
+  });
+
+  it("each session gets its own writer", () => {
+    expect(start().writer).not.toBe(start().writer);
+    expect(edit(editorReducer(VIEW, { type: "start", dashboardId: "d1", version: 1, spec: doc(), writer: "w1" })).writer).toBe("w1");
+  });
+
   it("rebase keeps the draft and moves the base", () => {
     const s1 = edit(run(start(), retitle("p-1", "Mine")));
     const theirs = spec("API latency", [panel("p-1", "Theirs", "up")]);

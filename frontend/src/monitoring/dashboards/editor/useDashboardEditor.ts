@@ -6,10 +6,10 @@
 import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { dashboardKey, saveDashboard, useDashboardMutation, type DashboardOut, type DashboardRequestError } from "../api";
-import { removeDraft } from "../drafts/draftStore";
+import { removeDraft, type StoredDraft } from "../drafts/draftStore";
 import { useDraft } from "../drafts/useDraft";
-import type { DashboardSpec } from "../schema";
-import { editorReducer, isDirty, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
+import type { DashboardSpec, OwnerKind } from "../schema";
+import { editorReducer, isDirty, newWriter, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
 
 export { isDirty };
 
@@ -23,6 +23,8 @@ export interface DashboardEditor {
   save(): Promise<void>;
   /** Moves the base to the newer saved version (after reviewing it), then saves over it. */
   saveOver(version: number, base: DashboardSpec): Promise<void>;
+  /** Edit mode from a stored draft: it becomes this session's, based on the version it started from. */
+  restore(draft: StoredDraft, current: DashboardSpec, ownerKind: OwnerKind): void;
   /** Leaves edit mode and drops the draft (the caller asks first when it has changes). */
   discard(): void;
   saving: boolean;
@@ -55,11 +57,12 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
   const adopt = keeper.adopt;
 
   const dispatch = useCallback((action: EditorAction) => {
-    const next = editorReducer(current.current, action);
-    if (next === current.current) return;
+    // The tab's live session is the latest (a save answered after this page went away and came back).
+    const live = sessionFor(tabId, dashboardId);
+    const from = live.mode === "edit" ? live : current.current;
+    const next = editorReducer(from, action);
+    if (next === from) return;
     current.current = next;
-    // A restored draft is already stored: nothing to write until it changes.
-    if (action.type === "resume" && next.mode === "edit") adopt(next);
     if (next.mode === "edit") editSessions.set(tabId, next);
     else if (sessionFor(tabId, dashboardId).mode === "edit") editSessions.delete(tabId);
     if (next.mode === "view") {
@@ -67,7 +70,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
       setConflict(null);
     }
     setState(next);
-  }, [tabId, dashboardId, adopt]);
+  }, [tabId, dashboardId]);
 
   const send = useCallback(async (baseVersion: number) => {
     const s = current.current;
@@ -77,9 +80,11 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
     try {
       const out: DashboardOut = await mutation.mutateAsync({ id: s.dashboardId, baseVersion, spec: s.draft });
       client.setQueryData(dashboardKey(out.id), out);
-      // Saved: the draft is done with (also when the page went away while saving).
-      removeDraft(out.id);
-      dispatch({ type: "saved", version: out.version, spec: out.spec });
+      // Changed while saving: editing goes on over the saved version, and the stored draft is
+      // updated with the next write. Otherwise the draft is done with (also when the page went away).
+      dispatch({ type: "saved", version: out.version, spec: out.spec, sent: s.draft });
+      setConflict(null);
+      if (current.current.mode === "view") removeDraft(out.id, s.writer);
     } catch (err) {
       const e = err as DashboardRequestError;
       setSaveError(e);
@@ -111,5 +116,15 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
 
   const discard = useCallback(() => dispatch({ type: "discard" }), [dispatch]);
 
-  return { state, dispatch, save, saveOver, discard, saving: mutation.isPending, saveError, conflict, draftsWork: keeper.works };
+  const restore = useCallback((d: StoredDraft, spec: DashboardSpec, ownerKind: OwnerKind) => {
+    dispatch({
+      type: "resume", dashboardId, baseVersion: d.baseVersion, base: spec, draft: d.draft, jsonText: d.jsonText, ownerKind,
+      writer: newWriter(),
+    });
+    const s = current.current;
+    // Written again under this session, keeping when it last changed.
+    if (s.mode === "edit") adopt(s, d.savedAt);
+  }, [dispatch, adopt, dashboardId]);
+
+  return { state, dispatch, save, saveOver, discard, restore, saving: mutation.isPending, saveError, conflict, draftsWork: keeper.works };
 }

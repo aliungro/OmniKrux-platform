@@ -10,10 +10,10 @@ import GroupForm from "./groups/GroupForm";
 import GroupPage from "./groups/GroupPage";
 import MonitoringHome from "./home/MonitoringHome";
 import DashboardPage from "./dashboards/page/DashboardPage";
-import { draftsWork, removeDraft, writeDraft } from "./dashboards/drafts/draftStore";
+import { draftsWork, removeDraft } from "./dashboards/drafts/draftStore";
 import { heldLeave } from "./dashboards/drafts/leaveGuard";
 import { LeaveDialog } from "./dashboards/drafts/LeaveDialog";
-import { holdUnload, toStoredDraft } from "./dashboards/drafts/useDraft";
+import { forgetSession, keepNow } from "./dashboards/drafts/useDraft";
 import { editSessions } from "./dashboards/editor/useDashboardEditor";
 import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
 import { Gone, type GoneWhat } from "./pages/Gone";
@@ -45,6 +45,8 @@ export interface MonitoringPageProps {
   tabId: string;
   nav: TabNav<MonitoringView>;
   openInNewTab(view: MonitoringView): void;
+  /** Shows another workspace tab (the one editing this dashboard). */
+  activateTab(id: string): void;
   onOpenSettings(): void;
 }
 
@@ -129,7 +131,22 @@ interface Leaving {
   from: HTMLElement | null;
 }
 
+/**
+ * A tab that is gone takes its edit session with it (closed without changes, or dropped). Run as the
+ * app renders, before its pages read the sessions; it only ever removes, so running again is harmless.
+ */
+function pruneSessions(tabs: AppTabs<MonitoringView>) {
+  if (editSessions.size === 0) return;
+  const ids = new Set(tabs.tabs.map((t) => t.id));
+  for (const id of [...editSessions.keys()]) {
+    if (ids.has(id)) continue;
+    editSessions.delete(id);
+    forgetSession(id);
+  }
+}
+
 export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings }: MonitoringAppProps) {
+  pruneSessions(tabs);
   const root = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const tree = useMonitoringTree();
@@ -214,21 +231,28 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       return;
     }
     const session = editSessions.get(l.tabId);
-    if (how === "keep" && session?.mode === "edit" && !writeDraft(toStoredDraft(session))) {
+    if (how === "keep" && session?.mode === "edit" && !keepNow(l.tabId, session)) {
       // Storage refused the draft just now: say leaving loses the changes, and stay.
       setLeaving({ ...l, draftsWork: false });
       return;
     }
-    if (how === "discard") removeDraft(l.dashboardId);
+    // Only this session's draft: another tab's or window's stays.
+    if (how === "discard" && session?.mode === "edit") removeDraft(l.dashboardId, session.writer);
     // The session ends first, so the action goes through when performed again.
     editSessions.delete(l.tabId);
-    holdUnload(l.tabId, false);
+    forgetSession(l.tabId);
     returnFocus.current = root.current?.closest("main") ?? null;
     focusMainFrom(root.current);
     asking.current = false;
     setLeaving(null);
     l.proceed();
   }, [leaving]);
+
+
+  const activateTab = useCallback((id: string) => {
+    handOff();
+    dispatchTabs({ type: "activateTab", id });
+  }, [dispatchTabs, handOff]);
 
   const openInNewTab = useCallback((v: MonitoringView) => {
     handOff();
@@ -266,7 +290,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     // Only when the tab changes; scrolling itself updates nav.scrollTop.
   }, [tabId]);
 
-  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, onOpenSettings };
+  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings };
   return (
     <div ref={root} className={s.app}>
       <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
