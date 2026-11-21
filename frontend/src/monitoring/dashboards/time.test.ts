@@ -20,6 +20,14 @@ describe("time", () => {
     expect(alignRange(1000, 1095, 30)).toEqual({ start: 990, end: 1110 });
   });
 
+  it("uses the binding step list", () => {
+    expect(NICE_STEPS).toEqual([
+      1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600, 43200, 86400,
+    ]);
+    expect(stepFor(2000, 24)).toBe(2);
+    expect(stepFor(600000, 1)).toBe(21600);
+  });
+
   it("steps stay inside the nice list, even for tiny or huge ranges", () => {
     expect(stepFor(1, 24)).toBe(NICE_STEPS[0]);
     expect(stepFor(1e12, 1)).toBe(NICE_STEPS[NICE_STEPS.length - 1]);
@@ -32,12 +40,18 @@ describe("time", () => {
     expect(parseTimeExpr("now-6x", 0)).toBeNull();
     expect(parseTimeExpr("2026-13-40T10:00:00Z", 0)).toBeNull();
     expect(parseTimeExpr("", 0)).toBeNull();
+    expect(parseTimeExpr("now-" + "9".repeat(400) + "w", 0)).toBeNull();
+    expect(parseTimeExpr("0050-01-01T00:00:00Z", 0)).toBe(-60589296000);
+    expect(parseTimeExpr("0000-01-01T00:00:00Z", 0)).toBeNull();
     expect(timeLabel({ from: "now-6h", to: "now" })).toBe("Last 6 hours");
     expect(timeLabel({ from: "now-90m", to: "now-5m" })).toBe("now-90m to now-5m");
   });
 
   it("resolves a range and refuses a backwards one", () => {
-    expect(resolveTime({ from: "now-1h", to: "now" }, 10000)).toEqual({ start: 6400, end: 10000 });
+    expect(resolveTime({ from: "now-1h", to: "now" }, 10000)).toEqual({
+      start: 6400,
+      end: 10000,
+    });
     expect(resolveTime({ from: "now", to: "now-1h" }, 10000)).toBeNull();
     expect(resolveTime({ from: "now-1h", to: "2026-11-19T10:00:00Z" }, 2e9)).toBeNull();
     expect(resolveTime({ from: "bogus", to: "now" }, 10000)).toBeNull();
@@ -45,7 +59,10 @@ describe("time", () => {
 
   it("presets and refresh labels", () => {
     expect(TIME_PRESETS).toHaveLength(9);
-    expect(TIME_PRESETS[0]).toEqual({ from: "now-5m", label: "Last 5 minutes" });
+    expect(TIME_PRESETS[0]).toEqual({
+      from: "now-5m",
+      label: "Last 5 minutes",
+    });
     expect(TIME_PRESETS[8]).toEqual({ from: "now-7d", label: "Last 7 days" });
     expect(REFRESH_LABELS).toHaveLength(7);
     expect(refreshMs(null)).toBeNull();

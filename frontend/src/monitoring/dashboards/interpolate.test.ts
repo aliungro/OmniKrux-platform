@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { ALL_PATTERN, escapeQueryString, escapeRegex, interpolate } from "./interpolate";
+import {
+  ALL_PATTERN,
+  escapeQueryString,
+  escapeRegex,
+  interpolate,
+  VariableError,
+} from "./interpolate";
 
 const B = { stepSeconds: 30, rangeSeconds: 21600 };
 
@@ -11,9 +17,7 @@ describe("interpolate", () => {
     };
     expect(interpolate('{ns=~"$ns"}', vars, B)).toBe('{ns=~"a\\\\.b|c"}');
     expect(interpolate('{x="${one}"}', vars, B)).toBe('{x="a\\"} or up{x=\\""}');
-    expect(interpolate('{ns=~"$ns"}', { ns: { multi: true, value: "all" } }, B)).toBe(
-      '{ns=~".+"}',
-    );
+    expect(interpolate('{ns=~"$ns"}', { ns: { multi: true, value: "all" } }, B)).toBe('{ns=~".+"}');
     expect(interpolate('{ns=~"$ns"}', { ns: { multi: true, value: [] } }, B)).toBe('{ns=~".+"}');
     expect(
       interpolate("rate(x[$__rate_interval])", {}, { stepSeconds: 30, rangeSeconds: 21600 }),
@@ -56,14 +60,63 @@ describe("interpolate", () => {
 
   it("a value is never re-expanded", () => {
     const out = interpolate(
-      "$a $b",
+      '"$a" "$b"',
       { a: { multi: false, value: ["$b"] }, b: { multi: false, value: ["X"] } },
       B,
     );
-    expect(out).toBe("$b X");
+    expect(out).toBe('"$b" "X"');
   });
 
   it("inherited names are not variables", () => {
     expect(interpolate("$constructor", {}, B)).toBe("$constructor");
+  });
+
+  const one = (value: string[], multi = false) => ({ v: { multi, value } });
+  const REFUSAL = "The value of $v can't be used here. Put $v inside double quotes in the query.";
+
+  it("single quotes escape for a single-quoted string", () => {
+    const evil = "x' or vector(1) or y{a='";
+    const out = interpolate("{a='$v'}", one([evil]), B);
+    expect(out).toBe(String.raw`{a='x\' or vector(1) or y{a=\''}`);
+    expect(interpolate("'$v'", one(["a\\b\nc\rd"]), B)).toBe(String.raw`'a\\b\nc\rd'`);
+  });
+
+  it("backticks refuse a value with a backtick and pass others raw", () => {
+    expect(interpolate("{a=`$v`}", one(['a\\b"c']), B)).toBe('{a=`a\\b"c`}');
+    expect(() => interpolate("{a=`$v`}", one(["a`b"]), B)).toThrow(VariableError);
+    try {
+      interpolate("{a=`$v`}", one(["a`b"]), B);
+    } catch (e) {
+      expect((e as VariableError).name).toBe("v");
+      expect((e as Error).message).toBe(REFUSAL);
+    }
+  });
+
+  it("unquoted values must be plain", () => {
+    expect(interpolate("topk($v, up)", one(["5"]), B)).toBe("topk(5, up)");
+    expect(interpolate("up[${v}]", one(["a_b:c.d-e"]), B)).toBe("up[a_b:c.d-e]");
+    expect(() => interpolate("topk($v, up)", one(["5) or up"]), B)).toThrow(VariableError);
+    expect(() => interpolate("topk($v, up)", one(["5", "6"], true), B)).toThrow(VariableError);
+    expect(() => interpolate("topk($v, up)", { v: { multi: true, value: "all" } }, B)).toThrow(
+      VariableError,
+    );
+    expect(() => interpolate("topk($v, up)", { v: { multi: false, value: "all" } }, B)).toThrow(
+      VariableError,
+    );
+  });
+
+  it("builtins are allowed anywhere", () => {
+    expect(interpolate("rate(x[$__rate_interval]) '$__interval' `$__range`", {}, B)).toBe(
+      "rate(x[2m]) '30s' `6h`",
+    );
+  });
+
+  it("an escaped quote does not end the string scan", () => {
+    const out = interpolate('{a="x\\" $v"}', one(['q"r']), B);
+    expect(out).toBe('{a="x\\" q\\"r"}');
+    // The string closes at the real quote, so a later bare variable is unquoted again.
+    expect(() => interpolate('{a="x"} $v', one(["a b"]), B)).toThrow(VariableError);
+    // A quote of the other kind inside a string does not change the context.
+    expect(interpolate(`"it's $v"`, one(['"']), B)).toBe(`"it's \\""`);
   });
 });

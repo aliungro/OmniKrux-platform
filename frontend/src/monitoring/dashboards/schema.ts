@@ -192,8 +192,8 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
 const LABEL = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PANEL_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const REF = /^[A-Z]$/;
-const REL_TIME = /^now-([0-9]+)([smhdw])$/;
-const ABS_TIME = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$/;
+export const REL_TIME = /^now-([0-9]+)([smhdw])$/;
+export const ABS_TIME = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$/;
 const USED = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
 const UNIT_SECONDS: Record<string, bigint> = {
   s: 1n,
@@ -370,7 +370,7 @@ export function variablesUsed(s: string): string[] {
 
 // --- time ---------------------------------------------------------------------------------
 
-function validUtc(t: string): boolean {
+export function validUtc(t: string): boolean {
   const m = ABS_TIME.exec(t);
   if (!m) return false;
   const [year, month, day, hour, minute, second] = m.slice(1).map(Number);

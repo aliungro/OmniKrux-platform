@@ -20,7 +20,13 @@ function P(id: string, x: number, y: number, w: number, h: number): PanelSpec {
     layout: { x, y, w, h },
     queries: [],
     alert: null,
-    options: { unit: "none", decimals: null, thresholds: [], calc: "last", sparkline: false },
+    options: {
+      unit: "none",
+      decimals: null,
+      thresholds: [],
+      calc: "last",
+      sparkline: false,
+    },
   };
 }
 const at = (ps: PanelSpec[], id: string) => ps.find((p) => p.id === id)!.layout;
@@ -47,20 +53,31 @@ describe("layout", () => {
   });
 
   it("pushes recursively", () => {
-    const out = placePanel(
-      [P("a", 0, 0, 12, 4), P("b", 0, 4, 12, 4), P("c", 12, 0, 12, 4)],
-      "c",
-      { x: 0, y: 0, w: 12, h: 6 },
-    );
+    const out = placePanel([P("a", 0, 0, 12, 4), P("b", 0, 4, 12, 4), P("c", 12, 0, 12, 4)], "c", {
+      x: 0,
+      y: 0,
+      w: 12,
+      h: 6,
+    });
     expect(box(out, "c")).toEqual([0, 0, 12, 6]);
     expect(box(out, "a")).toEqual([0, 6, 12, 4]);
     expect(box(out, "b")).toEqual([0, 10, 12, 4]);
   });
 
   it("clamps to the grid and the minimum size", () => {
-    const out = placePanel([P("a", 0, 0, 6, 4)], "a", { x: 30, y: -3, w: 1, h: 1 });
+    const out = placePanel([P("a", 0, 0, 6, 4)], "a", {
+      x: 30,
+      y: -3,
+      w: 1,
+      h: 1,
+    });
     expect(box(out, "a")).toEqual([22, 0, 2, 2]);
-    const wide = placePanel([P("a", 0, 0, 6, 4)], "a", { x: 5, y: 0, w: 40, h: 99 });
+    const wide = placePanel([P("a", 0, 0, 6, 4)], "a", {
+      x: 5,
+      y: 0,
+      w: 40,
+      h: 99,
+    });
     expect(box(wide, "a")).toEqual([0, 0, 24, 40]);
   });
 
@@ -93,6 +110,13 @@ describe("layout", () => {
     expect(box(grow(ps, "a", "down"), "a")).toEqual([12, 0, 12, 5]);
     expect(box(grow(ps, "a", "left"), "a")).toEqual([12, 0, 11, 4]);
     expect(box(grow(ps, "a", "up"), "a")).toEqual([12, 0, 12, 3]);
+  });
+
+  it("a free-space nudge down hands back the same list", () => {
+    const ps = [P("a", 0, 0, 12, 8), P("b", 12, 0, 12, 4)];
+    expect(nudge(ps, "a", "down")).toBe(ps);
+    expect(nudge(ps, "b", "down")).toBe(ps);
+    expect(nudge(ps, "zzz", "down")).toBe(ps);
   });
 
   it("grow stops at the maximum height", () => {
@@ -147,7 +171,15 @@ describe("layout", () => {
     expect(out.panels).toHaveLength(2);
     expect(out.panels[0]).toBe(spec.panels[0]);
     expect(out.panels[1].layout).toEqual({ x: 12, y: 0, w: 12, h: 8 });
-    const sized = appendPanel(spec, { ...rest, layout: { w: 6, h: 3 } } as never);
+    const sized = appendPanel(spec, {
+      ...rest,
+      layout: { w: 6, h: 3 },
+    } as never);
     expect(sized.panels[1].layout).toEqual({ x: 12, y: 0, w: 6, h: 3 });
+    const wild = appendPanel(spec, {
+      ...rest,
+      layout: { w: 99, h: 0 },
+    } as never);
+    expect(wild.panels[1].layout).toMatchObject({ w: 24, h: 2 });
   });
 });

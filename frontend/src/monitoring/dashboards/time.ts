@@ -1,5 +1,6 @@
 // Time ranges, refresh and query steps for dashboards. Pure; only dashboard code imports it.
 
+import { ABS_TIME, REL_TIME, validUtc } from "./schema";
 import type { RefreshSpec, TimeSpec } from "./schema";
 
 export const TIME_PRESETS: readonly { from: string; label: string }[] = [
@@ -14,34 +15,32 @@ export const TIME_PRESETS: readonly { from: string; label: string }[] = [
   { from: "now-7d", label: "Last 7 days" },
 ];
 
-const REL = /^now-([0-9]+)([smhdw])$/;
-const ABS = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$/;
-const UNIT: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+const UNIT: Record<string, number> = {
+  s: 1,
+  m: 60,
+  h: 3600,
+  d: 86400,
+  w: 604800,
+};
 
 /** Seconds since the epoch for "now", "now-<n><unit>" or a UTC time; null when it is none. */
 export function parseTimeExpr(text: string, nowSeconds: number): number | null {
   const t = text.trim();
   if (t === "now") return nowSeconds;
-  const rel = REL.exec(t);
-  if (rel) return nowSeconds - Number(rel[1]) * UNIT[rel[2]];
-  const abs = ABS.exec(t);
-  if (abs) {
+  const rel = REL_TIME.exec(t);
+  if (rel) {
+    const v = nowSeconds - Number(rel[1]) * UNIT[rel[2]];
+    return Number.isFinite(v) ? v : null;
+  }
+  const abs = ABS_TIME.exec(t);
+  if (abs && validUtc(t)) {
     const [y, mo, d, h, mi, s] = abs.slice(1).map(Number);
-    const ms = Date.UTC(y, mo - 1, d, h, mi, s);
-    const back = new Date(ms);
-    // Date.UTC rolls 13/40 over; a real date reads back the same.
-    if (
-      Number.isNaN(ms) ||
-      back.getUTCFullYear() !== y ||
-      back.getUTCMonth() !== mo - 1 ||
-      back.getUTCDate() !== d ||
-      back.getUTCHours() !== h ||
-      back.getUTCMinutes() !== mi ||
-      back.getUTCSeconds() !== s
-    ) {
-      return null;
-    }
-    return ms / 1000;
+    // Date.UTC maps years 0-99 to 19xx; setUTCFullYear does not.
+    const date = new Date(0);
+    date.setUTCFullYear(y, mo - 1, d);
+    date.setUTCHours(h, mi, s, 0);
+    const ms = date.getTime();
+    return Number.isNaN(ms) ? null : ms / 1000;
   }
   return null;
 }
@@ -66,7 +65,7 @@ export function timeLabel(t: TimeSpec): string {
 }
 
 export const NICE_STEPS: readonly number[] = [
-  1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400,
+  1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600, 43200, 86400,
 ];
 
 /** The smallest nice step that keeps a range to about sixty points per grid column. */
@@ -81,7 +80,10 @@ export function alignRange(
   end: number,
   step: number,
 ): { start: number; end: number } {
-  return { start: Math.floor(start / step) * step, end: Math.ceil(end / step) * step };
+  return {
+    start: Math.floor(start / step) * step,
+    end: Math.ceil(end / step) * step,
+  };
 }
 
 export const REFRESH_LABELS: readonly { value: RefreshSpec; label: string }[] = [

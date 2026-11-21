@@ -10,7 +10,9 @@ const MAX_H = 40;
 
 type Dir = "left" | "right" | "up" | "down";
 type DistributiveOmit<T, K extends string> = T extends unknown ? Omit<T, K> : never;
-export type NewPanel = DistributiveOmit<PanelSpec, "layout"> & { layout?: Partial<Layout> };
+export type NewPanel = DistributiveOmit<PanelSpec, "layout"> & {
+  layout?: Partial<Layout>;
+};
 
 export function overlaps(a: Layout, b: Layout): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -60,7 +62,16 @@ export function placePanel(panels: PanelSpec[], id: string, to: Layout): PanelSp
       queue.push(h.id);
     }
   }
-  return compact(list);
+  const out = compact(list);
+  // Nothing moved (a free-space nudge that compaction floats back): hand back the input.
+  const before = new Map(panels.map((p) => [p.id, p.layout]));
+  const unchanged =
+    out.length === panels.length &&
+    out.every((p) => {
+      const was = before.get(p.id);
+      return was !== undefined && same(p.layout, was);
+    });
+  return unchanged ? panels : out;
 }
 
 export function nudge(panels: PanelSpec[], id: string, dir: Dir): PanelSpec[] {
@@ -107,8 +118,8 @@ export function freeSpot(panels: PanelSpec[], w: number, h: number): { x: number
 
 export function appendPanel(spec: DashboardSpec, panel: NewPanel): DashboardSpec {
   const size = DEFAULT_SIZES[panel.type];
-  const w = panel.layout?.w ?? size.w;
-  const h = panel.layout?.h ?? size.h;
+  const w = Math.min(GRID_COLUMNS, Math.max(MIN_W, panel.layout?.w ?? size.w));
+  const h = Math.min(MAX_H, Math.max(MIN_H, panel.layout?.h ?? size.h));
   const spot =
     panel.layout?.x !== undefined && panel.layout?.y !== undefined
       ? { x: panel.layout.x, y: panel.layout.y }
@@ -134,7 +145,12 @@ export function neighbour(panels: PanelSpec[], fromId: string, dir: Dir): string
       (dir === "up" && dy < 0) ||
       (dir === "down" && dy > 0);
     if (!ok) continue;
-    const cand = { id: p.id, d: dx * dx + dy * dy, y: p.layout.y, x: p.layout.x };
+    const cand = {
+      id: p.id,
+      d: dx * dx + dy * dy,
+      y: p.layout.y,
+      x: p.layout.x,
+    };
     if (
       !best ||
       cand.d < best.d ||
