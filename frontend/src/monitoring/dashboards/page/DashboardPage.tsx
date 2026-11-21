@@ -1,9 +1,10 @@
-// A dashboard, in view mode: header, Updated line, ready-made note, variables and the panel
-// grid; and the JSON tab (the saved document, read-only until the JSON editor arrives). Time,
+// A dashboard: header, Updated line, ready-made note, variables and the panel grid; and the JSON
+// tab (the document, read-only until the JSON editor arrives). Edit turns the grid into tiles and
+// the header into Discard and Save dashboard (edit mode, kept per workspace tab). Time,
 // variables, auto-refresh and the view tab live in the tab's view (replace navigations).
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { failure } from "../../../api/http";
-import { pageKey, pressed } from "../../../features/chrome/shortcuts";
+import { isEditable, pressed } from "../../../features/chrome/shortcuts";
 import type { MonitoringPageProps } from "../../MonitoringApp";
 import { Gone, keyboardIsFree } from "../../pages/Gone";
 import { MONITORING_HOME, type MonitoringView } from "../../shell/tabState";
@@ -11,7 +12,12 @@ import { useDashboard, useReadyMade, type DashboardOut } from "../api";
 import type { VarValue } from "../interpolate";
 import { dashboardJson, type RefreshSpec, type TimeSpec } from "../schema";
 import { DashboardGrid } from "../grid/DashboardGrid";
+import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/EditBar";
+import { isDirty } from "../editor/editorState";
+import { SaveConflict } from "../editor/SaveConflict";
+import { useDashboardEditor } from "../editor/useDashboardEditor";
 import { DashboardHeader, type DashboardTab, type MenuAction } from "./DashboardHeader";
+import { pageLetter } from "./keys";
 import { RefreshControl } from "./RefreshControl";
 import { TimeRangePicker } from "./TimeRangePicker";
 import { PROJECTS_VAR, useDashboardContext, usePanelStatus, type DashboardViewState, type PanelStatusStore } from "./useDashboardContext";
@@ -40,16 +46,12 @@ function ReadyNote({ dashboard }: { dashboard: DashboardOut }) {
   );
 }
 
-/** Letter keys belong to the page only outside fields, dialogs and the page's own menus and pickers. */
-function pageLetter(e: KeyboardEvent): boolean {
-  if (!pageKey(e)) return false;
-  const t = e.target;
-  return !(t instanceof Element && t.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-dashboard-popup]'));
-}
-
-function DashboardScreen({ view, dashboard, nav, openInNewTab }: MonitoringPageProps & { view: DashboardViewState; dashboard: DashboardOut }) {
-  const { spec } = dashboard;
+function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: MonitoringPageProps & { view: DashboardViewState; dashboard: DashboardOut }) {
   const ready = dashboard.ready_made;
+  const editor = useDashboardEditor(dashboard.id, tabId);
+  const editing = editor.state.mode === "edit" ? editor.state : null;
+  // In edit mode the page shows the draft; the saved document otherwise.
+  const spec = editing ? editing.draft : dashboard.spec;
   const ctx = useDashboardContext(view, spec, dashboard.owner_kind, dashboard.owner_id);
   const tabs: DashboardTab[] = ["dashboard", "json"];
   const tab: DashboardTab = view.tab && tabs.includes(view.tab) ? view.tab : "dashboard";
@@ -63,7 +65,11 @@ function DashboardScreen({ view, dashboard, nav, openInNewTab }: MonitoringPageP
   const refreshButton = useRef<HTMLButtonElement>(null);
   const editButton = useRef<HTMLButtonElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
+  const discardButton = useRef<HTMLButtonElement>(null);
+  const saveButton = useRef<HTMLButtonElement>(null);
+  const page = useRef<HTMLElement>(null);
   const [timeOpen, setTimeOpen] = useState(false);
+  const [askDiscard, setAskDiscard] = useState(false);
 
   // The page opens with the keyboard on its title, unless the user is working elsewhere (Find, the tree).
   useEffect(() => { if (keyboardIsFree()) title.current?.focus({ preventScroll: true }); }, []);
@@ -92,10 +98,36 @@ function DashboardScreen({ view, dashboard, nav, openInNewTab }: MonitoringPageP
     ctx.refreshNow();
     refreshButton.current?.focus();
   }, [ctx]);
-  const edit = undefined as (() => void) | undefined; // Edit mode and Copy to edit arrive with the editor.
+  // Copy to edit (a ready-made view) arrives with creating and copying.
+  const edit = ready ? undefined : () => editor.dispatch({ type: "start", dashboardId: dashboard.id, version: dashboard.version, spec: dashboard.spec });
+  const save = () => { void editor.save(); };
+  const discard = () => {
+    if (isDirty(editor.state)) setAskDiscard(true);
+    else editor.discard();
+  };
+
+  // Edit mode ended (saved or discarded): the keyboard goes to Edit, never to <body>.
+  const isEditing = editing !== null;
+  const wasEditing = useRef(isEditing);
+  useLayoutEffect(() => {
+    if (wasEditing.current && !isEditing) {
+      setAskDiscard(false);
+      editButton.current?.focus();
+    }
+    wasEditing.current = isEditing;
+  }, [isEditing]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+S (Cmd+S) saves while editing, from this page's fields too (F7); otherwise it's the browser's.
+      if (editing && pressed("dashboardSave", e)) {
+        const t = e.target;
+        const here = t instanceof Node && !!page.current?.contains(t);
+        if (e.defaultPrevented || document.querySelector('[aria-modal="true"]') !== null || (!here && isEditable(t))) return;
+        e.preventDefault();
+        if (!e.repeat) save();
+        return;
+      }
       if (!pageLetter(e)) return;
       if (pressed("dashboardViews", e)) {
         const t = tabs[Number(e.key) - 1];
@@ -108,7 +140,7 @@ function DashboardScreen({ view, dashboard, nav, openInNewTab }: MonitoringPageP
       } else if (pressed("dashboardRefresh", e)) {
         e.preventDefault();
         refreshNow();
-      } else if (pressed("dashboardEdit", e) && !ready) {
+      } else if (pressed("dashboardEdit", e) && !ready && !editing) {
         e.preventDefault();
         editButton.current?.focus();
         edit?.();
@@ -136,15 +168,31 @@ function DashboardScreen({ view, dashboard, nav, openInNewTab }: MonitoringPageP
   const actions: MenuAction[] = ready ? [{ label: "Copy dashboard…" }] : [{ label: "Copy dashboard…" }, { label: "Delete dashboard…", danger: true }];
   const ids = tabIds(tab);
 
+  const { saveError, conflict } = editor;
+  const otherError = saveError && saveError.code !== "version_conflict" ? saveError : null;
+
   return (
-    <section className={s.page} aria-labelledby={titleId}>
+    <section ref={page} className={s.page} aria-labelledby={titleId}>
       <DashboardHeader title={spec.title || dashboard.title} titleId={titleId} titleRef={title}
         ownerName={dashboard.owner_name || ctx.ownerName} onOwner={openOwner} readyMade={ready}
         tabs={tabs} tab={tab} tabIds={tabIds} onTab={selectTab} tabRefs={tabRefs}
         timeControl={<TimeRangePicker time={ctx.time} open={timeOpen} onOpen={() => setTimeOpen(true)} onClose={closeTime} onPick={pickTime} buttonRef={timeButton} />}
         refreshControl={<RefreshControl value={ctx.refresh} onRefresh={refreshNow} buttonRef={refreshButton}
           onChange={(r: RefreshSpec) => replace({ refresh: r })} />}
-        editRef={editButton} onEdit={edit} moreRef={moreButton} actions={actions} />
+        editRef={editButton} onEdit={edit} moreRef={moreButton} actions={actions}
+        badge={editing ? <EditingPill /> : undefined}
+        editControls={editing
+          ? <EditControls saving={editor.saving} onDiscard={discard} onSave={save} discardRef={discardButton} saveRef={saveButton} />
+          : undefined} />
+      {editing && conflict !== null && (
+        <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
+          onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />
+      )}
+      {editing && conflict === null && otherError && <EditNotice error={otherError} onShowJson={() => selectTab("json")} />}
+      {askDiscard && editing && (
+        <DiscardDialog title={editing.base.title || dashboard.title} restoreFocusTo={discardButton}
+          onCancel={() => setAskDiscard(false)} onDiscard={() => editor.discard()} />
+      )}
       <UpdatedLine status={ctx.status} />
       {ready && <ReadyNote dashboard={dashboard} />}
       <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab} className={s.content}>
@@ -163,7 +211,8 @@ function DashboardScreen({ view, dashboard, nav, openInNewTab }: MonitoringPageP
               onVar={setVar} onProjects={(value) => setVar(PROJECTS_VAR, value)} onRetry={ctx.retryVariable}
               onOpenProject={(p, e) => openPage({ page: "project", id: p.id }, e)} />
             <DashboardGrid dashboardId={dashboard.id} panels={spec.panels} owner={ctx.owner} ownerName={ctx.ownerName}
-              vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} refreshSeq={ctx.refreshSeq} status={ctx.status} />
+              vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} refreshSeq={ctx.refreshSeq} status={ctx.status}
+              editor={editing ? { state: editing, dispatch: editor.dispatch, onLeave: () => saveButton.current?.focus() } : undefined} />
           </>
         )}
         {tab === "json" && <pre className={s.json} aria-label="Dashboard JSON" tabIndex={0}>{dashboardJson(spec)}</pre>}

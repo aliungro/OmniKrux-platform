@@ -1,5 +1,5 @@
 // The dashboard's header, one row: where it lives and its title, its views, the time range,
-// refreshing, Edit (or Copy to edit) and More actions.
+// refreshing, Edit (or Copy to edit) and More actions; in edit mode, Discard and Save dashboard.
 import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { escapeCloses } from "../../focus";
 import { closesOnLeave, menuKeys, POPUP, useCloseOutside } from "./popover";
@@ -70,6 +70,10 @@ interface Props {
   onEdit?(): void;
   moreRef: RefObject<HTMLButtonElement | null>;
   actions: MenuAction[];
+  /** After the title, such as the Editing pill. */
+  badge?: ReactNode;
+  /** Edit mode: these replace Edit and More actions. */
+  editControls?: ReactNode;
 }
 
 export function DashboardHeader(p: Props) {
@@ -92,6 +96,7 @@ export function DashboardHeader(p: Props) {
         </p>
         <h1 id={p.titleId} ref={p.titleRef} tabIndex={-1} className={s.title}>{p.title}</h1>
         {p.readyMade && <span className={s.readyTag}>Ready-made</span>}
+        {p.badge}
       </div>
       <div role="tablist" aria-label="Dashboard views" className={s.tabs} onKeyDown={onTabKey}>
         {p.tabs.map((t, i) => {
@@ -109,11 +114,15 @@ export function DashboardHeader(p: Props) {
       <div className={s.controls}>
         {p.timeControl}
         {p.refreshControl}
-        <button ref={p.editRef} type="button" className={s.edit} aria-keyshortcuts={p.readyMade ? undefined : "e"}
-          aria-disabled={p.onEdit ? undefined : true} onClick={() => p.onEdit?.()}>
-          {p.readyMade ? "Copy to edit" : "Edit"}
-        </button>
-        <ActionsMenu actions={p.actions} buttonRef={p.moreRef} />
+        {p.editControls ?? (
+          <>
+            <button ref={p.editRef} type="button" className={s.edit} aria-keyshortcuts={p.readyMade ? undefined : "e"}
+              aria-disabled={p.onEdit ? undefined : true} onClick={() => p.onEdit?.()}>
+              {p.readyMade ? "Copy to edit" : "Edit"}
+            </button>
+            <ActionsMenu actions={p.actions} buttonRef={p.moreRef} />
+          </>
+        )}
       </div>
     </header>
   );

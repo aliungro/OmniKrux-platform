@@ -9,6 +9,7 @@ import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fak
 import { gate, intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { ReadyMadeOut } from "../api";
+import { editSessions } from "../editor/useDashboardEditor";
 
 // The chart chunk as a stub: it prints how many series it was given.
 vi.mock("../../charts", async () => {
@@ -17,7 +18,7 @@ vi.mock("../../charts", async () => {
   return { default: ({ data }: { data: { series: unknown[] } }) => createElement("button", { type: "button" }, `chart ${data.series.length}`) };
 });
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => { localStorage.clear(); editSessions.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
@@ -109,8 +110,10 @@ describe("Dashboard page", () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(batches(api).length).toBe(before + 1);
 
+    // `e` enters edit mode: Edit gives way to Save dashboard, and the keyboard goes to the first panel.
     await user.keyboard("e");
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     notBody();
   });
 

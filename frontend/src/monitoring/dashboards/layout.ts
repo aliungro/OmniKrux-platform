@@ -8,7 +8,7 @@ const MIN_W = 2;
 const MIN_H = 2;
 const MAX_H = 40;
 
-type Dir = "left" | "right" | "up" | "down";
+export type Dir = "left" | "right" | "up" | "down";
 type DistributiveOmit<T, K extends string> = T extends unknown ? Omit<T, K> : never;
 export type NewPanel = DistributiveOmit<PanelSpec, "layout"> & {
   layout?: Partial<Layout>;

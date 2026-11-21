@@ -1,0 +1,65 @@
+/* A dashboard diff: the page's own background under the dialog, the two sides named once above.
+   Territories tokens only. */
+.diff {
+  margin: 0;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.heads {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--rule);
+}
+
+.head {
+  padding: 6px 12px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.head + .head {
+  border-left: 1px solid var(--rule);
+  color: var(--focus);
+}
+
+.view {
+  max-height: min(52vh, 480px);
+  overflow: auto;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.view :global(.cm-mergeView) {
+  overflow: visible;
+}
+
+.view :global(.cm-mergeViewEditor + .cm-mergeViewEditor) {
+  border-left: 1px solid var(--rule);
+}
+
+.note {
+  margin: 0;
+  padding: 18px 14px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.bad {
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .heads {
+    grid-template-columns: 1fr;
+  }
+
+  .head + .head {
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+  }
+}
