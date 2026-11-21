@@ -1,11 +1,24 @@
 // An in-memory stand-in for `/api/monitoring/*`, for UI tests. It stubs `fetch`, records every
 // request, and passes any other URL to a fallback. It applies the backend's validation copy for the
-// cases the UI tests use (name rule, name taken, gone). Not a model of the backend.
+// cases the UI tests use (name rule, name taken, gone), and for dashboards the backend's codes and
+// copy (`{code, message, problems?, current_version?}`). Not a model of the backend.
 import { vi } from "vitest";
 import type {
-  AuthOut, DiscoveryOut, FieldCatalogOut, GroupOut, HealthOut, LinkOut, ProjectKind, ProjectOut, QueryRequest, QueryResponse,
-  SetupIn, SourceIn, SourceOut, SuggestOut, TreeColor, TreeOut,
+  AuthOut, DashboardRefOut, DiscoveryOut, FieldCatalogOut, GroupOut, HealthOut, LinkOut, ProjectKind, ProjectOut,
+  QueryErrorCode, QueryRequest, QueryResponse, SetupIn, SourceIn, SourceOut, SuggestOut, TreeColor, TreeDashboard, TreeOut,
 } from "../api/types";
+import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut } from "../dashboards/api";
+import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem } from "../dashboards/schema";
+
+/** A seeded answer to a query: a success (whatever is left out is filled in) or a refusal. */
+export type FakeQueryAnswer = Partial<QueryResponse> | { error: { code: QueryErrorCode; message: string }; status: number };
+
+/** A dashboard the fake holds. A ready-made view (`out.ready_made`, id `ready:<project>:<key>`) is
+ * served read-only and has no versions. `versions` is oldest first. */
+export interface FakeDashboard {
+  out: DashboardOut;
+  versions: { out: VersionOut; spec: DashboardSpec }[];
+}
 
 export interface FakeMonitoringState {
   sources: SourceOut[];
@@ -19,6 +32,15 @@ export interface FakeMonitoringState {
   /** Answers to `/query`, by query text; whatever is left out is filled in. */
   queries: Record<string, Partial<QueryResponse>>;
   suggestion: SuggestOut;
+  /** Answers to `/query` and `/query/batch` items, by `"<project id>|<query text>"` or by query
+   * text (the first wins), read before `queries`. */
+  queryAnswers: Record<string, FakeQueryAnswer>;
+  /** By id. */
+  dashboards: Record<string, FakeDashboard>;
+  /** Ready-made views by project id (also listed in the tree). */
+  readyMade: Record<string, ReadyMadeOut[]>;
+  /** Label values by `"<project id>|<label>"`. */
+  labelValues: Record<string, string[]>;
 }
 
 export interface FakeMonitoringApi {
@@ -35,6 +57,18 @@ const GROUP_GONE = "That group doesn't exist anymore. It may have been removed."
 const NOT_LINKED = "This source isn't linked to that project.";
 const REVIEW_CHANGED = "That changed since you looked. Review it again.";
 const TOKEN = "review-token";
+const DASHBOARD_GONE = "That dashboard no longer exists.";
+const VERSION_GONE = "That version of the dashboard no longer exists.";
+const OWNER_GONE = "That project or group no longer exists.";
+const READ_ONLY = "Ready-made views can't be changed. Copy one to edit it.";
+const VERSION_NUMBER = "Send the version you started from as a whole number.";
+const BATCH_SIZE = "Send 1 to 64 queries in one batch.";
+const BATCH_PROJECT = "Pick the project this query belongs to.";
+const PROJECT_NEEDED = "Choose the project whose label values to read.";
+const NO_ANSWER = "This fake has no answer for that query.";
+const MAX_TITLE = 120;
+const conflict = (current: number) =>
+  `This dashboard was saved somewhere else since you started (version ${current}). Review the differences before saving.`;
 const UNKNOWN_HEALTH: HealthOut = { state: "unknown", message: null, version: null, checked_at: null };
 const NOW = "2026-01-01T00:00:00Z";
 
@@ -77,6 +111,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
   const state: FakeMonitoringState = {
     sources: [], projects: [], groups: [], health: {}, discovery: {}, fields: {}, queries: {},
     suggestion: { filter: "", origin: "none", reason: null },
+    queryAnswers: {}, dashboards: {}, readyMade: {}, labelValues: {},
     ...seed,
   };
   const requests: FakeMonitoringApi["requests"] = [];
@@ -111,11 +146,233 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     return source;
   }
 
+  // --- dashboards
+
+  type Owner = { kind: OwnerKind; id: string; name: string; linked: Set<string> };
+  const dashboardError = (status: number, code: string, message: string, extra: Obj = {}) => refuse({ code, message, ...extra }, status);
+  const titleOrder = (a: { title: string }, b: { title: string }) =>
+    a.title.toLowerCase().localeCompare(b.title.toLowerCase()) || a.title.localeCompare(b.title);
+  const saved = () => Object.values(state.dashboards).filter((d) => !d.out.ready_made);
+  const ownedBy = (kind: OwnerKind, id: string) =>
+    saved().filter((d) => d.out.owner_kind === kind && d.out.owner_id === id).sort((a, b) => titleOrder(a.out, b.out));
+  const refsOf = (kind: OwnerKind, id: string): DashboardRefOut[] =>
+    ownedBy(kind, id).map((d) => ({ id: d.out.id, title: d.out.title, versions: d.versions.length }));
+  const dropOwned = (kind: OwnerKind, id: string) => ownedBy(kind, id).forEach((d) => { delete state.dashboards[d.out.id]; });
+  const treeRows = (kind: OwnerKind, id: string): TreeDashboard[] =>
+    ownedBy(kind, id).map((d) => ({ id: d.out.id, title: d.out.title, ready_made: false }));
+  function ownerOf(kind: unknown, id: unknown): Owner | null {
+    if (kind === "project") {
+      const p = project(String(id));
+      return p ? { kind, id: p.id, name: p.name, linked: new Set(p.links.map((l) => l.source_id)) } : null;
+    }
+    if (kind === "group") {
+      const g = state.groups.find((x) => x.id === id);
+      return g ? { kind, id: g.id, name: g.name, linked: new Set() } : null;
+    }
+    return null;
+  }
+  const dashboardOut = (d: FakeDashboard): DashboardOut =>
+    d.out.ready_made ? d.out : { ...d.out, owner_name: ownerOf(d.out.owner_kind, d.out.owner_id)?.name ?? "" };
+
+  /** The validated document for the owner, or the backend's 422. */
+  function checked(spec: unknown, owner: Owner): DashboardSpec | Response {
+    const v = validateDashboard(spec, owner.kind);
+    const invalid = (problems: Problem[]) =>
+      dashboardError(422, "invalid_dashboard", `${problems[0].path}: ${problems[0].message}`, { problems });
+    if (!v.ok) return invalid(v.problems);
+    if (owner.kind === "project") {
+      const message = `This source isn't linked to ${owner.name}.`;
+      const problems: Problem[] = [];
+      v.spec.variables.forEach((x, i) => {
+        if (x.source.id !== null && !owner.linked.has(x.source.id)) problems.push({ path: `variables[${i}].source.id`, message });
+      });
+      v.spec.panels.forEach((p, i) => p.queries.forEach((q, j) => {
+        if (q.source.id !== null && !owner.linked.has(q.source.id)) problems.push({ path: `panels[${i}].queries[${j}].source.id`, message });
+      }));
+      if (problems.length) return invalid(problems.slice(0, 50));
+    }
+    return v.spec;
+  }
+
+  /** Titles are unique per owner, case-sensitively (like the backend). */
+  const titleTaken = (kind: OwnerKind, id: string, title: string, besides?: string) =>
+    saved().some((d) => d.out.owner_kind === kind && d.out.owner_id === id && d.out.title === title && d.out.id !== besides);
+  const takenTitle = (title: string) => dashboardError(409, "name_taken", `A dashboard named "${title}" already exists. Pick another name.`);
+  const versionConflict = (d: FakeDashboard) =>
+    dashboardError(409, "version_conflict", conflict(d.out.version), { current_version: d.out.version });
+
+  function uniqueTitle(kind: OwnerKind, id: string, base: string): string {
+    const start = base.trim().slice(0, MAX_TITLE);
+    let title = start;
+    for (let n = 2; titleTaken(kind, id, title); n++) {
+      const suffix = ` (${n})`;
+      title = start.slice(0, MAX_TITLE - suffix.length).trimEnd() + suffix;
+    }
+    return title;
+  }
+
+  function addVersion(d: FakeDashboard, spec: DashboardSpec, origin: VersionOut["origin"], extra: Partial<VersionOut> = {}) {
+    const version = d.out.version + 1;
+    d.out = { ...d.out, version, title: spec.title, spec, updated_at: NOW };
+    d.versions.push({
+      out: { version, saved_at: NOW, title: spec.title, panel_count: spec.panels.length, origin, restored_from: null, copied_from: null, ...extra },
+      spec,
+    });
+  }
+
+  function addDashboard(owner: Owner, spec: DashboardSpec, origin: "created" | "copied", copiedFrom: string | null): Response {
+    if (titleTaken(owner.kind, owner.id, spec.title)) return takenTitle(spec.title);
+    const id = nextId("d");
+    const d: FakeDashboard = {
+      out: {
+        id, owner_kind: owner.kind, owner_id: owner.id, owner_name: owner.name, title: spec.title, version: 0, spec,
+        ready_made: false, created_at: NOW, updated_at: NOW,
+      },
+      versions: [],
+    };
+    addVersion(d, spec, origin, { copied_from: copiedFrom });
+    state.dashboards[id] = d;
+    return json(dashboardOut(d), 201);
+  }
+
+  /** Every source id the owner can't use set to null, like the backend's `adapt_sources`. */
+  function adapted(spec: DashboardSpec, owner: Owner): DashboardSpec {
+    const copy = structuredClone(spec);
+    const fix = (s: { id: string | null }) => { if (owner.kind === "group" || (s.id !== null && !owner.linked.has(s.id))) s.id = null; };
+    copy.variables.forEach((v) => fix(v.source));
+    copy.panels.forEach((p) => p.queries.forEach((q) => fix(q.source)));
+    return copy;
+  }
+
+  function dashboardRoute(method: string, seg: string[], query: URLSearchParams, body: Obj): Response {
+    const [, id, sub, v, action] = seg;
+    if (method === "GET" && seg.length === 1) {
+      const kind = query.get("owner_kind");
+      const ownerId = query.get("owner_id");
+      if (kind !== null && kind !== "project" && kind !== "group") {
+        return dashboardError(422, "bad_request", 'Choose "project" or "group" as the owner kind.');
+      }
+      return json(saved()
+        .filter((d) => (kind === null || d.out.owner_kind === kind) && (ownerId === null || d.out.owner_id === ownerId))
+        .sort((a, b) => titleOrder(a.out, b.out))
+        .map((d) => ({
+          id: d.out.id, owner_kind: d.out.owner_kind, owner_id: d.out.owner_id, title: d.out.title, version: d.out.version,
+          panel_count: d.out.spec.panels.length, updated_at: d.out.updated_at, ready_made: false,
+        })));
+    }
+    if (method === "POST" && seg.length === 1) {
+      const owner = ownerOf(body.owner_kind, body.owner_id);
+      if (!owner) return dashboardError(404, "unknown_owner", OWNER_GONE);
+      const spec = checked(body.spec, owner);
+      return spec instanceof Response ? spec : addDashboard(owner, spec, "created", null);
+    }
+    if (method === "POST" && seg.length === 2 && id === "copy") {
+      const from = state.dashboards[String(body.from_id)];
+      if (!from) return dashboardError(404, "not_found", DASHBOARD_GONE);
+      const owner = ownerOf(body.owner_kind, body.owner_id);
+      if (!owner) return dashboardError(404, "unknown_owner", OWNER_GONE);
+      // A ready-made view isn't "a copy": it keeps its own title.
+      const base = from.out.ready_made ? from.out.title : `${from.out.title} (copy)`;
+      const title = typeof body.title === "string" ? body.title : uniqueTitle(owner.kind, owner.id, base);
+      const spec = checked({ ...adapted(from.out.spec, owner), title }, owner);
+      return spec instanceof Response ? spec : addDashboard(owner, spec, "copied", from.out.title);
+    }
+    const d = state.dashboards[id];
+    const readOnly = d?.out.ready_made === true || id.startsWith("ready:");
+    const gone = () => dashboardError(404, "not_found", DASHBOARD_GONE);
+    const base = typeof body.base_version === "number" && Number.isInteger(body.base_version) ? body.base_version : null;
+    if (readOnly && method !== "GET") return dashboardError(409, "read_only", READ_ONLY);
+    if (seg.length === 2) {
+      if (method === "GET") return d ? json(dashboardOut(d)) : gone();
+      if (method === "PUT") {
+        if (base === null) return dashboardError(422, "bad_request", VERSION_NUMBER);
+        if (!d) return gone();
+        const owner = ownerOf(d.out.owner_kind, d.out.owner_id);
+        if (!owner) return dashboardError(404, "unknown_owner", OWNER_GONE);
+        const spec = checked(body.spec, owner);
+        if (spec instanceof Response) return spec;
+        if (base !== d.out.version) return versionConflict(d);
+        if (titleTaken(owner.kind, owner.id, spec.title, d.out.id)) return takenTitle(spec.title);
+        addVersion(d, spec, "saved");
+        return json(dashboardOut(d));
+      }
+      if (method === "DELETE") {
+        const raw = query.get("version") ?? "";
+        if (!/^[0-9]{1,9}$/.test(raw)) return dashboardError(422, "bad_request", VERSION_NUMBER);
+        if (!d) return gone();
+        if (Number(raw) !== d.out.version) return versionConflict(d);
+        delete state.dashboards[id];
+        return empty();
+      }
+    }
+    if (sub === "versions") {
+      // Ready-made views have no versions: the store doesn't know them.
+      if (!d || readOnly) return gone();
+      if (method === "GET" && seg.length === 3) return json([...d.versions].reverse().map((x) => x.out));
+      const found = /^[0-9]{1,9}$/.test(v ?? "") ? d.versions.find((x) => x.out.version === Number(v)) : undefined;
+      if (method === "GET" && seg.length === 4) {
+        return found
+          ? json({ version: found.out.version, saved_at: found.out.saved_at, spec: found.spec })
+          : dashboardError(404, "not_found", VERSION_GONE);
+      }
+      if (method === "POST" && seg.length === 5 && action === "restore") {
+        if (base === null) return dashboardError(422, "bad_request", VERSION_NUMBER);
+        if (!found) return dashboardError(404, "not_found", VERSION_GONE);
+        if (base !== d.out.version) return versionConflict(d);
+        if (titleTaken(d.out.owner_kind, d.out.owner_id, found.spec.title, d.out.id)) return takenTitle(found.spec.title);
+        addVersion(d, found.spec, "restored", { restored_from: found.out.version });
+        return json(dashboardOut(d));
+      }
+    }
+    return refuse("Not found", 404);
+  }
+
+  /** A seeded answer to one query (by project and text, then text, then M1's `queries`), or the fake's refusal. */
+  function answer(req: QueryRequest): { response: QueryResponse } | { error: { code: QueryErrorCode; message: string }; status: number } {
+    const seeded = (req.project_id ? state.queryAnswers[`${req.project_id}|${req.query}`] : undefined)
+      ?? state.queryAnswers[req.query] ?? state.queries[req.query];
+    if (!seeded) return { error: { code: "bad_query", message: NO_ANSWER }, status: 400 };
+    if ("error" in seeded && "status" in seeded) return { error: seeded.error, status: seeded.status };
+    const source = state.sources.find((s) => s.id === req.source_id);
+    return {
+      response: {
+        result_type: "vector", series: [], streams: [], warnings: [], truncated: false,
+        source_id: req.source_id, source_name: source?.name ?? req.source_id, source_type: source?.type ?? "prometheus",
+        project_id: req.project_id ?? null, applied_filter: "", query: req.query, took_ms: 1,
+        ...(seeded as Partial<QueryResponse>),
+      },
+    };
+  }
+
   function route(method: string, path: string, query: URLSearchParams, body: Obj): Response {
     const seg = path.split("/").map(decodeURIComponent);
     const [a, b, , d] = seg;
     const is = (m: string, ...pattern: (string | null)[]) =>
       method === m && seg.length === pattern.length && pattern.every((p, i) => p === null || p === seg[i]);
+
+    // --- dashboards, ready-made views, batches and label values
+    if (a === "dashboards") return dashboardRoute(method, seg, query, body);
+    if (is("GET", "projects", null, "ready-made")) {
+      return project(b) ? json(state.readyMade[b] ?? []) : dashboardError(404, "not_found", DASHBOARD_GONE);
+    }
+    if (is("POST", "query", "batch")) {
+      const items = (body as Obj).queries;
+      if (!Array.isArray(items)) return queryError(422, "bad_request", 'Put the queries in a "queries" list.');
+      if (items.length < 1 || items.length > 64) return queryError(422, "bad_request", BATCH_SIZE);
+      const results: BatchItemOut[] = (items as QueryRequest[]).map((req) => {
+        if (!req.project_id) return { ok: false, response: null, error: { code: "bad_request", message: BATCH_PROJECT, status: 422 } };
+        const got = answer(req);
+        return "response" in got
+          ? { ok: true, response: got.response, error: null }
+          : { ok: false, response: null, error: { ...got.error, status: got.status } };
+      });
+      return json({ results });
+    }
+    if (is("GET", "label-values")) {
+      if (!query.get("source_id")) return queryError(400, "bad_request", "Choose a source to query.");
+      if (!query.get("project_id")) return queryError(400, "bad_request", PROJECT_NEEDED);
+      return json({ values: state.labelValues[`${query.get("project_id")}|${query.get("label")}`] ?? [], truncated: false });
+    }
 
     // --- sources
     if (is("GET", "sources")) return json(state.sources);
@@ -165,8 +422,11 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     // --- tree, projects, setup
     if (is("GET", "tree")) {
       const out: TreeOut = {
-        projects: state.projects.map((p) => ({ id: p.id, name: p.name, kind: p.kind, cluster_id: p.cluster_id, color: color(p.kind, p.cluster_provider), dashboards: [] })),
-        groups: state.groups.map((g) => ({ id: g.id, name: g.name, project_ids: byName(g.project_ids), dashboards: [] })),
+        projects: state.projects.map((p) => ({
+          id: p.id, name: p.name, kind: p.kind, cluster_id: p.cluster_id, color: color(p.kind, p.cluster_provider),
+          dashboards: [...treeRows("project", p.id), ...(state.readyMade[p.id] ?? []).map((r) => ({ id: r.id, title: r.title, ready_made: true }))],
+        })),
+        groups: state.groups.map((g) => ({ id: g.id, name: g.name, project_ids: byName(g.project_ids), dashboards: treeRows("group", g.id) })),
         source_count: state.sources.length,
       };
       return json(out);
@@ -221,6 +481,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
           sources_kept: kept,
           sources_unlinked: unlinked.map((s) => ({ id: s.id, name: s.name })),
           groups_left: state.groups.filter((g) => g.project_ids.includes(p.id)).map((g) => ({ id: g.id, name: g.name })),
+          dashboards: refsOf("project", p.id),
           token: TOKEN,
         });
       }
@@ -229,6 +490,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
         const { removed } = split();
         state.sources = state.sources.filter((s) => !removed.includes(s));
         state.projects = state.projects.filter((x) => x.id !== b);
+        dropOwned("project", b);
         state.groups.forEach((g) => { g.project_ids = g.project_ids.filter((id) => id !== b); });
         refreshUsedBy();
         return empty();
@@ -300,7 +562,12 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
         }
         return json(groupOut(g));
       }
+      if (is("GET", "groups", b, "delete-review")) return json({ group_id: g.id, name: g.name, dashboards: refsOf("group", g.id), token: TOKEN });
       if (is("DELETE", "groups", b)) {
+        // A group with dashboards needs its review's token; one without deletes as is.
+        const token = query.get("token");
+        if (!(token === TOKEN || (token === null && refsOf("group", g.id).length === 0))) return refuse(REVIEW_CHANGED, 409);
+        dropOwned("group", g.id);
         state.groups = state.groups.filter((x) => x.id !== b);
         syncGroupIds();
         return empty();
@@ -309,16 +576,8 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
 
     // --- query
     if (is("POST", "query")) {
-      const req = body as unknown as QueryRequest;
-      const source = state.sources.find((s) => s.id === req.source_id);
-      const answer = state.queries[req.query];
-      if (!answer) return queryError(400, "bad_query", "This fake has no answer for that query.");
-      return json({
-        result_type: "vector", series: [], streams: [], warnings: [], truncated: false,
-        source_id: req.source_id, source_name: source?.name ?? req.source_id, source_type: source?.type ?? "prometheus",
-        project_id: req.project_id ?? null, applied_filter: "", query: req.query, took_ms: 1,
-        ...answer,
-      } satisfies QueryResponse);
+      const got = answer(body as unknown as QueryRequest);
+      return "response" in got ? json(got.response) : queryError(got.status, got.error.code, got.error.message);
     }
     return refuse("Not found", 404);
   }

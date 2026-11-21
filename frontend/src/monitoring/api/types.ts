@@ -229,9 +229,11 @@ export interface GroupPatch {
   project_ids?: string[] | null;
 }
 
+/** A saved dashboard, or (`ready_made`) a project's ready-made view, generated on request. */
 export interface TreeDashboard {
   id: string;
   title: string;
+  ready_made: boolean;
 }
 
 export interface TreeProject {
@@ -263,6 +265,24 @@ export interface ProjectDeleteReviewOut {
   sources_kept: { id: string; name: string; used_by: string[] }[];
   sources_unlinked: ProjectRefOut[];
   groups_left: ProjectRefOut[];
+  /** Deleted with the project, by title; [] when it has none. */
+  dashboards: DashboardRefOut[];
+  token: string;
+}
+
+/** A dashboard an owner's deletion takes with it. */
+export interface DashboardRefOut {
+  id: string;
+  title: string;
+  versions: number;
+}
+
+/** What deleting a group would do: the dashboards it takes (its projects stay). A group with
+ * dashboards deletes only with this `token`. */
+export interface GroupDeleteReviewOut {
+  group_id: string;
+  name: string;
+  dashboards: DashboardRefOut[];
   token: string;
 }
 

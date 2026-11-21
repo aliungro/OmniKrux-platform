@@ -1,6 +1,6 @@
 import { deleteEmpty, getJson, patchJson, postJson, putJson } from "../../api/http";
 import type {
-  AlertingOut, DiscoveryOut, FieldCatalogOut, FilterOrigin, GroupIn, GroupOut, GroupPatch, HealthOut, LinkOut,
+  AlertingOut, DiscoveryOut, FieldCatalogOut, FilterOrigin, GroupDeleteReviewOut, GroupIn, GroupOut, GroupPatch, HealthOut, LinkOut,
   ProjectDeleteReviewOut, ProjectOut, SetupIn, SourceDeleteReviewOut, SourceIn, SourceOut, SourcePatch,
   SuggestIn, SuggestOut, TestOut, TreeOut,
 } from "./types";
@@ -47,4 +47,8 @@ export const setupProject = (body: SetupIn) => postJson<ProjectOut>(`${BASE}/set
 export const listGroups = () => getJson<GroupOut[]>(`${BASE}/groups`);
 export const createGroup = (body: GroupIn) => postJson<GroupOut>(`${BASE}/groups`, body);
 export const updateGroup = (id: string, body: GroupPatch) => patchJson<GroupOut>(`${BASE}/groups/${enc(id)}`, body);
-export const deleteGroup = (id: string) => deleteEmpty(`${BASE}/groups/${enc(id)}`);
+/** What deleting the group takes with it (its dashboards); its token allows the delete. */
+export const groupDeleteReview = (id: string) => getJson<GroupDeleteReviewOut>(`${BASE}/groups/${enc(id)}/delete-review`);
+/** A group with dashboards needs its review's `token` (409 without it); one without deletes as is. */
+export const deleteGroup = (id: string, token?: string) =>
+  deleteEmpty(`${BASE}/groups/${enc(id)}${token === undefined ? "" : `?token=${enc(token)}`}`);
