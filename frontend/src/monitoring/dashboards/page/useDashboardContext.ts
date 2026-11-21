@@ -19,15 +19,27 @@ import { REFRESH_LABELS, refreshMs as refreshMsOf, resolveTime, stepFor } from "
 export type DashboardViewState = Extract<MonitoringView, { page: "dashboard" }>;
 export type ProjectRef = { id: string; name: string };
 
+/**
+ * Why a variable has no values: the read failed (`fetch`: Try again may help), its selector can't
+ * take an earlier variable's value (`variable`), or a project has no source to read (`noSource`:
+ * `fix` names the project whose page links one). Only `fetch` is worth trying again.
+ */
+export type VariableErrorKind = "fetch" | "variable" | "noSource";
+
 /** One variable as the page shows it. `missing`: selected values the label no longer has (kept selected). */
 export type VariableState = {
   spec: VariableSpec;
   values: string[];
   loading: boolean;
   error: string | null;
+  errorKind: VariableErrorKind | null;
+  fix: ProjectRef | null;
   selected: VarValue;
   missing: string[];
 };
+
+/** The owner couldn't be read: the page says why and offers Try again instead of waiting forever. */
+export type OwnerFailure = { message: string; retrying: boolean; retry(): void };
 
 /** The view's key for a group dashboard's Projects selection. */
 export const PROJECTS_VAR = "__projects";
@@ -146,6 +158,8 @@ export interface DashboardContext {
   retryVariable(name: string): void;
   /** Whether a panel must wait: its owner or a variable it uses is still loading. */
   waiting(panel: PanelSpec): boolean;
+  /** The owner (its project, or its group and the projects) couldn't be read. */
+  ownerFailure: OwnerFailure | null;
   status: PanelStatusStore;
 }
 
@@ -176,6 +190,17 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
   const projects = useMemo(
     () => (ownerKind === "group" ? { all: allProjects, selected: JSON.parse(selectedKey) as VarValue } : null),
     [ownerKind, allProjects, selectedKey],
+  );
+  // A failed owner read (with nothing read before) is said, never left as Loading….
+  const ownerReads = ownerKind === "project" ? [projectQ] : [groupsQ, projectsQ];
+  const failedRead = owner === null ? ownerReads.find((q) => q.isError) : undefined;
+  const ownerMessage = failedRead ? failure(failedRead.error, "try again") : null;
+  const ownerRetrying = ownerReads.some((q) => q.isError && q.isFetching);
+  const ownerRefetch = useRef<() => void>(() => {});
+  ownerRefetch.current = () => { for (const q of ownerReads) if (q.isError) void q.refetch(); };
+  const ownerFailure = useMemo<OwnerFailure | null>(
+    () => (ownerMessage === null ? null : { message: ownerMessage, retrying: ownerRetrying, retry: () => ownerRefetch.current() }),
+    [ownerMessage, ownerRetrying],
   );
 
   // "Now", and the range from it. A new time range starts a new "now" in the same render, so no
@@ -213,29 +238,38 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     if (refreshMs === null) return;
     // Ticks are skipped while the page is hidden: nobody sees them, and the tools aren't asked.
     const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") tick(); }, refreshMs);
-    // Back from a hidden page: catch up at once when a tick was skipped.
+    // Back to a hidden or unfocused page: catch up at once when a tick is due. Panel queries never
+    // send their old window again on focus by themselves.
     const onVisible = () => {
       if (document.visibilityState === "visible" && Date.now() - lastTick.current >= refreshMs) tick();
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+    window.addEventListener("focus", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
   }, [refreshMs, tick]);
 
   // Variables, in order: each one's `match` is substituted with the ones before it, and it waits
-  // until they have loaded. Values come from each selected project and are unioned.
+  // only for those its `match` uses (which wait in turn for theirs). Values come from each
+  // selected project and are unioned.
   const lastValues = useRef(new Map<string, { key: string; values: string[] }>());
   const builtins = { stepSeconds: stepFor(valuesRange.end - valuesRange.start, 24), rangeSeconds: valuesRange.end - valuesRange.start };
   const requests: LabelValuesParams[] = [];
   const paramsByVariable = new Map<string, LabelValuesParams[]>();
   const states: VariableState[] = [];
   const resolved: ResolvedVars = {};
-  let blocked = owner === null;
+  const pending = new Set<string>();
   for (const v of spec.variables) {
     let selected = startingSelection(v, view.vars?.[v.name]);
     let values: string[] = [];
     let loading = false;
     let error: string | null = null;
-    if (blocked) loading = true;
+    let errorKind: VariableErrorKind | null = null;
+    let fix: ProjectRef | null = null;
+    if (owner === null || variablesUsed(v.match).some((name) => pending.has(name))) loading = true;
     else {
       let match: string | null = null;
       try {
@@ -243,13 +277,19 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
       } catch (err) {
         if (!(err instanceof VariableError)) throw err;
         error = err.message;
+        errorKind = "variable";
       }
-      const members = owner === null ? [] : owner.kind === "project" ? [owner.project] : owner.members;
+      const members = owner.kind === "project" ? [owner.project] : owner.members;
       const params: LabelValuesParams[] = [];
       if (match !== null) {
         for (const p of members) {
           const link = linkFor(p, v.source, ownerKind);
-          if (!link) { error = noLink(p, v.source, ownerKind); break; }
+          if (!link) {
+            error = noLink(p, v.source, ownerKind);
+            errorKind = "noSource";
+            fix = { id: p.id, name: p.name };
+            break;
+          }
           params.push({ sourceId: link.source_id, projectId: p.id, label: v.labelName, match, start: valuesRange.start, end: valuesRange.end });
         }
       }
@@ -260,8 +300,10 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
         const failed = read.find((r) => r?.status === "error");
         // The same question over another window: its last answer stands while the new one loads.
         const asked = JSON.stringify([v.labelName, params.map(({ start: _s, end: _e, ...rest }) => rest)]);
-        if (failed) error = failure(failed.error, "try again");
-        else if (read.every((r) => r?.status === "success" && r.data)) {
+        if (failed) {
+          error = failure(failed.error, "try again");
+          errorKind = "fetch";
+        } else if (read.every((r) => r?.status === "success" && r.data)) {
           values = [...new Set(read.flatMap((r) => r?.data?.values ?? []))].sort();
           lastValues.current.set(v.name, { key: asked, values });
         } else {
@@ -276,8 +318,8 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     if (loaded && !v.multi && selected !== "all" && selected.length === 0 && values.length > 0) selected = [values[0]];
     const missing = loaded && selected !== "all" ? selected.filter((x) => !values.includes(x)) : [];
     resolved[v.name] = { multi: v.multi, value: selected };
-    if (loading) blocked = true;
-    states.push({ spec: v, values, loading, error, selected, missing });
+    if (loading) pending.add(v.name);
+    states.push({ spec: v, values, loading, error, errorKind, fix, selected, missing });
   }
 
   // Every label-values read, so each answer re-renders this (and the next variable can ask).
@@ -287,6 +329,9 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
       queryFn: ({ signal }: { signal: AbortSignal }) => labelValues(p, signal),
       retry: false,
       gcTime: 60_000,
+      // Values are read again with the time range and Refresh now, never on focus or reconnect.
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     })),
     combine: (results) => results.map((r) => `${r.status}:${r.dataUpdatedAt}:${r.errorUpdatedAt}`).join("|"),
   });
@@ -311,6 +356,6 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
 
   return {
     owner, ownerName, vars, variables, projects, range, time, now: clock.now, refresh, refreshMs,
-    refreshSeq: clock.seq, refreshNow, retryVariable, waiting, status,
+    refreshSeq: clock.seq, refreshNow, retryVariable, waiting, ownerFailure, status,
   };
 }

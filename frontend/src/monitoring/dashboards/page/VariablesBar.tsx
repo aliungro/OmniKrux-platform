@@ -1,10 +1,10 @@
 // The variables bar: on a group, Projects first; then each variable as a button with its
 // selection, opening its values (radios, or checkboxes when several may be chosen).
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { escapeCloses } from "../../focus";
 import type { VarValue } from "../interpolate";
 import { closesOnLeave, POPUP, useCloseOutside } from "./popover";
-import type { ProjectRef, VariableState } from "./useDashboardContext";
+import type { ProjectRef, VariableErrorKind, VariableState } from "./useDashboardContext";
 import s from "./DashboardPage.module.css";
 
 const FILTER_FROM = 10;
@@ -30,11 +30,18 @@ interface PickerProps {
   allChecksEach: boolean;
   loading: boolean;
   error: string | null;
+  /** Only a failed read offers Try again; a selector or source problem says what to fix. */
+  errorKind?: VariableErrorKind | null;
+  /** The project whose page links the missing source. */
+  fix?: ProjectRef | null;
   onRetry?(): void;
+  onFix?(project: ProjectRef, e: MouseEvent<HTMLAnchorElement>): void;
   onChange(value: VarValue): void;
 }
 
-function Picker({ label, pending, values, selected, missing, multi, includeAll, allChecksEach, loading, error, onRetry, onChange }: PickerProps) {
+function Picker({
+  label, pending, values, selected, missing, multi, includeAll, allChecksEach, loading, error, errorKind, fix, onRetry, onFix, onChange,
+}: PickerProps) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -54,6 +61,16 @@ function Picker({ label, pending, values, selected, missing, multi, includeAll, 
     first?.focus();
     // Only when it opens.
   }, [open]);
+  // Try again took the keyboard with it when its message went away (the values came): it goes
+  // to the first choice, or the popup itself, never to <body>.
+  const retried = useRef(false);
+  useLayoutEffect(() => {
+    if (!open || !retried.current) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    retried.current = false;
+    (popup.current?.querySelector<HTMLElement>("input") ?? popup.current)?.focus();
+  });
 
   const nameOf = useMemo(() => {
     const names = new Map(values.map((v) => [v.value, v.name]));
@@ -83,7 +100,8 @@ function Picker({ label, pending, values, selected, missing, multi, includeAll, 
 
   const type = multi ? "checkbox" : "radio";
   const groupName = `${id}-choice`;
-  const text = pending ? "…" : summary(selected, nameOf);
+  // Nothing chosen and nothing to choose from: say it failed, never "None".
+  const text = pending ? "…" : error && selected !== "all" && selected.length === 0 ? "couldn't load" : summary(selected, nameOf);
   return (
     <div ref={root} className={s.popAnchor}>
       <button ref={button} type="button" className={s.varButton} aria-expanded={open} aria-controls={open ? `${id}-values` : undefined}
@@ -93,13 +111,18 @@ function Picker({ label, pending, values, selected, missing, multi, includeAll, 
         <span className={s.caret} aria-hidden="true">▾</span>
       </button>
       {open && (
-        <div {...POPUP} ref={popup} id={`${id}-values`} role="group" aria-label={label} className={`${s.popup} ${s.values}`}
+        <div {...POPUP} ref={popup} id={`${id}-values`} role="group" aria-label={label} tabIndex={-1} className={`${s.popup} ${s.values}`}
           onKeyDown={escapeCloses(() => close(true))} onBlur={closesOnLeave(closeQuietly)}>
           {loading && <p className={s.valuesNote} role="status">Loading values…</p>}
           {error && (
             <div className={s.valuesError} role="alert">
               <p className={s.valuesProblem}>Couldn't load values: {error}</p>
-              {onRetry && <button type="button" className={s.retry} onClick={onRetry}>Try again</button>}
+              {errorKind === "noSource" && fix && onFix && (
+                <a href="#" className={s.fixLink} onClick={(e) => { e.preventDefault(); onFix(fix, e); }}>Link one on {fix.name}'s page</a>
+              )}
+              {errorKind === "fetch" && onRetry && (
+                <button type="button" className={s.retry} onClick={() => { retried.current = true; onRetry(); }}>Try again</button>
+              )}
             </div>
           )}
           {!loading && values.length > FILTER_FROM && (
@@ -141,9 +164,11 @@ interface Props {
   onVar(name: string, value: VarValue): void;
   onProjects(value: VarValue): void;
   onRetry(name: string): void;
+  /** Opens a project's page (Ctrl: in a new tab), where a missing source is linked. */
+  onOpenProject(project: ProjectRef, e: MouseEvent<HTMLAnchorElement>): void;
 }
 
-export function VariablesBar({ projects, projectsLoading, variables, onVar, onProjects, onRetry }: Props) {
+export function VariablesBar({ projects, projectsLoading, variables, onVar, onProjects, onRetry, onOpenProject }: Props) {
   const projectValues = useMemo(() => projects?.all.map((p) => ({ value: p.id, name: p.name })) ?? [], [projects]);
   if (!projects && variables.length === 0) return null;
   return (
@@ -156,7 +181,8 @@ export function VariablesBar({ projects, projectsLoading, variables, onVar, onPr
         <Picker key={v.spec.name} label={v.spec.label} pending={v.loading && !v.spec.multi && v.selected !== "all" && v.selected.length === 0}
           values={v.values.map((x) => ({ value: x, name: x }))} selected={v.selected} missing={v.missing}
           multi={v.spec.multi} includeAll={v.spec.includeAll} allChecksEach={false} loading={v.loading} error={v.error}
-          onRetry={() => onRetry(v.spec.name)} onChange={(value) => onVar(v.spec.name, value)} />
+          errorKind={v.errorKind} fix={v.fix} onRetry={() => onRetry(v.spec.name)} onFix={onOpenProject}
+          onChange={(value) => onVar(v.spec.name, value)} />
       ))}
     </div>
   );

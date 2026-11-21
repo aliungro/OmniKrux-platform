@@ -1,4 +1,6 @@
-// Seeds for dashboard page tests: dashboards as the fake API holds them, panels and links.
+// Seeds for dashboard page tests: dashboards as the fake API holds them, panels and links; and a
+// way to hold or fail chosen requests in front of the fake.
+import { vi } from "vitest";
 import type { LinkOut, ProjectOut } from "../api/types";
 import type { DashboardOut } from "../dashboards/api";
 import { emptyDashboard, newPanel, type DashboardSpec, type Layout, type OwnerKind, type PanelSpec, type PanelType, type VariableSpec } from "../dashboards/schema";
@@ -50,4 +52,27 @@ export function seedDashboard(
     spec: doc,
   }];
   return { out, versions };
+}
+
+/**
+ * Puts a rule in front of the fake API (install it first): for a request it matches, the rule's
+ * answer; otherwise the fake's. `pass()` sends a request on to the fake (recorded there as usual).
+ */
+export function intercept(rule: (url: string, pass: () => Promise<Response>) => Promise<Response> | null) {
+  const inner = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    return rule(url, () => inner(input, init)) ?? inner(input, init);
+  }));
+}
+
+/** A server failure in the dashboard routes' shape. */
+export const serverFailure = (status: number, code: string, message: string) =>
+  Promise.resolve(new Response(JSON.stringify({ detail: { code, message } }), { status, headers: { "content-type": "application/json" } }));
+
+/** A gate: requests held behind it wait until `open()`. */
+export function gate() {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => { open = resolve; });
+  return { opened, open };
 }

@@ -339,6 +339,10 @@ export function usePanelData(
     refetchIntervalInBackground: false,
     // Old windows are never shown again; don't keep them long.
     gcTime: 60_000,
+    // A key is a fixed window: focusing the page or reconnecting must not send that old window
+    // again as if it were current. The page moves "now" instead (F20).
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   // What was shown last, for this dashboard's panel only (another panel's data is never kept).
   const owner = JSON.stringify([dashboardId, panel.id]);

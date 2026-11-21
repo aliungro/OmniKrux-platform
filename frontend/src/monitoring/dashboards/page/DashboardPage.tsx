@@ -1,12 +1,12 @@
 // A dashboard, in view mode: header, Updated line, ready-made note, variables and the panel
 // grid; and the JSON tab (the saved document, read-only until the JSON editor arrives). Time,
 // variables, auto-refresh and the view tab live in the tab's view (replace navigations).
-import { useCallback, useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { failure } from "../../../api/http";
 import { pageKey, pressed } from "../../../features/chrome/shortcuts";
 import type { MonitoringPageProps } from "../../MonitoringApp";
 import { Gone, keyboardIsFree } from "../../pages/Gone";
-import { MONITORING_HOME } from "../../shell/tabState";
+import { MONITORING_HOME, type MonitoringView } from "../../shell/tabState";
 import { useDashboard, useReadyMade, type DashboardOut } from "../api";
 import type { VarValue } from "../interpolate";
 import { dashboardJson, type RefreshSpec, type TimeSpec } from "../schema";
@@ -118,8 +118,21 @@ function DashboardScreen({ view, dashboard, nav, openInNewTab }: MonitoringPageP
     return () => document.removeEventListener("keydown", onKey);
   });
 
+  // The owner read failed and Try again worked: its button went with the message, and the
+  // keyboard goes to the title rather than <body>.
+  const ownerRetry = useRef<HTMLButtonElement>(null);
+  const failed = ctx.ownerFailure !== null;
+  const wasFailed = useRef(failed);
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (wasFailed.current && !failed && (active === null || active === document.body)) title.current?.focus({ preventScroll: true });
+    wasFailed.current = failed;
+  }, [failed]);
+
+  const openPage = (target: MonitoringView, e: MouseEvent<HTMLAnchorElement>) =>
+    (e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push"));
   const ownerView = { page: dashboard.owner_kind, id: dashboard.owner_id } as const;
-  const openOwner = (e: MouseEvent<HTMLAnchorElement>) => (e.ctrlKey || e.metaKey ? openInNewTab(ownerView) : nav.navigate(ownerView, "push"));
+  const openOwner = (e: MouseEvent<HTMLAnchorElement>) => openPage(ownerView, e);
   const actions: MenuAction[] = ready ? [{ label: "Copy dashboard…" }] : [{ label: "Copy dashboard…" }, { label: "Delete dashboard…", danger: true }];
   const ids = tabIds(tab);
 
@@ -135,10 +148,20 @@ function DashboardScreen({ view, dashboard, nav, openInNewTab }: MonitoringPageP
       <UpdatedLine status={ctx.status} />
       {ready && <ReadyNote dashboard={dashboard} />}
       <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab} className={s.content}>
-        {tab === "dashboard" && (
+        {tab === "dashboard" && ctx.ownerFailure && (
+          <div className={s.ownerFailure} role="alert">
+            <p className={s.ownerProblem}>{ctx.ownerFailure.message}</p>
+            <button ref={ownerRetry} type="button" className={s.retry} aria-disabled={ctx.ownerFailure.retrying || undefined}
+              onClick={() => { if (!ctx.ownerFailure?.retrying) ctx.ownerFailure?.retry(); }}>
+              {ctx.ownerFailure.retrying ? "Trying again…" : "Try again"}
+            </button>
+          </div>
+        )}
+        {tab === "dashboard" && !ctx.ownerFailure && (
           <>
             <VariablesBar projects={ctx.projects} projectsLoading={ctx.owner === null} variables={ctx.variables}
-              onVar={setVar} onProjects={(value) => setVar(PROJECTS_VAR, value)} onRetry={ctx.retryVariable} />
+              onVar={setVar} onProjects={(value) => setVar(PROJECTS_VAR, value)} onRetry={ctx.retryVariable}
+              onOpenProject={(p, e) => openPage({ page: "project", id: p.id }, e)} />
             <DashboardGrid dashboardId={dashboard.id} panels={spec.panels} owner={ctx.owner} ownerName={ctx.ownerName}
               vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} refreshSeq={ctx.refreshSeq} status={ctx.status} />
           </>

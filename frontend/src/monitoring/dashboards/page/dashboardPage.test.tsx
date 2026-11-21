@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { focusManager, onlineManager } from "@tanstack/react-query";
 import type { QueryRequest } from "../../api/types";
 import type { GroupOut } from "../../api/types";
 import { readRecent, recordRecent } from "../../home/recent";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { gate, intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { ReadyMadeOut } from "../api";
 
@@ -236,6 +237,99 @@ describe("Dashboard page", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("focusing the window never sends the old window again", async () => {
+    const api = shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const sent = batches(api).length;
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    // Other reads (the tree, the dashboard) may refresh on focus; a panel's fixed window never does.
+    expect(batches(api).length).toBe(sent);
+    focusManager.setFocused(undefined);
+  });
+
+  it("with auto-refresh on, focusing the window after a missed tick reads a new window", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const api = shop();
+      renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s" }) });
+      expect(await screen.findByText("chart 1")).toBeTruthy();
+      const first = batches(api)[0][0];
+      const later = Date.now() + 61_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(later);
+      act(() => { focusManager.setFocused(true); window.dispatchEvent(new Event("focus")); });
+      await waitFor(() => expect(batches(api).length).toBe(2));
+      expect(batches(api)[1][0].start).toBeGreaterThan(first.start as number);
+      clock.mockRestore();
+      focusManager.setFocused(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("while panels load the page says Updating…, then when they were read", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    expect(screen.getByText(/^Updated \d\d:\d\d:\d\d$/)).toBeTruthy();
+    const held = gate();
+    intercept((url, pass) => (url.endsWith("/query/batch") ? held.opened.then(pass) : null));
+    await user.click(screen.getByRole("button", { name: "Refresh now" }));
+    expect(await screen.findByText("Updating…")).toBeTruthy();
+    held.open();
+    expect(await screen.findByText(/^Updated \d\d:\d\d:\d\d$/)).toBeTruthy();
+  });
+
+  it("a project that can't be read says why, and Try again reads it", async () => {
+    const user = userEvent.setup();
+    shop();
+    let broken = true;
+    intercept((url) => (broken && url === "/api/monitoring/projects/p1"
+      ? Promise.resolve(new Response(JSON.stringify({ detail: "The project couldn't be read." }), { status: 500 }))
+      : null));
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect((await screen.findByRole("alert")).textContent).toContain("The project couldn't be read.");
+    expect(screen.queryByText("Loading…")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Requests" })).toBeNull();
+    broken = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    notBody();
+  });
+
+  it("a group whose projects can't be read says why, and Try again reads them", async () => {
+    const user = userEvent.setup();
+    const g: GroupOut = { id: "g1", name: "Everything", project_ids: ["p1", "p2"], created_at: "", updated_at: "" };
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Dev", "s1"), linkedProject("p2", "Stage", "s1")],
+      groups: [g],
+      dashboards: { d1: seedDashboard("d1", { kind: "group", id: "g1", name: "Everything" }, spec("Fleet", [panel("p-1", "Up", "up")])) },
+      queryAnswers: { up: ok },
+    }, fallback);
+    let broken = true;
+    intercept((url) => (broken && url === "/api/monitoring/projects"
+      ? Promise.resolve(new Response(JSON.stringify({ detail: "The projects couldn't be read." }), { status: 500 }))
+      : null));
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect((await screen.findByRole("alert")).textContent).toContain("The projects couldn't be read.");
+    expect(screen.queryByRole("button", { name: /^Projects:/ })).toBeNull();
+    expect(screen.queryByText("Loading…")).toBeNull();
+    broken = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("chart 2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Projects: All" })).toBeTruthy();
+    notBody();
   });
 
   it("a group dashboard runs per project and narrows by Projects", async () => {

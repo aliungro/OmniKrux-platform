@@ -555,6 +555,36 @@
   border-color: var(--focus);
 }
 
+.fixLink {
+  color: var(--focus);
+  font-size: 12px;
+  text-underline-offset: 3px;
+  border-radius: 3px;
+}
+
+.fixLink:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The owner couldn't be read: said in place of the variables and panels. */
+.ownerFailure {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-left: 2px solid var(--bad);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+}
+
+.ownerProblem {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .valuesFilter {
   margin-bottom: 4px;
 }

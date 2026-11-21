@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { focusManager } from "@tanstack/react-query";
 import type { QueryRequest } from "../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec, variable } from "../../test/dashboardSeeds";
+import { gate, intercept, linkedProject, panel, seedDashboard, serverFailure, spec, variable } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 
 vi.mock("../../charts", async () => {
@@ -96,16 +97,101 @@ describe("Dashboard variables", () => {
     expect(batches(api)[0][0].query).toBe('kube_pod_restarts{namespace=~"gone", pod=~"api-1|api-9"}');
   });
 
-  it("a variable that can't load says why and offers Try again", async () => {
+  it("a variable whose project has no source says where to link one, without Try again", async () => {
     const user = userEvent.setup();
     const { api, view } = seed(undefined);
-    // The source isn't linked any more: label values are refused.
     api.state.projects[0].links = [];
     renderMonitoringApp({ tabs: tabsWith(view) });
-    await user.click(await screen.findByRole("button", { name: /^Namespace:/ }));
+    await user.click(await screen.findByRole("button", { name: "Namespace: couldn't load" }));
     const ns = screen.getByRole("group", { name: "Namespace" });
-    expect(await within(ns).findByText(/^Couldn't load values: /)).toBeTruthy();
-    expect(within(ns).getByRole("button", { name: "Try again" })).toBeTruthy();
+    expect(within(ns).getByText("Couldn't load values: Shop has no Prometheus-compatible source.")).toBeTruthy();
+    expect(within(ns).queryByRole("button", { name: "Try again" })).toBeNull();
+    // No request is made for it: the client knows there is nothing to read.
+    expect(labelReads(api)).toEqual([]);
+    await user.click(within(ns).getByRole("link", { name: "Link one on Shop's page" }));
+    expect(await screen.findByRole("heading", { name: "Shop" })).toBeTruthy();
+  });
+
+  it("a value that can't be placed in a selector says so, without Try again", async () => {
+    const user = userEvent.setup();
+    const doc = spec("Pods", [panel("p-1", "Restarts", "up")], [
+      variable("namespace", "Namespace", { multi: true, includeAll: true, default: "all" }),
+      // Unquoted: a regex can't be placed there safely.
+      variable("pod", "Pod", { match: "kube_pod_info{namespace=~$namespace}" }),
+    ]);
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, doc) },
+      labelValues: { "p1|namespace": ["api"] },
+      queryAnswers: { up: ok },
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    await user.click(await screen.findByRole("button", { name: "Pod: couldn't load" }));
+    const pod = screen.getByRole("group", { name: "Pod" });
+    expect(within(pod).getByText(/^Couldn't load values: The value of \$namespace can't be used here\./)).toBeTruthy();
+    expect(within(pod).queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(within(pod).queryByRole("link")).toBeNull();
+  });
+
+  it("a failed read offers Try again, and after it the keyboard stays in the values", async () => {
+    const user = userEvent.setup();
+    const { view } = seed(undefined);
+    let broken = true;
+    intercept((url, pass) => (broken && url.includes("/label-values") && url.includes("label=namespace")
+      ? serverFailure(502, "unreachable", "Can't reach Prometheus: the connection was refused.")
+      : pass()));
+    renderMonitoringApp({ tabs: tabsWith(view) });
+    await user.click(await screen.findByRole("button", { name: "Namespace: couldn't load" }));
+    const ns = screen.getByRole("group", { name: "Namespace" });
+    expect(await within(ns).findByText("Couldn't load values: Can't reach Prometheus: the connection was refused.")).toBeTruthy();
+    broken = false;
+    await user.click(within(ns).getByRole("button", { name: "Try again" }));
+    const api = await within(ns).findByRole("radio", { name: "api" });
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(ns.contains(document.activeElement)).toBe(true);
+    expect((api as HTMLInputElement).checked).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "Namespace" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Namespace: api" }));
+  });
+
+  it("a panel using an unrelated variable keeps running when another variable reloads", async () => {
+    const user = userEvent.setup();
+    const doc = spec("Mixed", [
+      panel("a", "Restarts", 'kube_pod_restarts{pod=~"$pod"}', { x: 0 }),
+      panel("b", "Jobs", 'up{job=~"$job"}', { x: 12 }),
+    ], [
+      variable("namespace", "Namespace"),
+      variable("pod", "Pod", { match: 'kube_pod_info{namespace="$namespace"}', multi: true, includeAll: true, default: "all" }),
+      variable("job", "Job"),
+    ]);
+    const api = installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, doc) },
+      labelValues: { "p1|namespace": ["api", "web"], "p1|pod": ["api-1"], "p1|job": ["node"] },
+      queryAnswers: { 'kube_pod_restarts{pod=~".+"}': ok, 'up{job=~"node"}': ok },
+    }, fallback);
+    // The pods of "web" take their time.
+    const slow = gate();
+    intercept((url, pass) => (url.includes("label=pod") && decodeURIComponent(url).includes('"web"') ? slow.opened.then(pass) : null));
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const jobs = within(await screen.findByRole("region", { name: "Jobs" }));
+    expect(await jobs.findByText("chart 1")).toBeTruthy();
+    await waitFor(() => expect(batches(api).length).toBe(2));
+    const jobRuns = () => batches(api).filter((b) => b[0].query === 'up{job=~"node"}').length;
+
+    await user.click(screen.getByRole("button", { name: "Namespace: api" }));
+    await user.click(within(screen.getByRole("group", { name: "Namespace" })).getByRole("radio", { name: "web" }));
+    // Pod is reloading: its panel waits, the Jobs panel doesn't.
+    const restarts = within(screen.getByRole("region", { name: "Restarts" }));
+    expect(await restarts.findByText("Loading…")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Job: node" })).toBeTruthy();
+    expect(jobs.queryByText("Loading…")).toBeNull();
+    expect(jobs.getByText("chart 1")).toBeTruthy();
+    expect(jobRuns()).toBe(1);
+    slow.open();
+    expect(await restarts.findByText("chart 1")).toBeTruthy();
+    expect(jobRuns()).toBe(1);
   });
 
   it("a panel waits for its variables before running", async () => {
@@ -115,5 +201,19 @@ describe("Dashboard variables", () => {
     expect(await screen.findByText("chart 1")).toBeTruthy();
     // Every batch sent carried the loaded values: none ran with an empty namespace.
     expect(batches(api).every((b) => b.every((q) => q.query.includes('namespace=~"api"')))).toBe(true);
+  });
+
+  it("focusing the window reads neither values nor panels again", async () => {
+    const { api, answer, view } = seed(undefined);
+    answer['kube_pod_restarts{namespace=~"api", pod=~".+"}'] = ok;
+    renderMonitoringApp({ tabs: tabsWith(view) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const reads = labelReads(api).length;
+    const sent = batches(api).length;
+    act(() => { focusManager.setFocused(false); focusManager.setFocused(true); });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(labelReads(api).length).toBe(reads);
+    expect(batches(api).length).toBe(sent);
+    focusManager.setFocused(undefined);
   });
 });
