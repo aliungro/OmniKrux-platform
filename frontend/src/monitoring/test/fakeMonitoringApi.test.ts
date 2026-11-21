@@ -101,6 +101,70 @@ describe("fake Monitoring API", () => {
     expect((await fetch("/api/monitoring/groups/g1", { method: "DELETE" })).status).toBe(204);
   });
 
+  it("refuses batch items and label values the server would refuse", async () => {
+    installFakeMonitoringApi({
+      projects: [{
+        id: "p1", name: "Shop", kind: "custom", cluster_id: null, cluster_name: null, cluster_provider: null,
+        links: [{ source_id: "s1", source_name: "s1", source_type: "prometheus", filter: "", filter_origin: "none", created_by_project: false }],
+        group_ids: [], created_at: "", updated_at: "",
+      }],
+      queryAnswers: { up: { series: [] } },
+      labelValues: { "p1|job": ["x"] },
+    });
+    const item = (more: Record<string, unknown>) => ({ source_id: "s1", project_id: "p1", kind: "instant", query: "up", time: 1, ...more });
+    const res = await postJson<{ results: { ok: boolean; error: unknown }[] }>("/api/monitoring/query/batch", { queries: [
+      item({}),
+      item({ project_id: "gone" }),
+      item({ source_id: "s2" }),
+      item({ kind: "range", time: null, start: 0, end: 60 }),
+      item({ kind: "range", time: null, start: 60, end: 60, step: 1 }),
+      item({ kind: "range", time: null, start: 0, end: 12000, step: 1 }),
+      item({ kind: "range", time: null, start: 0, end: 60, step: 5 }),
+    ] });
+    expect(res.results.map((r) => r.error)).toEqual([
+      null,
+      { code: "not_found", message: "That project no longer exists.", status: 404 },
+      { code: "not_linked", message: "This source isn't linked to that project.", status: 404 },
+      { code: "bad_request", message: "A range query needs a start, an end after it, and a step.", status: 400 },
+      { code: "bad_request", message: "A range query needs a start, an end after it, and a step.", status: 400 },
+      { code: "bad_request", message: "This range has too many points for the step. Use a larger step.", status: 400 },
+      null,
+    ]);
+    expect(await getJson("/api/monitoring/label-values?source_id=s1&project_id=p1&label=job")).toEqual({ values: ["x"], truncated: false });
+    const gone = await fetch("/api/monitoring/label-values?source_id=s1&project_id=gone&label=job");
+    expect([gone.status, await gone.json()]).toEqual([404, { detail: { code: "not_found", message: "That project no longer exists." } }]);
+    const unlinked = await fetch("/api/monitoring/label-values?source_id=s2&project_id=p1&label=job");
+    expect([unlinked.status, await unlinked.json()]).toEqual([404, { detail: { code: "not_linked", message: "This source isn't linked to that project." } }]);
+  });
+
+  it("refuses a bad owner kind, and a ready-made view whose project is gone", async () => {
+    const spec = { schemaVersion: 1, title: "Nodes", panels: [] };
+    const api = installFakeMonitoringApi({
+      projects: [{ id: "p1", name: "Shop", kind: "custom", cluster_id: null, cluster_name: null, cluster_provider: null, links: [], group_ids: [], created_at: "", updated_at: "" }],
+    });
+    const kindWords = { detail: { code: "bad_request", message: 'Choose "project" or "group" as the owner kind.' } };
+    const post = await fetch("/api/monitoring/dashboards", { method: "POST", body: JSON.stringify({ owner_kind: "team", owner_id: "p1", spec }) });
+    expect([post.status, await post.json()]).toEqual([422, kindWords]);
+    const copy = await fetch("/api/monitoring/dashboards/copy", { method: "POST", body: JSON.stringify({ from_id: "x", owner_kind: "team", owner_id: "p1" }) });
+    expect([copy.status, await copy.json()]).toEqual([422, kindWords]);
+
+    const id = "ready:p1:nodes";
+    const full = { schemaVersion: 1, title: "Node health", description: "", time: { from: "now-6h", to: "now" }, refresh: null, variables: [], panels: [] };
+    api.state.dashboards[id] = {
+      out: {
+        id, owner_kind: "project", owner_id: "p1", owner_name: "Shop", title: "Node health", version: 0, spec: full as never,
+        ready_made: true, created_at: null, updated_at: null,
+      },
+      versions: [],
+    };
+    expect((await fetch(`/api/monitoring/dashboards/${encodeURIComponent(id)}`)).status).toBe(200);
+    api.state.projects = [];
+    const gone = await fetch(`/api/monitoring/dashboards/${encodeURIComponent(id)}`);
+    expect([gone.status, await gone.json()]).toEqual([404, { detail: { code: "not_found", message: "That dashboard no longer exists." } }]);
+    const copyGone = await fetch("/api/monitoring/dashboards/copy", { method: "POST", body: JSON.stringify({ from_id: id, owner_kind: "project", owner_id: "p1" }) });
+    expect(copyGone.status).toBe(404);
+  });
+
   it("refuses a batch of the wrong size and label values without a project", async () => {
     installFakeMonitoringApi();
     const empty = await fetch("/api/monitoring/query/batch", { method: "POST", body: JSON.stringify({ queries: [] }) });

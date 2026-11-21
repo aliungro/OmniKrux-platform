@@ -7,7 +7,7 @@ import type { GroupOut, LinkOut, ProjectOut, QueryResponse, SourceType } from ".
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import type { BatchItemOut } from "./api";
 import {
-  buildPanelRun, mergePanelResults, panelRunKey, queryKindFor, runRequests, usePanelData,
+  buildPanelRun, CUT_SHORT, mergePanelResults, panelRunKey, queryKindFor, runRequests, usePanelData,
   type DashboardOwner, type PanelRun,
 } from "./runPanel";
 import { newPanel, type PanelSpec, type PanelType, type QuerySpec } from "./schema";
@@ -209,6 +209,13 @@ describe("mergePanelResults", () => {
     expect(data.problems).toEqual([warning]);
   });
 
+  it("an answer cut short without a warning still says so", () => {
+    const data = mergePanelResults(panel, run, [ok({ ...seriesFor("a"), truncated: true }), ok()], "group");
+    expect(data.state).toBe("partial");
+    expect(data.problems).toEqual([CUT_SHORT]);
+    expect(CUT_SHORT).toBe("Some results were cut short; narrow the query or the time range.");
+  });
+
   it("empty answers are empty; answers with data are ready", () => {
     expect(mergePanelResults(panel, run, [ok(), ok()], "group").state).toBe("empty");
     const data = mergePanelResults(panel, run, [ok(seriesFor("a")), ok({ ...seriesFor("b"), took_ms: 9 })], "group");
@@ -255,7 +262,7 @@ describe("usePanelData", () => {
   const at = (start: number) => buildPanelRun({ panel, owner: project(projA), vars: {}, range: { start, end: start + 3600 }, ownerName: "projA" });
 
   it("runs a panel's queries in one batch and merges the answer", async () => {
-    const api = installFakeMonitoringApi({ queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
+    const api = installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
     const client = new QueryClient();
     const { result } = renderHook(() => usePanelData("d1", panel, at(0), null, true), { wrapper: wrapper(client) });
     await waitFor(() => expect(result.current.data?.state).toBe("ready"));
@@ -268,7 +275,7 @@ describe("usePanelData", () => {
   });
 
   it("keeps the previous answer while a new window loads, then a refresh that fails returns no old series", async () => {
-    installFakeMonitoringApi({ queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
+    installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
     const client = new QueryClient();
     const { result, rerender } = renderHook(({ run }: { run: PanelRun }) => usePanelData("d1", panel, run, null, true), {
       wrapper: wrapper(client), initialProps: { run: at(0) },
@@ -293,7 +300,7 @@ describe("usePanelData", () => {
   });
 
   it("a refetch of the same window that fails never shows the old series", async () => {
-    installFakeMonitoringApi({ queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
+    installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
     const client = new QueryClient();
     const { result } = renderHook(() => usePanelData("d1", panel, at(0), null, true), { wrapper: wrapper(client) });
     await waitFor(() => expect(result.current.data?.state).toBe("ready"));
@@ -305,7 +312,7 @@ describe("usePanelData", () => {
   });
 
   it("a legend edit redraws from the same answer without a query", async () => {
-    const api = installFakeMonitoringApi({ queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
+    const api = installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
     const client = new QueryClient();
     const run = at(0);
     const { result, rerender } = renderHook(({ p }: { p: PanelSpec }) => usePanelData("d1", p, run, null, true), {
@@ -315,6 +322,20 @@ describe("usePanelData", () => {
     rerender({ p: { ...panel, queries: [{ ...panel.queries[0], legend: "job {{job}}" }] } as PanelSpec });
     expect(result.current.data?.series[0].name).toBe("job x");
     expect(api.requests).toHaveLength(1);
+  });
+
+  it("never shows another panel's data while its own first answer loads", async () => {
+    installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
+    const client = new QueryClient();
+    const { result, rerender } = renderHook(({ id }: { id: string }) => usePanelData(id, panel, at(0), null, true), {
+      wrapper: wrapper(client), initialProps: { id: "d1" },
+    });
+    await waitFor(() => expect(result.current.data?.state).toBe("ready"));
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    rerender({ id: "d2" });
+    await waitFor(() => expect(result.current.fetching).toBe(true));
+    expect(result.current.data).toBeNull();
+    expect(result.current.updatedAt).toBeNull();
   });
 
   it("a panel with nothing to send asks nothing", () => {
@@ -337,8 +358,9 @@ describe("usePanelData", () => {
 
 describe("runRequests", () => {
   it("sends more than 64 items as several batches and keeps their order", async () => {
-    const api = installFakeMonitoringApi({ queryAnswers: { up: { series: [] } } });
-    const requests = Array.from({ length: 70 }, (_, i) => ({ source_id: "s", project_id: `p${i}`, kind: "instant" as const, query: "up", time: 1 }));
+    const projects = Array.from({ length: 70 }, (_, i) => proj(`p${i}`, `p${i}`, [link("s", "prometheus")]));
+    const api = installFakeMonitoringApi({ projects, queryAnswers: { up: { series: [] } } });
+    const requests = projects.map((p) => ({ source_id: "s", project_id: p.id, kind: "instant" as const, query: "up", time: 1 }));
     const results = await runRequests(requests);
     expect(results).toHaveLength(70);
     expect(results.every((r) => r.ok)).toBe(true);

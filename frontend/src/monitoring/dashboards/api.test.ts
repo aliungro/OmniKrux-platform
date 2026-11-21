@@ -164,6 +164,7 @@ describe("dashboard client", () => {
 
   it("runs a batch and reads label values for a project", async () => {
     const api = installFakeMonitoringApi({
+      projects: [shop, { ...shop, id: "p2", name: "Other" }],
       queryAnswers: {
         up: { series: [{ labels: { job: "x" }, points: [[1, 1]] }] },
         "p2|up": { error: { code: "unreachable", message: "Can't reach it." }, status: 502 },

@@ -66,6 +66,11 @@ const BATCH_SIZE = "Send 1 to 64 queries in one batch.";
 const BATCH_PROJECT = "Pick the project this query belongs to.";
 const PROJECT_NEEDED = "Choose the project whose label values to read.";
 const NO_ANSWER = "This fake has no answer for that query.";
+const OWNER_KIND_CHOICE = 'Choose "project" or "group" as the owner kind.';
+const QUERY_PROJECT_GONE = "That project no longer exists.";
+const QUERY_NOT_LINKED = "This source isn't linked to that project.";
+const RANGE_NEEDS = "A range query needs a start, an end after it, and a step.";
+const TOO_MANY_POINTS = "This range has too many points for the step. Use a larger step.";
 const MAX_TITLE = 120;
 const conflict = (current: number) =>
   `This dashboard was saved somewhere else since you started (version ${current}). Review the differences before saving.`;
@@ -244,6 +249,9 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     return copy;
   }
 
+  /** A ready-made view exists only while its project does; a saved dashboard always passes. */
+  const readyProjectExists = (d: FakeDashboard) => !d.out.ready_made || !!project(d.out.owner_id);
+
   function dashboardRoute(method: string, seg: string[], query: URLSearchParams, body: Obj): Response {
     const [, id, sub, v, action] = seg;
     if (method === "GET" && seg.length === 1) {
@@ -260,15 +268,19 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
           panel_count: d.out.spec.panels.length, updated_at: d.out.updated_at, ready_made: false,
         })));
     }
+    const badKind = () => dashboardError(422, "bad_request", OWNER_KIND_CHOICE);
+    const kindOk = body.owner_kind === "project" || body.owner_kind === "group";
     if (method === "POST" && seg.length === 1) {
+      if (!kindOk) return badKind();
       const owner = ownerOf(body.owner_kind, body.owner_id);
       if (!owner) return dashboardError(404, "unknown_owner", OWNER_GONE);
       const spec = checked(body.spec, owner);
       return spec instanceof Response ? spec : addDashboard(owner, spec, "created", null);
     }
     if (method === "POST" && seg.length === 2 && id === "copy") {
+      if (!kindOk) return badKind();
       const from = state.dashboards[String(body.from_id)];
-      if (!from) return dashboardError(404, "not_found", DASHBOARD_GONE);
+      if (!from || !readyProjectExists(from)) return dashboardError(404, "not_found", DASHBOARD_GONE);
       const owner = ownerOf(body.owner_kind, body.owner_id);
       if (!owner) return dashboardError(404, "unknown_owner", OWNER_GONE);
       // A ready-made view isn't "a copy": it keeps its own title.
@@ -283,7 +295,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     const base = typeof body.base_version === "number" && Number.isInteger(body.base_version) ? body.base_version : null;
     if (readOnly && method !== "GET") return dashboardError(409, "read_only", READ_ONLY);
     if (seg.length === 2) {
-      if (method === "GET") return d ? json(dashboardOut(d)) : gone();
+      if (method === "GET") return d && readyProjectExists(d) ? json(dashboardOut(d)) : gone();
       if (method === "PUT") {
         if (base === null) return dashboardError(422, "bad_request", VERSION_NUMBER);
         if (!d) return gone();
@@ -344,6 +356,26 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     };
   }
 
+  /** The backend's project and link checks for a filtered read (`run.py`'s `_link_matchers`). */
+  function linkRefusal(projectId: string, sourceId: string): { error: { code: QueryErrorCode; message: string }; status: number } | null {
+    const p = project(projectId);
+    if (!p) return { error: { code: "not_found", message: QUERY_PROJECT_GONE }, status: 404 };
+    if (!p.links.some((l) => l.source_id === sourceId)) return { error: { code: "not_linked", message: QUERY_NOT_LINKED }, status: 404 };
+    return null;
+  }
+
+  /** A batch item checked as the server checks it (range, then project and link), then answered. */
+  function batchAnswer(req: QueryRequest): ReturnType<typeof answer> {
+    if (req.kind === "range") {
+      const { start, end, step } = req;
+      if (start == null || end == null || step == null || !(end > start)) {
+        return { error: { code: "bad_request", message: RANGE_NEEDS }, status: 400 };
+      }
+      if ((end - start) / step > 11000) return { error: { code: "bad_request", message: TOO_MANY_POINTS }, status: 400 };
+    }
+    return linkRefusal(req.project_id as string, req.source_id) ?? answer(req);
+  }
+
   function route(method: string, path: string, query: URLSearchParams, body: Obj): Response {
     const seg = path.split("/").map(decodeURIComponent);
     const [a, b, , d] = seg;
@@ -361,7 +393,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
       if (items.length < 1 || items.length > 64) return queryError(422, "bad_request", BATCH_SIZE);
       const results: BatchItemOut[] = (items as QueryRequest[]).map((req) => {
         if (!req.project_id) return { ok: false, response: null, error: { code: "bad_request", message: BATCH_PROJECT, status: 422 } };
-        const got = answer(req);
+        const got = batchAnswer(req);
         return "response" in got
           ? { ok: true, response: got.response, error: null }
           : { ok: false, response: null, error: { ...got.error, status: got.status } };
@@ -371,6 +403,8 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     if (is("GET", "label-values")) {
       if (!query.get("source_id")) return queryError(400, "bad_request", "Choose a source to query.");
       if (!query.get("project_id")) return queryError(400, "bad_request", PROJECT_NEEDED);
+      const refused = linkRefusal(query.get("project_id") as string, query.get("source_id") as string);
+      if (refused) return queryError(refused.status, refused.error.code, refused.error.message);
       return json({ values: state.labelValues[`${query.get("project_id")}|${query.get("label")}`] ?? [], truncated: false });
     }
 

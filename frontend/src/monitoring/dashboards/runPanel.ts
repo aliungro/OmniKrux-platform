@@ -148,6 +148,9 @@ export interface PanelData {
 }
 
 /** Failures that mean "the tool couldn't answer", not "the query is wrong". */
+/** Said when an answer was cut short without the tool saying why. */
+export const CUT_SHORT = "Some results were cut short; narrow the query or the time range.";
+
 const UNREACHABLE = new Set<QueryErrorCode | "network">(["unreachable", "timeout", "unauthorized", "too_large", "tool_error", "network"]);
 
 function sortedLabels(labels: Record<string, string>): [string, string][] {
@@ -224,6 +227,7 @@ export function mergePanelResults(panel: PanelSpec, run: PanelRun, results: Batc
       }
     }
     res.warnings.forEach(problem);
+    if (res.truncated && res.warnings.length === 0) problem(CUT_SHORT);
   });
   for (const s of run.skipped) {
     codes.push("skipped");
@@ -281,7 +285,7 @@ export interface PanelDataResult {
   refetch(): void;
 }
 
-type Shown = { data: PanelData; updatedAt: number | null; failedAt: number | null };
+type Shown = { data: PanelData; updatedAt: number | null; failedAt: number | null; owner: string };
 
 /**
  * The panel's data, run on the server. Keyed by what is sent, so a new window is a new key; the
@@ -309,6 +313,8 @@ export function usePanelData(
     // Old windows are never shown again; don't keep them long.
     gcTime: 60_000,
   });
+  // What was shown last, for this dashboard's panel only (another panel's data is never kept).
+  const owner = JSON.stringify([dashboardId, panel.id]);
   const last = useRef<Shown | null>(null);
 
   const answers = query.status === "success" ? query.data : undefined;
@@ -323,10 +329,11 @@ export function usePanelData(
   const idle = useMemo(() => (nothing ? mergePanelResults(panel, run, [], run.ownerKind) : null), [nothing, panel, run]);
 
   let shown: Shown | null;
-  if (idle) shown = { data: idle, updatedAt: null, failedAt: null };
-  else if (failed) shown = { data: failed, updatedAt: null, failedAt: query.errorUpdatedAt };
-  else if (merged) shown = { data: merged, updatedAt: query.dataUpdatedAt, failedAt: null };
-  else shown = last.current; // this key hasn't answered yet: keep what was shown
+  if (idle) shown = { data: idle, updatedAt: null, failedAt: null, owner };
+  else if (failed) shown = { data: failed, updatedAt: null, failedAt: query.errorUpdatedAt, owner };
+  else if (merged) shown = { data: merged, updatedAt: query.dataUpdatedAt, failedAt: null, owner };
+  // This key hasn't answered yet: keep what was shown for the same panel.
+  else shown = last.current?.owner === owner ? last.current : null;
   if (shown !== last.current && (idle || failed || merged)) last.current = shown;
 
   return {
