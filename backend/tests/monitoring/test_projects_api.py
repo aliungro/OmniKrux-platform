@@ -1,5 +1,6 @@
 """Projects: reading them, linking sources with filters, renaming, and deleting through a review."""
 
+from omnikrux.audit.store import AuditUnavailable
 from omnikrux.monitoring.query.filters import BAD_FILTER
 
 API = "/api/monitoring"
@@ -253,3 +254,138 @@ async def test_monitoring_audit_records_name_the_object(monitoring_app):
     ]
     assert all(r["outcome"] == "succeeded" for r in records)
     assert all(r["kind"] in {"project", "group", "source"} for r in records)
+
+
+# --- Dashboards go with their project ---------------------------------------------------------
+
+
+def board(title: str, panels: int = 1) -> dict:
+    """A dashboard document with `panels` stat panels stacked down the left."""
+    return {
+        "schemaVersion": 1,
+        "title": title,
+        "panels": [
+            {
+                "id": f"p-{i + 1}",
+                "type": "stat",
+                "title": f"Panel {i + 1}",
+                "layout": {"x": 0, "y": 4 * i, "w": 6, "h": 4},
+                "queries": [
+                    {"ref": "A", "source": {"type": "prometheus", "id": None}, "expr": "up"}
+                ],
+            }
+            for i in range(panels)
+        ],
+    }
+
+
+async def add_dashboard(
+    http, owner_id: str, title: str, versions: int = 1, owner_kind: str = "project"
+) -> dict:
+    """A dashboard saved `versions` times in all (the create is the first)."""
+    response = await http.post(
+        f"{API}/dashboards",
+        json={"owner_kind": owner_kind, "owner_id": owner_id, "spec": board(title)},
+    )
+    assert response.status_code == 201, response.text
+    made = response.json()
+    for version in range(2, versions + 1):
+        response = await http.put(
+            f"{API}/dashboards/{made['id']}",
+            json={"base_version": made["version"], "spec": board(title, version)},
+        )
+        assert response.status_code == 200, response.text
+        made = response.json()
+    return made
+
+
+async def test_project_review_lists_its_dashboards(monitoring_app):
+    http, _ = monitoring_app
+    shop = await set_up(http, "Shop", [new("Own")])
+    other = await set_up(http, "Billing", [new("Theirs")])
+    latency = await add_dashboard(http, shop["id"], "API latency", versions=2)
+    errors = await add_dashboard(http, shop["id"], "errors")
+    await add_dashboard(http, other["id"], "Invoices")
+
+    review = (await http.get(f"{API}/projects/{shop['id']}/delete-review")).json()
+    assert review["dashboards"] == [
+        {"id": latency["id"], "title": "API latency", "versions": 2},
+        {"id": errors["id"], "title": "errors", "versions": 1},
+    ]
+    assert [s["name"] for s in review["sources_removed"]] == ["Own"]
+
+
+async def test_saving_a_dashboard_makes_the_project_review_stale(monitoring_app):
+    http, _ = monitoring_app
+    shop = await set_up(http, "Shop", [new("Own")])
+    made = await add_dashboard(http, shop["id"], "API latency")
+    review = (await http.get(f"{API}/projects/{shop['id']}/delete-review")).json()
+    saved = await http.put(
+        f"{API}/dashboards/{made['id']}", json={"base_version": 1, "spec": board("API latency", 2)}
+    )
+    assert saved.status_code == 200, saved.text
+
+    stale = await http.delete(f"{API}/projects/{shop['id']}", params={"token": review["token"]})
+    assert stale.status_code == 409
+    assert stale.json() == {"detail": REVIEW_CHANGED}
+    assert (await http.get(f"{API}/projects/{shop['id']}")).status_code == 200
+    kept = (await http.get(f"{API}/dashboards/{made['id']}")).json()
+    assert kept["version"] == 2
+    assert len((await http.get(f"{API}/dashboards/{made['id']}/versions")).json()) == 2
+    removes = [r for r in await monitoring_records(http) if r["action"].endswith("_remove")]
+    assert [(r["action"], r["name"], r["outcome"]) for r in removes] == [
+        ("project_remove", "Shop", "failed")
+    ]
+
+    fresh = (await http.get(f"{API}/projects/{shop['id']}/delete-review")).json()
+    assert fresh["dashboards"] == [{"id": made["id"], "title": "API latency", "versions": 2}]
+    assert fresh["token"] != review["token"]
+
+
+async def test_deleting_a_project_takes_its_dashboards(monitoring_app):
+    http, _ = monitoring_app
+    shop = await set_up(http, "Shop", [new("Own")])
+    billing = await set_up(http, "Billing", [new("Theirs")])
+    latency = await add_dashboard(http, shop["id"], "API latency", versions=3)
+    errors = await add_dashboard(http, shop["id"], "Errors")
+    invoices = await add_dashboard(http, billing["id"], "Invoices", versions=2)
+
+    review = (await http.get(f"{API}/projects/{shop['id']}/delete-review")).json()
+    gone = await http.delete(f"{API}/projects/{shop['id']}", params={"token": review["token"]})
+    assert gone.status_code == 204, gone.text
+
+    for d in (latency, errors):
+        assert (await http.get(f"{API}/dashboards/{d['id']}")).status_code == 404
+        assert (await http.get(f"{API}/dashboards/{d['id']}/versions")).status_code == 404
+    assert (await http.get(f"{API}/dashboards/{invoices['id']}")).json()["version"] == 2
+    assert len((await http.get(f"{API}/dashboards/{invoices['id']}/versions")).json()) == 2
+    assert [d["title"] for d in (await http.get(f"{API}/dashboards")).json()] == ["Invoices"]
+
+    records = await monitoring_records(http)
+    removes = [r for r in records if r["action"].endswith("_remove")]
+    assert [(r["action"], r["kind"], r["name"], r["outcome"]) for r in removes] == [
+        ("project_remove", "project", "Shop", "succeeded"),
+        ("source_remove", "source", "Own", "succeeded"),
+        ("dashboard_remove", "dashboard", "API latency", "succeeded"),
+        ("dashboard_remove", "dashboard", "Errors", "succeeded"),
+    ]
+    assert [r["details"] for r in removes[2:]] == [
+        {"owner": "project", "owner_name": "Shop", "versions": 3, "with": "project"},
+        {"owner": "project", "owner_name": "Shop", "versions": 1, "with": "project"},
+    ]
+
+
+async def test_no_audit_no_project_delete(monitoring_app, monkeypatch):
+    http, app = monitoring_app
+    shop = await set_up(http, "Shop", [new("Own")])
+    made = await add_dashboard(http, shop["id"], "API latency")
+    review = (await http.get(f"{API}/projects/{shop['id']}/delete-review")).json()
+
+    async def broken(entry):
+        raise AuditUnavailable("disk I/O error")
+
+    monkeypatch.setattr(app.state.audit, "begin_app", broken)
+    refused = await http.delete(f"{API}/projects/{shop['id']}", params={"token": review["token"]})
+    assert refused.status_code == 503
+    assert (await http.get(f"{API}/projects/{shop['id']}")).status_code == 200
+    assert (await http.get(f"{API}/dashboards/{made['id']}")).status_code == 200

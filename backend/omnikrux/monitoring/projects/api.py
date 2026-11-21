@@ -3,7 +3,9 @@ review shown before a project is deleted.
 
 Projects are never created automatically: only `POST /setup` creates one, together with its new
 sources and its links, in one transaction. Every change is audited before it is made (no audit,
-no change) without a review step; deleting a project asks first, through the review's token.
+no change) without a review step; deleting a project, or a group with dashboards, asks first,
+through the review's token, and takes the owner's dashboards with it (one `dashboard_remove`
+record each, begun before the delete).
 The rules a request must follow answer 422 with plain words from the handlers (pydantic only
 checks the shape)."""
 
@@ -18,10 +20,13 @@ from pydantic import BaseModel, ConfigDict
 from omnikrux.clusters.registry import ClusterInfo, ClusterRegistry
 from omnikrux.monitoring.audit import begin_change, finish_change
 from omnikrux.monitoring.dashboards.ready_made import TITLES, project_ready_keys, ready_id
+from omnikrux.monitoring.dashboards.schema import OwnerKind
+from omnikrux.monitoring.dashboards.store import DashboardRef
 from omnikrux.monitoring.projects.store import SetupLink
 from omnikrux.monitoring.projects.types import (
     REVIEW_CHANGED,
     Group,
+    GroupDeleteReview,
     Link,
     Matcher,
     Project,
@@ -61,6 +66,7 @@ SOURCE_TWICE = "Each source can be linked to a project only once."
 PROJECT_NOT_SAVED = "The project couldn't be saved. Try again."
 PROJECT_NOT_REMOVED = "The project couldn't be removed. Try again."
 GROUP_NOT_SAVED = "The group couldn't be saved. Try again."
+GROUP_NOT_REMOVED = "The group couldn't be removed. Try again."
 
 TreeColor = Literal["aks", "eks", "gke", "oke", "kind", "onprem", "custom"]
 
@@ -146,6 +152,12 @@ class GroupRefOut(BaseModel):
     name: str
 
 
+class DashboardRefOut(BaseModel):
+    id: str
+    title: str
+    versions: int
+
+
 class ProjectDeleteReviewOut(BaseModel):
     project_id: str
     name: str
@@ -153,6 +165,16 @@ class ProjectDeleteReviewOut(BaseModel):
     sources_kept: list[KeptSourceOut]
     sources_unlinked: list[SourceRefOut]
     groups_left: list[GroupRefOut]
+    # By title. Left out of the answer when empty, so a project without dashboards reviews
+    # exactly as before dashboards existed (the token leaves it out the same way).
+    dashboards: list[DashboardRefOut] = []
+    token: str
+
+
+class GroupDeleteReviewOut(BaseModel):
+    group_id: str
+    name: str
+    dashboards: list[DashboardRefOut]  # by title
     token: str
 
 
@@ -354,8 +376,43 @@ def _review_out(review: ProjectDeleteReview) -> ProjectDeleteReviewOut:
         ],
         sources_unlinked=[SourceRefOut(id=s.id, name=s.name) for s in review.sources_unlinked],
         groups_left=[GroupRefOut(id=g.id, name=g.name) for g in review.groups_left],
+        dashboards=_dashboard_outs(review.dashboards),
         token=review.token,
     )
+
+
+def _dashboard_outs(refs: Iterable[DashboardRef]) -> list[DashboardRefOut]:
+    return [DashboardRefOut(id=d.id, title=d.title, versions=d.versions) for d in refs]
+
+
+def _group_review_out(review: GroupDeleteReview) -> GroupDeleteReviewOut:
+    return GroupDeleteReviewOut(
+        group_id=review.group_id,
+        name=review.name,
+        dashboards=_dashboard_outs(review.dashboards),
+        token=review.token,
+    )
+
+
+async def _begin_dashboard_removes(
+    request: Request,
+    records: list[int],
+    owner_kind: OwnerKind,
+    owner_name: str,
+    refs: Iterable[DashboardRef],
+) -> None:
+    """Begin one `dashboard_remove` per dashboard the owner's delete takes, adding each record
+    to `records` as it is written (so a refusal can finish the ones already begun)."""
+    for ref in refs:
+        details = {
+            "owner": owner_kind,
+            "owner_name": owner_name,
+            "versions": ref.versions,
+            "with": owner_kind,
+        }
+        records.append(
+            await begin_change(request, "dashboard_remove", "dashboard", ref.title, details)
+        )
 
 
 # --- Tree and projects -------------------------------------------------------------------------
@@ -493,10 +550,11 @@ async def unlink_source(id: str, source_id: str, request: Request) -> Response:
     return Response(status_code=204)
 
 
-@router.get("/projects/{id}/delete-review")
+@router.get("/projects/{id}/delete-review", response_model_exclude_defaults=True)
 async def project_delete_review(id: str, request: Request) -> ProjectDeleteReviewOut:
+    services = _services(request)
     try:
-        review = await _services(request).projects.delete_review(id)
+        review = await services.projects.delete_review(id, services.dashboards)
     except UnknownProject:
         raise _gone(PROJECT_GONE) from None
     return _review_out(review)
@@ -504,11 +562,12 @@ async def project_delete_review(id: str, request: Request) -> ProjectDeleteRevie
 
 @router.delete("/projects/{id}", status_code=204)
 async def remove_project(id: str, token: str, request: Request) -> Response:
-    """Delete the project as its review showed: the sources only it created and used, its links
-    and its group memberships. 409 (nothing changed) when the review no longer matches."""
+    """Delete the project as its review showed: the sources only it created and used, its links,
+    its group memberships and its dashboards. 409 (nothing changed) when the review no longer
+    matches."""
     services, registry = _services(request), _registry(request)
     try:
-        review = await services.projects.delete_review(id)
+        review = await services.projects.delete_review(id, services.dashboards)
     except UnknownProject:
         raise _gone(PROJECT_GONE) from None
     details = {
@@ -524,7 +583,8 @@ async def remove_project(id: str, token: str, request: Request) -> Response:
         await _finish_all(request, records, False, REVIEW_CHANGED)
         raise HTTPException(status_code=409, detail=REVIEW_CHANGED) from None
     try:
-        # The store deletes exactly what a review with this token shows: these sources.
+        # The store deletes exactly what a review with this token shows: these sources and
+        # these dashboards.
         for source in removed:
             records.append(
                 await begin_change(
@@ -535,11 +595,12 @@ async def remove_project(id: str, token: str, request: Request) -> Response:
                     await details_of(registry, source),
                 )
             )
+        await _begin_dashboard_removes(request, records, "project", review.name, review.dashboards)
     except HTTPException as exc:
         await _finish_all(request, records, False, str(exc.detail))
         raise
     try:
-        await services.projects.delete(id, token, services.sources)
+        await services.projects.delete(id, token, services.sources, services.dashboards)
     except ReviewChanged:
         await _finish_all(request, records, False, REVIEW_CHANGED)
         raise HTTPException(status_code=409, detail=REVIEW_CHANGED) from None
@@ -621,25 +682,54 @@ async def change_group(id: str, body: GroupPatch, request: Request) -> GroupOut:
     return _group_out(updated, await _project_names(services))
 
 
+@router.get("/groups/{id}/delete-review")
+async def group_delete_review(id: str, request: Request) -> GroupDeleteReviewOut:
+    """What deleting the group would do: the dashboards it takes (its projects stay)."""
+    services = _services(request)
+    try:
+        review = await services.groups.delete_review(id, services.dashboards)
+    except UnknownGroup:
+        raise _gone(GROUP_GONE) from None
+    return _group_review_out(review)
+
+
 @router.delete("/groups/{id}", status_code=204)
-async def remove_group(id: str, request: Request) -> Response:
-    """Remove the group; its projects stay as they are."""
+async def remove_group(id: str, request: Request, token: str | None = None) -> Response:
+    """Remove the group and its dashboards; its projects stay as they are. A group with
+    dashboards needs its review's token: 409 (nothing changed) when it is missing or the review
+    no longer matches. A group without dashboards deletes without one."""
     services = _services(request)
     group = await _group(services, id)
+    try:
+        review = await services.groups.delete_review(id, services.dashboards)
+    except UnknownGroup:
+        raise _gone(GROUP_GONE) from None
     names = await _project_names(services)
     projects = [names[p] for p in _in_name_order(group.project_ids, names) if p in names]
-    record = await begin_change(
-        request, "group_remove", "group", group.name, {"projects": projects}
-    )
+    records = [
+        await begin_change(request, "group_remove", "group", group.name, {"projects": projects})
+    ]
+    if not review.accepts(token):
+        await _finish_all(request, records, False, REVIEW_CHANGED)
+        raise HTTPException(status_code=409, detail=REVIEW_CHANGED)
     try:
-        await services.groups.delete(id)
+        # The store deletes exactly what a review with this token shows: these dashboards.
+        await _begin_dashboard_removes(request, records, "group", review.name, review.dashboards)
+    except HTTPException as exc:
+        await _finish_all(request, records, False, str(exc.detail))
+        raise
+    try:
+        await services.groups.delete(id, token, services.dashboards)
+    except ReviewChanged:
+        await _finish_all(request, records, False, REVIEW_CHANGED)
+        raise HTTPException(status_code=409, detail=REVIEW_CHANGED) from None
     except UnknownGroup:
-        await finish_change(request, record, False, GROUP_GONE)
+        await _finish_all(request, records, False, GROUP_GONE)
         raise _gone(GROUP_GONE) from None
     except Exception:
-        await finish_change(request, record, False, "The group couldn't be removed. Try again.")
+        await _finish_all(request, records, False, GROUP_NOT_REMOVED)
         raise
-    await finish_change(request, record, True)
+    await _finish_all(request, records, True)
     return Response(status_code=204)
 
 

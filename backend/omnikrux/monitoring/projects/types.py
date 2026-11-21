@@ -1,12 +1,17 @@
 """Projects, their links to sources, groups, and the reviews shown before a delete."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from omnikrux.monitoring.sources.types import FilterOrigin, ProjectKind
+
+if TYPE_CHECKING:
+    from omnikrux.monitoring.dashboards.store import DashboardRef
 
 REVIEW_CHANGED = "Something changed since the review. Review it again."
 
@@ -100,7 +105,21 @@ class ProjectDeleteReview:
     sources_kept: tuple[KeptSource, ...]  # created by the project, used by others
     sources_unlinked: tuple[SourceRef, ...]  # linked, not created by the project
     groups_left: tuple[GroupRef, ...]
+    dashboards: tuple[DashboardRef, ...]  # deleted with the project, by title
     token: str
+
+
+@dataclass(frozen=True)
+class GroupDeleteReview:
+    group_id: str
+    name: str
+    dashboards: tuple[DashboardRef, ...]  # deleted with the group, by title
+    token: str
+
+    def accepts(self, token: str | None) -> bool:
+        """Whether a delete may go ahead with `token`: one that matches, or none at all for a
+        group without dashboards (nothing to review)."""
+        return token == self.token or (token is None and not self.dashboards)
 
 
 @dataclass(frozen=True)
@@ -112,5 +131,10 @@ class SourceDeleteReview:
 
 
 def review_token(review_without_token: dict) -> str:
-    """A fingerprint of what a review shows: it changes whenever the review would."""
-    return hashlib.sha256(json.dumps(review_without_token, sort_keys=True).encode()).hexdigest()
+    """A fingerprint of what a review shows: it changes whenever the review would. An empty
+    `dashboards` list stays out of it, so a review without dashboards keeps the fingerprint it
+    had before owners had dashboards."""
+    fields = dict(review_without_token)
+    if "dashboards" in fields and not fields["dashboards"]:
+        del fields["dashboards"]
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()

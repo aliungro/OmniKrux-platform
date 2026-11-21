@@ -1,8 +1,9 @@
 """Projects, their links to sources, and groups on disk.
 
 A group only lists projects: joining or leaving one never moves a project or changes its links.
-Deleting a project goes through a review; the delete recomputes it in the same transaction and
-refuses (`ReviewChanged`) when it no longer matches the token the user saw. Writes that read
+Deleting a project, or a group with dashboards, goes through a review; the delete recomputes it
+in the same transaction and refuses (`ReviewChanged`) when it no longer matches the token the
+user saw. Either delete takes the owner's dashboards and their versions with it. Writes that read
 what a delete could remove (a link's project and source, a group's members) take the write lock
 first, so a delete can't land between the read and the write."""
 
@@ -19,6 +20,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.models import (
     GroupMemberRecord,
     GroupRecord,
@@ -32,6 +34,7 @@ from omnikrux.monitoring.models import (
 )
 from omnikrux.monitoring.projects.types import (
     Group,
+    GroupDeleteReview,
     GroupRef,
     KeptSource,
     Link,
@@ -89,7 +92,7 @@ def _by_name(items: Iterable) -> tuple:
     return tuple(sorted(items, key=lambda item: (item.name.casefold(), item.id)))
 
 
-def _sealed[R: (ProjectDeleteReview, SourceDeleteReview)](review: R) -> R:
+def _sealed[R: (ProjectDeleteReview, SourceDeleteReview, GroupDeleteReview)](review: R) -> R:
     """The review with its token: the fingerprint of every other field."""
     fields = asdict(review)
     del fields["token"]
@@ -128,6 +131,9 @@ async def _known_projects(session: AsyncSession, ids: Iterable[str]) -> tuple[st
 class ProjectStore:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
+
+    def _dashboards(self, dashboards: DashboardStore | None) -> DashboardStore:
+        return dashboards if dashboards is not None else DashboardStore(self._sessionmaker)
 
     # -- reading -------------------------------------------------------------------------------
 
@@ -303,7 +309,9 @@ class ProjectStore:
 
     # -- reviews and deletes -------------------------------------------------------------------
 
-    async def _review(self, session: AsyncSession, id: str) -> ProjectDeleteReview:
+    async def _review(
+        self, session: AsyncSession, id: str, dashboards: DashboardStore | None = None
+    ) -> ProjectDeleteReview:
         project = await _project_row(session, id)
         linked = set(
             await session.scalars(
@@ -348,19 +356,30 @@ class ProjectStore:
             sources_kept=_by_name(kept),
             sources_unlinked=_by_name(unlinked),
             groups_left=_by_name(groups),
+            dashboards=tuple(
+                await self._dashboards(dashboards).owned_refs("project", id, session=session)
+            ),
             token="",
         )
         return _sealed(review)
 
-    async def delete_review(self, id: str) -> ProjectDeleteReview:
+    async def delete_review(
+        self, id: str, dashboards: DashboardStore | None = None
+    ) -> ProjectDeleteReview:
         """What deleting the project would do. UnknownProject if it doesn't exist."""
         async with self._sessionmaker() as session:
-            return await self._review(session, id)
+            return await self._review(session, id, dashboards)
 
-    async def delete(self, id: str, token: str, sources: SourceStore) -> ProjectDeleteReview:
-        """Delete the project, the sources only it used and created, its links and its group
-        memberships, in one transaction. ReviewChanged (nothing changed) when the review no
-        longer matches `token`."""
+    async def delete(
+        self,
+        id: str,
+        token: str,
+        sources: SourceStore,
+        dashboards: DashboardStore | None = None,
+    ) -> ProjectDeleteReview:
+        """Delete the project, the sources only it used and created, its links, its group
+        memberships and its dashboards with their versions, in one transaction. ReviewChanged
+        (nothing changed) when the review no longer matches `token`."""
         async with self._sessionmaker.begin() as session:
             # Write first: SQLite then holds the write lock, so nothing can change in between.
             locked = await session.scalar(
@@ -371,9 +390,10 @@ class ProjectStore:
             )
             if locked is None:
                 raise UnknownProject(id)
-            review = await self._review(session, id)
+            review = await self._review(session, id, dashboards)
             if review.token != token:
                 raise ReviewChanged()
+            await self._dashboards(dashboards).delete_owned("project", id, session=session)
             for source in review.sources_removed:
                 await sources.delete(source.id, session=session)
             if review.sources_kept:
@@ -432,6 +452,9 @@ class ProjectStore:
 class GroupStore:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
+
+    def _dashboards(self, dashboards: DashboardStore | None) -> DashboardStore:
+        return dashboards if dashboards is not None else DashboardStore(self._sessionmaker)
 
     async def _groups(self, session: AsyncSession, ids: Sequence[str] | None) -> list[Group]:
         query = select(GroupRecord)
@@ -503,12 +526,36 @@ class GroupStore:
             await _flush(session, "group", row.name)
         return await self.get(id)
 
-    async def delete(self, id: str) -> None:
-        """Remove the group and its member list; the projects stay as they are."""
+    async def _review(
+        self, session: AsyncSession, id: str, dashboards: DashboardStore | None
+    ) -> GroupDeleteReview:
+        name = await session.scalar(select(GroupRecord.name).where(GroupRecord.id == id))
+        if name is None:
+            raise UnknownGroup(id)
+        refs = await self._dashboards(dashboards).owned_refs("group", id, session=session)
+        return _sealed(GroupDeleteReview(id, name, tuple(refs), token=""))
+
+    async def delete_review(
+        self, id: str, dashboards: DashboardStore | None = None
+    ) -> GroupDeleteReview:
+        """What deleting the group would do: the dashboards it takes. UnknownGroup."""
+        async with self._sessionmaker() as session:
+            return await self._review(session, id, dashboards)
+
+    async def delete(
+        self, id: str, token: str | None = None, dashboards: DashboardStore | None = None
+    ) -> GroupDeleteReview:
+        """Remove the group, its member list and its dashboards with their versions, in one
+        transaction; the projects stay as they are. A group with dashboards needs the token of a
+        review that still matches; one without deletes without a token (a token given must
+        still match). UnknownGroup; ReviewChanged (nothing changed)."""
         async with self._sessionmaker.begin() as session:
-            removed = await session.scalar(
-                delete(GroupRecord).where(GroupRecord.id == id).returning(GroupRecord.id)
-            )
-            if removed is None:
-                raise UnknownGroup(id)
+            # Write first: nothing can change between the recomputed review and the delete.
+            await lock_first(session)
+            review = await self._review(session, id, dashboards)
+            if not review.accepts(token):
+                raise ReviewChanged()
+            await self._dashboards(dashboards).delete_owned("group", id, session=session)
             await session.execute(delete(GroupMemberRecord).where(GroupMemberRecord.group_id == id))
+            await session.execute(delete(GroupRecord).where(GroupRecord.id == id))
+        return review
