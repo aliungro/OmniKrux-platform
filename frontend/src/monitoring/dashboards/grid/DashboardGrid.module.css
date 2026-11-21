@@ -46,6 +46,27 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 15%, transparent);
 }
 
+/* D1: an edited panel's frame lights up for FLASH_MS, then fades back. Under reduced motion the
+   ring shows and hides without the fade. */
+.tile {
+  transition: border-color 0.4s ease-out, box-shadow 0.4s ease-out;
+}
+
+.tile.flash {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 18%, transparent);
+}
+
+.tile[data-motion="off"] {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile {
+    transition: none;
+  }
+}
+
 .tile[data-dragging] {
   z-index: 3;
   border-color: color-mix(in srgb, var(--focus) 70%, var(--rule));

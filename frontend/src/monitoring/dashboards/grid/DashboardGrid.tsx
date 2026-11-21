@@ -26,7 +26,7 @@ interface Props {
 
 export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, range, waiting, refreshSeq, status, editor }: Props) {
   const gridRef = useRef<HTMLDivElement>(null);
-  const edit = useEditableGrid(editor ?? null, gridRef);
+  const edit = useEditableGrid(editor ?? null, gridRef, owner);
   const ordered = useMemo(
     () => [...panels].sort((a, b) => a.layout.y - b.layout.y || a.layout.x - b.layout.x),
     [panels],

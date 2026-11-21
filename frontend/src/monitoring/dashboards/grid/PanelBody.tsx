@@ -13,11 +13,13 @@ interface Props {
   result: PanelDataResult;
   /** Its owner or a variable it uses is still loading: nothing it had is current. */
   waiting: boolean;
-  /** Increments on each edit of this panel (0 in view mode). */
+  /** Rises with each edit of this panel (never in view mode). */
   changeId: number;
+  /** Off under reduced motion. Charts only morph and count on edits (a newer `changeId` or `editId`). */
+  animate: boolean;
 }
 
-export function PanelBody({ panel, run, result, waiting, changeId }: Props) {
+export function PanelBody({ panel, run, result, waiting, changeId, animate }: Props) {
   const { data } = result;
   // Waiting on variables, nothing read yet, or the last thing kept is from before this panel had a run.
   if (waiting || data === null || (data.state === "noQuery" && run.requests.length > 0)) {
@@ -35,8 +37,8 @@ export function PanelBody({ panel, run, result, waiting, changeId }: Props) {
     default:
       return (
         <Suspense fallback={<PanelNote text={PANEL_COPY.loading} busy />}>
-          {/* View mode: refreshes and time changes never animate (no edit to morph from). */}
-          <ChartView panel={panel} data={data} range={run.range} animate={false} changeId={changeId} />
+          {/* Refreshes and time changes never animate: only a newer edit count morphs (F28). */}
+          <ChartView panel={panel} data={data} range={run.range} animate={animate} changeId={changeId} />
         </Suspense>
       );
   }

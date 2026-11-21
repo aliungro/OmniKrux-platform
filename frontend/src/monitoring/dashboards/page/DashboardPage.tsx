@@ -239,7 +239,9 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
               onOpenProject={(p, e) => openPage({ page: "project", id: p.id }, e)} />
             <DashboardGrid dashboardId={dashboard.id} panels={spec.panels} owner={ctx.owner} ownerName={ctx.ownerName}
               vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} refreshSeq={ctx.refreshSeq} status={ctx.status}
-              editor={editing ? { state: editing, dispatch: editor.dispatch, onLeave: () => saveButton.current?.focus() } : undefined} />
+              editor={editing ? {
+                state: editing, dispatch: editor.dispatch, ownerKind: dashboard.owner_kind, onLeave: () => saveButton.current?.focus(),
+              } : undefined} />
           </>
         )}
         {tab === "json" && <pre className={s.json} aria-label="Dashboard JSON" tabIndex={0}>{dashboardJson(spec)}</pre>}

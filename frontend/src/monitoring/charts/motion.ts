@@ -1,32 +1,14 @@
 // Motion: durations from the design, an easing, a tween on requestAnimationFrame and the
 // reduced-motion preference. Reduced motion always jumps.
 
-import { useSyncExternalStore } from "react";
+export { FLASH_MS, usePrefersReducedMotion } from "../dashboards/motion";
 
 export const MORPH_MS = 380;
 export const COUNT_MS = 380;
-export const FLASH_MS = 450;
 
 export function easeOutCubic(k: number): number {
   const r = 1 - k;
   return 1 - r * r * r;
-}
-
-const QUERY = "(prefers-reduced-motion: reduce)";
-
-function media(): MediaQueryList | null {
-  return typeof matchMedia === "function" ? matchMedia(QUERY) : null;
-}
-
-function subscribe(onChange: () => void): () => void {
-  const mq = media();
-  mq?.addEventListener("change", onChange);
-  return () => mq?.removeEventListener("change", onChange);
-}
-
-/** Live: follows the system setting while the page is open. */
-export function usePrefersReducedMotion(): boolean {
-  return useSyncExternalStore(subscribe, () => media()?.matches ?? false, () => false);
 }
 
 /** Calls `onFrame(k)` with k from 0 to 1 over the duration (the last call is exactly 1). Returns cancel. */

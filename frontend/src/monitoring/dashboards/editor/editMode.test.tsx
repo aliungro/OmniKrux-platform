@@ -362,4 +362,32 @@ describe("Edit mode", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit" })));
   });
+
+  it("a drag clamped at the left edge changes nothing", async () => {
+    const { user } = await editing();
+    vi.spyOn(panels(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 950, 400));
+    const handle = within(tile("Requests")).getByRole("button", { name: "Move Requests" });
+    const point = (type: string, clientX: number, clientY: number) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY });
+      Object.defineProperty(event, "pointerId", { value: 4 });
+      fireEvent(handle, event);
+    };
+    // Three columns to the left of column 1: it can't go further than where it is.
+    point("pointerdown", 200, 100);
+    point("pointermove", 80, 100);
+    point("pointerup", 80, 100);
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
+    expect(screen.queryByText(/^Moved "Requests"/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit" })));
+  });
+
+  it("Enter on a tile opens its settings with the keyboard on the Query tab", async () => {
+    const { user } = await editing();
+    await user.keyboard("{Enter}");
+    const query = within(screen.getByRole("complementary", { name: "Panel settings" })).getByRole("tab", { name: "Query" });
+    expect(document.activeElement).toBe(query);
+    expect(query.getAttribute("aria-selected")).toBe("true");
+  });
 });

@@ -1,11 +1,15 @@
 // One panel: its title, description, Partial badge and body. It runs its own queries, reports
 // when its data was read, and keeps the keyboard off <body> when its chart goes away. In edit
-// mode it is also a tile (`tile`): focusable, named by its place, with move and resize handles.
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, type CSSProperties } from "react";
+// mode it is also a tile (`tile`): focusable, named by its place, with move and resize handles;
+// it runs its queries 300 ms after the typing stops, and its frame flashes when it is edited (D1).
+// Memoised: an edit re-renders only the panel it changed.
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ResolvedVars } from "../interpolate";
 import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelRun } from "../runPanel";
 import type { Layout, PanelSpec } from "../schema";
 import type { TileProps } from "../editor/EditableGrid";
+import { useDebouncedQueries } from "../editor/useDebouncedQueries";
+import { FLASH_MS, usePrefersReducedMotion } from "../motion";
 import type { PanelStatusStore } from "../page/useDashboardContext";
 import { PanelBody } from "./PanelBody";
 import s from "./DashboardGrid.module.css";
@@ -38,19 +42,55 @@ function useStableRun(run: PanelRun): PanelRun {
   return last.current;
 }
 
-export function PanelFrame({ dashboardId, panel, owner, ownerName, vars, range, waiting, refreshSeq, status, changeId = 0, layout, tile }: Props) {
+/**
+ * `changes` restart at 0 with each edit session, but the chart compares edit counts with the last
+ * frame it drew: counts keep rising across sessions, so a later session's first edit still morphs.
+ */
+function useRisingCount(count: number): number {
+  const seen = useRef({ base: 0, last: count });
+  if (count < seen.current.last) seen.current.base += seen.current.last;
+  seen.current.last = count;
+  return seen.current.base + count;
+}
+
+/** True for `FLASH_MS` after each rise of `count` while editing. */
+function useFlash(count: number, on: boolean): boolean {
+  const [flash, setFlash] = useState(false);
+  const last = useRef(count);
+  useLayoutEffect(() => {
+    const rose = count > last.current;
+    last.current = count;
+    if (!rose || !on) return;
+    setFlash(true);
+    const timer = setTimeout(() => setFlash(false), FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [count, on]);
+  useEffect(() => { if (!on) setFlash(false); }, [on]);
+  return flash && on;
+}
+
+export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, ownerName, vars, range, waiting, refreshSeq, status, changeId: changes = 0, layout, tile }: Props) {
   const titleId = useId();
   const tipId = useId();
   const problemsId = useId();
   const frame = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
 
+  const reduced = usePrefersReducedMotion();
+  const changeId = useRisingCount(changes);
+  const flash = useFlash(changes, tile !== undefined);
+  // While editing, the queries run 300 ms after the typing stops; everything else applies at once.
+  const debounced = useDebouncedQueries(panel, tile ? 300 : 0);
+  const runPanel = useMemo(
+    () => (debounced.queries === panel.queries ? panel : ({ ...panel, queries: debounced.queries } as PanelSpec)),
+    [panel, debounced.queries],
+  );
   const built = useMemo(
-    () => (owner ? buildPanelRun({ panel, owner, vars, range, ownerName }) : NO_RUN),
-    [panel, owner, vars, range, ownerName],
+    () => (owner ? buildPanelRun({ panel: runPanel, owner, vars, range, ownerName }) : NO_RUN),
+    [runPanel, owner, vars, range, ownerName],
   );
   const run = useStableRun(built);
-  const result = usePanelData(dashboardId, panel, run, null, owner !== null && !waiting, changeId);
+  const result = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting, changeId);
   const key = panelRunKey(run);
 
   // A refresh whose window didn't move (the range is aligned to the step) reads it again; a new
@@ -66,6 +106,14 @@ export function PanelFrame({ dashboardId, panel, owner, ownerName, vars, range, 
   const updatedAt = waiting ? null : result.updatedAt;
   useEffect(() => { status.report(panel.id, { updatedAt, loading }); }, [status, panel.id, updatedAt, loading]);
   useEffect(() => () => status.report(panel.id, null), [status, panel.id]);
+
+  // While editing, the side panel reads this panel's run: its data, and whether the typing stopped.
+  const report = tile?.report;
+  const { pending, flush } = debounced;
+  useEffect(() => {
+    report?.(panel.id, { data: result.data, fetching: result.fetching, waiting, pending, flush });
+  }, [report, panel.id, result.data, result.fetching, waiting, pending, flush]);
+  useEffect(() => () => report?.(panel.id, null), [report, panel.id]);
 
   // The keyboard was inside this panel (a table header, a log line, Try again) and what held it
   // went away with a new state: it goes to the panel's title, never to <body>.
@@ -86,10 +134,13 @@ export function PanelFrame({ dashboardId, panel, owner, ownerName, vars, range, 
   } as CSSProperties;
   const named = tile ? { "aria-label": tile.label } : { "aria-labelledby": titleId };
 
+  const classes = [s.panel, tile ? s.tile : "", flash ? s.flash : ""].filter(Boolean).join(" ");
+
   return (
-    <section ref={frame} className={tile ? `${s.panel} ${s.tile}` : s.panel} style={place} {...named} data-state={state ?? "loading"}
+    <section ref={frame} className={classes} style={place} {...named} data-state={state ?? "loading"}
       tabIndex={tile?.tabIndex} data-tile-id={tile ? panel.id : undefined} data-selected={tile?.selected || undefined}
-      data-dragging={tile?.dragging || undefined} onKeyDown={tile?.onKeyDown}
+      data-dragging={tile?.dragging || undefined} data-motion={tile && reduced ? "off" : undefined}
+      onKeyDown={tile?.onKeyDown} onClick={tile?.onClick}
       onFocus={(e) => { hadFocus.current = true; if (e.target === e.currentTarget) tile?.onFocus(); }}
       onBlur={(e) => {
         // Leaving for somewhere else ends it; an element removed under the keyboard doesn't.
@@ -114,9 +165,11 @@ export function PanelFrame({ dashboardId, panel, owner, ownerName, vars, range, 
         {tile?.grab}
       </header>
       <div className={s.body}>
-        <PanelBody panel={panel} run={run} result={result} waiting={waiting} changeId={changeId} />
+        {/* Only edits animate: view mode has none, and reduced motion always jumps. */}
+        <PanelBody panel={panel} run={run} result={result} waiting={waiting} changeId={changeId}
+          animate={tile !== undefined && !reduced} />
       </div>
       {tile?.corner}
     </section>
   );
-}
+});

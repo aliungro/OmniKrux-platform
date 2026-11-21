@@ -1,0 +1,494 @@
+/* The panel side panel (E2): a 360 px column at the right of the grid (the grid narrows), laid
+   over the grid's right side on a narrow window. Quiet rows and hairlines; the chart type tiles
+   and the run line carry the panel's state. Territories tokens only. */
+
+.side {
+  position: sticky;
+  top: 58px;
+  flex: none;
+  width: 360px;
+  max-width: 100%;
+  max-height: calc(100vh - 72px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.close {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.close:hover {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.tab {
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink-2);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+.body {
+  min-height: 0;
+  padding: 12px 14px 14px;
+  overflow-y: auto;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* A field with its label above it (Source, Title, Description). */
+.field,
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fieldLabel {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+/* An option row: its name on the left, its control on the right, a hairline under it. */
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  align-items: center;
+  column-gap: 10px;
+  padding: 2px 0 7px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.rowLabel {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.rowControl {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.text,
+.input,
+.select,
+.source {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.text {
+  width: 100%;
+  resize: vertical;
+}
+
+.rowControl .input,
+.rowControl .select {
+  width: 100%;
+  max-width: 190px;
+}
+
+.input {
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.input::placeholder,
+.text::placeholder {
+  color: var(--ink-3);
+}
+
+.select,
+.source {
+  cursor: pointer;
+}
+
+.input[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--bad) 60%, var(--rule));
+}
+
+.problem {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  color: var(--bad);
+  font-size: 11.5px;
+}
+
+.check {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.box {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--focus);
+}
+
+/* --- Query ---------------------------------------------------------------------------------- */
+
+.queries {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.query {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.query[data-hidden] .code {
+  color: var(--ink-3);
+}
+
+.queryHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.queryName {
+  color: var(--ink-2);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+}
+
+.code {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: none;
+  overflow-y: auto;
+  tab-size: 2;
+}
+
+.queryMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.legend {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.legend .input {
+  flex: 1;
+  width: 100%;
+}
+
+.metaLabel {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.queryMeta .check {
+  flex: none;
+}
+
+/* What the last run said: a tone dot, then the words. */
+.run {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 2px;
+}
+
+.runLine {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  color: var(--ink-2);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.runLine::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  translate: 0 -1px;
+}
+
+.runLine[data-tone="ok"]::before {
+  background: var(--ok);
+}
+
+.runLine[data-tone="warn"]::before {
+  background: var(--warn);
+}
+
+.runLine[data-tone="bad"] {
+  color: var(--bad);
+}
+
+.runLine[data-tone="bad"]::before {
+  background: var(--bad);
+}
+
+.runLine[data-tone="quiet"] {
+  color: var(--ink-3);
+}
+
+.hint {
+  margin: 0;
+  padding-left: 13px;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+/* --- Chart ---------------------------------------------------------------------------------- */
+
+.types {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.type {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.type:hover {
+  border-color: color-mix(in srgb, var(--focus) 40%, var(--rule));
+  color: var(--ink);
+}
+
+.type[aria-checked="true"] {
+  border-color: var(--focus);
+  background: color-mix(in srgb, var(--focus) 8%, transparent);
+  color: var(--ink);
+}
+
+.glyph {
+  width: 18px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.8;
+}
+
+.type[aria-checked="true"] .glyph {
+  stroke: var(--focus);
+  opacity: 1;
+}
+
+.warning {
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.note {
+  margin: -4px 0 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+/* --- Options -------------------------------------------------------------------------------- */
+
+.thresholds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.threshold {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--ok);
+}
+
+.threshold[data-color="warn"] .swatch {
+  background: var(--warn);
+}
+
+.threshold[data-color="bad"] .swatch {
+  background: var(--bad);
+}
+
+.remove {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.remove:hover {
+  color: var(--ink);
+}
+
+.add {
+  align-self: flex-start;
+  padding: 4px 9px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 45%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.add:hover {
+  border-color: var(--focus);
+  background: color-mix(in srgb, var(--focus) 6%, transparent);
+}
+
+/* --- Alert ---------------------------------------------------------------------------------- */
+
+.later {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.body:focus-visible,
+.close:focus-visible,
+.tab:focus-visible,
+.text:focus-visible,
+.input:focus-visible,
+.select:focus-visible,
+.source:focus-visible,
+.code:focus-visible,
+.box:focus-visible,
+.type:focus-visible,
+.remove:focus-visible,
+.add:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Narrow: the panel lies over the grid's right side. */
+@media (max-width: 959px) {
+  .side {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 5;
+    width: min(360px, 100%);
+    max-height: none;
+    box-shadow: 0 14px 36px color-mix(in srgb, var(--bg) 80%, transparent);
+  }
+}

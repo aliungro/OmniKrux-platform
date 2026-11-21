@@ -1,28 +1,31 @@
 // Edit mode on the panel grid (E2): every panel is a tile you can move and resize by pointer or
 // keyboard, "+ Add panel" sits in the free space, and the selected panel's settings open beside
 // the grid. The grid itself stays `DashboardGrid`, so panels keep running (and keep their data)
-// when edit mode starts or ends.
+// when edit mode starts or ends. Tile props are kept per panel while nothing a tile shows changes,
+// so an edit re-renders only the panel it touched (D1).
 import {
-  useCallback, useEffect, useId, useLayoutEffect, useRef, useState,
-  type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject,
+  useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState,
+  type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject,
 } from "react";
 import { isDeleteKey, pressed } from "../../../features/chrome/shortcuts";
-import { escapeCloses } from "../../focus";
 import { freeSpot, neighbour, placePanel, type Dir } from "../layout";
-import { GRID_COLUMNS, type Layout, type PanelSpec } from "../schema";
+import type { DashboardOwner } from "../runPanel";
+import { GRID_COLUMNS, type Layout, type OwnerKind, type PanelSpec } from "../schema";
 import { pageLetter } from "../page/keys";
 import { AddPanelTile, cellStyle } from "./AddPanelTile";
 import { editorReducer, type EditingState, type EditorAction } from "./editorState";
+import { panelName, SidePanel, type PanelLive } from "./SidePanel";
 import s from "./EditableGrid.module.css";
 
 export interface GridEditor {
   state: EditingState;
   dispatch(action: EditorAction): void;
-  /** Esc on a tile: the keyboard goes to Save dashboard. */
+  /** Esc on a tile (settings closed): the keyboard goes to Save dashboard. */
   onLeave(): void;
+  ownerKind: OwnerKind;
 }
 
-/** What `PanelFrame` needs to be a tile. */
+/** What `PanelFrame` needs to be a tile. The same object while nothing it shows changes. */
 export interface TileProps {
   label: string;
   tabIndex: 0 | -1;
@@ -32,6 +35,10 @@ export interface TileProps {
   offset: { x: number; y: number } | null;
   onKeyDown(e: KeyboardEvent<HTMLElement>): void;
   onFocus(): void;
+  /** A click on the tile itself (not on something in it) opens its settings. */
+  onClick(e: MouseEvent<HTMLElement>): void;
+  /** The panel's run, for the side panel's run line and Ctrl+Enter; null when it goes away. */
+  report(id: string, live: PanelLive | null): void;
   grab: ReactNode;
   corner: ReactNode;
 }
@@ -52,9 +59,10 @@ const ROW_PITCH = 30 + GAP;
 const ADD_SIZE = { w: 12, h: 8 };
 const ARROWS: Readonly<Record<string, Dir>> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
 
-export const panelName = (p: PanelSpec) => p.title.trim() || "Untitled panel";
 const tileLabel = (p: PanelSpec, l: Layout) => `${panelName(p)}, ${l.w} by ${l.h}, column ${l.x + 1}, row ${l.y + 1}`;
 const sameLayout = (a: Layout, b: Layout) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+/** Something inside a tile that takes its own clicks. */
+const OWN_CLICKS = "button, a, input, select, textarea, [role='button'], [tabindex]:not([tabindex='-1'])";
 
 type Drag = {
   id: string;
@@ -71,7 +79,15 @@ type Drag = {
   onEscape: (e: globalThis.KeyboardEvent) => void;
 };
 type Preview = { id: string; kind: "move" | "resize"; panels: PanelSpec[]; target: Layout; offset: { x: number; y: number } | null };
-type Settings = { open: boolean; focus: "tab" | "query"; seq: number };
+type Settings = { open: boolean; focus: "tab" | "query" | "none"; seq: number };
+/** The tile handlers, rebuilt each render; tiles call them through a ref so their props stay the same. */
+type Handlers = {
+  key(id: string, e: KeyboardEvent<HTMLElement>): void;
+  click(id: string, e: MouseEvent<HTMLElement>): void;
+  down(id: string, kind: Drag["kind"], e: PointerEvent<HTMLButtonElement>): void;
+  move(e: PointerEvent<HTMLButtonElement>): void;
+  up(e: PointerEvent<HTMLButtonElement>, apply: boolean): void;
+};
 
 const movedWords = (id: string) => (n: EditingState) => {
   const p = panelIn(n, id);
@@ -85,17 +101,30 @@ const byReading = (a: PanelSpec, b: PanelSpec) => a.layout.y - b.layout.y || a.l
 const panelIn = (st: EditingState, id: string | null) => (id === null ? undefined : st.draft.panels.find((p) => p.id === id));
 
 /** Edit mode for `DashboardGrid`; null outside edit mode. `gridRef` is the grid element (its width sets the cell size). */
-export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HTMLDivElement | null>): GridEditing | null {
+export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HTMLDivElement | null>, owner: DashboardOwner | null = null): GridEditing | null {
   const editing = editor !== null;
   const latest = useRef(editor);
   latest.current = editor;
   const [current, setCurrent] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>({ open: false, focus: "tab", seq: 0 });
+  const settingsOpen = useRef(settings.open);
+  settingsOpen.current = settings.open;
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const drag = useRef<Drag | null>(null);
   /** A tile id (or "add") to put the keyboard on after the next render. */
   const refocus = useRef<string | null>(null);
+  const handlers = useRef<Handlers | null>(null);
+  const tiles = useRef(new Map<string, { sig: string; tile: TileProps }>());
+
+  // Each panel's run as its frame reports it; the side panel re-renders when the selected one's changes.
+  const lives = useRef(new Map<string, PanelLive>());
+  const [, liveChanged] = useReducer((n: number) => n + 1, 0);
+  const report = useCallback((id: string, live: PanelLive | null) => {
+    if (live) lives.current.set(id, live);
+    else lives.current.delete(id);
+    if (latest.current?.state.selected === id) liveChanged();
+  }, []);
 
   const focusTile = useCallback((id: string) => {
     const root = gridRef.current;
@@ -142,10 +171,14 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     act({ type: "removePanel", id: panel.id }, () => `Removed "${panelName(panel)}". Discard brings it back.`);
   };
 
+  /** Closes the settings; the keyboard goes to the selected tile, which keeps its highlight. */
   const closeSettings = useCallback(() => {
     setSettings((was) => ({ ...was, open: false }));
     const id = latest.current?.state.selected;
-    if (id) focusTile(id);
+    if (id) {
+      setCurrent(id);
+      focusTile(id);
+    }
   }, [focusTile]);
 
   // --- pointer: move by the ⋮⋮ handle, resize by the corner --------------------------------------
@@ -163,50 +196,6 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
       act({ type: "place", id: d.id, to: d.to }, d.kind === "move" ? movedWords(d.id) : resizedWords(d.id));
     }
   }, [act, focusTile]);
-
-  const startDrag = (panel: PanelSpec, kind: Drag["kind"]) => (e: PointerEvent<HTMLButtonElement>) => {
-    const ed = latest.current;
-    if (e.button !== 0 || drag.current || !ed) return;
-    e.preventDefault();
-    const width = gridRef.current?.getBoundingClientRect().width ?? 0;
-    const onEscape = (k: globalThis.KeyboardEvent) => {
-      if (k.key !== "Escape" || drag.current === null) return;
-      k.preventDefault();
-      k.stopPropagation();
-      finish(drag.current, false);
-    };
-    drag.current = {
-      id: panel.id, kind, pointer: e.pointerId, handle: e.currentTarget, startX: e.clientX, startY: e.clientY,
-      start: panel.layout, panels: ed.state.draft.panels, colPitch: width > 0 ? (width + GAP) / GRID_COLUMNS : ROW_PITCH,
-      to: panel.layout, onEscape,
-    };
-    window.addEventListener("keydown", onEscape, true);
-    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* not capturable */ }
-    setCurrent(panel.id);
-  };
-  const dragFor = (e: PointerEvent<HTMLButtonElement>) => (drag.current?.pointer === e.pointerId ? drag.current : null);
-  const moveDrag = (e: PointerEvent<HTMLButtonElement>) => {
-    const d = dragFor(e);
-    if (!d) return;
-    const dx = e.clientX - d.startX;
-    const dy = e.clientY - d.startY;
-    const cols = Math.round(dx / d.colPitch);
-    const rows = Math.round(dy / ROW_PITCH);
-    d.to = d.kind === "move"
-      ? { ...d.start, x: d.start.x + cols, y: d.start.y + rows }
-      : { ...d.start, w: d.start.w + cols, h: d.start.h + rows };
-    const placed = placePanel(d.panels, d.id, d.to);
-    const target = placed.find((p) => p.id === d.id)?.layout ?? d.start;
-    setPreview({ id: d.id, kind: d.kind, panels: placed, target, offset: d.kind === "move" ? { x: dx, y: dy } : null });
-  };
-  const endDrag = (e: PointerEvent<HTMLButtonElement>) => {
-    const d = dragFor(e);
-    if (d) finish(d, true);
-  };
-  const cancelDrag = (e: PointerEvent<HTMLButtonElement>) => {
-    const d = dragFor(e);
-    if (d) finish(d, false);
-  };
 
   // --- entering and leaving edit mode, and where the keyboard goes ------------------------------
 
@@ -228,9 +217,23 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
       setSettings((was) => ({ ...was, open: false }));
       setMessage("");
       setCurrent(null);
+      tiles.current.clear();
     }
     wasEditing.current = editing;
   }, [editing]);
+
+  // The settings went away with the keyboard in them (their panel left the draft): it goes to a tile.
+  const asideShown = editing && settings.open && editor !== null && panelIn(editor.state, editor.state.selected) !== undefined;
+  const hadAside = useRef(asideShown);
+  useLayoutEffect(() => {
+    const lost = () => { const a = document.activeElement; return a === null || a === document.body || !a.isConnected; };
+    if (hadAside.current && !asideShown && editing && refocus.current === null && lost()) {
+      const ed = latest.current;
+      const first = ed ? [...ed.state.draft.panels].sort(byReading)[0] : undefined;
+      refocus.current = ed?.state.selected && panelIn(ed.state, ed.state.selected) ? ed.state.selected : (first?.id ?? "add");
+    }
+    hadAside.current = asideShown;
+  }, [asideShown, editing]);
 
   useLayoutEffect(() => {
     const want = refocus.current;
@@ -265,38 +268,90 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
   const has = (id: string | null) => id !== null && panels.some((p) => p.id === id);
   const roving = has(current) ? current : has(state.selected) ? state.selected : (ordered[0]?.id ?? null);
 
-  const onTileKey = (panel: PanelSpec) => (e: KeyboardEvent<HTMLElement>) => {
-    if (e.target !== e.currentTarget || drag.current) return;
-    const dir = ARROWS[e.key];
-    // Most modifiers first: `pressed` lets a plain arrow shortcut match with Shift (F6).
-    if (dir && pressed("panelResize", e)) {
-      e.preventDefault();
-      refocus.current = panel.id;
-      act({ type: "grow", id: panel.id, dir }, resizedWords(panel.id));
-    } else if (dir && pressed("panelMove", e)) {
-      e.preventDefault();
-      refocus.current = panel.id;
-      act({ type: "nudge", id: panel.id, dir }, movedWords(panel.id));
-    } else if (dir && pressed("panelFocus", e)) {
-      e.preventDefault();
-      const to = neighbour(panels, panel.id, dir);
-      if (to) {
-        setCurrent(to);
-        focusTile(to);
+  handlers.current = {
+    key(id, e) {
+      const panel = panelIn(state, id);
+      if (!panel || e.target !== e.currentTarget || drag.current) return;
+      const dir = ARROWS[e.key];
+      // Most modifiers first: `pressed` lets a plain arrow shortcut match with Shift (F6).
+      if (dir && pressed("panelResize", e)) {
+        e.preventDefault();
+        refocus.current = id;
+        act({ type: "grow", id, dir }, resizedWords(id));
+      } else if (dir && pressed("panelMove", e)) {
+        e.preventDefault();
+        refocus.current = id;
+        act({ type: "nudge", id, dir }, movedWords(id));
+      } else if (dir && pressed("panelFocus", e)) {
+        e.preventDefault();
+        const to = neighbour(panels, id, dir);
+        if (to) {
+          setCurrent(to);
+          focusTile(to);
+        }
+      } else if (pressed("panelSettings", e)) {
+        e.preventDefault();
+        act({ type: "select", id });
+        act({ type: "sideTab", tab: "query" });
+        openSettings(id, "tab");
+      } else if (isDeleteKey(e)) {
+        e.preventDefault();
+        remove(panel, panels);
+      } else if (pressed("panelLeave", e)) {
+        e.preventDefault();
+        // The settings close first; the next Esc goes to Save dashboard.
+        if (settingsOpen.current) setSettings((was) => ({ ...was, open: false }));
+        else editor.onLeave();
       }
-    } else if (pressed("panelSettings", e)) {
+    },
+    click(id, e) {
+      if (drag.current || e.button !== 0) return;
+      const inner = e.target instanceof Element ? e.target.closest(OWN_CLICKS) : null;
+      if (inner && inner !== e.currentTarget) return;
+      if (state.selected === id && settingsOpen.current) return;
+      act({ type: "select", id });
+      openSettings(id, "none");
+    },
+    down(id, kind, e) {
+      const panel = panelIn(state, id);
+      if (e.button !== 0 || drag.current || !panel) return;
       e.preventDefault();
-      act({ type: "select", id: panel.id });
-      act({ type: "sideTab", tab: "query" });
-      openSettings(panel.id, "tab");
-    } else if (isDeleteKey(e)) {
-      e.preventDefault();
-      remove(panel, panels);
-    } else if (pressed("panelLeave", e)) {
-      e.preventDefault();
-      editor.onLeave();
-    }
+      const width = gridRef.current?.getBoundingClientRect().width ?? 0;
+      const onEscape = (k: globalThis.KeyboardEvent) => {
+        if (k.key !== "Escape" || drag.current === null) return;
+        k.preventDefault();
+        k.stopPropagation();
+        finish(drag.current, false);
+      };
+      drag.current = {
+        id, kind, pointer: e.pointerId, handle: e.currentTarget, startX: e.clientX, startY: e.clientY,
+        start: panel.layout, panels, colPitch: width > 0 ? (width + GAP) / GRID_COLUMNS : ROW_PITCH,
+        to: panel.layout, onEscape,
+      };
+      window.addEventListener("keydown", onEscape, true);
+      try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* not capturable */ }
+      setCurrent(id);
+    },
+    move(e) {
+      const d = drag.current?.pointer === e.pointerId ? drag.current : null;
+      if (!d) return;
+      const dx = e.clientX - d.startX;
+      const dy = e.clientY - d.startY;
+      const cols = Math.round(dx / d.colPitch);
+      const rows = Math.round(dy / ROW_PITCH);
+      d.to = d.kind === "move"
+        ? { ...d.start, x: d.start.x + cols, y: d.start.y + rows }
+        : { ...d.start, w: d.start.w + cols, h: d.start.h + rows };
+      const placed = placePanel(d.panels, d.id, d.to);
+      const target = placed.find((p) => p.id === d.id)?.layout ?? d.start;
+      setPreview({ id: d.id, kind: d.kind, panels: placed, target, offset: d.kind === "move" ? { x: dx, y: dy } : null });
+    },
+    up(e, apply) {
+      const d = drag.current?.pointer === e.pointerId ? drag.current : null;
+      if (d) finish(d, apply);
+    },
   };
+  const on = () => handlers.current!;
 
   const shown = (panel: PanelSpec): Layout => {
     if (!preview) return panel.layout;
@@ -304,33 +359,50 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     return preview.panels.find((p) => p.id === panel.id)?.layout ?? panel.layout;
   };
 
-  const handle = (panel: PanelSpec, kind: Drag["kind"]) => (
+  const handle = (id: string, name: string, kind: Drag["kind"]) => (
     <button type="button" tabIndex={-1} className={kind === "move" ? s.grab : s.corner}
-      aria-label={`${kind === "move" ? "Move" : "Resize"} ${panelName(panel)}`}
+      aria-label={`${kind === "move" ? "Move" : "Resize"} ${name}`}
       aria-keyshortcuts={kind === "move" ? "Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown" : "Control+Shift+ArrowRight Control+Shift+ArrowDown"}
-      onPointerDown={startDrag(panel, kind)} onPointerMove={moveDrag} onPointerUp={endDrag}
-      onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag}
-      onClick={() => { if (!drag.current) focusTile(panel.id); }}>
+      onPointerDown={(e) => on().down(id, kind, e)} onPointerMove={(e) => on().move(e)} onPointerUp={(e) => on().up(e, true)}
+      onPointerCancel={(e) => on().up(e, false)} onLostPointerCapture={(e) => on().up(e, false)}
+      onClick={() => { if (!drag.current) focusTile(id); }}>
       <span aria-hidden="true">{kind === "move" ? "⋮⋮" : ""}</span>
     </button>
   );
 
+  /** The tile's props: the same object while its label, place in the Tab order, highlight and drag don't change. */
+  const tile = (panel: PanelSpec): TileProps => {
+    const id = panel.id;
+    const name = panelName(panel);
+    const label = tileLabel(panel, preview?.id === id ? preview.target : shown(panel));
+    const tabIndex: 0 | -1 = id === roving ? 0 : -1;
+    const selected = state.selected === id;
+    const dragging = preview?.id === id;
+    const offset = dragging ? preview.offset : null;
+    const sig = JSON.stringify([name, label, tabIndex, selected, dragging, offset]);
+    const kept = tiles.current.get(id);
+    if (kept?.sig === sig) return kept.tile;
+    const made: TileProps = {
+      label, tabIndex, selected, dragging, offset,
+      onKeyDown: (e) => on().key(id, e),
+      onFocus: () => setCurrent(id),
+      onClick: (e) => on().click(id, e),
+      report,
+      grab: handle(id, name, "move"),
+      corner: handle(id, name, "resize"),
+    };
+    tiles.current.set(id, { sig, tile: made });
+    return made;
+  };
+  for (const id of tiles.current.keys()) if (!has(id)) tiles.current.delete(id);
+
   const addAt = freeSpot(preview ? preview.panels : panels, ADD_SIZE.w, ADD_SIZE.h);
   const selected = panelIn(state, state.selected);
+  const live = selected ? lives.current.get(selected.id) ?? null : null;
 
   return {
     layoutOf: shown,
-    tile: (panel) => ({
-      label: tileLabel(panel, preview?.id === panel.id ? preview.target : shown(panel)),
-      tabIndex: panel.id === roving ? 0 : -1,
-      selected: state.selected === panel.id,
-      dragging: preview?.id === panel.id,
-      offset: preview?.id === panel.id ? preview.offset : null,
-      onKeyDown: onTileKey(panel),
-      onFocus: () => setCurrent(panel.id),
-      grab: handle(panel, "move"),
-      corner: handle(panel, "resize"),
-    }),
+    tile,
     layer: (
       <>
         {preview && <div data-testid="drop-target" className={s.target} style={cellStyle(preview.target)} aria-hidden="true" />}
@@ -338,51 +410,11 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
       </>
     ),
     aside: settings.open && selected
-      ? <PanelSettings key={selected.id} panel={selected} focus={settings.focus} seq={settings.seq} dispatch={editor.dispatch} onClose={closeSettings} />
+      ? (
+        <SidePanel key={selected.id} state={state} dispatch={editor.dispatch} owner={owner} ownerKind={editor.ownerKind}
+          panelData={live?.data ?? null} live={live} initialFocus={settings.focus} seq={settings.seq} onClose={closeSettings} />
+      )
       : null,
     live: <p className={s.live} role="status" aria-live="polite">{message}</p>,
   };
-}
-
-/**
- * The selected panel's settings, beside the grid: its queries for now. The full side panel
- * (Query, Chart, Options, Alert) replaces this.
- */
-function PanelSettings({ panel, focus, seq, dispatch, onClose }: {
-  panel: PanelSpec;
-  focus: Settings["focus"];
-  seq: number;
-  dispatch(action: EditorAction): void;
-  onClose(): void;
-}) {
-  const base = useId();
-  const tab = useRef<HTMLButtonElement>(null);
-  const fields = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    if (focus === "query") fields.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-    else tab.current?.focus();
-  }, [focus, seq]);
-  const setExpr = (ref: string, expr: string) => dispatch({
-    type: "updatePanel", id: panel.id,
-    update: (p) => ({ ...p, queries: p.queries.map((q) => (q.ref === ref ? { ...q, expr } : q)) }),
-  });
-  return (
-    <aside className={s.settings} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>
-      <div className={s.settingsHead}>
-        <h2 className={s.settingsTitle}>{panelName(panel)}</h2>
-        <button type="button" className={s.close} aria-label="Close panel settings" onClick={onClose}><span aria-hidden="true">✕</span></button>
-      </div>
-      <div role="tablist" aria-label="Panel settings" className={s.tabs}>
-        <button ref={tab} id={`${base}-tab`} type="button" role="tab" aria-selected="true" aria-controls={`${base}-panel`} className={s.tab}>Query</button>
-      </div>
-      <div ref={fields} id={`${base}-panel`} role="tabpanel" aria-labelledby={`${base}-tab`} className={s.fields}>
-        {panel.queries.map((q) => (
-          <label key={q.ref} className={s.field}>
-            <span className={s.fieldLabel}>Query {q.ref}</span>
-            <textarea className={s.query} spellCheck={false} rows={3} value={q.expr} onChange={(e) => setExpr(q.ref, e.target.value)} />
-          </label>
-        ))}
-      </div>
-    </aside>
-  );
 }
