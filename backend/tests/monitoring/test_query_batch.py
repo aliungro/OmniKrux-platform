@@ -3,11 +3,12 @@ and each item succeeds or fails on its own."""
 
 import asyncio
 import json
+import logging
 import socket
 
 from omnikrux.monitoring.query import api as query_api
 from omnikrux.monitoring.query.filters import UNREADABLE
-from omnikrux.monitoring.sources import messages
+from omnikrux.monitoring.sources import messages, prometheus
 from tests.monitoring.conftest import TwoProjects
 
 BATCH = "/api/monitoring/query/batch"
@@ -192,10 +193,87 @@ async def test_an_item_without_a_project_is_refused(
         },
     )
     results = r.json()["results"]
-    refused = {"code": "bad_request", "message": query_api.PROJECT_CHOICE, "status": 422}
+    refused = {"code": "bad_request", "message": query_api.BATCH_PROJECT, "status": 422}
     assert [i["error"] for i in results[:2]] == [refused, refused]
     assert results[2]["ok"] is True
     assert [q.params["query"] for q in fake_prometheus.requests] == [['up{cluster="b"}']]
+
+
+async def test_an_item_on_a_source_its_project_does_not_link_fails_alone(
+    monitoring_app, fake_prometheus, two_projects_on_one_source
+):
+    """Isolation: a source linked only to another project is refused for this one, and nothing
+    is sent to the tool for that item."""
+    http, _ = monitoring_app
+    p = two_projects_on_one_source
+    other = await add_source(http, fake_prometheus.url, "Only C")
+    c = await set_up(http, "Team C", other, 'cluster="c"')
+    r = await http.post(
+        BATCH,
+        json={
+            "queries": [
+                {"source_id": other, "project_id": p.a, "kind": "instant", "query": "up"},
+                {"source_id": other, "project_id": c, "kind": "instant", "query": "up"},
+                {"source_id": p.source_id, "project_id": p.a, "kind": "instant", "query": "up"},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    first, second, third = r.json()["results"]
+    assert first == {
+        "ok": False,
+        "response": None,
+        "error": {
+            "code": "not_linked",
+            "message": "This source isn't linked to that project.",
+            "status": 404,
+        },
+    }
+    assert second["ok"] is True and third["ok"] is True
+    sent = sorted(
+        q.params["query"][0] for q in fake_prometheus.requests if q.path == "/api/v1/query"
+    )
+    assert sent == ['up{cluster="a"}', 'up{cluster="c"}']
+
+
+async def test_an_unexpected_failure_fails_only_its_item(
+    monitoring_app, fake_prometheus, two_projects_on_one_source, monkeypatch, caplog
+):
+    """A fault inside one item (not a query error) answers that item in plain words, is logged
+    with its stack but without the query text, and never fails the other items."""
+    http, _ = monitoring_app
+    p = two_projects_on_one_source
+    real_query = prometheus.PrometheusConnector.query
+
+    async def broken(self, t, q, name):
+        if "secret_metric" in q.query:
+            raise RuntimeError("connector bug")
+        return await real_query(self, t, q, name)
+
+    monkeypatch.setattr(prometheus.PrometheusConnector, "query", broken)
+    item = {"source_id": p.source_id, "kind": "instant"}
+    with caplog.at_level(logging.ERROR, logger="omnikrux.monitoring.query.api"):
+        r = await http.post(
+            BATCH,
+            json={
+                "queries": [
+                    item | {"project_id": p.a, "query": "up"},
+                    item | {"project_id": p.a, "query": "secret_metric"},
+                    item | {"project_id": p.b, "query": "up"},
+                ]
+            },
+        )
+    assert r.status_code == 200, r.text
+    first, second, third = r.json()["results"]
+    assert first["ok"] is True and third["ok"] is True
+    assert second == {
+        "ok": False,
+        "response": None,
+        "error": {"code": "unreachable", "message": query_api.BATCH_FAILED, "status": 500},
+    }
+    [record] = [rec for rec in caplog.records if rec.name == "omnikrux.monitoring.query.api"]
+    assert record.exc_info is not None and "connector bug" in caplog.text
+    assert "secret_metric" not in caplog.text
 
 
 async def test_batch_limits(monitoring_app, two_projects_on_one_source):

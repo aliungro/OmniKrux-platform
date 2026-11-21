@@ -14,6 +14,7 @@ list of errors)."""
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -51,8 +52,10 @@ from omnikrux.monitoring.query.series import QueryRequest, QueryResponse
 from omnikrux.monitoring.sources.transport import SourceUnreachable
 
 __all__ = [
+    "BATCH_FAILED",
     "BATCH_LIST",
     "BATCH_NOT_AN_OBJECT",
+    "BATCH_PROJECT",
     "BATCH_SIZE",
     "DIRECTION_CHOICE",
     "FIELD_INVALID",
@@ -99,6 +102,10 @@ MAX_RUNNING = 8  # batch items running at once
 BATCH_NOT_AN_OBJECT = 'Send the batch as a JSON object with a "queries" list.'
 BATCH_LIST = 'Put the queries in a "queries" list.'
 BATCH_SIZE = "Send 1 to 64 queries in one batch."
+BATCH_PROJECT = "Pick the project this query belongs to."
+BATCH_FAILED = "Something went wrong running this query. Try again."
+
+log = logging.getLogger(__name__)
 
 
 class BatchIn(BaseModel):
@@ -212,8 +219,8 @@ def _failed(exc: QueryError) -> BatchItemOut:
 @router.post("/query/batch", openapi_extra=_BATCH_SCHEMA)
 async def batch_route(request: Request) -> BatchOut:
     """Each item runs through its own project's filter, at most `MAX_RUNNING` at once, with M1's
-    limits and timeouts. One item's failure never fails or cancels another: the answer is 200
-    with every item's result in the order sent."""
+    limits and timeouts. One item's failure, even an unexpected one, never fails or cancels
+    another: the answer is 200 with every item's result in the order sent."""
     data = await _json_body(request)
     if not isinstance(data, dict):
         raise query_error(422, "bad_request", BATCH_NOT_AN_OBJECT)
@@ -229,11 +236,21 @@ async def batch_route(request: Request) -> BatchOut:
         try:
             q = query_request(item)
             if q.project_id is None:  # a batch never reads a source unfiltered
-                raise QueryError(422, "bad_request", PROJECT_CHOICE)
+                raise QueryError(422, "bad_request", BATCH_PROJECT)
             async with running:
                 return BatchItemOut(ok=True, response=await run_query(services, q))
         except QueryError as exc:
             return _failed(exc)
+        except Exception:
+            # A fault in OmniKrux, not in the query: this item fails alone and the others still
+            # answer. The log names where it ran, never the query text or a secret.
+            where = item if isinstance(item, dict) else {}
+            log.exception(
+                "A batch query failed unexpectedly (source %r, project %r).",
+                where.get("source_id"),
+                where.get("project_id"),
+            )
+            return _failed(QueryError(500, "unreachable", BATCH_FAILED))
 
     return BatchOut(results=list(await asyncio.gather(*(one(item) for item in items))))
 
