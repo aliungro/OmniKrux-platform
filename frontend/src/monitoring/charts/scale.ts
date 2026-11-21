@@ -20,9 +20,16 @@ export function niceTicks(min: number, max: number, count: number): number[] {
     min -= pad;
     max += pad;
   }
-  const step = niceStep((max - min) / Math.max(1, count - 1));
+  // A range that can't be stepped (empty after padding, overflowing, or a step that underflows) gets two ticks.
+  const two = (): number[] => (max > min ? [min, max] : [min, min + 1]);
+  const range = max - min;
+  if (!Number.isFinite(range) || !(range > 0)) return two();
+  const raw = range / Math.max(1, count - 1);
+  const step = raw > 0 ? niceStep(raw) : 0;
+  if (!(step > 0) || !Number.isFinite(step)) return two();
   const first = Math.floor(clean(min / step));
   const last = Math.ceil(clean(max / step));
+  if (!Number.isFinite(first) || !Number.isFinite(last) || last - first > 1000 || !Number.isFinite(Math.max(Math.abs(first), Math.abs(last)) * step)) return two();
   const out: number[] = [];
   for (let i = first; i <= last; i++) out.push(clean(i * step));
   return out;

@@ -38,6 +38,18 @@ describe("formatValue", () => {
     expect(formatValue(-1400, "short", null)).toBe("-1.4k");
     expect(formatValue(Number.NaN, "short", null)).toBe("–");
   });
+  it("rounds before choosing the suffix", () => {
+    expect(formatValue(999.7, "short", null)).toBe("1k");
+    expect(formatValue(999600, "short", null)).toBe("1M");
+    expect(formatValue(999.4, "short", null)).toBe("999");
+    expect(formatValue(1023.7, "bytes", null)).toBe("1 KiB");
+    expect(formatValue(1024 * 1023.9, "bytes", null)).toBe("1 MiB");
+    expect(formatValue(59.99, "s", null)).toBe("1 min");
+    expect(formatValue(0.9997, "s", null)).toBe("1 s");
+    expect(formatValue(3599.9, "s", null)).toBe("1 h");
+    expect(formatValue(999.7, "ms", null)).toBe("1 s");
+    expect(formatValue(999.7, "reqps", null)).toBe("1k req/s");
+  });
   it("knows every unit", () => {
     for (const u of UNITS) expect(formatValue(1, u, null)).not.toBe("");
   });

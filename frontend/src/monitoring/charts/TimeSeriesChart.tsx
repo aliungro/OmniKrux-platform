@@ -156,6 +156,11 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
       return;
     }
     const from = new Map<string, FrameSeries>(prev.shown.series.map((s) => [s.key, s]));
+    // Resampled once, not per frame.
+    const starts = frame.series.map((s) => {
+      const f = from.get(s.key)!;
+      return { ys: resample(f.ys, s.ys.length), base: s.base && f.base ? resample(f.base, s.base.length) : undefined };
+    });
     const buffers = frame.series.map((s) => ({
       ys: new Float32Array(s.ys.length),
       base: s.base ? new Float32Array(s.base.length) : undefined,
@@ -164,14 +169,11 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
       const e = easeOutCubic(k);
       const mixed: TimeSeriesFrame = k >= 1 ? frame : {
         ...frame,
-        series: frame.series.map((s, i) => {
-          const f = from.get(s.key)!;
-          return {
-            ...s,
-            ys: mixColumns(resample(f.ys, s.ys.length), s.ys, e, buffers[i].ys),
-            base: s.base && f.base ? mixColumns(resample(f.base, s.base.length), s.base, e, buffers[i].base) : s.base,
-          };
-        }),
+        series: frame.series.map((s, i) => ({
+          ...s,
+          ys: mixColumns(starts[i].ys, s.ys, e, buffers[i].ys),
+          base: s.base && starts[i].base ? mixColumns(starts[i].base, s.base, e, buffers[i].base) : s.base,
+        })),
       };
       entry.shown = mixed;
       drawTimeSeries(ctx, mixed, colorOf);

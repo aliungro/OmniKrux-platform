@@ -42,4 +42,23 @@ describe("decimate", () => {
     for (let s = 0; s < 20; s++) decimate(make(10000), 0, 10000, 1200);
     expect(performance.now() - t0).toBeLessThan(250);
   });
+
+  it("collapses a run of nulls into one gap marker", () => {
+    const pts: P[] = [[0, 1], [1, 2], [2, null], [3, null], [4, null], [5, 3], [6, 4]];
+    expect(decimate(pts, 0, 10, 100).filter((p) => p[1] === null)).toEqual([[2, null]]);
+  });
+
+  it("ignores NaN when picking extremes", () => {
+    const pts: P[] = [[0, Number.NaN], [1, 5], [2, 1], [3, 9], [4, 2]];
+    const out = decimate(pts, 0, 5, 1);
+    expect(out.map((p) => p[1])).toEqual([5, 1, 9, 2].filter((v) => out.some((p) => p[1] === v)));
+    expect(out.some((p) => Number.isNaN(p[1]))).toBe(false);
+    expect(Math.max(...out.map((p) => p[1]!))).toBe(9);
+    expect(Math.min(...out.map((p) => p[1]!))).toBe(1);
+  });
+
+  it("filters points outside the range even for one or two points", () => {
+    expect(decimate([[-5, 1], [3, 2]], 0, 10, 10)).toEqual([[3, 2]]);
+    expect(decimate([[50, 1]], 0, 10, 10)).toEqual([]);
+  });
 });

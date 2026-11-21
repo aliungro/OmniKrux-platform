@@ -109,6 +109,12 @@ export function buildPanelRun(input: {
   return { requests, parts, skipped, ownerKind: owner.kind, range: kind === "instant" ? { ...range } : aligned, step };
 }
 
+/** A request without its time window: what is asked, not when. */
+function withoutWindow(r: QueryRequest): Omit<QueryRequest, "start" | "end" | "step" | "time"> {
+  const { start: _start, end: _end, step: _step, time: _time, ...rest } = r;
+  return rest;
+}
+
 /** The same requests give the same key. */
 export function panelRunKey(run: Pick<PanelRun, "requests">): string {
   return JSON.stringify(run.requests);
@@ -309,12 +315,17 @@ export function usePanelData(
 ): PanelDataResult {
   const key = panelRunKey(run);
   // The edit count each key was first seen with: its fetch began then. Later option-only edits
-  // don't retag it; a refresh (a new key, no new edit) carries the same count.
+  // don't retag it. A new key (a refresh: a new window) keeps the previous key's count unless the
+  // queries themselves changed (the requests minus their time window): only that is a query edit.
   const tags = useRef(new Map<string, number>());
+  const lastQuery = useRef<{ query: string; tag: number } | null>(null);
   const tagKey = JSON.stringify([dashboardId, panel.id, key]);
   if (!tags.current.has(tagKey)) {
     if (tags.current.size > 50) tags.current.clear();
-    tags.current.set(tagKey, editId);
+    const query = JSON.stringify([dashboardId, panel.id, run.requests.map(withoutWindow)]);
+    const kept = lastQuery.current?.query === query ? lastQuery.current.tag : editId;
+    tags.current.set(tagKey, kept);
+    lastQuery.current = { query, tag: kept };
   }
   const tag = tags.current.get(tagKey) ?? editId;
   const nothing = run.requests.length === 0;

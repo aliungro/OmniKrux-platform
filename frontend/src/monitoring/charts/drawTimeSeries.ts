@@ -143,21 +143,35 @@ export function buildFrame(
   const stacked = opts.style === "stacked";
   const plotH = Math.max(1, size.height - TOP - BOTTOM);
 
-  // The data's extent (stacked: the tallest column sum).
-  let dMin = Infinity;
-  let dMax = -Infinity;
-  if (stacked) {
-    const sums = new Map<number, number>();
-    for (const s of visible) {
-      for (const p of decimate(s.points, range.start, range.end, Math.max(1, Math.floor(size.width)))) {
-        if (p[1] !== null) sums.set(p[0], (sums.get(p[0]) ?? 0) + p[1]);
-      }
+  /** The y domain, its ticks and labels for a data extent. */
+  const domainFor = (extMin: number, extMax: number) => {
+    if (extMin === Infinity) {
+      extMin = 0;
+      extMax = 1;
     }
-    for (const v of sums.values()) {
-      if (v > dMax) dMax = v;
-      if (v < dMin) dMin = v;
-    }
-  } else {
+    if (filled && opts.min === null) extMin = Math.min(0, extMin);
+    const eMin = opts.min ?? extMin;
+    const eMax = opts.max ?? Math.max(extMax, eMin);
+    const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4);
+    const lo = opts.min ?? ticks[0];
+    let hi = opts.max ?? ticks[ticks.length - 1];
+    if (!(hi > lo)) hi = lo + 1;
+    const yTicks = ticks.filter((t) => t >= lo - 1e-9 && t <= hi + 1e-9);
+    const yLabels = yTicks.map((t) => formatValue(t, opts.unit, opts.decimals));
+    const left = Math.ceil(yLabels.reduce((m, l) => Math.max(m, l.length), 1) * CHAR_W) + 14;
+    return { lo, hi, yTicks, yLabels, left };
+  };
+  const colsFor = (left: number) => Math.max(1, Math.floor(Math.max(1, size.width - left - RIGHT)));
+  const valuesFor = (cols: number) => visible.map((s) => columnValues(s, range.start, range.end, cols));
+
+  let dom: ReturnType<typeof domainFor>;
+  let left: number;
+  let columns: number;
+  let allValues: Float32Array[];
+  if (!stacked) {
+    // The extent is the data's own; the width follows from the labels.
+    let dMin = Infinity;
+    let dMax = -Infinity;
     for (const s of visible) {
       for (const p of s.points) {
         const v = p[1];
@@ -166,30 +180,45 @@ export function buildFrame(
         if (v < dMin) dMin = v;
       }
     }
+    dom = domainFor(dMin, dMax);
+    left = dom.left;
+    columns = colsFor(left);
+    allValues = valuesFor(columns);
+  } else {
+    // The extent is the tallest column sum as drawn, and the columns depend on the width, which
+    // depends on the labels: settle them together (two or three passes), so no band is clipped.
+    left = 56;
+    for (let pass = 0; ; pass++) {
+      columns = colsFor(left);
+      allValues = valuesFor(columns);
+      let dMin = Infinity;
+      let dMax = -Infinity;
+      for (let c = 0; c < columns; c++) {
+        let sum = 0;
+        let any = false;
+        for (const v of allValues) {
+          if (v[c] === v[c]) {
+            sum += v[c];
+            any = true;
+          }
+        }
+        if (!any) continue;
+        if (sum > dMax) dMax = sum;
+        if (sum < dMin) dMin = sum;
+      }
+      dom = domainFor(dMin, dMax);
+      if (dom.left === left || pass >= 3) break;
+      left = dom.left;
+    }
   }
-  if (dMin === Infinity) {
-    dMin = 0;
-    dMax = 1;
-  }
-  if (filled && opts.min === null) dMin = Math.min(0, dMin);
-  const eMin = opts.min ?? dMin;
-  const eMax = opts.max ?? Math.max(dMax, eMin);
-  const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4);
-  let lo = opts.min ?? ticks[0];
-  let hi = opts.max ?? ticks[ticks.length - 1];
-  if (!(hi > lo)) hi = lo + 1;
-  const yTicks = ticks.filter((t) => t >= lo - 1e-9 && t <= hi + 1e-9);
-  const yLabels = yTicks.map((t) => formatValue(t, opts.unit, opts.decimals));
-
-  const left = Math.ceil(yLabels.reduce((m, l) => Math.max(m, l.length), 1) * CHAR_W) + 14;
+  const { lo, hi, yTicks, yLabels } = dom;
   const plot = { x: left, y: TOP, w: Math.max(1, size.width - left - RIGHT), h: plotH };
-  const columns = Math.max(1, Math.floor(plot.w));
   const yOf = (v: number) => plot.h - ((v - lo) / (hi - lo)) * plot.h;
 
   const out: FrameSeries[] = [];
   const cum = stacked ? new Float32Array(columns) : null;
-  for (const s of visible) {
-    const values = columnValues(s, range.start, range.end, columns);
+  visible.forEach((s, si) => {
+    const values = allValues[si];
     const ys = new Float32Array(columns);
     const base = cum ? new Float32Array(columns) : undefined;
     for (let c = 0; c < columns; c++) {
@@ -203,7 +232,7 @@ export function buildFrame(
       }
     }
     out.push({ key: s.key, name: s.name, color: seriesColor(s.key), values, ys, base });
-  }
+  });
 
   const thresholds = opts.thresholds.map((t: Threshold) => ({ value: t.value, color: `--${t.color}`, y: yOf(t.value) }));
   return {

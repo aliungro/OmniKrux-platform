@@ -15,6 +15,21 @@ describe("niceTicks", () => {
   });
 });
 
+describe("niceTicks on awkward ranges", () => {
+  const sane = (t: number[]) => {
+    expect(t.length).toBeGreaterThanOrEqual(2);
+    expect(t.every(Number.isFinite)).toBe(true);
+    expect(t[t.length - 1]).toBeGreaterThan(t[0]);
+  };
+  it("falls back to two ticks", () => {
+    sane(niceTicks(0, 5e-324, 5));
+    sane(niceTicks(5e-324, 5e-324, 5));
+    expect(niceTicks(-1e308, 1e308, 5)).toEqual([-1e308, 1e308]);
+    sane(niceTicks(0, Number.MAX_VALUE, 5));
+    sane(niceTicks(Number.NaN, 1, 5));
+  });
+});
+
 describe("timeTicks", () => {
   const start = Date.UTC(2026, 10, 19, 10, 2, 0) / 1000;
   it("aligns to a clock interval and stays inside the range", () => {

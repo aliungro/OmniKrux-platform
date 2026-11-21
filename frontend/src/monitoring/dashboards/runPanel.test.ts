@@ -349,13 +349,14 @@ describe("usePanelData", () => {
     // An option-only edit: same key, newer count; the data keeps its tag.
     rerender({ run: at(0), edit: 1 });
     expect(result.current.data?.editId).toBe(0);
-    // A refresh (a new window) with no new edit: still the count it was started with.
+    // A refresh (a new window, same queries) after an option edit: still the old tag, so it jumps.
     rerender({ run: at(60), edit: 1 });
-    await waitFor(() => expect(result.current.data?.editId).toBe(1));
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    expect(result.current.data?.editId).toBe(0);
     rerender({ run: at(120), edit: 1 });
     await waitFor(() => expect(result.current.fetching).toBe(false));
-    expect(result.current.data?.editId).toBe(1);
-    // A query edit (new key at count 2).
+    expect(result.current.data?.editId).toBe(0);
+    // A query edit (the queries changed) takes the current count.
     const edited = buildPanelRun({ panel: ts("up2"), owner: project(projA), vars: {}, range: { start: 120, end: 3720 }, ownerName: "projA" });
     rerender({ run: edited, edit: 2 });
     await waitFor(() => expect(result.current.data?.editId).toBe(2));

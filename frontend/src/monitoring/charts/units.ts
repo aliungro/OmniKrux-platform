@@ -14,35 +14,42 @@ function number(v: number, decimals: number | null): string {
   return String(Number(v.toPrecision(3)));
 }
 
-function si(v: number, decimals: number | null): string {
-  const a = Math.abs(v);
-  const steps: [number, string][] = [[1e12, "T"], [1e9, "G"], [1e6, "M"], [1e3, "k"]];
-  for (const [size, suffix] of steps) {
-    if (a >= size) return number(v / size, decimals) + suffix;
+/**
+ * The largest unit the value reaches, moved up one when rounding would print the next unit's size
+ * (999.7 is "1k", not "1000").
+ */
+function pick(a: number, factors: number[], decimals: number | null): number {
+  let i = 0;
+  for (let j = factors.length - 1; j > 0; j--) {
+    if (a >= factors[j]) {
+      i = j;
+      break;
+    }
   }
-  return number(v, decimals);
+  while (i < factors.length - 1 && Math.abs(Number(number(a / factors[i], decimals))) * factors[i] >= factors[i + 1] * (1 - 1e-9)) i++;
+  return i;
 }
 
+const SI_FACTORS = [1, 1e3, 1e6, 1e9, 1e12];
+const SI_SUFFIX = ["", "k", "M", "G", "T"];
+function si(v: number, decimals: number | null): string {
+  const i = pick(Math.abs(v), SI_FACTORS, decimals);
+  return number(v / SI_FACTORS[i], decimals) + SI_SUFFIX[i];
+}
+
+const TIME_FACTORS = [1e-6, 1e-3, 1, 60, 3600, 86400];
+const TIME_UNITS = ["µs", "ms", "s", "min", "h", "d"];
 function seconds(v: number, decimals: number | null): string {
-  const a = Math.abs(v);
-  if (a === 0) return "0 ms";
-  if (a < 1e-3) return `${number(v * 1e6, decimals)} µs`;
-  if (a < 1) return `${number(v * 1e3, decimals)} ms`;
-  if (a < 60) return `${number(v, decimals)} s`;
-  if (a < 3600) return `${number(v / 60, decimals)} min`;
-  if (a < 86400) return `${number(v / 3600, decimals)} h`;
-  return `${number(v / 86400, decimals)} d`;
+  if (v === 0) return "0 ms";
+  const i = pick(Math.abs(v), TIME_FACTORS, decimals);
+  return `${number(v / TIME_FACTORS[i], decimals)} ${TIME_UNITS[i]}`;
 }
 
+const BYTE_FACTORS = [1, 1024, 1024 ** 2, 1024 ** 3, 1024 ** 4, 1024 ** 5];
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
 function bytes(v: number, decimals: number | null): string {
-  let n = Math.abs(v);
-  let i = 0;
-  while (n >= 1024 && i < BYTE_UNITS.length - 1) {
-    n /= 1024;
-    i++;
-  }
-  return `${number(v < 0 ? -n : n, decimals)} ${BYTE_UNITS[i]}`;
+  const i = pick(Math.abs(v), BYTE_FACTORS, decimals);
+  return `${number(v / BYTE_FACTORS[i], decimals)} ${BYTE_UNITS[i]}`;
 }
 
 export function formatValue(v: number | null, unit: Unit, decimals: number | null): string {
@@ -58,7 +65,7 @@ export function formatValue(v: number | null, unit: Unit, decimals: number | nul
     case "s":
       return seconds(v, decimals);
     case "ms":
-      return Math.abs(v) < 1000 ? `${number(v, decimals)} ms` : seconds(v / 1000, decimals);
+      return Math.abs(Number(number(v, decimals))) < 1000 ? `${number(v, decimals)} ms` : seconds(v / 1000, decimals);
     case "bytes":
       return bytes(v, decimals);
     case "Bps":

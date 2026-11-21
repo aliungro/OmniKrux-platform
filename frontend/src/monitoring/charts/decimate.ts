@@ -6,7 +6,9 @@ type Point = [number, number | null];
 export function decimate(points: Point[], start: number, end: number, columns: number): Point[] {
   const n = points.length;
   const span = end - start;
-  if (n === 0 || !(span > 0) || columns < 1 || n <= 2) return points.slice();
+  if (n === 0) return [];
+  if (!(span > 0) || columns < 1) return points.slice();
+  if (n <= 2) return points.filter((p) => p[0] >= start && p[0] <= end);
   const scale = columns / span;
   const out: Point[] = [];
   let col = -1;
@@ -43,9 +45,11 @@ export function decimate(points: Point[], start: number, end: number, columns: n
     if (v === null) {
       flush();
       col = -1;
-      out.push(p); // a gap marker stays between the columns' points
+      // A gap marker stays between the columns' points; a run of them is one gap.
+      if (out.length === 0 || out[out.length - 1][1] !== null) out.push(p);
       continue;
     }
+    if (v !== v) continue; // NaN is no value: it can be neither an extreme nor a column's first
     let c = Math.floor((t - start) * scale);
     if (c >= columns) c = columns - 1;
     if (c !== col) {

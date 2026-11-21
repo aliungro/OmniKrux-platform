@@ -85,6 +85,18 @@ describe("buildFrame and drawTimeSeries", () => {
     expect(b.base![mid]).toBeCloseTo(a.ys[mid]);
   });
 
+  it("keeps the top band of a stack whose peaks share a column at different times", () => {
+    const spike = (name: string, at: number): ChartSeries => ({
+      key: `k-${name}`, name, labels: {}, queryRef: "A", projectName: null,
+      points: Array.from({ length: 1201 }, (_, i) => [i, i === at ? 10 : 0] as P),
+    });
+    const o = { ...options, style: "stacked" as const, thresholds: [] };
+    const frame = buildFrame([spike("a", 100), spike("b", 101)], o, SIZE, { start: 0, end: 1200 }, new Set());
+    expect(frame.yTicks[frame.yTicks.length - 1]).toBeGreaterThanOrEqual(20);
+    const top = Math.min(...Array.from(frame.series[1].ys).filter((y) => y === y));
+    expect(top).toBeGreaterThanOrEqual(0); // inside the plot, not clipped above it
+  });
+
   it("draws nothing for no series, and survives an empty range", () => {
     const frame = buildFrame([], options, SIZE, { start: 5, end: 5 }, new Set());
     expect(frame.series).toEqual([]);
@@ -142,7 +154,7 @@ describe("ChartView time series", () => {
   });
 
   it("draws no old series when the panel is unreachable or errored", () => {
-    for (const state of ["unreachable", "error"] as const) {
+    for (const state of ["unreachable", "error", "noQuery"] as const) {
       const { calls } = stubBrowser();
       const { unmount } = render(<ChartView {...base({ data: dataOf([series("a", [1, 2, 3])], { state }) })} />);
       expect(calls.filter((c) => c.name === "stroke" && c.lineWidth === 1.5)).toHaveLength(0);
@@ -189,6 +201,16 @@ describe("ChartView time series", () => {
       const { rerender } = render(<ChartView {...base()} />);
       rerender(<ChartView {...base({ changeId: 1, data: dataOf([series("a", [2, 3, 4]), series("b", [4, 3, 2])], { editId: 1 }) })} />);
       expect(tweenMock).toHaveBeenCalledWith(380, expect.any(Function));
+    });
+
+    it("jumps on the first refresh after an option edit", () => {
+      stubBrowser();
+      const { rerender } = render(<ChartView {...base()} />);
+      rerender(<ChartView {...edited({ changeId: 1 })} />); // the option edit morphs
+      tweenMock.mockClear();
+      // The refresh: new points, the data keeps the tag it had (0) because the queries didn't change.
+      rerender(<ChartView {...edited({ changeId: 1, data: dataOf([series("a", [2, 3, 4]), series("b", [4, 3, 2])], { editId: 0 }) })} />);
+      expect(tweenMock).not.toHaveBeenCalled();
     });
 
     it("jumps when the series set changed", () => {
