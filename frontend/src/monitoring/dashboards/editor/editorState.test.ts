@@ -73,6 +73,10 @@ describe("editorReducer", () => {
     expect(isDirty(s3)).toBe(true);
     // Nothing changed since it was sent: edit mode ends.
     expect(run(s1, { type: "saved", version: 2, spec: sent, sent })).toEqual(VIEW);
+    // Changed and changed back while it was on its way: the same document, so edit mode ends too.
+    const undone = edit(run(s2, retitle("p-2", sent.panels[1].title)));
+    expect(undone.draft).not.toBe(sent);
+    expect(run(undone, { type: "saved", version: 2, spec: sent, sent })).toEqual(VIEW);
   });
 
   it("each session gets its own writer", () => {

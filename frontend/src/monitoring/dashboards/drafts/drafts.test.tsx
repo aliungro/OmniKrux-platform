@@ -247,6 +247,26 @@ describe("Drafts across tabs, windows and saves", () => {
     await waitFor(notBody);
   });
 
+  it("Go to that tab asks again: with that tab gone, editing starts here", async () => {
+    shop();
+    const user = userEvent.setup();
+    renderMonitoringApp({ tabs: tabsWith(D1, D1) });
+    await screen.findAllByText("chart 1");
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(dashboardTabs()[1]);
+    await screen.findAllByText("chart 1");
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("This dashboard is being edited in another tab.")).toBeTruthy();
+    // The editing tab closes (nothing changed there, so nothing is asked).
+    await user.click(screen.getAllByRole("button", { name: "Close API latency" })[0]);
+    await waitFor(() => expect(dashboardTabs()).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: "Go to that tab" }));
+    expect(await screen.findByText("Editing")).toBeTruthy();
+    expect(screen.queryByText("This dashboard is being edited in another tab.")).toBeNull();
+    expect(editSessions.has("start1")).toBe(true);
+    await waitFor(notBody);
+  });
+
   it("a tab closed without changes leaves no session behind", async () => {
     shop();
     const user = userEvent.setup();
@@ -308,6 +328,13 @@ describe("Drafts across tabs, windows and saves", () => {
     foreign({ savedAt: mine.savedAt + 1000 });
     fromElsewhere();
     expect(stored()?.writer).toBe("w-other");
+    // Having lost, this session doesn't take over again on the next event: a third window's draft,
+    // newer than this session's last change, stays too.
+    foreign({ savedAt: mine.savedAt + 500, writer: "w-third" });
+    fromElsewhere();
+    expect(stored()?.writer).toBe("w-third");
+    fromElsewhere();
+    expect(stored()?.writer).toBe("w-third");
     // Until this session changes something again.
     await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
     await waitFor(() => expect(stored()?.writer).toBe(mine.writer), { timeout: 1500 });

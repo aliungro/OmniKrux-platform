@@ -44,48 +44,72 @@ interface Kept {
   draft: EditingState["draft"];
   jsonText: string | null;
   baseVersion: number;
-  /** When the stored draft last changed (its `savedAt`). */
-  savedAt: number;
 }
 
-/** By tab id; it outlives the page, like the session it belongs to. */
+/**
+ * A session's claim on the stored draft: when its user last changed the draft (the `savedAt` it
+ * writes; never the time of a write), and whether a newer draft from another window won over it.
+ * A session that lost writes again only after its user changes something, or when the entry is
+ * removed (writing into nothing overwrites no one).
+ */
+export interface DraftClaim {
+  writer: string;
+  changedAt: number;
+  lost: boolean;
+}
+
+/** By tab id; they outlive the page, like the session they belong to. */
 const keptByTab = new Map<string, Kept>();
+const claims = new Map<string, DraftClaim & { dashboardId: string }>();
 
 const keptFor = (tabId: string, s: EditingState): Kept | null => {
   const k = keptByTab.get(tabId);
   return k && k.dashboardId === s.dashboardId && k.writer === s.writer ? k : null;
 };
+const claimFor = (tabId: string, s: EditingState) => {
+  const c = claims.get(tabId);
+  return c && c.dashboardId === s.dashboardId && c.writer === s.writer ? c : null;
+};
 const sameKept = (k: Kept | null, s: EditingState) =>
   k !== null && k.draft === s.draft && k.jsonText === s.jsonText && k.baseVersion === s.baseVersion;
 
-/** Writes the session's draft as last changed at `savedAt`; false when storage refused it. */
-function keep(tabId: string, s: EditingState, savedAt: number): boolean {
-  if (!writeDraft(toStoredDraft(s, savedAt))) return false;
-  keptByTab.set(tabId, { dashboardId: s.dashboardId, writer: s.writer, draft: s.draft, jsonText: s.jsonText, baseVersion: s.baseVersion, savedAt });
+/** The user changed the draft at `at` (or a restored draft last changed then). */
+function claim(tabId: string, s: EditingState, at: number): DraftClaim {
+  const c = { dashboardId: s.dashboardId, writer: s.writer, changedAt: at, lost: false };
+  claims.set(tabId, c);
+  return c;
+}
+
+/** Writes the session's draft as last changed at its claim's time; false when storage refused it. */
+function keep(tabId: string, s: EditingState, c: DraftClaim): boolean {
+  if (!writeDraft(toStoredDraft(s, c.changedAt))) return false;
+  keptByTab.set(tabId, { dashboardId: s.dashboardId, writer: s.writer, draft: s.draft, jsonText: s.jsonText, baseVersion: s.baseVersion });
+  c.lost = false;
   return true;
 }
 
 /** Writes the session's draft now (Keep draft and leave); false when storage refused it. */
 export function keepNow(tabId: string, s: EditingState): boolean {
-  const k = keptFor(tabId, s);
-  return keep(tabId, s, sameKept(k, s) ? k!.savedAt : Date.now());
+  return keep(tabId, s, claimFor(tabId, s) ?? claim(tabId, s, Date.now()));
 }
 
 /** The tab's session ended or the tab is gone: nothing of it is tracked any more. */
 export function forgetSession(tabId: string): void {
   keptByTab.delete(tabId);
+  claims.delete(tabId);
   holdUnload(tabId, false);
 }
 
 /**
- * Whether this session should write its draft again over what another window left: nothing
- * (removed), or an older draft by another writer. A tie goes to the larger writer id, so two
- * windows never take turns.
+ * What a dirty session does about the stored draft another window just changed: `write` its own
+ * again (the entry was removed, or holds an older draft), `yield` to a newer one (or an equally
+ * new one: on a tie the stored draft stays), or `keep` things as they are (its own draft is
+ * stored, or it already lost and its user hasn't changed anything since).
  */
-function oursWins(theirs: StoredDraft | null, s: EditingState, ourAt: number): boolean {
-  if (theirs === null) return true;
-  if (theirs.writer === s.writer) return false;
-  return ourAt > theirs.savedAt || (ourAt === theirs.savedAt && s.writer > theirs.writer);
+export function settle(c: DraftClaim, theirs: Pick<StoredDraft, "writer" | "savedAt"> | null): "write" | "yield" | "keep" {
+  if (theirs === null) return "write";
+  if (theirs.writer === c.writer || c.lost) return "keep";
+  return c.changedAt > theirs.savedAt ? "write" : "yield";
 }
 
 // --- the session's draft --------------------------------------------------------------------
@@ -104,8 +128,6 @@ export interface DraftKeeper {
 export function useDraft(tabId: string, dashboardId: string, state: EditorState, session: () => EditingState | null): DraftKeeper {
   const [works, setWorks] = useState(draftsWork);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** When the session's draft last changed, while that change waits to be written. */
-  const changedAt = useRef<number | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
 
@@ -113,29 +135,31 @@ export function useDraft(tabId: string, dashboardId: string, state: EditorState,
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
   };
-  const write = useCallback((s: EditingState, savedAt: number) => {
-    const ok = keep(tabId, s, savedAt);
-    setWorks(ok);
-    if (ok) changedAt.current = null;
+  const write = useCallback((s: EditingState, c: DraftClaim) => {
+    setWorks(keep(tabId, s, c));
   }, [tabId]);
   const flush = useCallback(() => {
     cancel();
     const s = sessionRef.current();
     if (!s || !isDirty(s)) return;
-    write(s, changedAt.current ?? Date.now());
-  }, [write]);
+    const c = claimFor(tabId, s);
+    if (c && !c.lost) write(s, c);
+  }, [tabId, write]);
 
-  /** Another window changed this dashboard's draft (or this page opened again): write ours back if it wins. */
+  /** Another window changed this dashboard's draft (or this page opened again): settle with it. */
   const reconcile = useCallback(() => {
     const s = sessionRef.current();
     if (!s || !isDirty(s)) return;
-    const theirs = readDraft(dashboardId);
-    const ourAt = changedAt.current ?? keptFor(tabId, s)?.savedAt ?? Date.now();
-    if (oursWins(theirs, s, ourAt)) {
+    const c = claimFor(tabId, s);
+    if (!c) return;
+    const how = settle(c, readDraft(dashboardId));
+    if (how === "write") {
       cancel();
-      write(s, ourAt);
-    } else if (theirs?.writer !== s.writer) {
-      // A newer draft from elsewhere: ours writes again with its next change.
+      write(s, c);
+    } else if (how === "yield") {
+      // A newer draft from elsewhere stays; ours writes again with its user's next change.
+      cancel();
+      c.lost = true;
       keptByTab.delete(tabId);
     }
   }, [tabId, dashboardId, write]);
@@ -149,6 +173,7 @@ export function useDraft(tabId: string, dashboardId: string, state: EditorState,
       // Saved or discarded: this session's draft is done with; another's stays.
       if (was.mode === "edit") removeDraft(dashboardId, was.writer);
       keptByTab.delete(tabId);
+      claims.delete(tabId);
       return;
     }
     if (!isDirty(state)) {
@@ -156,10 +181,17 @@ export function useDraft(tabId: string, dashboardId: string, state: EditorState,
       cancel();
       if (keptFor(tabId, state)) removeDraft(dashboardId, state.writer);
       keptByTab.delete(tabId);
+      claims.delete(tabId);
       return;
     }
     if (sameKept(keptFor(tabId, state), state)) return;
-    changedAt.current = Date.now();
+    // The user changed the draft: that is when it last changed. A new base alone (a save that
+    // went through while editing went on) keeps the time of the last change.
+    const edited = was !== state && (was.mode !== "edit" || was.draft !== state.draft || was.jsonText !== state.jsonText);
+    const known = claimFor(tabId, state);
+    const c: DraftClaim = edited || !known ? claim(tabId, state, Date.now()) : known;
+    // Lost to a newer draft and nothing changed here since: that draft stays.
+    if (c.lost) return;
     cancel();
     timer.current = setTimeout(flush, DRAFT_DELAY_MS);
   }, [state, tabId, dashboardId, flush]);
@@ -188,7 +220,7 @@ export function useDraft(tabId: string, dashboardId: string, state: EditorState,
     };
   }, [tabId, flush]);
 
-  const adopt = useCallback((s: EditingState, savedAt: number) => { write(s, savedAt); }, [write]);
+  const adopt = useCallback((s: EditingState, savedAt: number) => { write(s, claim(tabId, s, savedAt)); }, [tabId, write]);
   return { works, adopt };
 }
 

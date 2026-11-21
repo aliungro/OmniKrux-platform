@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { panel, spec } from "../../test/dashboardSeeds";
 import { DRAFT_PREFIX, draftsWork, readDraft, removeDraft, writeDraft, type StoredDraft } from "./draftStore";
+import { settle, type DraftClaim } from "./useDraft";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
@@ -53,6 +54,57 @@ describe("draft store", () => {
     // Without a writer (Discard draft on the offer), it goes.
     removeDraft("d1");
     expect(readDraft("d1")).toBeNull();
+  });
+
+  it("three windows settle on the newest draft without a write loop", () => {
+    // Each window's session, the one stored entry, and storage events delivered one at a time.
+    const windows: Record<string, DraftClaim> = {
+      a: { writer: "a", changedAt: 10, lost: false },
+      b: { writer: "b", changedAt: 20, lost: false },
+      c: { writer: "c", changedAt: 30, lost: false },
+    };
+    let entry: { writer: string; savedAt: number } | null = null;
+    let writes = 0;
+    const queue: string[] = [];
+    const write = (w: string) => {
+      entry = { writer: w, savedAt: windows[w].changedAt };
+      windows[w].lost = false;
+      writes++;
+      queue.push(...Object.keys(windows).filter((x) => x !== w));
+    };
+    const settleAll = () => {
+      for (let steps = 0; queue.length > 0; steps++) {
+        if (steps > 100) throw new Error("no end");
+        const w = queue.shift()!;
+        const how = settle(windows[w], entry);
+        if (how === "write") write(w);
+        else if (how === "yield") windows[w].lost = true;
+      }
+    };
+    // Stale handlers: the newest writes first, then two older ones each write before seeing it.
+    write("c");
+    write("a");
+    write("b");
+    settleAll();
+    expect(entry).toEqual({ writer: "c", savedAt: 30 });
+    expect(writes).toBeLessThanOrEqual(6);
+    expect(windows.a.lost && windows.b.lost).toBe(true);
+    // Lost windows stay quiet on later events...
+    const before = writes;
+    queue.push("a", "b", "a", "b");
+    settleAll();
+    expect(writes).toBe(before);
+    // ...until their user changes something: that change is the newest and wins once.
+    windows.a.changedAt = 40;
+    windows.a.lost = false;
+    write("a");
+    settleAll();
+    expect(entry).toEqual({ writer: "a", savedAt: 40 });
+    expect(writes).toBe(before + 1);
+    // An equally new draft from elsewhere: the stored one stays.
+    expect(settle({ writer: "z", changedAt: 40, lost: false }, entry)).toBe("yield");
+    // A removed entry is written again, even by a session that lost (it overwrites no one).
+    expect(settle({ writer: "b", changedAt: 20, lost: true }, null)).toBe("write");
   });
 
   it("a malformed draft is dropped", () => {

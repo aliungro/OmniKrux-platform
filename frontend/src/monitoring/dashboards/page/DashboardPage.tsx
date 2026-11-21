@@ -106,6 +106,12 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   };
   useLayoutEffect(() => { if (elsewhere) goElsewhere.current?.focus(); }, [elsewhere]);
   const restoreDraft = () => startEditing(offer.draft);
+  // Asked again on the press: a tab that is gone or stopped editing leaves editing to this one.
+  const goToEditingTab = () => {
+    const other = editingTab();
+    if (other) activateTab(other);
+    else startEditing(null);
+  };
   const discardDraft = () => {
     offer.discard();
     title.current?.focus({ preventScroll: true });
@@ -253,7 +259,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
           ? <EditControls saving={editor.saving} onDiscard={discard} onSave={save} discardRef={discardButton} saveRef={saveButton} />
           : undefined} />
       {editing && !editor.draftsWork && <DraftsOffNotice />}
-      {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={() => activateTab(elsewhere)} />}
+      {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
       {editing && conflict !== null && (
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />

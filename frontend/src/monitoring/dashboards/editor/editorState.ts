@@ -44,7 +44,7 @@ export type EditorAction =
   | { type: "sideTab"; tab: SideTab }
   | { type: "setJson"; text: string; ownerKind: OwnerKind }
   | { type: "setDashboard"; update: (d: DashboardSpec) => DashboardSpec }
-  /** `sent`: the draft the save sent. A draft changed since then stays in edit mode on the new base. */
+  /** `sent`: the draft the save sent. A draft that differs from it now stays in edit mode on the new base. */
   | { type: "saved"; version: number; spec: DashboardSpec; sent?: DashboardSpec }
   | { type: "rebase"; version: number; base: DashboardSpec }
   | { type: "discard" };
@@ -202,7 +202,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return applyDocument(state, action.update(state.draft));
     case "saved":
       // Changed while the save was on its way: keep editing over the version just saved.
-      if (action.sent !== undefined && action.sent !== state.draft) return { ...state, baseVersion: action.version, base: action.spec };
+      if (action.sent !== undefined && !sameJson(action.sent, state.draft)) return { ...state, baseVersion: action.version, base: action.spec };
       return VIEW;
     case "rebase":
       return { ...state, baseVersion: action.version, base: action.base };
