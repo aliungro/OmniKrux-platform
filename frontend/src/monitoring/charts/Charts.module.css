@@ -1,0 +1,154 @@
+/* Charts: the plot, its crosshair and tooltip, and the legend. Territories tokens only. */
+.chart {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.plotWrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 72px;
+}
+
+.plot {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  cursor: crosshair;
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.crosshair {
+  position: absolute;
+  width: 1px;
+  background: color-mix(in srgb, var(--ink-2) 55%, transparent);
+  pointer-events: none;
+}
+
+.tip {
+  position: absolute;
+  z-index: 2;
+  min-width: 120px;
+  max-width: min(320px, 70%);
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surf-2);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--bg) 70%, transparent);
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.tip:empty {
+  display: none;
+}
+
+.tipLeft {
+  transform: translateX(calc(-100% - 12px));
+}
+
+.tipRight {
+  transform: translateX(12px);
+}
+
+.tipTime {
+  margin: 0 0 6px;
+  color: var(--ink-3);
+}
+
+.tipList {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tipRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tipName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tipValue {
+  flex: none;
+  font-weight: 600;
+}
+
+.swatch {
+  flex: none;
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.legend {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  max-height: 76px;
+  margin: 6px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.legendItem:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.legendItem:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.legendOff {
+  color: var(--ink-3);
+}
+
+.legendOff .swatch {
+  opacity: 0.3;
+}
+
+.legendName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

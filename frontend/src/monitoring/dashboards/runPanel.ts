@@ -145,6 +145,11 @@ export interface PanelData {
   /** Plain words: what failed (and where) or what is missing. */
   problems: string[];
   summary: { series: number; points: number; tookMs: number };
+  /**
+   * `changes[panel.id]` when this answer's fetch began (0 outside edit mode). A newer value than
+   * the last drawn frame's means a query edit: the chart morphs. A refresh keeps the old one.
+   */
+  editId: number;
 }
 
 /** Failures that mean "the tool couldn't answer", not "the query is wrong". */
@@ -246,7 +251,7 @@ export function mergePanelResults(panel: PanelSpec, run: PanelRun, results: Batc
   else if (series.length === 0 && logs.length === 0) state = "empty";
   else state = truncated ? "partial" : "ready";
 
-  return { state, series, logs, problems, summary: { series: series.length, points, tookMs } };
+  return { state, series, logs, problems, summary: { series: series.length, points, tookMs }, editId: 0 };
 }
 
 /** The panel after its whole request failed: the reason, never the previous data. */
@@ -261,6 +266,7 @@ function failedPanel(run: PanelRun, err: unknown): PanelData {
     logs: [],
     problems,
     summary: { series: 0, points: 0, tookMs: 0 },
+    editId: 0,
   };
 }
 
@@ -299,8 +305,18 @@ export function usePanelData(
   run: PanelRun,
   refreshMs: number | null,
   enabled: boolean,
+  editId = 0,
 ): PanelDataResult {
   const key = panelRunKey(run);
+  // The edit count each key was first seen with: its fetch began then. Later option-only edits
+  // don't retag it; a refresh (a new key, no new edit) carries the same count.
+  const tags = useRef(new Map<string, number>());
+  const tagKey = JSON.stringify([dashboardId, panel.id, key]);
+  if (!tags.current.has(tagKey)) {
+    if (tags.current.size > 50) tags.current.clear();
+    tags.current.set(tagKey, editId);
+  }
+  const tag = tags.current.get(tagKey) ?? editId;
   const nothing = run.requests.length === 0;
   const query = useQuery<BatchItemOut[], unknown>({
     queryKey: ["monitoring", "panel", dashboardId, panel.id, key],
@@ -319,14 +335,17 @@ export function usePanelData(
 
   const answers = query.status === "success" ? query.data : undefined;
   const merged = useMemo(
-    () => (answers ? mergePanelResults(panel, run, answers, run.ownerKind) : null),
-    [answers, panel, run],
+    () => (answers ? { ...mergePanelResults(panel, run, answers, run.ownerKind), editId: tag } : null),
+    [answers, panel, run, tag],
   );
   const failed = useMemo(
-    () => (query.status === "error" ? failedPanel(run, query.error) : null),
-    [query.status, query.error, run],
+    () => (query.status === "error" ? { ...failedPanel(run, query.error), editId: tag } : null),
+    [query.status, query.error, run, tag],
   );
-  const idle = useMemo(() => (nothing ? mergePanelResults(panel, run, [], run.ownerKind) : null), [nothing, panel, run]);
+  const idle = useMemo(
+    () => (nothing ? { ...mergePanelResults(panel, run, [], run.ownerKind), editId: tag } : null),
+    [nothing, panel, run, tag],
+  );
 
   let shown: Shown | null;
   if (idle) shown = { data: idle, updatedAt: null, failedAt: null, owner };

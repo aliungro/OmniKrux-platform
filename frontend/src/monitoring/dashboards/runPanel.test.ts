@@ -338,6 +338,29 @@ describe("usePanelData", () => {
     expect(result.current.updatedAt).toBeNull();
   });
 
+  it("tags each answer with the edit count when its fetch began; a refresh keeps the old tag", async () => {
+    installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
+    const client = new QueryClient();
+    const { result, rerender } = renderHook(
+      ({ run, edit }: { run: PanelRun; edit: number }) => usePanelData("d1", panel, run, null, true, edit),
+      { wrapper: wrapper(client), initialProps: { run: at(0), edit: 0 } },
+    );
+    await waitFor(() => expect(result.current.data?.editId).toBe(0));
+    // An option-only edit: same key, newer count; the data keeps its tag.
+    rerender({ run: at(0), edit: 1 });
+    expect(result.current.data?.editId).toBe(0);
+    // A refresh (a new window) with no new edit: still the count it was started with.
+    rerender({ run: at(60), edit: 1 });
+    await waitFor(() => expect(result.current.data?.editId).toBe(1));
+    rerender({ run: at(120), edit: 1 });
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    expect(result.current.data?.editId).toBe(1);
+    // A query edit (new key at count 2).
+    const edited = buildPanelRun({ panel: ts("up2"), owner: project(projA), vars: {}, range: { start: 120, end: 3720 }, ownerName: "projA" });
+    rerender({ run: edited, edit: 2 });
+    await waitFor(() => expect(result.current.data?.editId).toBe(2));
+  });
+
   it("a panel with nothing to send asks nothing", () => {
     const api = installFakeMonitoringApi();
     const client = new QueryClient();
