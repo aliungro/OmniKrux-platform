@@ -399,6 +399,8 @@ async def test_tree_lists_dashboards_under_their_owner(monitoring_app, linked_pr
         {"id": alpha["id"], "title": "Alpha", "ready_made": False},
         {"id": mid["id"], "title": "beta", "ready_made": False},
         {"id": zeta["id"], "title": "zeta", "ready_made": False},
+        # After the saved ones: the ready-made view a project with Prometheus always has.
+        {"id": f"ready:{pid}:nodes", "title": "Node health", "ready_made": True},
     ]
     [ops] = tree["groups"]
     assert ops["dashboards"] == [{"id": overview["id"], "title": "Overview", "ready_made": False}]

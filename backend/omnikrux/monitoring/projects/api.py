@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from omnikrux.clusters.registry import ClusterInfo, ClusterRegistry
 from omnikrux.monitoring.audit import begin_change, finish_change
+from omnikrux.monitoring.dashboards.ready_made import TITLES, project_ready_keys, ready_id
 from omnikrux.monitoring.projects.store import SetupLink
 from omnikrux.monitoring.projects.types import (
     REVIEW_CHANGED,
@@ -363,7 +364,8 @@ def _review_out(review: ProjectDeleteReview) -> ProjectDeleteReviewOut:
 @router.get("/tree")
 async def tree(request: Request) -> TreeOut:
     """The sidebar: projects and groups by name (case-insensitive), each with its saved
-    dashboards by title (case-insensitive), and how many sources exist."""
+    dashboards by title (case-insensitive) followed, for a project, by its ready-made views, and
+    how many sources exist."""
     services = _services(request)
     clusters = {c.id: c for c in await _registry(request).list()}
     projects = await services.projects.list()
@@ -373,6 +375,14 @@ async def tree(request: Request) -> TreeOut:
         dashboards.setdefault((d.owner_kind, d.owner_id), []).append(
             TreeDashboard(id=d.id, title=d.title)
         )
+    source_types = {s.id: s.type for s in await services.sources.list()}
+
+    def ready_made(p: Project) -> list[TreeDashboard]:
+        return [
+            TreeDashboard(id=ready_id(p.id, key), title=TITLES[key], ready_made=True)
+            for key in project_ready_keys(p, source_types)
+        ]
+
     return TreeOut(
         projects=[
             TreeProject(
@@ -381,7 +391,7 @@ async def tree(request: Request) -> TreeOut:
                 kind=p.kind,
                 cluster_id=p.cluster_id,
                 color=_color(p, clusters),
-                dashboards=dashboards.get(("project", p.id), []),
+                dashboards=[*dashboards.get(("project", p.id), []), *ready_made(p)],
             )
             for p in projects
         ],

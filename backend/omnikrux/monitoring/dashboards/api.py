@@ -17,6 +17,19 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from omnikrux.monitoring.audit import begin_change, finish_change
+from omnikrux.monitoring.dashboards.ready_made import (
+    DESCRIPTIONS,
+    NEED_METRIC,
+    NEED_NOTE,
+    NEEDS,
+    TITLES,
+    Need,
+    ReadyKey,
+    build_ready_made,
+    parse_ready_id,
+    project_ready_keys,
+    ready_id,
+)
 from omnikrux.monitoring.dashboards.schema import (
     MAX_PROBLEMS,
     DashboardInvalid,
@@ -35,9 +48,12 @@ from omnikrux.monitoring.dashboards.store import (
     VersionConflict,
     VersionRecord,
 )
-from omnikrux.monitoring.projects.types import UnknownGroup, UnknownProject
+from omnikrux.monitoring.projects.types import Project, UnknownGroup, UnknownProject
 from omnikrux.monitoring.services import MonitoringServices
-from omnikrux.monitoring.sources.types import NameTaken
+from omnikrux.monitoring.sources.connector import QueryRejected
+from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE
+from omnikrux.monitoring.sources.transport import SourceUnreachable
+from omnikrux.monitoring.sources.types import NameTaken, SourceConfig
 
 DashboardErrorCode = Literal[
     "invalid_dashboard",
@@ -56,6 +72,9 @@ READ_ONLY = "Ready-made views can't be changed. Copy one to edit it."
 NOT_LINKED = "This source isn't linked to {project}."
 NOT_SAVED = "The dashboard couldn't be saved. Try again."
 NOT_REMOVED = "The dashboard couldn't be removed. Try again."
+CANT_READ_ALL = "OmniKrux couldn't read every metric name, so it can't tell what's missing."
+# Metric names read to tell which exporters report; well past a large Prometheus.
+NAME_LIMIT = 100_000
 
 # What a body of the wrong shape is told, by field. Never the value sent.
 NOT_JSON = "The request body isn't valid JSON. Correct it and try again."
@@ -121,6 +140,21 @@ class VersionDetailOut(BaseModel):
     version: int
     saved_at: datetime
     spec: dict
+
+
+class ReadyMadeOut(BaseModel):
+    """A ready-made view of a project and what its data lacks. `checked` is False when the
+    metric names couldn't be read (`check_message` says why); `missing` and `notes` are then
+    empty, never guessed."""
+
+    key: ReadyKey
+    id: str
+    title: str
+    description: str
+    missing: list[Need]
+    notes: list[str]
+    checked: bool
+    check_message: str | None
 
 
 class _Body(BaseModel):
@@ -279,6 +313,46 @@ async def _dashboard(services: MonitoringServices, id: str) -> DashboardRecord:
         raise _dashboard_gone() from None
 
 
+async def _ready_project(services: MonitoringServices, project_id: str) -> Project:
+    try:
+        return await services.projects.get(project_id)
+    except UnknownProject:
+        raise _dashboard_gone() from None
+
+
+async def _source_configs(services: MonitoringServices, project: Project) -> list[SourceConfig]:
+    """The project's linked sources that still exist, in link order."""
+    found = []
+    for link in project.links:
+        try:
+            found.append(await services.sources.get(link.source_id))
+        except KeyError:
+            continue
+    return found
+
+
+async def _ready_document(services: MonitoringServices, id: str) -> tuple[Project, ReadyKey, dict]:
+    """The ready-made view `id` names and the project it belongs to; 404 `not_found` when the
+    project is gone or has no such view."""
+    parsed = parse_ready_id(id)
+    if parsed is None:
+        raise _dashboard_gone()
+    project_id, key = parsed
+    project = await _ready_project(services, project_id)
+    configs = await _source_configs(services, project)
+    types = {c.id: c.type for c in configs}
+    if key not in project_ready_keys(project, types):
+        raise _dashboard_gone()
+    doc = build_ready_made(key, kind=project.kind, has_loki="loki" in types.values())
+    return project, key, doc
+
+
+def _refuse_ready_made(id: str) -> None:
+    """Ready-made views are never changed: 409 `read_only`."""
+    if parse_ready_id(id) is not None:
+        raise dashboard_error(409, "read_only", READ_ONLY)
+
+
 def _sources(doc: dict) -> Iterator[tuple[str, dict]]:
     """(path, source) of every source the document names, in document order."""
     for i, variable in enumerate(doc["variables"]):
@@ -409,22 +483,39 @@ async def copy_dashboard(request: Request) -> DashboardOut:
     first source of the type (`null`)."""
     services = _services(request)
     body = await _body(request, DashboardCopyIn)
-    source = await _dashboard(services, body.from_id)
+    if parse_ready_id(body.from_id) is not None:
+        _, _, spec = await _ready_document(services, body.from_id)
+        source_title, base = spec["title"], spec["title"]  # a ready-made view isn't "a copy"
+    else:
+        source = await _dashboard(services, body.from_id)
+        spec, source_title, base = source.spec, source.title, f"{source.title} (copy)"
     owner = await _owner(services, body.owner_kind, body.owner_id)
     if body.title is not None:
         title = body.title
     else:
-        title = await services.dashboards.unique_title(
-            owner.kind, owner.id, f"{source.title} (copy)"
-        )
-    adapted = adapt_sources(source.spec, owner_kind=owner.kind, linked_source_ids=owner.linked)
+        title = await services.dashboards.unique_title(owner.kind, owner.id, base)
+    adapted = adapt_sources(spec, owner_kind=owner.kind, linked_source_ids=owner.linked)
     doc = _checked(adapted | {"title": title}, owner)
-    return await _add(request, owner, doc, origin="copied", copied_from=source.title)
+    return await _add(request, owner, doc, origin="copied", copied_from=source_title)
 
 
 @router.get("/dashboards/{id}")
 async def get_dashboard(id: str, request: Request) -> DashboardOut:
     services = _services(request)
+    if parse_ready_id(id) is not None:
+        project, _, spec = await _ready_document(services, id)
+        return DashboardOut(
+            id=id,
+            owner_kind="project",
+            owner_id=project.id,
+            owner_name=project.name,
+            title=spec["title"],
+            version=0,
+            spec=spec,
+            ready_made=True,
+            created_at=None,
+            updated_at=None,
+        )
     record = await _dashboard(services, id)
     return _out(record, await _owner_name(services, record.owner_kind, record.owner_id))
 
@@ -433,6 +524,7 @@ async def get_dashboard(id: str, request: Request) -> DashboardOut:
 async def save_dashboard(id: str, request: Request) -> DashboardOut:
     """Save the document as the next version; 409 (nothing changed) when another save landed
     since `base_version`."""
+    _refuse_ready_made(id)
     services = _services(request)
     body = await _body(request, DashboardSaveIn)
     current = await _dashboard(services, id)
@@ -466,6 +558,7 @@ async def save_dashboard(id: str, request: Request) -> DashboardOut:
 async def remove_dashboard(id: str, request: Request, version: str | None = None) -> Response:
     """Delete the dashboard and every version of it; 409 (nothing changed) when it is no longer
     at `version`."""
+    _refuse_ready_made(id)
     services = _services(request)
     base = _whole(version)
     if base is None:
@@ -526,6 +619,7 @@ async def get_version(id: str, v: str, request: Request) -> VersionDetailOut:
 async def restore_version(id: str, v: str, request: Request) -> DashboardOut:
     """Save an earlier version's document as the next version; 409 (nothing changed) when
     another save landed since `base_version`."""
+    _refuse_ready_made(id)
     services = _services(request)
     body = await _body(request, RestoreIn)
     current = await _dashboard(services, id)
@@ -552,3 +646,54 @@ async def restore_version(id: str, v: str, request: Request) -> DashboardOut:
     await finish_change(request, record, True)
     owner_name = await _owner_name(services, current.owner_kind, current.owner_id)
     return _out(restored, owner_name)
+
+
+@router.get("/projects/{id}/ready-made")
+async def ready_made_views(id: str, request: Request) -> list[ReadyMadeOut]:
+    """The project's ready-made views, each with what its data lacks. The metric names are read
+    once, from the project's first Prometheus source with that link's filter."""
+    services = _services(request)
+    project = await _ready_project(services, id)
+    configs = await _source_configs(services, project)
+    keys = project_ready_keys(project, {c.id: c.type for c in configs})
+    if not keys:
+        return []
+    names, message = await _metric_names(services, project, configs)
+    views = []
+    for key in keys:
+        missing: list[Need] = []
+        if names is not None:
+            missing = [n for n in NEEDS[key] if NEED_METRIC[n] not in names]
+        views.append(
+            ReadyMadeOut(
+                key=key,
+                id=ready_id(project.id, key),
+                title=TITLES[key],
+                description=DESCRIPTIONS[key],
+                missing=missing,
+                notes=[NEED_NOTE[n] for n in missing],
+                checked=names is not None,
+                check_message=message,
+            )
+        )
+    return views
+
+
+async def _metric_names(
+    services: MonitoringServices, project: Project, configs: list[SourceConfig]
+) -> tuple[set[str] | None, str | None]:
+    """(every metric name, None), or (None, why they couldn't be read)."""
+    source = next(c for c in configs if c.type == "prometheus")
+    link = next(link for link in project.links if link.source_id == source.id)
+    if source.secrets_unreadable:
+        return None, SECRETS_UNREADABLE
+    connector = services.connectors.get(source.type)
+    try:
+        catalog = await connector.describe_fields(
+            services.transports.for_source(source), matchers=link.matchers, limit=NAME_LIMIT
+        )
+    except (SourceUnreachable, QueryRejected) as exc:
+        return None, exc.message
+    if catalog.truncated:  # never say "isn't reporting" about names that weren't all read
+        return None, CANT_READ_ALL
+    return {m.name for m in catalog.metrics}, None
