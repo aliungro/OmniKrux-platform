@@ -9,7 +9,8 @@ interface Props {
   /** The tab's top stripe: the project's colour, lilac otherwise. */
   colorFor(view: MonitoringView): string;
   onActivate(id: string): void;
-  onClose(id: string): void;
+  /** Returns true when the close was held (the app asks first): the keyboard stays with its question. */
+  onClose(id: string): boolean;
   onNew(): void;
 }
 
@@ -42,8 +43,7 @@ export function MonitoringTabs({ tabs, labelFor, colorFor, onActivate, onClose, 
   };
 
   const close = (id: string) => {
-    onClose(id);
-    setRefocus(true);
+    if (!onClose(id)) setRefocus(true);
   };
 
   return (

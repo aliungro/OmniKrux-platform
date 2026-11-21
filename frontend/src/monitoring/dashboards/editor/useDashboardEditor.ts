@@ -1,12 +1,15 @@
 // A dashboard's edit session in one workspace tab. Sessions live in `editSessions` (this module is
 // in the lazy Monitoring chunk), keyed by tab id, so switching app and back resumes edit mode; the
-// leave check and drafts (Task 16) read the same map.
+// leave check and drafts (Task 16) read the same map. The draft is kept in browser storage while
+// it has changes (`useDraft`), so a reload or Browser Back offers it back.
 
 import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { dashboardKey, saveDashboard, useDashboardMutation, type DashboardOut, type DashboardRequestError } from "../api";
+import { removeDraft } from "../drafts/draftStore";
+import { useDraft } from "../drafts/useDraft";
 import type { DashboardSpec } from "../schema";
-import { editorReducer, isDirty, VIEW, type EditorAction, type EditorState } from "./editorState";
+import { editorReducer, isDirty, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
 
 export { isDirty };
 
@@ -26,6 +29,8 @@ export interface DashboardEditor {
   saveError: DashboardRequestError | null;
   /** The current version a save was refused for (409), until a save goes through or editing ends. */
   conflict: number | null;
+  /** Whether this browser keeps drafts; false: a reload loses unsaved changes. */
+  draftsWork: boolean;
 }
 
 const sessionFor = (tabId: string, dashboardId: string): EditorState => {
@@ -42,11 +47,19 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
   const [conflict, setConflict] = useState<number | null>(null);
   const mutation = useDashboardMutation((v: { id: string; baseVersion: number; spec: DashboardSpec }) => saveDashboard(v.id, v.baseVersion, v.spec));
   const busy = useRef(false);
+  const live = useCallback((): EditingState | null => {
+    const s = sessionFor(tabId, dashboardId);
+    return s.mode === "edit" ? s : null;
+  }, [tabId, dashboardId]);
+  const keeper = useDraft(tabId, dashboardId, state, live);
+  const adopt = keeper.adopt;
 
   const dispatch = useCallback((action: EditorAction) => {
     const next = editorReducer(current.current, action);
     if (next === current.current) return;
     current.current = next;
+    // A restored draft is already stored: nothing to write until it changes.
+    if (action.type === "resume" && next.mode === "edit") adopt(next);
     if (next.mode === "edit") editSessions.set(tabId, next);
     else if (sessionFor(tabId, dashboardId).mode === "edit") editSessions.delete(tabId);
     if (next.mode === "view") {
@@ -54,7 +67,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
       setConflict(null);
     }
     setState(next);
-  }, [tabId, dashboardId]);
+  }, [tabId, dashboardId, adopt]);
 
   const send = useCallback(async (baseVersion: number) => {
     const s = current.current;
@@ -64,6 +77,8 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
     try {
       const out: DashboardOut = await mutation.mutateAsync({ id: s.dashboardId, baseVersion, spec: s.draft });
       client.setQueryData(dashboardKey(out.id), out);
+      // Saved: the draft is done with (also when the page went away while saving).
+      removeDraft(out.id);
       dispatch({ type: "saved", version: out.version, spec: out.spec });
     } catch (err) {
       const e = err as DashboardRequestError;
@@ -96,5 +111,5 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
 
   const discard = useCallback(() => dispatch({ type: "discard" }), [dispatch]);
 
-  return { state, dispatch, save, saveOver, discard, saving: mutation.isPending, saveError, conflict };
+  return { state, dispatch, save, saveOver, discard, saving: mutation.isPending, saveError, conflict, draftsWork: keeper.works };
 }

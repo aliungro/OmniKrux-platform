@@ -15,7 +15,9 @@ import { DashboardGrid } from "../grid/DashboardGrid";
 import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/EditBar";
 import { isDirty } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
-import { useDashboardEditor } from "../editor/useDashboardEditor";
+import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
+import { DraftBanner, DraftsOffNotice } from "../drafts/DraftBanner";
+import { useDraftOffer } from "../drafts/useDraft";
 import { DashboardHeader, type DashboardTab, type MenuAction } from "./DashboardHeader";
 import { pageLetter } from "./keys";
 import { RefreshControl } from "./RefreshControl";
@@ -72,6 +74,31 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
   const page = useRef<HTMLElement>(null);
   const [timeOpen, setTimeOpen] = useState(false);
   const [askDiscard, setAskDiscard] = useState(false);
+
+  // A draft left behind (a reload, Browser Back, Keep draft and leave) is offered back when the
+  // page opens without a live session; not while another tab is editing this dashboard.
+  const offer = useDraftOffer(dashboard.id, !ready && editor.state.mode === "view"
+    && ![...editSessions.values()].some((x) => x.mode === "edit" && x.dashboardId === dashboard.id));
+  const dirty = isDirty(editor.state);
+  // New changes replace the stored draft: there is nothing left to offer.
+  const { dismiss: dismissOffer } = offer;
+  useEffect(() => { if (dirty) dismissOffer(); }, [dirty, dismissOffer]);
+  const restoreDraft = () => {
+    const d = offer.draft;
+    if (!d) return;
+    // The base stays the version the draft started from: a save over a newer one is reviewed first.
+    editor.dispatch({
+      type: "resume", dashboardId: dashboard.id, baseVersion: d.baseVersion, base: dashboard.spec, draft: d.draft,
+      jsonText: d.jsonText, ownerKind: dashboard.owner_kind,
+    });
+    offer.dismiss();
+    // Already editing, nothing else takes the keyboard from the banner as it goes.
+    if (editing) saveButton.current?.focus();
+  };
+  const discardDraft = () => {
+    offer.discard();
+    title.current?.focus({ preventScroll: true });
+  };
 
   // The page opens with the keyboard on its title, unless the user is working elsewhere (Find, the tree).
   useEffect(() => { if (keyboardIsFree()) title.current?.focus({ preventScroll: true }); }, []);
@@ -208,9 +235,13 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
           onChange={(r: RefreshSpec) => replace({ refresh: r })} />}
         editRef={editButton} onEdit={edit} moreRef={moreButton} actions={actions}
         badge={editing ? <EditingPill /> : undefined}
+        afterTitle={offer.draft && !dirty
+          ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft} />
+          : undefined}
         editControls={editing
           ? <EditControls saving={editor.saving} onDiscard={discard} onSave={save} discardRef={discardButton} saveRef={saveButton} />
           : undefined} />
+      {editing && !editor.draftsWork && <DraftsOffNotice />}
       {editing && conflict !== null && (
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />

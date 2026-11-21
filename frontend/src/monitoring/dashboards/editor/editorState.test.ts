@@ -122,6 +122,20 @@ describe("editorReducer", () => {
     expect(fixed.jsonProblems).toEqual([]);
   });
 
+  it("resume re-checks kept JSON text, so its problems show again", () => {
+    const d = doc();
+    const back = edit(editorReducer(VIEW, { type: "resume", dashboardId: "d1", baseVersion: 1, base: d, draft: d, jsonText: "{ nope", ownerKind: "project" }));
+    expect(back.jsonText).toBe("{ nope");
+    expect(back.jsonProblems[0].message).toMatch(/^Not valid JSON/);
+    // Text that is valid after all becomes the draft.
+    const next = structuredClone(d);
+    next.title = "Renamed";
+    const valid = edit(editorReducer(VIEW, { type: "resume", dashboardId: "d1", baseVersion: 1, base: d, draft: d, jsonText: dashboardJson(next), ownerKind: "project" }));
+    expect(valid.draft.title).toBe("Renamed");
+    expect(valid.jsonText).toBeNull();
+    expect(valid.jsonProblems).toEqual([]);
+  });
+
   it("changedPanelIds lists changed and added panels", () => {
     const a = doc();
     const b = { ...a, panels: [a.panels[0], { ...a.panels[1], title: "x" }, panel("p-3", "New", "up")] };

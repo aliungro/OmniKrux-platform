@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, type ComponentType } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useClusters } from "../api/useClusters";
 import type { TabNav } from "../features/shell/browserHistory";
 import type { AppTabs } from "../features/shell/workspace";
@@ -10,6 +10,11 @@ import GroupForm from "./groups/GroupForm";
 import GroupPage from "./groups/GroupPage";
 import MonitoringHome from "./home/MonitoringHome";
 import DashboardPage from "./dashboards/page/DashboardPage";
+import { draftsWork, removeDraft, writeDraft } from "./dashboards/drafts/draftStore";
+import { heldLeave } from "./dashboards/drafts/leaveGuard";
+import { LeaveDialog } from "./dashboards/drafts/LeaveDialog";
+import { holdUnload, toStoredDraft } from "./dashboards/drafts/useDraft";
+import { editSessions } from "./dashboards/editor/useDashboardEditor";
 import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
@@ -17,7 +22,9 @@ import SourcesPage, { SourcePage } from "./sources/SourcesPage";
 import SetupPage from "./setup/SetupPage";
 import { buildSearchIndex } from "./search/search";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
-import { MONITORING_HOME, monitoringTabLabel, type MonitoringTabAction, type MonitoringView } from "./shell/tabState";
+import {
+  MONITORING_HOME, monitoringTabLabel, setMonitoringLeaveCheck, type MonitoringTabAction, type MonitoringView,
+} from "./shell/tabState";
 import { DOT, Sidebar } from "./sidebar/Sidebar";
 import s from "./MonitoringApp.module.css";
 
@@ -25,7 +32,8 @@ import s from "./MonitoringApp.module.css";
 export interface MonitoringAppProps {
   tabs: AppTabs<MonitoringView>;
   nav: TabNav<MonitoringView>;
-  dispatchTabs(action: MonitoringTabAction): void;
+  /** True when the action was held: the app's leave check asks first and performs it itself. */
+  dispatchTabs(action: MonitoringTabAction): boolean | void;
   onOpenSettings(): void;
   onOpenKubernetes(): void;
 }
@@ -109,6 +117,18 @@ function PageView({ page, tree, sources, onHome }: { page: MonitoringPageProps; 
   return <Component {...page} />;
 }
 
+/** A way out held by the leave check: the dialog's question, and how to go on when it's answered. */
+interface Leaving {
+  tabId: string;
+  dashboardId: string;
+  title: string;
+  draftsWork: boolean;
+  /** Performs the held action again, through the same path. */
+  proceed(): void;
+  /** Where the keyboard was: Stay returns it there. */
+  from: HTMLElement | null;
+}
+
 export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings }: MonitoringAppProps) {
   const root = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -145,6 +165,71 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     const active = document.activeElement;
     if (active === null || active === document.body || scroller.current?.contains(active)) focusMainFrom(root.current);
   }, []);
+
+  // --- leaving a dashboard with unsaved changes -------------------------------------------------
+  // Every way out of a tab (the shell's keys and tab strip, the top bar, and this app's own
+  // navigations) asks first; a held action changes nothing until the dialog is answered.
+  const latest = useRef({ tabs, nav, dispatchTabs });
+  latest.current = { tabs, nav, dispatchTabs };
+  const [leaving, setLeaving] = useState<Leaving | null>(null);
+  const asking = useRef(false);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const ask = useCallback((action: MonitoringTabAction, proceed: () => void): boolean => {
+    const held = heldLeave(action, latest.current.tabs, editSessions);
+    if (!held) return false;
+    // Already asking: the first question stands.
+    if (asking.current) return true;
+    asking.current = true;
+    returnFocus.current = null;
+    const session = editSessions.get(held.tabId);
+    const active = document.activeElement;
+    setLeaving({
+      ...held, proceed, draftsWork: draftsWork(),
+      title: (session?.mode === "edit" && session.base.title) || "this dashboard",
+      from: active instanceof HTMLElement && active !== document.body ? active : null,
+    });
+    return true;
+  }, []);
+
+  const pageNavRef = useRef<TabNav<MonitoringView> | null>(null);
+  useEffect(() => {
+    // Held by the shell: performed again through the path it came by, no longer held.
+    const again = (action: MonitoringTabAction) => () => {
+      const { tabs: t, nav: n, dispatchTabs: d } = latest.current;
+      if (action.type === "navigate" && action.id === t.active && pageNavRef.current) pageNavRef.current.navigate(action.view, action.mode);
+      else if ((action.type === "back" || action.type === "forward") && action.id === t.active) n[action.type]();
+      else d(action);
+    };
+    setMonitoringLeaveCheck((action) => ask(action, again(action)));
+    return () => setMonitoringLeaveCheck(null);
+  }, [ask]);
+
+  const answer = useCallback((how: "stay" | "discard" | "keep") => {
+    const l = leaving;
+    if (!l) return;
+    if (how === "stay") {
+      returnFocus.current = l.from?.isConnected ? l.from : (root.current?.closest("main") ?? null);
+      asking.current = false;
+      setLeaving(null);
+      return;
+    }
+    const session = editSessions.get(l.tabId);
+    if (how === "keep" && session?.mode === "edit" && !writeDraft(toStoredDraft(session))) {
+      // Storage refused the draft just now: say leaving loses the changes, and stay.
+      setLeaving({ ...l, draftsWork: false });
+      return;
+    }
+    if (how === "discard") removeDraft(l.dashboardId);
+    // The session ends first, so the action goes through when performed again.
+    editSessions.delete(l.tabId);
+    holdUnload(l.tabId, false);
+    returnFocus.current = root.current?.closest("main") ?? null;
+    focusMainFrom(root.current);
+    asking.current = false;
+    setLeaving(null);
+    l.proceed();
+  }, [leaving]);
+
   const openInNewTab = useCallback((v: MonitoringView) => {
     handOff();
     dispatchTabs({ type: "newTab", view: v });
@@ -154,28 +239,28 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   // opened. Back, Forward, switching tabs and reloading show a page without opening it again. A
   // replace that keeps the page and its item (a dashboard's time, variables or tab) changes only
   // view state: the page stays, so the keyboard stays where it is and nothing is opened again.
+  // Leaving a page with unsaved changes asks first: held, nothing moves and nothing is recorded.
+  const tabId = tabs.active;
   const pageNav = useMemo<TabNav<MonitoringView>>(() => ({
     ...nav,
     navigate: (move, mode) => {
       const next = typeof move === "function" ? move(nav.view) : move;
       const stays = mode === "replace" && samePageAndItem(nav.view, next);
+      if (!stays && ask({ type: "navigate", id: tabId, view: next, mode }, () => pageNavRef.current?.navigate(next, mode))) return;
       if (!stays) handOff();
       nav.navigate(next, mode);
       if (!stays) recordOpened(next);
     },
-  }), [nav, handOff]);
+  }), [nav, handOff, ask, tabId]);
+  pageNavRef.current = pageNav;
   const open = useCallback((v: MonitoringView, newTab: boolean) => {
     if (newTab) openInNewTab(v);
     else pageNav.navigate(v, "push");
   }, [pageNav, openInNewTab]);
   const leave = useCallback(() => focusMainFrom(root.current), []);
-  const goHome = useCallback(() => {
-    focusMainFrom(root.current);
-    nav.navigate(MONITORING_HOME, "push");
-  }, [nav]);
+  const goHome = useCallback(() => pageNav.navigate(MONITORING_HOME, "push"), [pageNav]);
 
   // Each tab keeps where its page was scrolled.
-  const tabId = tabs.active;
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = nav.scrollTop;
     // Only when the tab changes; scrolling itself updates nav.scrollTop.
@@ -189,13 +274,17 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       <div className={s.work}>
         <MonitoringTabs tabs={tabs} labelFor={names.label} colorFor={names.color}
           onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
-          onClose={(id) => dispatchTabs({ type: "closeTab", id })}
+          onClose={(id) => dispatchTabs({ type: "closeTab", id }) === true}
           onNew={() => dispatchTabs({ type: "newTab" })} />
         <div ref={scroller} className={s.page} data-monitoring-page onScroll={(e) => nav.setScroll(e.currentTarget.scrollTop)}>
           <PageView key={tabId} page={page} onHome={goHome}
             tree={{ data: tree.data, fetching: tree.isFetching }} sources={{ data: sources.data, fetching: sources.isFetching }} />
         </div>
       </div>
+      {leaving && (
+        <LeaveDialog title={leaving.title} draftsWork={leaving.draftsWork} restoreFocusTo={returnFocus}
+          onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />
+      )}
     </div>
   );
 }

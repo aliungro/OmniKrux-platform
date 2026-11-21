@@ -210,6 +210,7 @@ it("Alt+W on a held Monitoring tab keeps it open", async () => {
   const asked: MonitoringTabAction[] = [];
   setMonitoringLeaveCheck((action) => { asked.push(action); return action.type === "closeTab"; });
   const active = savedMonitoring()!.active;
+  const before = document.activeElement;
   fireEvent.keyDown(document.activeElement!, { key: "w", code: "KeyW", altKey: true });
   expect(asked).toEqual([{ type: "closeTab", id: active }]);
   // The tab strip's close button asks the same check.
@@ -218,6 +219,8 @@ it("Alt+W on a held Monitoring tab keeps it open", async () => {
   await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   expect(savedMonitoring()?.tabs).toHaveLength(2);
   expect(savedMonitoring()?.active).toBe(active);
+  // A held key leaves the keyboard exactly where it was: the app's question takes it, not the shell.
+  expect(document.activeElement).toBe(before);
   expect(document.activeElement).not.toBe(document.body);
   // Moving between tabs is never held.
   fireEvent.keyDown(document.body, { key: "PageUp", code: "PageUp", altKey: true });

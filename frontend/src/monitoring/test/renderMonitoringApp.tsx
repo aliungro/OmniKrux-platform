@@ -1,5 +1,6 @@
 // Renders the Monitoring app the way the shell does: inside a focusable <main>, with its tabs kept
-// by the real reducer and a tab navigation that pushes onto the active tab's history.
+// by the real reducer and a tab navigation that pushes onto the active tab's history. Like the
+// shell, a way out of a page asks the app's leave check first, and a held one changes nothing.
 import { useReducer } from "react";
 import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -8,7 +9,7 @@ import type { AppTabs } from "../../features/shell/workspace";
 import MonitoringApp from "../MonitoringApp";
 import type { ProjectKind, ProjectOut } from "../api/types";
 import {
-  monitoringTabsReducer, type MonitoringTabAction, type MonitoringView, type PreparedMonitoringTabAction,
+  monitoringLeaveHeld, monitoringTabsReducer, sameMonitoringView, type MonitoringTabAction, type MonitoringView, type PreparedMonitoringTabAction,
 } from "../shell/tabState";
 
 let counter = 0;
@@ -29,11 +30,22 @@ function Harness({ initial, onOpenSettings, seen }: { initial: AppTabs<Monitorin
   );
   seen.tabs = tabs;
   const tab = tabs.tabs.find((t) => t.id === tabs.active)!;
+  const dispatchTabs = (action: MonitoringTabAction): boolean => {
+    if (monitoringLeaveHeld(action)) return true;
+    dispatch(action);
+    return false;
+  };
+  const navigate: TabNav<MonitoringView>["navigate"] = (move, mode) => {
+    const view = typeof move === "function" ? move(tab.view) : move;
+    const action = { type: "navigate", id: tab.id, view, mode } as const;
+    if (!sameMonitoringView(tab.view, view) && monitoringLeaveHeld(action)) return;
+    dispatch(action);
+  };
   const nav: TabNav<MonitoringView> = {
     view: tab.view,
-    navigate: (view, mode) => dispatch({ type: "navigate", id: tab.id, view: typeof view === "function" ? view(tab.view) : view, mode }),
-    back: () => dispatch({ type: "back", id: tab.id }),
-    forward: () => dispatch({ type: "forward", id: tab.id }),
+    navigate,
+    back: () => { if (tab.back.length) dispatchTabs({ type: "back", id: tab.id }); },
+    forward: () => { if (tab.forward.length) dispatchTabs({ type: "forward", id: tab.id }); },
     canBack: tab.back.length > 0,
     canForward: tab.forward.length > 0,
     setScroll: (top) => dispatch({ type: "scroll", id: tab.id, top }),
@@ -41,7 +53,7 @@ function Harness({ initial, onOpenSettings, seen }: { initial: AppTabs<Monitorin
   };
   return (
     <main tabIndex={-1}>
-      <MonitoringApp tabs={tabs} nav={nav} dispatchTabs={dispatch} onOpenSettings={onOpenSettings} onOpenKubernetes={() => {}} />
+      <MonitoringApp tabs={tabs} nav={nav} dispatchTabs={dispatchTabs} onOpenSettings={onOpenSettings} onOpenKubernetes={() => {}} />
     </main>
   );
 }

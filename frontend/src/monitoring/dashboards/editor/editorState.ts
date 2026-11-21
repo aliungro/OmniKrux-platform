@@ -31,7 +31,8 @@ export type EditorState = { mode: "view" } | EditingState;
 
 export type EditorAction =
   | { type: "start"; dashboardId: string; version: number; spec: DashboardSpec }
-  | { type: "resume"; dashboardId: string; baseVersion: number; base: DashboardSpec; draft: DashboardSpec; jsonText: string | null }
+  /** A stored draft or a live session back in edit mode; `ownerKind` re-checks kept JSON text for its problems. */
+  | { type: "resume"; dashboardId: string; baseVersion: number; base: DashboardSpec; draft: DashboardSpec; jsonText: string | null; ownerKind?: OwnerKind }
   | { type: "updatePanel"; id: string; update: (p: PanelSpec) => PanelSpec }
   | { type: "addPanel"; panelType: PanelType; at?: { x: number; y: number } }
   | { type: "removePanel"; id: string }
@@ -124,9 +125,20 @@ function fresh(dashboardId: string, baseVersion: number, base: DashboardSpec, dr
   return { mode: "edit", dashboardId, baseVersion, base, draft, selected: null, sideTab: "query", jsonText, jsonProblems: [], changes: {} };
 }
 
+/**
+ * A resumed session. Kept JSON text that doesn't parse or validate shows its problems again; text
+ * that is valid after all (the rules changed) becomes the draft.
+ */
+function resumed(action: Extract<EditorAction, { type: "resume" }>): EditingState {
+  const state = fresh(action.dashboardId, action.baseVersion, action.base, action.draft, action.jsonText);
+  if (action.jsonText === null || action.ownerKind === undefined) return state;
+  const result = parseDashboardJson(action.jsonText, action.ownerKind);
+  return result.ok ? applyDocument(state, result.spec) : { ...state, jsonProblems: result.problems };
+}
+
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
   if (action.type === "start") return fresh(action.dashboardId, action.version, action.spec, action.spec, null);
-  if (action.type === "resume") return fresh(action.dashboardId, action.baseVersion, action.base, action.draft, action.jsonText);
+  if (action.type === "resume") return resumed(action);
   if (state.mode !== "edit") return state;
   const panels = state.draft.panels;
 

@@ -74,6 +74,8 @@ interface Props {
   badge?: ReactNode;
   /** Edit mode: these replace Edit and More actions. */
   editControls?: ReactNode;
+  /** Right after the title in Tab order (an offered draft); it draws on its own row. */
+  afterTitle?: ReactNode;
 }
 
 export function DashboardHeader(p: Props) {
@@ -98,6 +100,7 @@ export function DashboardHeader(p: Props) {
         {p.readyMade && <span className={s.readyTag}>Ready-made</span>}
         {p.badge}
       </div>
+      {p.afterTitle}
       <div role="tablist" aria-label="Dashboard views" className={s.tabs} onKeyDown={onTabKey}>
         {p.tabs.map((t, i) => {
           const ids = p.tabIds(t);
