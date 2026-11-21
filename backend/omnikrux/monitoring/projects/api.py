@@ -165,9 +165,7 @@ class ProjectDeleteReviewOut(BaseModel):
     sources_kept: list[KeptSourceOut]
     sources_unlinked: list[SourceRefOut]
     groups_left: list[GroupRefOut]
-    # By title. Left out of the answer when empty, so a project without dashboards reviews
-    # exactly as before dashboards existed (the token leaves it out the same way).
-    dashboards: list[DashboardRefOut] = []
+    dashboards: list[DashboardRefOut]  # by title; [] when it has none
     token: str
 
 
@@ -550,7 +548,7 @@ async def unlink_source(id: str, source_id: str, request: Request) -> Response:
     return Response(status_code=204)
 
 
-@router.get("/projects/{id}/delete-review", response_model_exclude_defaults=True)
+@router.get("/projects/{id}/delete-review")
 async def project_delete_review(id: str, request: Request) -> ProjectDeleteReviewOut:
     services = _services(request)
     try:

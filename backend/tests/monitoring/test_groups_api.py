@@ -251,8 +251,14 @@ async def test_no_audit_no_group_delete(monitoring_app, monkeypatch):
     monkeypatch.setattr(app.state.audit, "begin_app", broken)
     refused = await http.delete(f"{API}/groups/{ops['id']}", params={"token": review["token"]})
     assert refused.status_code == 503
-    assert [g["id"] for g in (await http.get(f"{API}/groups")).json()] == [ops["id"]]
-    assert (await http.get(f"{API}/dashboards/{made['id']}")).status_code == 200
+    assert refused.json() == {
+        "detail": "Nothing was changed: the audit log can't be written (disk I/O error)."
+    }
+    groups = (await http.get(f"{API}/groups")).json()
+    assert [(g["id"], g["project_ids"]) for g in groups] == [(ops["id"], [shop["id"]])]
+    assert (await http.get(f"{API}/dashboards/{made['id']}")).json()["version"] == 1
+    assert len((await http.get(f"{API}/dashboards/{made['id']}/versions")).json()) == 1
+    assert not [r for r in await monitoring_records(http) if r["action"].endswith("_remove")]
 
 
 async def test_group_store_rechecks_the_review_inside_the_delete(monitoring_app):

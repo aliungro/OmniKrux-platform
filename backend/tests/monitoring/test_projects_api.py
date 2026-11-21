@@ -199,6 +199,7 @@ async def test_delete_project_removes_only_what_it_owns(monitoring_app):
         "sources_kept": [{"id": shared_id, "name": "Shared", "used_by": ["Billing"]}],
         "sources_unlinked": [{"id": outside["id"], "name": "Outside"}],
         "groups_left": [{"id": group["id"], "name": "Teams"}],
+        "dashboards": [],
         "token": review["token"],
     }
     gone = await http.delete(f"{API}/projects/{shop['id']}", params={"token": review["token"]})
@@ -387,5 +388,11 @@ async def test_no_audit_no_project_delete(monitoring_app, monkeypatch):
     monkeypatch.setattr(app.state.audit, "begin_app", broken)
     refused = await http.delete(f"{API}/projects/{shop['id']}", params={"token": review["token"]})
     assert refused.status_code == 503
-    assert (await http.get(f"{API}/projects/{shop['id']}")).status_code == 200
-    assert (await http.get(f"{API}/dashboards/{made['id']}")).status_code == 200
+    assert refused.json() == {
+        "detail": "Nothing was changed: the audit log can't be written (disk I/O error)."
+    }
+    assert (await http.get(f"{API}/projects/{shop['id']}")).json()["links"] == shop["links"]
+    assert [s["name"] for s in (await http.get(f"{API}/sources")).json()] == ["Own"]
+    assert (await http.get(f"{API}/dashboards/{made['id']}")).json()["version"] == 1
+    assert len((await http.get(f"{API}/dashboards/{made['id']}/versions")).json()) == 1
+    assert not [r for r in await monitoring_records(http) if r["action"].endswith("_remove")]
