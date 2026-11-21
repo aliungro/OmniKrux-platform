@@ -12,12 +12,14 @@ import httpx
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.main import create_app
+from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
 from omnikrux.monitoring.sources.store import NewSource, SourceStore
 from omnikrux.monitoring.sources.transport import TransportFactory
@@ -61,11 +63,14 @@ def _watchdog(_terminal_fd):
 
 @dataclass
 class Stores:
-    """The three stores the Monitoring services are built on."""
+    """The stores the Monitoring services are built on, and their sessionmaker (for writes that
+    share one transaction)."""
 
     sources: SourceStore
     projects: ProjectStore
     groups: GroupStore
+    dashboards: DashboardStore
+    sessionmaker: async_sessionmaker[AsyncSession]
 
 
 @dataclass(frozen=True)
@@ -104,6 +109,8 @@ async def stores(tmp_path, db_path):
         sources=SourceStore(sessionmaker, box),
         projects=ProjectStore(sessionmaker),
         groups=GroupStore(sessionmaker),
+        dashboards=DashboardStore(sessionmaker),
+        sessionmaker=sessionmaker,
     )
     await engine.dispose()
 

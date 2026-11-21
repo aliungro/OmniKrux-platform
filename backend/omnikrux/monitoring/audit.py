@@ -18,12 +18,13 @@ from omnikrux.audit.store import (
 async def begin_change(
     request: Request,
     action: Action,
-    kind: Literal["source", "project", "group"],
+    kind: Literal["source", "project", "group", "dashboard"],
     name: str,
     details: dict | None = None,
 ) -> int:
     """Write the `started` record and return its id; 503 (nothing changes) when it can't be
-    written. `details` hold names and settings, never secret values."""
+    written. `details` hold names, settings, versions and counts, never secret values (nor a
+    dashboard's document)."""
     audit: AuditLog = request.app.state.audit
     try:
         return await audit.begin_app(

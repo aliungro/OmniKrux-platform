@@ -1,4 +1,5 @@
-"""Monitoring tables. Kept identical to migration 0007 (`tests/test_db.py` compares them)."""
+"""Monitoring tables. Kept identical to migrations 0007 and 0008 (`tests/test_db.py` compares
+them)."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -7,6 +8,8 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Index,
+    Integer,
     LargeBinary,
     String,
     Text,
@@ -114,6 +117,44 @@ class GroupMemberRecord(Base):
 
     group_id: Mapped[str] = mapped_column(String, primary_key=True)
     project_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+
+
+class DashboardRow(Base):
+    """A dashboard as it is now: its owner (a project or a group), its title (the document's) and
+    the document itself, at `version`."""
+
+    __tablename__ = "monitoring_dashboards"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_kind", "owner_id", "title", name="uq_monitoring_dashboards_owner_title"
+        ),
+        Index("ix_monitoring_dashboards_owner", "owner_kind", "owner_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    owner_kind: Mapped[str] = mapped_column(String)
+    owner_id: Mapped[str] = mapped_column(String)
+    title: Mapped[str] = mapped_column(String)
+    spec: Mapped[str] = mapped_column(Text)  # JSON: the normalised document
+    version: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DashboardVersionRow(Base):
+    """Every version a dashboard has had, the current one included."""
+
+    __tablename__ = "monitoring_dashboard_versions"
+
+    dashboard_id: Mapped[str] = mapped_column(String, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    spec: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(String)
+    panel_count: Mapped[int] = mapped_column(Integer)
+    origin: Mapped[str] = mapped_column(String)  # created, copied, saved or restored
+    restored_from: Mapped[int | None] = mapped_column(Integer)
+    copied_from: Mapped[str | None] = mapped_column(String)
+    saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 async def lock_first(session: AsyncSession) -> None:

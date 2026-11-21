@@ -50,6 +50,10 @@ Action = Literal[
     "group_add",
     "group_change",
     "group_remove",
+    "dashboard_add",
+    "dashboard_save",
+    "dashboard_remove",
+    "dashboard_restore",
 ]
 App = Literal["kubernetes", "monitoring"]
 Outcome = Literal["started", "succeeded", "failed", "ended", "unknown"]

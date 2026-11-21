@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.kube.connections import ClusterConnections
+from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
 from omnikrux.monitoring.sources.connector import ConnectorRegistry, default_connectors
 from omnikrux.monitoring.sources.discovery import Discovery
@@ -20,6 +21,7 @@ class MonitoringServices:
     sources: SourceStore
     projects: ProjectStore
     groups: GroupStore
+    dashboards: DashboardStore
     transports: TransportFactory
     connectors: ConnectorRegistry
     health: HealthCache
@@ -45,6 +47,7 @@ def build_services(
         sources=sources,
         projects=ProjectStore(sessionmaker),
         groups=GroupStore(sessionmaker),
+        dashboards=DashboardStore(sessionmaker),
         transports=transports,
         connectors=connectors,
         health=HealthCache(sources, transports, connectors, registry),

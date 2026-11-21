@@ -1,12 +1,14 @@
 """The audit log on a real SQLite file: begin, finish, list, and rows a stopped console left."""
 
 import logging
+from typing import get_args
 
 import pytest
 from sqlalchemy import text
 
 from omnikrux.audit.store import (
     INTERRUPTED,
+    Action,
     AppAuditEntry,
     AuditEntry,
     AuditLog,
@@ -239,6 +241,26 @@ async def test_monitoring_entry_has_no_cluster(audit_log):
         "succeeded",
     )
     assert rec.details == {"type": "prometheus"}
+
+
+async def test_dashboard_actions_are_recorded(audit_log):
+    actions = ("dashboard_add", "dashboard_save", "dashboard_remove", "dashboard_restore")
+    assert set(actions) <= set(get_args(Action))
+    rid = await audit_log.begin_app(
+        AppAuditEntry(
+            "local", "monitoring", "dashboard_save", "dashboard", "API latency", {"version": 3}
+        )
+    )
+    await audit_log.finish(rid, "succeeded")
+    [rec] = (await audit_log.list(action="dashboard_save")).records
+    assert (rec.app, rec.action, rec.kind, rec.name, rec.outcome) == (
+        "monitoring",
+        "dashboard_save",
+        "dashboard",
+        "API latency",
+        "succeeded",
+    )
+    assert rec.details == {"version": 3}
 
 
 async def test_kubernetes_records_are_unchanged(setup):
