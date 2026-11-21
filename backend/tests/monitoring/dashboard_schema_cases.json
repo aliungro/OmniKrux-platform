@@ -5785,5 +5785,157 @@
       "panels": []
     },
     "problems": []
+  },
+  {
+    "name": "absolute_time_year_zero",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "0000-01-01T00:00:00Z",
+        "to": "now"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time.from",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      }
+    ]
+  },
+  {
+    "name": "absolute_time_impossible_day",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "2026-02-30T10:00:00Z",
+        "to": "now"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time.from",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      }
+    ]
+  },
+  {
+    "name": "absolute_time_seconds_sixty",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "2026-02-28T10:00:60Z",
+        "to": "now"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time.from",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      }
+    ]
+  },
+  {
+    "name": "absolute_time_leap_day_ok",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "2024-02-29T10:00:00Z",
+        "to": "2024-03-01T00:00:00Z"
+      }
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "2024-02-29T10:00:00Z",
+        "to": "2024-03-01T00:00:00Z"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "variable_multi_include_all_wrong_type_cascade",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "env",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus"
+          },
+          "labelName": "env",
+          "multi": "yes",
+          "includeAll": 1,
+          "default": [
+            "a",
+            "b"
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].multi",
+        "message": "Expected true or false."
+      },
+      {
+        "path": "variables[0].includeAll",
+        "message": "Expected true or false."
+      },
+      {
+        "path": "variables[0].default",
+        "message": "Only a multi-value variable can start with more than one value."
+      }
+    ]
+  },
+  {
+    "name": "variable_all_default_with_wrong_include_all",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "env",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus"
+          },
+          "labelName": "env",
+          "includeAll": "true",
+          "default": "all"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].includeAll",
+        "message": "Expected true or false."
+      },
+      {
+        "path": "variables[0].default",
+        "message": "\"all\" needs includeAll: true."
+      }
+    ]
   }
 ]
