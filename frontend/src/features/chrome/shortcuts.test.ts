@@ -121,7 +121,67 @@ describe("shortcut registry", () => {
     expect(monitoring.map((s) => [s.id, s.keys, s.label])).toEqual([
       ["monitoringFind", ["/"], "Find a project, group or source"],
       ["monitoringTree", ["↑ ↓", "← →", "Enter"], "In the sidebar: move, close or open a group, open the item"],
+      ["monitoringNewDashboard", ["N"], "New dashboard"],
     ]);
+  });
+
+  it("the Dashboards group appears only in Monitoring", () => {
+    const titles = allGroups(undefined, "monitoring").map(([t]) => t);
+    const at = titles.indexOf("Monitoring");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(titles.slice(at, at + 2)).toEqual(["Monitoring", "Dashboards"]);
+    expect(allGroups().map(([t]) => t)).not.toContain("Dashboards");
+    expect(allGroups().map(([t]) => t)).not.toContain("Monitoring");
+    expect(allGroups("pods", "kubernetes").map(([t]) => t)).not.toContain("Dashboards");
+    const dashboards = allGroups(undefined, "monitoring").find(([t]) => t === "Dashboards")![1];
+    expect(dashboards.map((s) => [s.id, s.keys, s.label])).toEqual([
+      ["dashboardEdit", ["e"], "Edit the dashboard"],
+      ["dashboardViews", ["1–3"], "Dashboard, JSON or Versions"],
+      ["dashboardTime", ["t"], "Pick the time range"],
+      ["dashboardRefresh", ["r"], "Refresh now"],
+      ["dashboardSave", ["Ctrl S"], "While editing (in fields too): save the dashboard"],
+      ["panelFocus", ["← → ↑ ↓"], "While editing: move between panels"],
+      ["panelMove", ["Shift ← → ↑ ↓"], "While editing: move the panel one step"],
+      ["panelResize", ["Ctrl Shift ← → ↑ ↓"], "While editing: make the panel narrower, wider, shorter or taller"],
+      ["panelSettings", ["Enter"], "While editing: open the panel's settings"],
+      ["panelAdd", ["a"], "While editing: add a panel"],
+      ["panelRemove", ["Ctrl Del"], "While editing: remove the panel from the draft"],
+      ["panelLeave", ["Esc"], "Close the panel's settings, then go to Save dashboard"],
+      ["queryRun", ["Ctrl Enter"], "In a query: run it now; in the JSON: review the changes"],
+      ["chartCrosshair", ["← →"], "On a chart: move the crosshair; Esc hides it"],
+      ["tableSort", ["Enter"], "On a table column: sort by it"],
+      ["logLabels", ["Enter"], "On a log line: show its labels"],
+    ]);
+    expect(keysFor("dashboardSave", true)).toEqual(["⌘ S"]);
+    expect(keysFor("panelResize", true)).toEqual(["⌘ Shift ← → ↑ ↓"]);
+    expect(keysFor("panelRemove", true)).toEqual(["⌘ ⌫"]);
+    expect(keysFor("queryRun", true)).toEqual(["⌘ Enter"]);
+  });
+
+  it("panel resize needs Ctrl and Shift with an arrow", () => {
+    expect(pressed("panelResize", { ...base, key: "ArrowRight", ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(pressed("panelResize", { ...base, key: "ArrowUp", metaKey: true, shiftKey: true })).toBe(true);
+    expect(pressed("panelResize", { ...base, key: "ArrowRight", shiftKey: true })).toBe(false);
+    expect(pressed("panelResize", { ...base, key: "ArrowRight", ctrlKey: true })).toBe(false);
+    expect(pressed("panelMove", { ...base, key: "ArrowLeft", shiftKey: true })).toBe(true);
+    expect(pressed("panelMove", { ...base, key: "ArrowLeft" })).toBe(false);
+    expect(pressed("dashboardSave", { ...base, key: "s", ctrlKey: true })).toBe(true);
+    expect(pressed("dashboardSave", { ...base, key: "s", metaKey: true })).toBe(true);
+    expect(pressed("dashboardSave", { ...base, key: "s" })).toBe(false);
+    expect(pressed("queryRun", { ...base, key: "Enter", ctrlKey: true })).toBe(true);
+    expect(pressed("dashboardViews", { ...base, key: "3" })).toBe(true);
+    expect(pressed("dashboardViews", { ...base, key: "4" })).toBe(false);
+  });
+
+  it("new dashboard is n without Ctrl, Alt or Meta", () => {
+    expect(pressed("monitoringNewDashboard", { ...base, key: "n" })).toBe(true);
+    // Shift and Caps Lock give N, which matches as M1's letters do.
+    expect(pressed("monitoringNewDashboard", { ...base, key: "N" })).toBe(true);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "N", shiftKey: true })).toBe(true);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "n", ctrlKey: true })).toBe(false);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "n", altKey: true })).toBe(false);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "n", metaKey: true })).toBe(false);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "N", ctrlKey: true, shiftKey: true })).toBe(false);
   });
 
   it("the sheet drops Filter rows while Monitoring is shown", () => {

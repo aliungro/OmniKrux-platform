@@ -11,7 +11,21 @@ export type MonitoringView =
   | { page: "setup"; clusterId?: string }
   | { page: "project"; id: string }
   | { page: "group"; id: string }
-  | { page: "newGroup" };
+  | { page: "newGroup" }
+  | DashboardView;
+
+/**
+ * A dashboard and its view state. `vars` holds each variable's selection by name; the key
+ * `__projects` holds a group dashboard's Projects selection (project ids).
+ */
+export interface DashboardView {
+  page: "dashboard";
+  id: string;
+  tab?: "dashboard" | "json" | "versions";
+  vars?: Record<string, string[] | "all">;
+  time?: { from: string; to: string };
+  refresh?: string | null;
+}
 
 export const MONITORING_HOME: MonitoringView = { page: "home" };
 
@@ -46,11 +60,51 @@ export function defaultMonitoringTabs(): AppTabs<MonitoringView> {
   return { tabs: [tab], active: tab.id, closed: [] };
 }
 
+/**
+ * The same place: page and id, and a dashboard's tab (no tab is the Dashboard tab). Its variables,
+ * time and refresh are view state, not another place. Used for push de-duplication and the leave check.
+ */
 export function sameMonitoringView(a: MonitoringView, b: MonitoringView): boolean {
   if (a.page !== b.page) return false;
+  if (a.page === "dashboard" && b.page === "dashboard") return a.id === b.id && (a.tab ?? "dashboard") === (b.tab ?? "dashboard");
   if ("id" in a && "id" in b) return a.id === b.id;
   if (a.page === "setup" && b.page === "setup") return a.clusterId === b.clusterId;
   return true;
+}
+
+/** Equal by value, key order aside; a key holding `undefined` counts as absent. */
+function equalValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return false;
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  const keys = (o: Record<string, unknown>) => Object.keys(o).filter((k) => o[k] !== undefined);
+  const kx = keys(x);
+  return kx.length === keys(y).length && kx.every((k) => equalValue(x[k], y[k]));
+}
+
+/** The same view with the same view state: a `replace` that would change nothing. */
+export function equalMonitoringView(a: MonitoringView, b: MonitoringView): boolean {
+  return equalValue(a, b);
+}
+
+/** Holds a way out of a tab's page: true means the app asks first and will dispatch it itself. */
+export type MonitoringLeaveCheck = (action: MonitoringTabAction) => boolean;
+
+let leaveCheck: MonitoringLeaveCheck | null = null;
+
+export function setMonitoringLeaveCheck(check: MonitoringLeaveCheck | null): void {
+  leaveCheck = check;
+}
+
+/**
+ * Whether the app holds this action. Only a way out of a page is asked about (closing a tab,
+ * navigating, Back and Forward); opening, switching and scrolling tabs never are.
+ */
+export function monitoringLeaveHeld(action: MonitoringTabAction): boolean {
+  if (!leaveCheck) return false;
+  if (action.type !== "closeTab" && action.type !== "navigate" && action.type !== "back" && action.type !== "forward") return false;
+  return leaveCheck(action);
 }
 
 export function monitoringTabsReducer(tabs: AppTabs<MonitoringView>, action: PreparedMonitoringTabAction): AppTabs<MonitoringView> {
@@ -83,7 +137,8 @@ export function monitoringTabsReducer(tabs: AppTabs<MonitoringView>, action: Pre
     if (tab.scrollTop === action.top) return tabs;
     next = { ...tab, scrollTop: action.top };
   } else if (action.type === "navigate") {
-    if (sameMonitoringView(tab.view, action.view)) return tabs;
+    // A push to the same place is a no-op; a replace lands whenever the view state differs.
+    if (action.mode === "push" ? sameMonitoringView(tab.view, action.view) : equalMonitoringView(tab.view, action.view)) return tabs;
     next = action.mode === "replace"
       ? { ...tab, view: action.view }
       : { ...tab, view: action.view, back: [...tab.back, tab.view].slice(-MAX_BACK), forward: [] };
@@ -101,6 +156,31 @@ export function monitoringTabsReducer(tabs: AppTabs<MonitoringView>, action: Pre
 
 const record = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object" && !Array.isArray(x);
 const validId = (x: unknown): x is string => typeof x === "string" && x.length > 0 && x.length <= MAX_ID;
+const shortText = (x: unknown, max: number): x is string => typeof x === "string" && x.length <= max;
+
+const DASHBOARD_TABS: readonly unknown[] = ["dashboard", "json", "versions"];
+const MAX_VARS = 21; // 20 variables and the Projects selection
+const MAX_VALUES = 100;
+
+function parseVars(x: unknown): Record<string, string[] | "all"> | undefined {
+  if (!record(x)) return undefined;
+  const entries = Object.entries(x);
+  if (entries.length > MAX_VARS) return undefined;
+  const ok = entries.every(([, v]) => v === "all" || (Array.isArray(v) && v.length <= MAX_VALUES && v.every((s) => shortText(s, MAX_ID))));
+  return ok ? Object.fromEntries(entries.map(([k, v]) => [k, v === "all" ? "all" : [...(v as string[])]])) : undefined;
+}
+
+/** A dashboard view: the id must be good; each bad part of its view state is dropped on its own. */
+function parseDashboard(x: Record<string, unknown>): DashboardView | null {
+  if (!validId(x.id)) return null;
+  const view: DashboardView = { page: "dashboard", id: x.id };
+  if (DASHBOARD_TABS.includes(x.tab)) view.tab = x.tab as DashboardView["tab"];
+  const vars = parseVars(x.vars);
+  if (vars) view.vars = vars;
+  if (record(x.time) && shortText(x.time.from, 40) && shortText(x.time.to, 40)) view.time = { from: x.time.from, to: x.time.to };
+  if (x.refresh === null || shortText(x.refresh, 10)) view.refresh = x.refresh;
+  return view;
+}
 
 /** A saved view, rebuilt from its known fields only; an unknown page (a later version's) is null. */
 function parseView(x: unknown): MonitoringView | null {
@@ -113,6 +193,8 @@ function parseView(x: unknown): MonitoringView | null {
     case "setup":
       if (x.clusterId === undefined) return { page: "setup" };
       return validId(x.clusterId) ? { page: "setup", clusterId: x.clusterId } : null;
+    case "dashboard":
+      return parseDashboard(x);
     default:
       return null;
   }
@@ -159,6 +241,7 @@ export interface MonitoringNames {
   project?(id: string): string | undefined;
   group?(id: string): string | undefined;
   source?(id: string): string | undefined;
+  dashboard?(id: string): string | undefined;
 }
 
 export function monitoringTabLabel(view: MonitoringView, names: MonitoringNames): string {
@@ -172,5 +255,6 @@ export function monitoringTabLabel(view: MonitoringView, names: MonitoringNames)
     case "source": return names.source?.(view.id) ?? "Source";
     case "setup": return "New project";
     case "newGroup": return "New group";
+    case "dashboard": return names.dashboard?.(view.id) ?? "Dashboard";
   }
 }

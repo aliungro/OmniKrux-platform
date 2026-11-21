@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { hashFor, parseHash } from "../../route";
-import { sameMonitoringView, type MonitoringView } from "../../monitoring/shell/tabState";
+import { equalMonitoringView, monitoringLeaveHeld, sameMonitoringView, type MonitoringView } from "../../monitoring/shell/tabState";
 import { kindView, sameView, workspaceReducer, type KubeView, type Tab, type Workspace, type WorkspaceAction } from "./workspace";
 
 type Move<V> = V | ((view: V) => V);
@@ -120,24 +120,37 @@ export function useWorkspaceNav(ws: Workspace, dispatch: (action: WorkspaceActio
   // Monitoring tabs: the same browser entries, written only while Monitoring is shown.
   const monitoringView = useCallback((id: string): MonitoringView | undefined => current.current.monitoring.tabs.find((t) => t.id === id)?.view, []);
 
-  const navigateMonitoring = useCallback((id: string, view: MonitoringView, mode: Mode) => {
+  /**
+   * A push to the same place is dropped; a replace lands whenever the view state differs. Going
+   * somewhere else asks the app's leave check first; a held move changes nothing (returns true).
+   */
+  const navigateMonitoring = useCallback((id: string, view: MonitoringView, mode: Mode): boolean => {
     const state = current.current;
     const tab = state.monitoring.tabs.find((t) => t.id === id);
-    if (!tab || sameMonitoringView(tab.view, view)) return;
-    const action = { type: "monitoring", action: { type: "navigate", id, view, mode } } as const;
+    if (!tab) return false;
+    const same = sameMonitoringView(tab.view, view);
+    if (mode === "push" ? same : equalMonitoringView(tab.view, view)) return false;
+    const inner = { type: "navigate", id, view, mode } as const;
+    if (!same && monitoringLeaveHeld(inner)) return true;
+    const action = { type: "monitoring", action: inner } as const;
     current.current = workspaceReducer(state, action);
     dispatch(action);
-    if (state.app !== "monitoring" || id !== state.monitoring.active) return;
+    if (state.app !== "monitoring" || id !== state.monitoring.active) return false;
     if (mode === "push") write("pushState", ++seq.current, hashFor("monitoring", id));
     else replace();
+    return false;
   }, [dispatch, replace]);
 
-  const stepMonitoring = useCallback((id: string, direction: Direction) => {
+  /** Back or Forward in a Monitoring tab, after the leave check when there is somewhere to go. */
+  const stepMonitoring = useCallback((id: string, direction: Direction): boolean => {
     const state = current.current;
+    const tab = state.monitoring.tabs.find((t) => t.id === id);
+    if (tab && (direction === "back" ? tab.back : tab.forward).length && monitoringLeaveHeld({ type: direction, id })) return true;
     const action = { type: "monitoring", action: { type: direction, id } } as const;
     current.current = workspaceReducer(state, action);
     dispatch(action);
     if (state.app === "monitoring" && id === state.monitoring.active) replace();
+    return false;
   }, [dispatch, replace]);
 
   const monitoringScrolls = useRef(new Map<string, { top: number; timer: ReturnType<typeof setTimeout> }>());

@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  defaultMonitoringTabs, MONITORING_HOME, monitoringTabLabel, monitoringTabsReducer, parseMonitoringTabs, sameMonitoringView,
-  type MonitoringView,
+  defaultMonitoringTabs, equalMonitoringView, MONITORING_HOME, monitoringLeaveHeld, monitoringTabLabel, monitoringTabsReducer, parseMonitoringTabs,
+  sameMonitoringView, setMonitoringLeaveCheck, type MonitoringView,
 } from "./tabState";
 
 const project = (id: string): MonitoringView => ({ page: "project", id });
@@ -62,8 +62,8 @@ describe("monitoring tab state", () => {
   it("parseMonitoringTabs drops unknown pages and keeps the rest", () => {
     const input = {
       tabs: [
-        { id: "a", view: { page: "dashboard", id: "x" }, back: [], forward: [], scrollTop: 0 },
-        { id: "b", view: { page: "project", id: "p1" }, back: [{ page: "dashboard", id: "x" }, { page: "home" }], forward: [], scrollTop: 3 },
+        { id: "a", view: { page: "nope", id: "x" }, back: [], forward: [], scrollTop: 0 },
+        { id: "b", view: { page: "project", id: "p1" }, back: [{ page: "nope", id: "x" }, { page: "home" }], forward: [], scrollTop: 3 },
       ],
       active: "a",
       closed: [],
@@ -108,5 +108,102 @@ describe("monitoring tab state", () => {
     expect(sameMonitoringView(project("a"), project("b"))).toBe(false);
     expect(sameMonitoringView(project("a"), { page: "group", id: "a" })).toBe(false);
     expect(sameMonitoringView({ page: "setup" }, { page: "setup", clusterId: "k" })).toBe(false);
+  });
+
+  it("a dashboard view survives storage with its view state", () => {
+    const view: MonitoringView = {
+      page: "dashboard", id: "d1", tab: "json", vars: { namespace: ["api"] }, time: { from: "now-1h", to: "now" }, refresh: "30s",
+    };
+    const saved = JSON.parse(JSON.stringify({ tabs: [{ id: "a", view, back: [{ page: "dashboard", id: "d0", refresh: null }], forward: [], scrollTop: 0 }], active: "a", closed: [] }));
+    const { tabs, dropped } = parseMonitoringTabs(saved);
+    expect(dropped).toBe(0);
+    expect(tabs.tabs[0].view).toEqual(view);
+    expect(tabs.tabs[0].back).toEqual([{ page: "dashboard", id: "d0", refresh: null }]);
+    const all: MonitoringView = { page: "dashboard", id: "g", vars: { __projects: ["p1", "p2"], pod: "all" } };
+    expect(parseMonitoringTabs({ tabs: [{ id: "a", view: all }], active: "a" }).tabs.tabs[0].view).toEqual(all);
+  });
+
+  it("bad dashboard view state is dropped, the view kept", () => {
+    const parse = (view: unknown) => {
+      const { tabs, dropped } = parseMonitoringTabs({ tabs: [{ id: "a", view, back: [], forward: [], scrollTop: 0 }], active: "a", closed: [] });
+      expect(dropped).toBe(0);
+      return tabs.tabs[0].view;
+    };
+    const bare = { page: "dashboard", id: "d1" };
+    expect(parse({ ...bare, vars: { a: 5 } })).toEqual(bare);
+    expect(parse({ ...bare, tab: "settings", time: { from: 1, to: "now" }, refresh: 30 })).toEqual(bare);
+    expect(parse({ ...bare, time: { from: "x".repeat(41), to: "now" }, refresh: "x".repeat(11) })).toEqual(bare);
+    expect(parse({ ...bare, time: { from: "now-1h" } })).toEqual(bare);
+    const keys = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`v${i}`, "all"]));
+    expect(parse({ ...bare, vars: keys(22) })).toEqual(bare);
+    expect(parse({ ...bare, vars: keys(21) })).toEqual({ ...bare, vars: keys(21) });
+    expect(parse({ ...bare, vars: { a: Array.from({ length: 101 }, () => "x") } })).toEqual(bare);
+    expect(parse({ ...bare, vars: { a: ["x".repeat(201)] } })).toEqual(bare);
+    expect(parse({ ...bare, vars: { a: [1] } })).toEqual(bare);
+    expect(parse({ ...bare, vars: { a: "some" } })).toEqual(bare);
+    expect(parse({ ...bare, vars: ["a"] })).toEqual(bare);
+    // The dashboard itself must be named: no id, or an overlong one, drops the tab.
+    const { dropped } = parseMonitoringTabs({ tabs: [{ id: "a", view: { page: "dashboard", id: "" } }, { id: "b", view: { page: "dashboard", id: "d".repeat(201) } }] });
+    expect(dropped).toBe(2);
+  });
+
+  it("dashboard tabs are labelled by title", () => {
+    const names = { dashboard: (id: string) => (id === "d1" ? "API latency" : undefined) };
+    expect(monitoringTabLabel({ page: "dashboard", id: "d1" }, names)).toBe("API latency");
+    expect(monitoringTabLabel({ page: "dashboard", id: "gone" }, names)).toBe("Dashboard");
+    expect(monitoringTabLabel({ page: "dashboard", id: "d1" }, {})).toBe("Dashboard");
+  });
+
+  it("same dashboard with other variables is the same view", () => {
+    const a: MonitoringView = { page: "dashboard", id: "d1", tab: "dashboard", vars: { ns: ["api"] }, time: { from: "now-1h", to: "now" } };
+    const b: MonitoringView = { page: "dashboard", id: "d1", tab: "dashboard", vars: { ns: ["web"] }, refresh: "1m" };
+    expect(sameMonitoringView(a, b)).toBe(true);
+    expect(equalMonitoringView(a, b)).toBe(false);
+    expect(sameMonitoringView(a, { ...a, tab: "json" })).toBe(false);
+    expect(sameMonitoringView(a, { ...a, id: "d2" })).toBe(false);
+    expect(sameMonitoringView({ page: "dashboard", id: "d1" }, { page: "dashboard", id: "d1", tab: "dashboard" })).toBe(true);
+    expect(equalMonitoringView(a, { ...a, vars: { ns: ["api"] }, time: { to: "now", from: "now-1h" } })).toBe(true);
+  });
+
+  it("replace with new time changes the view; back history unchanged", () => {
+    let tabs = defaultMonitoringTabs();
+    const id = tabs.active;
+    const dash: MonitoringView = { page: "dashboard", id: "d1", tab: "dashboard", time: { from: "now-1h", to: "now" } };
+    tabs = monitoringTabsReducer(tabs, { type: "navigate", id, view: project("p1"), mode: "push" });
+    tabs = monitoringTabsReducer(tabs, { type: "navigate", id, view: dash, mode: "push" });
+    const back = tabs.tabs[0].back;
+    const later: MonitoringView = { ...dash, time: { from: "now-6h", to: "now" } };
+    tabs = monitoringTabsReducer(tabs, { type: "navigate", id, view: later, mode: "replace" });
+    expect(tabs.tabs[0].view).toEqual(later);
+    expect(tabs.tabs[0].back).toBe(back);
+    // The same value again changes nothing; a push of the same dashboard is still a no-op.
+    expect(monitoringTabsReducer(tabs, { type: "navigate", id, view: { ...later }, mode: "replace" })).toBe(tabs);
+    expect(monitoringTabsReducer(tabs, { type: "navigate", id, view: { ...dash, refresh: "5m" }, mode: "push" })).toBe(tabs);
+  });
+
+  describe("the leave check", () => {
+    afterEach(() => setMonitoringLeaveCheck(null));
+
+    it("a held close does not close the tab", () => {
+      expect(monitoringLeaveHeld({ type: "closeTab", id: "a" })).toBe(false);
+      setMonitoringLeaveCheck((a) => a.type === "closeTab");
+      expect(monitoringLeaveHeld({ type: "closeTab", id: "a" })).toBe(true);
+      expect(monitoringLeaveHeld({ type: "nextTab" })).toBe(false);
+      setMonitoringLeaveCheck(null);
+      expect(monitoringLeaveHeld({ type: "closeTab", id: "a" })).toBe(false);
+      expect(monitoringLeaveHeld({ type: "nextTab" })).toBe(false);
+    });
+
+    it("asks only about ways out of a tab's page", () => {
+      const asked: string[] = [];
+      setMonitoringLeaveCheck((a) => { asked.push(a.type); return true; });
+      expect(monitoringLeaveHeld({ type: "navigate", id: "a", view: MONITORING_HOME, mode: "push" })).toBe(true);
+      expect(monitoringLeaveHeld({ type: "back", id: "a" })).toBe(true);
+      expect(monitoringLeaveHeld({ type: "forward", id: "a" })).toBe(true);
+      for (const action of [{ type: "newTab" }, { type: "activateTab", id: "a" }, { type: "nextTab" }, { type: "previousTab" }, { type: "scroll", id: "a", top: 1 }] as const) {
+        expect(monitoringLeaveHeld(action)).toBe(false);
+      }
+      expect(asked).toEqual(["navigate", "back", "forward"]);
+    });
   });
 });

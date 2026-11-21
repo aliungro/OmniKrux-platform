@@ -169,7 +169,7 @@ it("monitoring tabs round-trip through storage", () => {
   };
   expect(parseWorkspace(serializeWorkspace(ws)).workspace).toEqual(ws);
   const unreadable = JSON.parse(serializeWorkspace(ws));
-  unreadable.monitoring.tabs.push({ id: "m4", view: { page: "dashboard", id: "d" }, back: [], forward: [], scrollTop: 0 });
+  unreadable.monitoring.tabs.push({ id: "m4", view: { page: "nope", id: "d" }, back: [], forward: [], scrollTop: 0 });
   const parsed = parseWorkspace(JSON.stringify(unreadable));
   expect(parsed.problem).toEqual({ text: "1 saved tab couldn't be read and was left out", reset: false });
   expect(parsed.workspace.monitoring.tabs.map((t) => t.id)).toEqual(["m1", "m2"]);

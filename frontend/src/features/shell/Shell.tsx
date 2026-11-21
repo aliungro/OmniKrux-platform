@@ -27,7 +27,7 @@ import { tabLabel } from "./tabLabel";
 import { kindView, type AppId, type KubeView, type Tab } from "./workspace";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 import type { MonitoringAppProps } from "../../monitoring/MonitoringApp";
-import type { MonitoringTabAction } from "../../monitoring/shell/tabState";
+import { monitoringLeaveHeld, type MonitoringTabAction } from "../../monitoring/shell/tabState";
 import s from "./Shell.module.css";
 
 interface PaneProps extends Omit<KubernetesTabProps, "nav" | "paneActive"> {
@@ -149,7 +149,13 @@ export function Shell() {
     dispatch({ type: "closeTab", id });
     if (id === activeId) focusView();
   };
-  const dispatchMonitoring = useCallback((action: MonitoringTabAction) => dispatch({ type: "monitoring", action }), [dispatch]);
+  // Alt+W, the tab strip's close buttons and the app's own tab actions: a way out of a page asks
+  // the app's leave check first, and a held action changes nothing (returns true).
+  const dispatchMonitoring = useCallback((action: MonitoringTabAction): boolean => {
+    if (monitoringLeaveHeld(action)) return true;
+    dispatch({ type: "monitoring", action });
+    return false;
+  }, [dispatch]);
   const openSettings = useCallback(() => switchApp("settings"), [switchApp]);
   const openKubernetes = useCallback(() => switchApp("kubernetes"), [switchApp]);
   const monitoringProps: MonitoringAppProps = {
@@ -218,15 +224,17 @@ export function Shell() {
     if (pressed("enterLogs", e)) { e.preventDefault(); if (!e.repeat) dockRef.current?.enter(); return; }
     if (monitoring) {
       // Monitoring's own tabs while it is shown; the Kubernetes tabs stay as they are.
-      if (pressed("newTab", e)) dispatchMonitoring({ type: "newTab" });
-      else if (pressed("closeTab", e)) dispatchMonitoring({ type: "closeTab", id: ws.monitoring.active });
-      else if (pressed("nextTab", e)) dispatchMonitoring({ type: "nextTab" });
-      else if (pressed("previousTab", e)) dispatchMonitoring({ type: "previousTab" });
-      else if (pressed("back", e)) monitoringNav.back();
-      else if (pressed("forward", e)) monitoringNav.forward();
+      // A held key leaves the keyboard where it is: the app's leave dialog takes it.
+      let held: boolean;
+      if (pressed("newTab", e)) held = dispatchMonitoring({ type: "newTab" });
+      else if (pressed("closeTab", e)) held = dispatchMonitoring({ type: "closeTab", id: ws.monitoring.active });
+      else if (pressed("nextTab", e)) held = dispatchMonitoring({ type: "nextTab" });
+      else if (pressed("previousTab", e)) held = dispatchMonitoring({ type: "previousTab" });
+      else if (pressed("back", e)) held = history.stepMonitoring(ws.monitoring.active, "back");
+      else if (pressed("forward", e)) held = history.stepMonitoring(ws.monitoring.active, "forward");
       else return;
       e.preventDefault();
-      focusView();
+      if (!held) focusView();
       return;
     }
     if (!kube) return;

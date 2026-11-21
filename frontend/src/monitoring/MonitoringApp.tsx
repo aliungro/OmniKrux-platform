@@ -58,6 +58,7 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   newGroup: GroupForm,
   explore: later("Explore", EXPLORE_LATER),
   alerts: later("Alerts", ALERTS_LATER),
+  dashboard: later("Dashboard"),
 };
 
 /** Opening a project or group (in this tab or a new one) puts it first in Recently opened. */
