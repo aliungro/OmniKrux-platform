@@ -1,0 +1,53 @@
+// Seeds for dashboard page tests: dashboards as the fake API holds them, panels and links.
+import type { LinkOut, ProjectOut } from "../api/types";
+import type { DashboardOut } from "../dashboards/api";
+import { emptyDashboard, newPanel, type DashboardSpec, type Layout, type OwnerKind, type PanelSpec, type PanelType, type VariableSpec } from "../dashboards/schema";
+import type { FakeDashboard } from "./fakeMonitoringApi";
+import { seedProject } from "./renderMonitoringApp";
+
+const T = "2026-01-01T00:00:00Z";
+
+/** A Prometheus (or Loki) source linked to a project. */
+export const linkTo = (sourceId: string, type: "prometheus" | "loki" = "prometheus"): LinkOut => ({
+  source_id: sourceId, source_name: `${sourceId} name`, source_type: type, filter: "", filter_origin: "none", created_by_project: false,
+});
+
+/** A project with these sources linked. */
+export function linkedProject(id: string, name: string, ...sources: string[]): ProjectOut {
+  return { ...seedProject(id, name), links: sources.map((s) => linkTo(s)) };
+}
+
+/** A panel with one query (`expr`), at `layout` (default: half width, eight rows, top left). */
+export function panel(id: string, title: string, expr: string, layout: Partial<Layout> = {}, type: PanelType = "timeseries"): PanelSpec {
+  const p = newPanel(type, id, { x: 0, y: 0, w: 12, h: 8, ...layout });
+  p.title = title;
+  p.queries[0].expr = expr;
+  return p;
+}
+
+/** A label-values variable read from the owner's first Prometheus source. */
+export function variable(name: string, label: string, over: Partial<VariableSpec> = {}): VariableSpec {
+  return {
+    name, label, type: "labelValues", source: { type: "prometheus", id: null }, labelName: name, match: "",
+    multi: false, includeAll: false, default: [], ...over,
+  };
+}
+
+export function spec(title: string, panels: PanelSpec[], variables: VariableSpec[] = []): DashboardSpec {
+  return { ...emptyDashboard(title), panels, variables };
+}
+
+/** A saved dashboard (version 1), or a ready-made view (`readyMade`: version 0, no versions). */
+export function seedDashboard(
+  id: string, owner: { kind: OwnerKind; id: string; name: string }, doc: DashboardSpec, readyMade = false,
+): FakeDashboard {
+  const out: DashboardOut = {
+    id, owner_kind: owner.kind, owner_id: owner.id, owner_name: owner.name, title: doc.title, version: readyMade ? 0 : 1,
+    spec: doc, ready_made: readyMade, created_at: readyMade ? null : T, updated_at: readyMade ? null : T,
+  };
+  const versions = readyMade ? [] : [{
+    out: { version: 1, saved_at: T, title: doc.title, panel_count: doc.panels.length, origin: "created" as const, restored_from: null, copied_from: null },
+    spec: doc,
+  }];
+  return { out, versions };
+}

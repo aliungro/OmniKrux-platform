@@ -23,10 +23,11 @@ export function tabsWith(...views: MonitoringView[]): AppTabs<MonitoringView> {
   return { tabs, active: tabs[0].id, closed: [] };
 }
 
-function Harness({ initial, onOpenSettings }: { initial: AppTabs<MonitoringView>; onOpenSettings(): void }) {
+function Harness({ initial, onOpenSettings, seen }: { initial: AppTabs<MonitoringView>; onOpenSettings(): void; seen: { tabs: AppTabs<MonitoringView> } }) {
   const [tabs, dispatch] = useReducer(
     (state: AppTabs<MonitoringView>, action: MonitoringTabAction) => monitoringTabsReducer(state, prepare(action)), initial,
   );
+  seen.tabs = tabs;
   const tab = tabs.tabs.find((t) => t.id === tabs.active)!;
   const nav: TabNav<MonitoringView> = {
     view: tab.view,
@@ -47,12 +48,16 @@ function Harness({ initial, onOpenSettings }: { initial: AppTabs<MonitoringView>
 
 export function renderMonitoringApp(opts: { tabs?: AppTabs<MonitoringView>; onOpenSettings?(): void } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const initial = opts.tabs ?? tabsWith({ page: "home" });
+  const seen = { tabs: initial };
   const result = render(
     <QueryClientProvider client={client}>
-      <Harness initial={opts.tabs ?? tabsWith({ page: "home" })} onOpenSettings={opts.onOpenSettings ?? (() => {})} />
+      <Harness initial={initial} onOpenSettings={opts.onOpenSettings ?? (() => {})} seen={seen} />
     </QueryClientProvider>,
   );
-  return { ...result, client };
+  /** The tabs as last rendered: each tab's view and its Back history. */
+  const current = () => seen.tabs;
+  return { ...result, client, current };
 }
 
 /** A saved project as the API returns it. */

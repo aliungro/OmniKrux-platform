@@ -1,0 +1,610 @@
+/* A dashboard page: the header bar, the Updated line, the ready-made note, the variables bar and
+   the JSON tab. Territories tokens only. Values and times are set in Geist Mono, like the
+   prototype's chips; words stay in Bricolage. */
+.page {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pageNote,
+.pageProblem {
+  margin: 0;
+  padding: 28px 28px 10px;
+  font-size: 13.5px;
+}
+
+.pageNote {
+  color: var(--ink-3);
+}
+
+.pageProblem {
+  color: var(--bad);
+}
+
+.retryPage {
+  margin: 0 28px;
+  align-self: flex-start;
+}
+
+/* --- Header ----------------------------------------------------------------------------- */
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surf);
+}
+
+.heading {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.crumb {
+  flex: none;
+  margin: 0;
+  display: inline-flex;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.owner {
+  color: inherit;
+  text-decoration: none;
+  border-radius: 3px;
+}
+
+.owner:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.slash {
+  color: var(--ink-3);
+}
+
+.title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readyTag {
+  flex: none;
+  align-self: center;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 999px;
+  color: var(--focus);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.tab {
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+.controls {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink-2);
+  font: 11.5px/1.4 "Geist Mono", ui-monospace, monospace;
+  cursor: pointer;
+}
+
+.chip:hover,
+.chip[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+  color: var(--ink);
+}
+
+.chipIcon {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.caret {
+  color: var(--ink-3);
+  font-size: 10px;
+}
+
+.refresh {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.refresh:focus-within {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+}
+
+.refreshNow {
+  padding: 2px 9px;
+  border: 0;
+  border-right: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.refreshNow:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--focus) 8%, transparent);
+}
+
+.refreshEvery {
+  padding: 3px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: 11.5px/1.4 "Geist Mono", ui-monospace, monospace;
+  cursor: pointer;
+}
+
+.refreshEvery option {
+  background: var(--surf);
+  color: var(--ink);
+}
+
+.edit,
+.iconButton {
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.edit {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.iconButton {
+  width: 28px;
+  height: 27px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--ink-2);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.edit:hover,
+.iconButton:hover,
+.iconButton[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+  color: var(--ink);
+}
+
+.edit[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.edit[aria-disabled="true"]:hover {
+  border-color: var(--rule);
+}
+
+.owner:focus-visible,
+.title:focus-visible,
+.tab:focus-visible,
+.chip:focus-visible,
+.refreshNow:focus-visible,
+.refreshEvery:focus-visible,
+.edit:focus-visible,
+.iconButton:focus-visible,
+.varButton:focus-visible,
+.apply:focus-visible,
+.retry:focus-visible,
+.retryPage:focus-visible,
+.json:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.refreshNow:focus-visible,
+.refreshEvery:focus-visible {
+  outline-offset: -2px;
+}
+
+/* --- Menus and pickers ------------------------------------------------------------------- */
+
+.popAnchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.popup {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  min-width: 210px;
+  padding: 4px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf-2);
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--bg) 75%, transparent);
+}
+
+.popupEnd {
+  left: auto;
+  right: 0;
+}
+
+.menu {
+  display: grid;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menuItem:hover,
+.menuItem:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--focus) 13%, transparent);
+  color: var(--ink);
+}
+
+.menuItem[aria-checked="true"] {
+  color: var(--ink);
+}
+
+.menuItem[data-divider] {
+  margin-top: 4px;
+  border-top: 1px solid var(--rule);
+  border-radius: 0 0 6px 6px;
+  padding-top: 8px;
+}
+
+.menuItem[data-danger] {
+  color: var(--bad);
+}
+
+.menuItem[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.check {
+  width: 12px;
+  flex: none;
+  color: var(--focus);
+  font-size: 11px;
+}
+
+.custom {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 8px 6px;
+  border-top: 1px solid var(--rule);
+}
+
+.field {
+  display: grid;
+  gap: 3px;
+}
+
+.fieldLabel {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 12px/1.4 "Geist Mono", ui-monospace, monospace;
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--bad);
+}
+
+.fieldProblem {
+  max-width: 260px;
+  margin: 0;
+  color: var(--bad);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.apply {
+  justify-self: start;
+  margin-top: 2px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--focus);
+  color: var(--bg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* --- Under the header --------------------------------------------------------------------- */
+
+.updated {
+  min-height: 1.5em;
+  margin: 0;
+  padding: 7px 16px 0;
+  color: var(--ink-3);
+  font: 11px/1.5 "Geist Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.updated[data-updating] {
+  color: var(--ink-2);
+}
+
+.readyNote {
+  margin: 8px 16px 0;
+  padding: 9px 12px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 10px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.readyLine {
+  margin: 0;
+}
+
+.readyLine + .readyLine {
+  margin-top: 3px;
+  color: var(--ink-3);
+}
+
+.content {
+  flex: 1;
+  padding: 10px 16px 32px;
+}
+
+.json {
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 12px/1.6 "Geist Mono", ui-monospace, monospace;
+  white-space: pre;
+}
+
+/* --- Variables ---------------------------------------------------------------------------- */
+
+.vars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.varButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.varButton:hover,
+.varButton[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+}
+
+.varName {
+  color: var(--ink-3);
+}
+
+.varValue {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.varMissing {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.values {
+  width: max-content;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 6px;
+}
+
+.valuesNote {
+  margin: 4px 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.valuesError {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  padding: 4px 6px 6px;
+}
+
+.valuesProblem {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.retry,
+.retryPage {
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.retry:hover {
+  border-color: var(--focus);
+}
+
+.valuesFilter {
+  margin-bottom: 4px;
+}
+
+.choices {
+  display: grid;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.choice:hover,
+.choice:focus-within {
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
+  color: var(--ink);
+}
+
+.choice input {
+  margin: 0;
+  accent-color: var(--focus);
+}
+
+.choiceMissing {
+  color: var(--warn);
+}
+
+@media (max-width: 719px) {
+  .header {
+    padding: 9px 12px;
+  }
+
+  .controls {
+    margin-left: 0;
+  }
+
+  .content {
+    padding: 10px 12px 28px;
+  }
+
+  .updated {
+    padding: 7px 12px 0;
+  }
+}

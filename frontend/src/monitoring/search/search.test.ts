@@ -44,4 +44,26 @@ describe("search", () => {
     expect(searchMonitoring(index, "  ")).toEqual([]);
     expect(searchMonitoring(index, "nothing-like-this")).toEqual([]);
   });
+
+  it("search finds dashboards by title with their owner", () => {
+    const withDashboards: TreeOut = {
+      projects: [{
+        id: "p1", name: "prod-east", kind: "kubernetes", cluster_id: "c1", color: "gke",
+        dashboards: [{ id: "d1", title: "API latency", ready_made: false }, { id: "ready:p1:pods", title: "Pod health", ready_made: true }],
+      }],
+      groups: [{ id: "g1", name: "Everything", project_ids: ["p1"], dashboards: [{ id: "d2", title: "Fleet latency", ready_made: false }] }],
+      source_count: 0,
+    };
+    const found = buildSearchIndex({ tree: withDashboards, sources: [] });
+    const hits = searchMonitoring(found, "latency");
+    expect(hits.map((h) => [h.kind, h.name, h.subtitle, h.view])).toEqual([
+      ["dashboard", "API latency", "prod-east · Dashboard", { page: "dashboard", id: "d1" }],
+      ["dashboard", "Fleet latency", "Everything · Dashboard", { page: "dashboard", id: "d2" }],
+    ]);
+    expect(searchMonitoring(found, "pod health").map((h) => [h.subtitle, h.view])).toEqual([
+      ["prod-east · Ready-made", { page: "dashboard", id: "ready:p1:pods" }],
+    ]);
+    // The owner's name finds its dashboards too.
+    expect(searchMonitoring(found, "everything").map((h) => h.name)).toEqual(["Everything", "Fleet latency"]);
+  });
 });

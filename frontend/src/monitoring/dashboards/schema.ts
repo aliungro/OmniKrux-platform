@@ -180,7 +180,7 @@ export type Validation = { ok: true; spec: DashboardSpec } | { ok: false; proble
 
 // --- copy ---------------------------------------------------------------------------------
 
-const TIME_COPY =
+export const TIME_COPY =
   'Use "now", "now-<number><s|m|h|d|w>", or a UTC time like 2026-11-19T10:00:00Z.';
 const NAME_COPY =
   "Use letters, digits and _, starting with a letter or _, at most 40 characters, " +

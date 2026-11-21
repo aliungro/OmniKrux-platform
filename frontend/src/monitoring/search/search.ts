@@ -1,5 +1,5 @@
 import type { MonitoringView } from "../shell/tabState";
-import type { ProjectKind, SourceOut, TreeOut } from "../api/types";
+import type { ProjectKind, SourceOut, TreeDashboard, TreeOut } from "../api/types";
 
 export type SearchEntry = {
   kind: "project" | "group" | "source" | "dashboard";
@@ -18,6 +18,11 @@ function projectSubtitle(kind: ProjectKind, cluster: string | null | undefined):
   }
 }
 
+/** A dashboard opens itself; its subtitle names its owner and whether it is a ready-made view. */
+function dashboardEntry(d: TreeDashboard, owner: string): SearchEntry {
+  return { kind: "dashboard", id: d.id, name: d.title, subtitle: `${owner} · ${d.ready_made ? "Ready-made" : "Dashboard"}`, view: { page: "dashboard", id: d.id } };
+}
+
 /** Everything Find can open. `clusterNames` (cluster id to name) names a Kubernetes project's cluster; without it the id shows. */
 export function buildSearchIndex(input: { tree: TreeOut; sources: SourceOut[]; clusterNames?: Record<string, string> }): SearchEntry[] {
   const { tree, sources, clusterNames = {} } = input;
@@ -25,11 +30,11 @@ export function buildSearchIndex(input: { tree: TreeOut; sources: SourceOut[]; c
   for (const p of tree.projects) {
     const cluster = p.cluster_id ? (clusterNames[p.cluster_id] ?? p.cluster_id) : null;
     entries.push({ kind: "project", id: p.id, name: p.name, subtitle: projectSubtitle(p.kind, cluster), view: { page: "project", id: p.id } });
-    for (const d of p.dashboards) entries.push({ kind: "dashboard", id: d.id, name: d.title, subtitle: `Dashboard · ${p.name}`, view: { page: "project", id: p.id } });
+    for (const d of p.dashboards) entries.push(dashboardEntry(d, p.name));
   }
   for (const g of tree.groups) {
     entries.push({ kind: "group", id: g.id, name: g.name, subtitle: `${g.project_ids.length} ${g.project_ids.length === 1 ? "project" : "projects"}`, view: { page: "group", id: g.id } });
-    for (const d of g.dashboards) entries.push({ kind: "dashboard", id: d.id, name: d.title, subtitle: `Dashboard · ${g.name}`, view: { page: "group", id: g.id } });
+    for (const d of g.dashboards) entries.push(dashboardEntry(d, g.name));
   }
   for (const s of sources) {
     entries.push({ kind: "source", id: s.id, name: s.name, subtitle: s.type === "loki" ? "Loki" : "Prometheus-compatible", view: { page: "source", id: s.id } });

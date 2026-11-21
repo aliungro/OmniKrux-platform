@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ComponentType } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, type ComponentType } from "react";
 import { useClusters } from "../api/useClusters";
 import type { TabNav } from "../features/shell/browserHistory";
 import type { AppTabs } from "../features/shell/workspace";
@@ -9,7 +9,9 @@ import { recordRecent } from "./home/recent";
 import GroupForm from "./groups/GroupForm";
 import GroupPage from "./groups/GroupPage";
 import MonitoringHome from "./home/MonitoringHome";
+import DashboardPage from "./dashboards/page/DashboardPage";
 import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
+import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
 import SetupPage from "./setup/SetupPage";
@@ -31,6 +33,8 @@ export interface MonitoringAppProps {
 /** What every page gets: its view, the active tab's navigation, and a way to open a new tab. */
 export interface MonitoringPageProps {
   view: MonitoringView;
+  /** The workspace tab this page is shown in (an edit session is kept per tab). */
+  tabId: string;
   nav: TabNav<MonitoringView>;
   openInNewTab(view: MonitoringView): void;
   onOpenSettings(): void;
@@ -58,40 +62,30 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   newGroup: GroupForm,
   explore: later("Explore", EXPLORE_LATER),
   alerts: later("Alerts", ALERTS_LATER),
-  dashboard: later("Dashboard"),
+  dashboard: DashboardPage,
 };
 
-/** Opening a project or group (in this tab or a new one) puts it first in Recently opened. */
+/** Opening a project, group or dashboard (in this tab or a new one) puts it first in Recently opened. */
 function recordOpened(view: MonitoringView) {
-  if (view.page === "project" || view.page === "group") recordRecent({ kind: view.page, id: view.id });
+  if (view.page === "project" || view.page === "group" || view.page === "dashboard") recordRecent({ kind: view.page, id: view.id });
 }
 
-/**
- * Whether a page may take the keyboard as it appears: only when nothing else has it (`<body>`,
- * the workspace's `<main>`, or the page area). Typing in Find or moving in the tree keeps it.
- */
-function keyboardIsFree(): boolean {
-  const active = document.activeElement;
-  if (active === null || active === document.body || active.tagName === "MAIN") return true;
-  return active.closest("[data-monitoring-page]") !== null;
+/** The same page about the same item: a replace that only changes its view state (time, variables, tab). */
+function samePageAndItem(a: MonitoringView, b: MonitoringView): boolean {
+  return a.page === b.page && "id" in a && "id" in b && a.id === b.id;
 }
 
-function Gone({ what, onHome }: { what: "project" | "group" | "source"; onHome(): void }) {
-  const button = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (keyboardIsFree()) button.current?.focus(); }, []);
-  return (
-    <section className={s.gone}>
-      <p className={s.goneText}>This {what} no longer exists.</p>
-      <button ref={button} type="button" className={s.primary} onClick={onHome}>Go to Home</button>
-    </section>
-  );
+/** Whether a dashboard is listed in the tree, under its project (saved or ready-made) or its group. */
+function listsDashboard(tree: TreeOut, id: string): boolean {
+  return tree.projects.some((p) => p.dashboards.some((d) => d.id === id)) || tree.groups.some((g) => g.dashboards.some((d) => d.id === id));
 }
 
 /** Whether the item a view names is known to be gone: only once the list it belongs to has loaded. */
-function goneKind(view: MonitoringView, tree: TreeOut | undefined, sources: SourceOut[] | undefined): "project" | "group" | "source" | null {
+function goneKind(view: MonitoringView, tree: TreeOut | undefined, sources: SourceOut[] | undefined): GoneWhat | null {
   if (view.page === "project" && tree && !tree.projects.some((p) => p.id === view.id)) return "project";
   if (view.page === "group" && tree && !tree.groups.some((g) => g.id === view.id)) return "group";
   if (view.page === "source" && sources && !sources.some((x) => x.id === view.id)) return "source";
+  if (view.page === "dashboard" && tree && !listsDashboard(tree, view.id)) return "dashboard";
   return null;
 }
 
@@ -132,9 +126,11 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     const projects = new Map(tree.data?.projects.map((p) => [p.id, p]));
     const groups = new Map(tree.data?.groups.map((g) => [g.id, g.name]));
     const sourceNames = new Map(sources.data?.map((x) => [x.id, x.name]));
+    const dashboards = new Map([...(tree.data?.projects ?? []), ...(tree.data?.groups ?? [])].flatMap((o) => o.dashboards.map((d) => [d.id, d.title])));
     return {
       label: (v: MonitoringView) => monitoringTabLabel(v, {
         project: (id) => projects.get(id)?.name, group: (id) => groups.get(id), source: (id) => sourceNames.get(id),
+        dashboard: (id) => dashboards.get(id),
       }),
       color: (v: MonitoringView) => {
         const p = v.page === "project" ? projects.get(v.id) : undefined;
@@ -154,14 +150,18 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     dispatchTabs({ type: "newTab", view: v });
     recordOpened(v);
   }, [dispatchTabs, handOff]);
-  // The tab's navigation as pages see it: going to a project or group records it as opened.
-  // Back, Forward, switching tabs and reloading show a page without opening it again.
+  // The tab's navigation as pages see it: going to a project, group or dashboard records it as
+  // opened. Back, Forward, switching tabs and reloading show a page without opening it again. A
+  // replace that keeps the page and its item (a dashboard's time, variables or tab) changes only
+  // view state: the page stays, so the keyboard stays where it is and nothing is opened again.
   const pageNav = useMemo<TabNav<MonitoringView>>(() => ({
     ...nav,
     navigate: (move, mode) => {
-      handOff();
-      nav.navigate(move, mode);
-      recordOpened(typeof move === "function" ? move(nav.view) : move);
+      const next = typeof move === "function" ? move(nav.view) : move;
+      const stays = mode === "replace" && samePageAndItem(nav.view, next);
+      if (!stays) handOff();
+      nav.navigate(next, mode);
+      if (!stays) recordOpened(next);
     },
   }), [nav, handOff]);
   const open = useCallback((v: MonitoringView, newTab: boolean) => {
@@ -181,7 +181,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     // Only when the tab changes; scrolling itself updates nav.scrollTop.
   }, [tabId]);
 
-  const page: MonitoringPageProps = { view, nav: pageNav, openInNewTab, onOpenSettings };
+  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, onOpenSettings };
   return (
     <div ref={root} className={s.app}>
       <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}

@@ -158,11 +158,11 @@ export default function MonitoringHome({ nav, openInNewTab, onOpenSettings }: Mo
       const g = tree.data.groups.find((x) => x.id === r.id);
       return g ? [{ key: `group:${r.id}`, name: g.name, what: "Group", view: { page: "group", id: g.id } as MonitoringView }] : [];
     }
-    const p = tree.data.projects.find((x) => x.dashboards.some((d) => d.id === r.id));
-    const g = tree.data.groups.find((x) => x.dashboards.some((d) => d.id === r.id));
-    const owner = p ? { page: "project", id: p.id } : g ? { page: "group", id: g.id } : null;
-    const title = (p ?? g)?.dashboards.find((d) => d.id === r.id)?.title;
-    return owner && title ? [{ key: `dashboard:${r.id}`, name: title, what: "Dashboard", view: owner as MonitoringView }] : [];
+    // A dashboard opens itself, as long as its owner still lists it.
+    const owner = tree.data.projects.find((x) => x.dashboards.some((d) => d.id === r.id))
+      ?? tree.data.groups.find((x) => x.dashboards.some((d) => d.id === r.id));
+    const title = owner?.dashboards.find((d) => d.id === r.id)?.title;
+    return title ? [{ key: `dashboard:${r.id}`, name: title, what: "Dashboard", view: { page: "dashboard", id: r.id } as MonitoringView }] : [];
   });
 
   return (

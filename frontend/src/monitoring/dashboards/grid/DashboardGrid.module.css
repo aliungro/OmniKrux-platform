@@ -1,0 +1,220 @@
+/* The dashboard grid and its panels. 24 columns, 30 px rows, 10 px gaps; stacked when narrow.
+   Territories tokens only. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  grid-auto-rows: 30px;
+  gap: 10px;
+}
+
+.empty {
+  margin: 0;
+  padding: 18px 16px;
+  border: 1px dashed var(--rule);
+  border-radius: 10px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+.panel {
+  grid-column: var(--col);
+  grid-row: var(--row);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 9px 12px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf);
+}
+
+.panel[data-state="unreachable"],
+.panel[data-state="error"] {
+  border-color: color-mix(in srgb, var(--bad) 32%, var(--rule));
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  margin-bottom: 6px;
+}
+
+.panelTitle {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelTitle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.about {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.aboutButton {
+  padding: 0 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: help;
+}
+
+.aboutButton:hover {
+  color: var(--ink);
+}
+
+.aboutButton:focus-visible,
+.partial:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.partial {
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: help;
+}
+
+.tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: -6px;
+  z-index: 4;
+  display: none;
+  width: max-content;
+  max-width: 300px;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surf-2);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.about:hover .tip,
+.about:focus-within .tip {
+  display: block;
+}
+
+.tipLine {
+  display: block;
+}
+
+.tipLine + .tipLine {
+  margin-top: 4px;
+}
+
+.body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.note {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  min-height: 40px;
+}
+
+.noteText {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.failure {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-left: 2px solid var(--bad);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+}
+
+.failureTitle {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.failureReason {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.retry {
+  margin-top: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.retry:hover {
+  border-color: var(--focus);
+}
+
+.retry:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Narrow windows: every panel full width, in reading order, at its own height. */
+@media (max-width: 719px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+  }
+
+  .panel {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    height: calc(var(--rows) * 30px + (var(--rows) - 1) * 10px);
+  }
+}
