@@ -181,5 +181,7 @@ describe("layout", () => {
       layout: { w: 99, h: 0 },
     } as never);
     expect(wild.panels[1].layout).toMatchObject({ w: 24, h: 2 });
+    const edge = appendPanel(spec, { ...rest, layout: { x: 20, y: -4, w: 12, h: 3 } } as never);
+    expect(edge.panels[1].layout).toEqual({ x: 12, y: 0, w: 12, h: 3 });
   });
 });

@@ -34,7 +34,7 @@ export function escapeRegex(v: string): string {
 
 // Sticky, so it matches only at the scan position.
 const TOKEN = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/y;
-const BARE_SAFE = /^[A-Za-z0-9_:.-]*$/;
+const BARE_SAFE = /^[A-Za-z0-9_:.]*$/;
 
 type Quote = '"' | "'" | "`" | null;
 
@@ -73,6 +73,14 @@ export function interpolate(
   let i = 0;
   while (i < text.length) {
     const c = text[i];
+    if (quote === null && c === "#") {
+      // A line comment: copy to the end of the line untouched, no variables, no quote tracking.
+      const nl = text.indexOf("\n", i);
+      const end = nl === -1 ? text.length : nl;
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
     if (c === "$") {
       TOKEN.lastIndex = i;
       const m = TOKEN.exec(text);

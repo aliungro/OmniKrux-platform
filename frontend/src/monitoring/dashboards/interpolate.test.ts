@@ -94,7 +94,9 @@ describe("interpolate", () => {
 
   it("unquoted values must be plain", () => {
     expect(interpolate("topk($v, up)", one(["5"]), B)).toBe("topk(5, up)");
-    expect(interpolate("up[${v}]", one(["a_b:c.d-e"]), B)).toBe("up[a_b:c.d-e]");
+    expect(interpolate("up[${v}]", one(["a_b:c.d"]), B)).toBe("up[a_b:c.d]");
+    // A hyphen would turn `$v{job="x"}` into a subtraction.
+    expect(() => interpolate('$v{job="x"}', one(["up-secret"]), B)).toThrow(VariableError);
     expect(() => interpolate("topk($v, up)", one(["5) or up"]), B)).toThrow(VariableError);
     expect(() => interpolate("topk($v, up)", one(["5", "6"], true), B)).toThrow(VariableError);
     expect(() => interpolate("topk($v, up)", { v: { multi: true, value: "all" } }, B)).toThrow(
@@ -118,5 +120,18 @@ describe("interpolate", () => {
     expect(() => interpolate('{a="x"} $v', one(["a b"]), B)).toThrow(VariableError);
     // A quote of the other kind inside a string does not change the context.
     expect(interpolate(`"it's $v"`, one(['"']), B)).toBe(`"it's \\""`);
+  });
+
+  it("a quote inside a # comment does not flip the string state", () => {
+    const evil = 'x"} or vector(1) or up{a="';
+    const dbl = interpolate(`up # it's\n{a="$v"}`, one([evil]), B);
+    expect(dbl).toBe(`up # it's\n{a="x\\"} or vector(1) or up{a=\\""}`);
+    const sgl = interpolate(`up # say "hi\n{a='$v'}`, one(["x' or up{a='"]), B);
+    expect(sgl).toBe(`up # say "hi\n{a='x\\' or up{a=\\''}`);
+  });
+
+  it("comments are copied as they are and end at the line break", () => {
+    expect(interpolate("up # $v $__range\r\n$v", one(["5"]), B)).toBe("up # $v $__range\r\n5");
+    expect(interpolate('"a # $v"', one(["q"]), B)).toBe('"a # q"');
   });
 });

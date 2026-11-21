@@ -122,7 +122,10 @@ export function appendPanel(spec: DashboardSpec, panel: NewPanel): DashboardSpec
   const h = Math.min(MAX_H, Math.max(MIN_H, panel.layout?.h ?? size.h));
   const spot =
     panel.layout?.x !== undefined && panel.layout?.y !== undefined
-      ? { x: panel.layout.x, y: panel.layout.y }
+      ? {
+          x: Math.min(GRID_COLUMNS - w, Math.max(0, panel.layout.x)),
+          y: Math.max(0, panel.layout.y),
+        }
       : freeSpot(spec.panels, w, h);
   const full = { ...panel, layout: { ...spot, w, h } } as PanelSpec;
   return { ...spec, panels: [...spec.panels, full] };
