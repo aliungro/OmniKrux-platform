@@ -157,7 +157,9 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     setPreview(null);
     refocus.current = d.id;
     focusTile(d.id);
-    if (apply && !sameLayout(d.to, d.start)) {
+    // Back where it started (or clamped there): nothing to place and nothing to say.
+    const landed = placePanel(d.panels, d.id, d.to).find((p) => p.id === d.id)?.layout ?? d.start;
+    if (apply && !sameLayout(landed, d.start)) {
       act({ type: "place", id: d.id, to: d.to }, d.kind === "move" ? movedWords(d.id) : resizedWords(d.id));
     }
   }, [act, focusTile]);

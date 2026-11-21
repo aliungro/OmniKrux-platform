@@ -72,6 +72,9 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
       if (e.code === "version_conflict") {
         setConflict(e.currentVersion ?? baseVersion + 1);
         void client.invalidateQueries({ queryKey: dashboardKey(s.dashboardId), exact: true });
+      } else if (e.code === "invalid_dashboard") {
+        // The draft itself has problems (Save over it included): the edit bar lists them.
+        setConflict(null);
       }
     } finally {
       busy.current = false;
@@ -80,8 +83,11 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
 
   const save = useCallback(async () => {
     const s = current.current;
-    if (s.mode === "edit") await send(s.baseVersion);
-  }, [send]);
+    if (s.mode !== "edit") return;
+    // Nothing changed: no new version and no Audit record, just the end of editing.
+    if (!isDirty(s)) dispatch({ type: "discard" });
+    else await send(s.baseVersion);
+  }, [dispatch, send]);
 
   const saveOver = useCallback(async (version: number, base: DashboardSpec) => {
     dispatch({ type: "rebase", version, base });

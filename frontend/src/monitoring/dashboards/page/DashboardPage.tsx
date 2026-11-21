@@ -26,6 +26,8 @@ import s from "./DashboardPage.module.css";
 
 const two = (n: number) => String(n).padStart(2, "0");
 const clockTime = (ms: number) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`; };
+/** The keyboard is nowhere: on <body>, or on something that just went away. */
+const focusLost = () => { const a = document.activeElement; return a === null || a === document.body || !a.isConnected; };
 
 /** When the data was last read: the oldest panel read of the current set, or Updating… while any loads. */
 function UpdatedLine({ status }: { status: PanelStatusStore }) {
@@ -101,6 +103,8 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
   // Copy to edit (a ready-made view) arrives with creating and copying.
   const edit = ready ? undefined : () => editor.dispatch({ type: "start", dashboardId: dashboard.id, version: dashboard.version, spec: dashboard.spec });
   const save = () => { void editor.save(); };
+  const saveRef = useRef(save);
+  saveRef.current = save;
   const discard = () => {
     if (isDirty(editor.state)) setAskDiscard(true);
     else editor.discard();
@@ -109,25 +113,30 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
   // Edit mode ended (saved or discarded): the keyboard goes to Edit, never to <body>.
   const isEditing = editing !== null;
   const wasEditing = useRef(isEditing);
+  // Edit mode started where no grid takes the keyboard (the JSON tab, an owner failure): Edit
+  // went away under it, so it goes to Save dashboard. With the grid, the first tile already has it.
   useLayoutEffect(() => {
     if (wasEditing.current && !isEditing) {
       setAskDiscard(false);
       editButton.current?.focus();
+    } else if (!wasEditing.current && isEditing && focusLost()) {
+      saveButton.current?.focus();
     }
     wasEditing.current = isEditing;
   }, [isEditing]);
 
+  // The conflict review closed because the draft itself was refused (422): the keyboard goes to
+  // Show in JSON, or Save dashboard.
+  const conflictShown = editor.conflict !== null;
+  const hadConflict = useRef(conflictShown);
+  const showInJson = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (hadConflict.current && !conflictShown && isEditing && focusLost()) (showInJson.current ?? saveButton.current)?.focus();
+    hadConflict.current = conflictShown;
+  }, [conflictShown, isEditing]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Ctrl+S (Cmd+S) saves while editing, from this page's fields too (F7); otherwise it's the browser's.
-      if (editing && pressed("dashboardSave", e)) {
-        const t = e.target;
-        const here = t instanceof Node && !!page.current?.contains(t);
-        if (e.defaultPrevented || document.querySelector('[aria-modal="true"]') !== null || (!here && isEditable(t))) return;
-        e.preventDefault();
-        if (!e.repeat) save();
-        return;
-      }
       if (!pageLetter(e)) return;
       if (pressed("dashboardViews", e)) {
         const t = tabs[Number(e.key) - 1];
@@ -149,6 +158,24 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   });
+
+  // Ctrl+S (Cmd+S) while editing saves, from this page's fields too (F7). It is caught before the
+  // page's own handlers (dialogs keep their keys to themselves): with a dialog open it saves
+  // nothing, but the browser's Save dialog never opens either. Outside edit mode it's the browser's.
+  useEffect(() => {
+    if (!isEditing) return;
+    const onSave = (e: KeyboardEvent) => {
+      if (!pressed("dashboardSave", e) || e.defaultPrevented) return;
+      const t = e.target;
+      const here = t instanceof Node && !!page.current?.contains(t);
+      if (!here && isEditable(t)) return;
+      e.preventDefault();
+      if (document.querySelector('[aria-modal="true"]') !== null || e.repeat) return;
+      saveRef.current();
+    };
+    document.addEventListener("keydown", onSave, true);
+    return () => document.removeEventListener("keydown", onSave, true);
+  }, [isEditing]);
 
   // The owner read failed and Try again worked: its button went with the message, and the
   // keyboard goes to the title rather than <body>.
@@ -188,7 +215,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab }: Monitori
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />
       )}
-      {editing && conflict === null && otherError && <EditNotice error={otherError} onShowJson={() => selectTab("json")} />}
+      {editing && conflict === null && otherError && <EditNotice error={otherError} onShowJson={() => selectTab("json")} actionRef={showInJson} />}
       {askDiscard && editing && (
         <DiscardDialog title={editing.base.title || dashboard.title} restoreFocusTo={discardButton}
           onCancel={() => setAskDiscard(false)} onDiscard={() => editor.discard()} />

@@ -34,7 +34,11 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef }:
 const SHOWN_PROBLEMS = 3;
 
 /** A save that didn't go through, other than a version conflict (SaveConflict says that one). */
-export function EditNotice({ error, onShowJson }: { error: DashboardRequestError; onShowJson(): void }) {
+export function EditNotice({ error, onShowJson, actionRef }: {
+  error: DashboardRequestError;
+  onShowJson(): void;
+  actionRef?: RefObject<HTMLButtonElement | null>;
+}) {
   const { problems } = error;
   const more = problems.length - SHOWN_PROBLEMS;
   return (
@@ -52,7 +56,7 @@ export function EditNotice({ error, onShowJson }: { error: DashboardRequestError
           </ul>
         )}
       </div>
-      {problems.length > 0 && <button type="button" className={s.noticeAction} onClick={onShowJson}>Show in JSON</button>}
+      {problems.length > 0 && <button ref={actionRef} type="button" className={s.noticeAction} onClick={onShowJson}>Show in JSON</button>}
     </div>
   );
 }

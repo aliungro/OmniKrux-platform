@@ -277,4 +277,89 @@ describe("Edit mode", () => {
     expect(screen.getByText("Editing")).toBeTruthy();
     expect(document.activeElement).not.toBe(screen.getByRole("button", { name: "Save dashboard" }));
   });
+
+  it("entering edit mode from the JSON tab puts the keyboard on Save dashboard", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    await user.keyboard("2");
+    expect(screen.getByRole("tab", { name: "JSON" }).getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("e");
+    const save = await screen.findByRole("button", { name: "Save dashboard" });
+    notBody();
+    expect(document.activeElement).toBe(save);
+  });
+
+  it("saving with no changes writes nothing and leaves edit mode", async () => {
+    const { user, api } = await editing();
+    await user.keyboard("{Control>}s{/Control}");
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    await waitFor(() => expect(document.activeElement).toBe(edit));
+    expect(screen.queryByText("Editing")).toBeNull();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(puts(api)).toHaveLength(0);
+    expect(api.state.dashboards.d1.out.version).toBe(1);
+  });
+
+  it("Ctrl+S with a dialog open saves nothing and keeps the browser's Save away", async () => {
+    const { user, api } = await editing();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    const dialog = screen.getByRole("alertdialog");
+    const event = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true });
+    document.activeElement!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(dialog.isConnected).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(puts(api)).toHaveLength(0);
+  });
+
+  it("Save over it refused as invalid shows the problems with Show in JSON", async () => {
+    const { user, api } = await editing();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    const d = api.state.dashboards.d1;
+    d.out = { ...d.out, version: 2 };
+    await user.keyboard("{Control>}s{/Control}");
+    await screen.findByText(/saved somewhere else since you started \(version 2\)/);
+    // The next save is refused as invalid.
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => (init?.method === "PUT"
+      ? Promise.resolve(new Response(JSON.stringify({ detail: {
+        code: "invalid_dashboard", message: "The dashboard has problems.", problems: [{ path: "panels[0].title", message: "Use at most 120 characters." }],
+      } }), { status: 422, headers: { "content-type": "application/json" } }))
+      : inner(input, init))));
+    await user.click(screen.getByRole("button", { name: "Review differences" }));
+    await within(screen.getByRole("dialog")).findByTestId("diff-before");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    const problems = await screen.findByRole("alert");
+    expect(problems.textContent).toContain("panels[0].title");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(/saved somewhere else/)).toBeNull();
+    const show = within(problems).getByRole("button", { name: "Show in JSON" });
+    await waitFor(() => expect(document.activeElement).toBe(show));
+    expect(screen.getByText("Editing")).toBeTruthy();
+  });
+
+  it("a drag that ends where it started changes nothing", async () => {
+    const { user } = await editing();
+    vi.spyOn(panels(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 950, 400));
+    const handle = within(tile("Requests")).getByRole("button", { name: "Move Requests" });
+    const point = (type: string, clientX: number, clientY: number) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY });
+      Object.defineProperty(event, "pointerId", { value: 3 });
+      fireEvent(handle, event);
+    };
+    point("pointerdown", 100, 100);
+    point("pointermove", 182, 104);
+    point("pointermove", 103, 101);
+    point("pointerup", 103, 101);
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
+    expect(screen.queryByText(/^Moved "Requests"/)).toBeNull();
+    // Nothing changed, so Discard doesn't ask.
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit" })));
+  });
 });
