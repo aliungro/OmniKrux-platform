@@ -1,10 +1,11 @@
 """The connector for Loki."""
 
 from collections.abc import Sequence
+from decimal import Decimal
 from urllib.parse import quote
 
 from omnikrux.monitoring.projects.types import Matcher
-from omnikrux.monitoring.query.filters import render_matchers
+from omnikrux.monitoring.query.filters import inject_logql, render_matchers
 from omnikrux.monitoring.query.series import QueryResult, series_result, streams_result
 from omnikrux.monitoring.sources.connector import (
     NOT_LIKE,
@@ -103,9 +104,23 @@ class LokiConnector:
         return FieldCatalog((), tuple(labels[:limit]), len(labels) > limit)
 
     async def label_values(
-        self, t: SourceTransport, label: str, *, matchers: Sequence[Matcher], limit: int = 1000
+        self,
+        t: SourceTransport,
+        label: str,
+        *,
+        matchers: Sequence[Matcher],
+        limit: int = 1000,
+        selector: str | None = None,
+        start: float | None = None,
+        end: float | None = None,
     ) -> list[str]:
-        params = [("query", _selector(matchers))] if matchers else []
+        if selector is not None:
+            params = [("query", inject_logql(selector, matchers))]
+        else:
+            params = [("query", _selector(matchers))] if matchers else []
+        for key, value in (("start", start), ("end", end)):
+            if value is not None:
+                params.append((key, _nanoseconds(value)))
         path = f"/loki/api/v1/label/{quote(label, safe='')}/values"
         return (await self._list(t, path, params))[:limit]
 
@@ -127,3 +142,8 @@ class LokiConnector:
 
 def _selector(matchers: Sequence[Matcher]) -> str:
     return "{" + render_matchers(matchers) + "}"
+
+
+def _nanoseconds(seconds: float) -> str:
+    """Seconds as the whole nanoseconds Loki's label endpoints read, exactly (no float error)."""
+    return str(int(Decimal(repr(seconds)) * 1_000_000_000))

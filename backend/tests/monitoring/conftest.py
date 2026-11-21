@@ -174,6 +174,42 @@ async def linked_project(monitoring_app, fake_prometheus) -> LinkedProject:
     return LinkedProject(project_id=body["id"], source_id=source_id, project_name=body["name"])
 
 
+@dataclass(frozen=True)
+class TwoProjects:
+    """One Prometheus source linked to two custom projects: `a` (filter `cluster="a"`) and `b`
+    (filter `cluster="b"`). `a` and `b` are project ids."""
+
+    source_id: str
+    a: str
+    b: str
+
+
+@pytest.fixture
+async def two_projects_on_one_source(monitoring_app, fake_prometheus) -> TwoProjects:
+    """Two custom projects over one Prometheus source on `fake_prometheus`, each with its own
+    filter, created through the API as a user would (a source, then one setup per project)."""
+    http, _ = monitoring_app
+    source = await http.post(
+        "/api/monitoring/sources",
+        json={"type": "prometheus", "reach": "url", "url": fake_prometheus.url, "name": "Shared"},
+    )
+    assert source.status_code == 201, source.text
+    source_id = source.json()["id"]
+    ids = []
+    for name, filter in (("Team A", 'cluster="a"'), ("Team B", 'cluster="b"')):
+        project = await http.post(
+            "/api/monitoring/setup",
+            json={
+                "name": name,
+                "kind": "custom",
+                "sources": [{"source_id": source_id, "filter": filter}],
+            },
+        )
+        assert project.status_code == 201, project.text
+        ids.append(project.json()["id"])
+    return TwoProjects(source_id=source_id, a=ids[0], b=ids[1])
+
+
 @pytest.fixture
 async def fake_loki():
     async with serve_fake_loki() as server:

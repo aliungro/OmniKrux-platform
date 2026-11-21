@@ -1,93 +1,162 @@
-"""`POST /api/monitoring/query`: every Monitoring query runs here, never in the browser.
+"""Every Monitoring query runs here, never in the browser:
 
-With a `project_id`, the query runs only on a source linked to that project, with the link's
-filter added to every selector (`inject_promql` for Prometheus, `inject_logql` for Loki). A query
-the filter can't be added to is refused: the raw text is never sent instead. Without a
-`project_id` the query runs as written (the Sources page uses this; no project's data is involved).
+- `POST /query` runs one query, filtered when it names a project (the Sources page runs them
+  unfiltered);
+- `POST /query/batch` runs a panel's queries as one request, each item through its own
+  project's filter, each succeeding or failing on its own;
+- `GET /label-values` reads one label's values for a dashboard variable, through a project's
+  filter.
 
-Every error answers `detail = {"code": QueryErrorCode, "message": plain words}`, including a body
-that breaks a `QueryRequest` field limit (FastAPI's own 422 would be a list of errors)."""
+The pipeline itself (filters, checks, the connector call) is in `run.py`; this module reads the
+request and answers. Every refusal answers `detail = {"code": QueryErrorCode, "message": plain
+words}`, including a body that breaks a `QueryRequest` field limit (FastAPI's own 422 would be a
+list of errors)."""
 
+import asyncio
 import json
-import time
-from collections.abc import Callable, Sequence
-from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import ValidationError
+from pydantic import BaseModel, Field
 
-from omnikrux.monitoring.projects.types import Matcher, UnknownProject
-from omnikrux.monitoring.query.filters import (
-    FilterError,
-    inject_logql,
-    inject_promql,
-    render_matchers,
+from omnikrux.monitoring.query.run import (
+    DIRECTION_CHOICE,
+    FIELD_INVALID,
+    KIND_CHOICE,
+    LABEL_NAME,
+    LIMIT_RANGE,
+    MAX_LABEL_VALUES,
+    MAX_POINTS,
+    NO_FILTER_RULE,
+    NOT_AN_OBJECT,
+    NOT_JSON,
+    NOT_LINKED,
+    PROJECT_CHOICE,
+    PROJECT_GONE,
+    PROJECT_NEEDED,
+    QUERY_LENGTH,
+    RANGE_NEEDS,
+    SOURCE_GONE,
+    SOURCE_NEEDED,
+    STEP_RANGE,
+    TIME_NUMBER,
+    TOO_MANY_POINTS,
+    QueryError,
+    QueryErrorCode,
+    query_request,
+    read_label_values,
+    run_query,
+    transport_error,
 )
 from omnikrux.monitoring.query.series import QueryRequest, QueryResponse
-from omnikrux.monitoring.services import MonitoringServices
-from omnikrux.monitoring.sources.connector import (
-    ConnectorQuery,
-    QueryLanguage,
-    QueryRejected,
-    UnknownSourceType,
-)
-from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE
 from omnikrux.monitoring.sources.transport import SourceUnreachable
-from omnikrux.monitoring.sources.types import SourceConfig
 
-QueryErrorCode = Literal[
-    "not_found",
-    "not_linked",
-    "bad_request",
-    "bad_query",
-    "unreachable",
-    "timeout",
-    "unauthorized",
-    "too_large",
-    "tool_error",
+__all__ = [
+    "BATCH_LIST",
+    "BATCH_NOT_AN_OBJECT",
+    "BATCH_SIZE",
+    "DIRECTION_CHOICE",
+    "FIELD_INVALID",
+    "KIND_CHOICE",
+    "LABEL_NAME",
+    "LIMIT_RANGE",
+    "MAX_BATCH",
+    "MAX_LABEL_VALUES",
+    "MAX_POINTS",
+    "MAX_RUNNING",
+    "NOT_AN_OBJECT",
+    "NOT_JSON",
+    "NOT_LINKED",
+    "NO_FILTER_RULE",
+    "PROJECT_CHOICE",
+    "PROJECT_GONE",
+    "PROJECT_NEEDED",
+    "QUERY_LENGTH",
+    "RANGE_NEEDS",
+    "SOURCE_GONE",
+    "SOURCE_NEEDED",
+    "STEP_RANGE",
+    "TIME_NUMBER",
+    "TOO_MANY_POINTS",
+    "BatchError",
+    "BatchIn",
+    "BatchItemOut",
+    "BatchOut",
+    "LabelValuesOut",
+    "QueryError",
+    "QueryErrorCode",
+    "batch_route",
+    "label_values_route",
+    "query_error",
+    "query_route",
+    "router",
+    "run_query",
+    "unreachable_error",
 ]
 
-MAX_POINTS = 11000
-DEFAULT_LOG_LIMIT = 1000
+MAX_BATCH = 64
+MAX_RUNNING = 8  # batch items running at once
 
-SOURCE_GONE = "That source no longer exists."
-PROJECT_GONE = "That project no longer exists."
-NOT_LINKED = "This source isn't linked to that project."
-RANGE_NEEDS = "A range query needs a start, an end after it, and a step."
-TOO_MANY_POINTS = "This range has too many points for the step. Use a larger step."
-NO_FILTER_RULE = (
-    "OmniKrux can't add a project's filter to this source's queries yet, so it doesn't run them "
-    "for a project."
-)
+BATCH_NOT_AN_OBJECT = 'Send the batch as a JSON object with a "queries" list.'
+BATCH_LIST = 'Put the queries in a "queries" list.'
+BATCH_SIZE = "Send 1 to 64 queries in one batch."
 
-# What a body that breaks a `QueryRequest` field limit is told, by field. Never the value sent.
-QUERY_LENGTH = "Write a query of 1 to 10000 characters."
-LIMIT_RANGE = "A log limit is a whole number from 1 to 5000."
-STEP_RANGE = "A step is a number of seconds above 0."
-KIND_CHOICE = "Choose an instant or a range query."
-DIRECTION_CHOICE = "Read logs either backward or forward."
-SOURCE_NEEDED = "Choose a source to query."
-PROJECT_CHOICE = "Choose the project by its id, or leave it out."
-TIME_NUMBER = "A time is a number of seconds since 1970, like 1700000000."
-NOT_AN_OBJECT = "Send the query as a JSON object."
-NOT_JSON = "The request body isn't valid JSON. Correct it and try again."
-FIELD_INVALID = "A query field has a value that can't be used. Check the query and try again."
-_FIELD_WORDS = {
-    "source_id": SOURCE_NEEDED,
-    "project_id": PROJECT_CHOICE,
-    "kind": KIND_CHOICE,
-    "query": QUERY_LENGTH,
-    "time": TIME_NUMBER,
-    "start": TIME_NUMBER,
-    "end": TIME_NUMBER,
-    "step": STEP_RANGE,
-    "limit": LIMIT_RANGE,
-    "direction": DIRECTION_CHOICE,
-}
+
+class BatchIn(BaseModel):
+    """What `POST /query/batch` takes. The route reads each item on its own, so an item that
+    breaks a `QueryRequest` limit fails alone; this model describes the body."""
+
+    queries: list[QueryRequest] = Field(min_length=1, max_length=MAX_BATCH)
+
+
+class BatchError(BaseModel):
+    code: QueryErrorCode
+    message: str
+    status: int  # the HTTP status the same query alone would have answered
+
+
+class BatchItemOut(BaseModel):
+    ok: bool
+    response: QueryResponse | None = None
+    error: BatchError | None = None
+
+
+class BatchOut(BaseModel):
+    results: list[BatchItemOut]  # in the order of the queries sent
+
+
+class LabelValuesOut(BaseModel):
+    values: list[str]  # sorted, at most MAX_LABEL_VALUES
+    truncated: bool  # the label has more values than shown
+
+
 _REQUEST_SCHEMA = {
     "requestBody": {
         "required": True,
         "content": {"application/json": {"schema": QueryRequest.model_json_schema()}},
+    }
+}
+# `BatchIn` written out with the item schema inline: its own JSON schema refers to `$defs`,
+# which an OpenAPI document doesn't resolve.
+_BATCH_SCHEMA = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "title": "BatchIn",
+                    "type": "object",
+                    "required": ["queries"],
+                    "properties": {
+                        "queries": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": MAX_BATCH,
+                            "items": QueryRequest.model_json_schema(),
+                        }
+                    },
+                }
+            }
+        },
     }
 }
 
@@ -98,138 +167,100 @@ def query_error(status: int, code: QueryErrorCode, message: str) -> HTTPExceptio
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
+def http_error(exc: QueryError) -> HTTPException:
+    return query_error(exc.status, exc.code, exc.message)
+
+
 def unreachable_error(exc: SourceUnreachable) -> HTTPException:
-    """A transport failure as a query error, always with the transport's own words: a timeout is
-    504; rejected credentials and an answer too large keep their codes; the rest is unreachable."""
-    if exc.code == "timeout":
-        return query_error(504, "timeout", exc.message)
-    if exc.code == "unauthorized":
-        return query_error(502, "unauthorized", exc.message)
-    if exc.code == "too_large":
-        return query_error(502, "too_large", exc.message)
-    return query_error(502, "unreachable", exc.message)
+    """A transport failure as an HTTP query error (see `run.transport_error`)."""
+    return http_error(transport_error(exc))
+
+
+async def _json_body(request: Request) -> object:
+    """The decoded body; 422 `bad_request` when it isn't JSON."""
+    raw = await request.body()
+    try:
+        return json.loads(raw)
+    except (ValueError, RecursionError):  # RecursionError: nesting too deep to read
+        raise query_error(422, "bad_request", NOT_JSON) from None
 
 
 async def _query_request(request: Request) -> QueryRequest:
     """The body as a `QueryRequest`; 422 `bad_request` in plain words when it isn't one."""
-    raw = await request.body()
+    data = await _json_body(request)
     try:
-        data = json.loads(raw)
-    except (ValueError, RecursionError):  # RecursionError: nesting too deep to read
-        raise query_error(422, "bad_request", NOT_JSON) from None
-    if not isinstance(data, dict):
-        raise query_error(422, "bad_request", NOT_AN_OBJECT)
-    try:
-        return QueryRequest.model_validate(data)
-    except ValidationError as exc:
-        location = exc.errors()[0].get("loc") or ("",)
-        message = _FIELD_WORDS.get(str(location[0]), FIELD_INVALID)
-        raise query_error(422, "bad_request", message) from None
-
-
-def _check_range(q: QueryRequest) -> None:
-    if q.kind != "range":
-        return
-    start, end, step = q.start, q.end, q.step
-    if start is None or end is None or step is None or not end > start:
-        raise query_error(400, "bad_request", RANGE_NEEDS)
-    # Prometheus's own rule: (end - start) / step may be at most 11000.
-    if (end - start) / step > MAX_POINTS:
-        raise query_error(400, "bad_request", TOO_MANY_POINTS)
-
-
-_INJECTORS: dict[str, Callable[[str, Sequence[Matcher]], str]] = {
-    "promql": inject_promql,
-    "logql": inject_logql,
-}
-
-
-async def _source(services: MonitoringServices, id: str) -> SourceConfig:
-    try:
-        return await services.sources.get(id)
-    except KeyError:
-        raise query_error(404, "not_found", SOURCE_GONE) from None
-
-
-async def _link_matchers(
-    services: MonitoringServices, project_id: str, source_id: str
-) -> tuple[Matcher, ...]:
-    """The project's filter on the source; 404 when either is missing or they aren't linked."""
-    try:
-        project = await services.projects.get(project_id)
-    except UnknownProject:
-        raise query_error(404, "not_found", PROJECT_GONE) from None
-    for link in project.links:
-        if link.source_id == source_id:
-            return link.matchers
-    raise query_error(404, "not_linked", NOT_LINKED)
-
-
-def _filtered(language: QueryLanguage, query: str, matchers: Sequence[Matcher]) -> str:
-    """The query with the filter on every selector; 400 `bad_query` when it can't be added.
-
-    Each language names its own injector. A language without one is refused (400 `bad_request`):
-    a project's filter is never added by another language's rules.
-    """
-    inject = _INJECTORS.get(language)
-    if inject is None:
-        raise query_error(400, "bad_request", NO_FILTER_RULE)
-    try:
-        return inject(query, matchers)
-    except FilterError as exc:
-        raise query_error(400, "bad_query", str(exc)) from None
+        return query_request(data)
+    except QueryError as exc:
+        raise http_error(exc) from None
 
 
 @router.post("/query", openapi_extra=_REQUEST_SCHEMA)
-async def run_query(request: Request) -> QueryResponse:
+async def query_route(request: Request) -> QueryResponse:
     q = await _query_request(request)
-    _check_range(q)
-    services: MonitoringServices = request.app.state.monitoring
-    source = await _source(services, q.source_id)
-    matchers: tuple[Matcher, ...] = ()
-    if q.project_id is not None:
-        matchers = await _link_matchers(services, q.project_id, source.id)
     try:
-        connector = services.connectors.get(source.type)
-    except UnknownSourceType as exc:
-        raise query_error(400, "bad_request", exc.message) from None
-    sent = _filtered(connector.language, q.query, matchers) if q.project_id is not None else q.query
-    if source.secrets_unreadable:
-        raise query_error(502, "unreachable", SECRETS_UNREADABLE)
+        return await run_query(request.app.state.monitoring, q)
+    except QueryError as exc:
+        raise http_error(exc) from None
 
-    limit = q.limit
-    if limit is None and connector.language == "logql":
-        limit = DEFAULT_LOG_LIMIT
-    asked = ConnectorQuery(
-        kind=q.kind,
-        query=sent,
-        time=q.time,
-        start=q.start,
-        end=q.end,
-        step=q.step,
-        limit=limit,
-        direction=q.direction,
+
+def _failed(exc: QueryError) -> BatchItemOut:
+    return BatchItemOut(
+        ok=False, error=BatchError(code=exc.code, message=exc.message, status=exc.status)
     )
-    began = time.perf_counter()
+
+
+@router.post("/query/batch", openapi_extra=_BATCH_SCHEMA)
+async def batch_route(request: Request) -> BatchOut:
+    """Each item runs through its own project's filter, at most `MAX_RUNNING` at once, with M1's
+    limits and timeouts. One item's failure never fails or cancels another: the answer is 200
+    with every item's result in the order sent."""
+    data = await _json_body(request)
+    if not isinstance(data, dict):
+        raise query_error(422, "bad_request", BATCH_NOT_AN_OBJECT)
+    items = data.get("queries")
+    if not isinstance(items, list):
+        raise query_error(422, "bad_request", BATCH_LIST)
+    if not 1 <= len(items) <= MAX_BATCH:
+        raise query_error(422, "bad_request", BATCH_SIZE)
+    services = request.app.state.monitoring
+    running = asyncio.Semaphore(MAX_RUNNING)
+
+    async def one(item: object) -> BatchItemOut:
+        try:
+            q = query_request(item)
+            if q.project_id is None:  # a batch never reads a source unfiltered
+                raise QueryError(422, "bad_request", PROJECT_CHOICE)
+            async with running:
+                return BatchItemOut(ok=True, response=await run_query(services, q))
+        except QueryError as exc:
+            return _failed(exc)
+
+    return BatchOut(results=list(await asyncio.gather(*(one(item) for item in items))))
+
+
+@router.get("/label-values")
+async def label_values_route(
+    request: Request,
+    source_id: str | None = None,
+    project_id: str | None = None,
+    label: str | None = None,
+    match: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+) -> LabelValuesOut:
+    """One label's values for a dashboard variable, through the project's filter. `match` is an
+    optional selector (it gets the filter too); `start` and `end` are seconds. Every parameter is
+    read here, so a missing or bad one answers `{code, message}` like every query error."""
     try:
-        result = await connector.query(services.transports.for_source(source), asked, source.name)
-    except SourceUnreachable as exc:
-        raise unreachable_error(exc) from None
-    except QueryRejected as exc:
-        raise query_error(exc.status, exc.code, exc.message) from None
-    took_ms = int((time.perf_counter() - began) * 1000)
-
-    return QueryResponse(
-        result_type=result.result_type,
-        series=result.series,
-        streams=result.streams,
-        warnings=result.warnings,
-        truncated=result.truncated,
-        source_id=source.id,
-        source_name=source.name,
-        source_type=source.type,
-        project_id=q.project_id,
-        applied_filter=render_matchers(matchers),
-        query=sent,
-        took_ms=took_ms,
-    )
+        values, truncated = await read_label_values(
+            request.app.state.monitoring,
+            source_id=source_id,
+            project_id=project_id,
+            label=label,
+            selector=match,
+            start=start,
+            end=end,
+        )
+    except QueryError as exc:
+        raise http_error(exc) from None
+    return LabelValuesOut(values=values, truncated=truncated)

@@ -112,8 +112,21 @@ class Connector(Protocol):
     ) -> FieldCatalog: ...
 
     async def label_values(
-        self, t: SourceTransport, label: str, *, matchers: Sequence[Matcher], limit: int = 1000
-    ) -> list[str]: ...
+        self,
+        t: SourceTransport,
+        label: str,
+        *,
+        matchers: Sequence[Matcher],
+        limit: int = 1000,
+        selector: str | None = None,
+        start: float | None = None,
+        end: float | None = None,
+    ) -> list[str]:
+        """The label's values, at most `limit` in the tool's order. With a `selector`, only
+        series it selects count, with `matchers` added to it by the language's injector
+        (`FilterError` when they can't be); without one, `matchers` alone narrow the series.
+        `start` and `end` (seconds) bound the time searched."""
+        ...
 
     async def alerting(
         self, t: SourceTransport, *, cluster: ClusterProbe | None

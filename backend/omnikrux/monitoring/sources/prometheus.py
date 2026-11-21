@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from urllib.parse import quote
 
 from omnikrux.monitoring.projects.types import Matcher
-from omnikrux.monitoring.query.filters import render_matchers
+from omnikrux.monitoring.query.filters import inject_promql, render_matchers
 from omnikrux.monitoring.query.series import QueryResult, series_result
 from omnikrux.monitoring.sources.connector import (
     NO_OPERATOR,
@@ -99,10 +99,25 @@ class PrometheusConnector:
         return FieldCatalog(tuple(metrics), tuple(labels[:limit]), truncated)
 
     async def label_values(
-        self, t: SourceTransport, label: str, *, matchers: Sequence[Matcher], limit: int = 1000
+        self,
+        t: SourceTransport,
+        label: str,
+        *,
+        matchers: Sequence[Matcher],
+        limit: int = 1000,
+        selector: str | None = None,
+        start: float | None = None,
+        end: float | None = None,
     ) -> list[str]:
+        if selector is not None:
+            params = [("match[]", inject_promql(selector, matchers))]
+        else:
+            params = _match(matchers)
+        for key, value in (("start", start), ("end", end)):
+            if value is not None:
+                params.append((key, number_text(value)))
         path = f"/api/v1/label/{quote(label, safe='')}/values"
-        return (await self._list(t, path, _match(matchers)))[:limit]
+        return (await self._list(t, path, params))[:limit]
 
     async def alerting(
         self, t: SourceTransport, *, cluster: ClusterProbe | None
