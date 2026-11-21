@@ -5937,5 +5937,68 @@
         "message": "\"all\" needs includeAll: true."
       }
     ]
+  },
+  {
+    "name": "title_only_bom_is_kept",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "﻿"
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "﻿",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "title_leading_bom_is_kept",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "﻿abc"
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "﻿abc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "title_unicode_spaces_trimmed",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "  　x "
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "x",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
   }
 ]

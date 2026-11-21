@@ -326,6 +326,12 @@ function required(w: Walk, raw: Obj, path: string, key: string): Maybe {
   return field(raw, key);
 }
 
+// Python's str.strip() once control characters are excluded: Zs plus the line and paragraph
+// separators. JS trim() would also drop U+FEFF, which the server keeps.
+const SEPARATORS = String.fromCharCode(0x2028, 0x2029);
+const STRIP = new RegExp(String.raw`^[\p{Zs}${SEPARATORS}]+|[\p{Zs}${SEPARATORS}]+$`, "gu");
+const pyStrip = (t: string): string => t.replace(STRIP, "");
+
 function shortText(w: Walk, raw: unknown, path: string, lo: number, message: string): string | null {
   const t = text(w, raw, path);
   if (t === null) return null;
@@ -333,7 +339,7 @@ function shortText(w: Walk, raw: unknown, path: string, lo: number, message: str
     w.add(path, message);
     return null;
   }
-  const trimmed = t.trim();
+  const trimmed = pyStrip(t);
   const n = points(trimmed);
   if (n < lo || n > 120) {
     w.add(path, message);
@@ -891,6 +897,9 @@ function documentBytes(raw: unknown): number {
   }
 }
 
+// parseDashboardJson skips parsing text above this, so a huge paste is never walked.
+const MAX_TEXT_BYTES = 4_000_000;
+
 const TOO_BIG: Problem = { path: "", message: "The dashboard is larger than 1 MB." };
 
 export function validateDashboard(value: unknown, ownerKind: OwnerKind): Validation {
@@ -970,9 +979,12 @@ function documentOf(w: Walk, raw: unknown): Obj {
   };
 }
 
-/** Validate text from an editor: size by UTF-8 bytes of the text, then JSON, then the walker. */
+/**
+ * Validate text from an editor. Indented text is larger than the compact document the server
+ * measures, so only text above 4 MB is refused here; the 1 MB rule is `validateDashboard`'s.
+ */
 export function parseDashboardJson(text: string, ownerKind: OwnerKind): Validation {
-  if (byteLength(text) > MAX_DOCUMENT_BYTES) return { ok: false, problems: [{ ...TOO_BIG }] };
+  if (byteLength(text) > MAX_TEXT_BYTES) return { ok: false, problems: [{ ...TOO_BIG }] };
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -1035,7 +1047,7 @@ export function nextPanelId(spec: DashboardSpec): string {
 export function emptyDashboard(title: string): DashboardSpec {
   return {
     schemaVersion: SCHEMA_VERSION,
-    title,
+    title: pyStrip(title),
     description: "",
     time: { from: "now-6h", to: "now" },
     refresh: null,

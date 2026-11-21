@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_VARIABLES,
@@ -36,7 +37,10 @@ interface Case {
 
 const cases: Case[] = JSON.parse(
   readFileSync(
-    join(process.cwd(), "..", "backend", "tests", "monitoring", "dashboard_schema_cases.json"),
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../../backend/tests/monitoring/dashboard_schema_cases.json",
+    ),
     "utf8",
   ),
 );
@@ -70,9 +74,27 @@ describe("constants", () => {
     expect(MAX_THRESHOLDS).toBe(10);
     expect(MAX_DOCUMENT_BYTES).toBe(1_000_000);
     expect(PANEL_TYPES).toEqual(["timeseries", "stat", "gauge", "bar", "table", "logs"]);
-    expect(UNITS).toHaveLength(10);
+    expect(UNITS).toEqual([
+      "none",
+      "short",
+      "percent",
+      "percentunit",
+      "s",
+      "ms",
+      "bytes",
+      "Bps",
+      "reqps",
+      "cores",
+    ]);
     expect(REFRESH_CHOICES).toEqual([null, "10s", "30s", "1m", "5m", "15m", "1h"]);
-    expect(DEFAULT_SIZES.logs).toEqual({ w: 24, h: 10 });
+    expect(DEFAULT_SIZES).toEqual({
+      timeseries: { w: 12, h: 8 },
+      stat: { w: 6, h: 4 },
+      gauge: { w: 6, h: 6 },
+      bar: { w: 12, h: 8 },
+      table: { w: 12, h: 8 },
+      logs: { w: 24, h: 10 },
+    });
     expect(BUILTIN_VARIABLES).toEqual(["__interval", "__rate_interval", "__range"]);
   });
 });
@@ -163,13 +185,48 @@ describe("TS-only parity checks", () => {
     );
     expect(problemsOf(v)).toEqual([{ path: "", message: "The dashboard is larger than 1 MB." }]);
   });
-  it("text over 1 MB of UTF-8 is refused before parsing", () => {
-    const v = parseDashboardJson(`{"a":"${"é".repeat(600_000)}"}`, "project");
+  it("text over 4 MB of UTF-8 is refused before parsing", () => {
+    const v = parseDashboardJson(`{"a":"${"é".repeat(2_100_000)}"}`, "project");
     expect(problemsOf(v)).toEqual([{ path: "", message: "The dashboard is larger than 1 MB." }]);
   });
 });
 
+const BOM = String.fromCharCode(0xfeff);
+const LS = String.fromCharCode(0x2028);
+const IDEO = String.fromCharCode(0x3000);
+
 describe("parseDashboardJson", () => {
+  it("indented text over 1 MB passes while the compact document is under 1 MB", () => {
+    const panels = Array.from({ length: 100 }, (_, i) => ({
+      id: `p-${i + 1}`,
+      type: "timeseries",
+      title: "T",
+      layout: { x: 0, y: i * 2, w: 12, h: 2 },
+      queries: Array.from({ length: 10 }, (_, q) => ({
+        ref: String.fromCharCode(65 + q),
+        source: { type: "prometheus" },
+        expr: "x".repeat(900),
+      })),
+    }));
+    const doc = { schemaVersion: 1, title: "Big", panels };
+    const compact = new TextEncoder().encode(JSON.stringify(doc)).length;
+    const indented = JSON.stringify(doc, null, 2);
+    const text = new TextEncoder().encode(indented).length;
+    expect(compact).toBeLessThan(MAX_DOCUMENT_BYTES);
+    expect(text).toBeGreaterThan(MAX_DOCUMENT_BYTES);
+    expect(text).toBeLessThan(4_000_000);
+    expect(parseDashboardJson(indented, "project").ok).toBe(true);
+  });
+  it("a title is stripped like Python: a lone BOM stays, a leading BOM stays", () => {
+    expect(validateDashboard({ schemaVersion: 1, title: BOM }, "project").ok).toBe(true);
+    const v = validateDashboard({ schemaVersion: 1, title: BOM + "abc" }, "project");
+    expect(v.ok && v.spec.title).toBe(BOM + "abc");
+    const w = validateDashboard({ schemaVersion: 1, title: LS + " x " + IDEO }, "project");
+    expect(w.ok && w.spec.title).toBe("x");
+  });
+  it("emptyDashboard trims its title", () => {
+    expect(emptyDashboard("  D " + String.fromCharCode(0xa0)).title).toBe("D");
+  });
   it("a JSON syntax error is one problem at the top", () => {
     const v = parseDashboardJson('{"schemaVersion": 1,', "project");
     expect(v.ok).toBe(false);
