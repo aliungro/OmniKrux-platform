@@ -44,4 +44,30 @@ describe("tableRows", () => {
     expect(out.columns[0]).toBe("Project");
     expect(out.rows[0].cells[0]).toBe("Shop");
   });
+
+  it("keeps rows apart when the columns option hides the labels that differ", () => {
+    const a = series("a", [1], { labels: { namespace: "web", deployment: "api" } });
+    const b = series("b", [2], { labels: { namespace: "web", deployment: "db" } });
+    const out = tableRows([a, b], table([query("A")], { columns: ["namespace"] }));
+    expect(out.columns).toEqual(["namespace", "Value"]);
+    expect(out.rows.map((r) => r.cells)).toEqual([["web", 1], ["web", 2]]);
+  });
+
+  it("gives series that differ only by __name__, or share a label set, a row each", () => {
+    const x = series("x", [1], { labels: { __name__: "m1", app: "a" } });
+    const y = series("y", [2], { labels: { __name__: "m2", app: "a" } });
+    const out = tableRows([x, y], table([query("A")]));
+    expect(out.rows.map((r) => r.cells[1])).toEqual([1, 2]);
+    expect(new Set(out.rows.map((r) => r.key)).size).toBe(2);
+  });
+
+  it("joins queries on the same labels and splits rows when one has more labels", () => {
+    const base = { namespace: "web", deployment: "api" };
+    const out = tableRows(
+      [series("a", [1], { labels: base, queryRef: "A" }), series("b", [2], { labels: { ...base, pod: "p1" }, queryRef: "B" })],
+      table([query("A", "Up"), query("B", "Want")]),
+    );
+    expect(out.columns).toEqual(["namespace", "deployment", "pod", "Up", "Want"]);
+    expect(out.rows.map((r) => r.cells)).toEqual([["web", "api", "", 1, null], ["web", "api", "p1", null, 2]]);
+  });
 });

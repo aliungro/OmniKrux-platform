@@ -1,10 +1,14 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChartView from "./index";
-import { dataOf, logLine, panelOf, RANGE } from "./panelFixtures";
+import { dataOf, fakeBox, logLine, panelOf, RANGE } from "./panelFixtures";
 import { logTime } from "./LogsChart";
 
-afterEach(cleanup);
+beforeEach(() => fakeBox(300));
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 const draw = (logs: ReturnType<typeof logLine>[], options: Record<string, unknown> = {}) =>
   render(<ChartView panel={panelOf("logs", options)} data={dataOf([], { logs })} range={RANGE} animate={false} changeId={0} />);
 
@@ -15,10 +19,12 @@ describe("logs panel", () => {
     expect(items[0].textContent).toContain("second");
     expect(items[1].textContent).toContain("first");
     expect(items[0].querySelector("time")!.textContent).toMatch(/^\d\d:\d\d:\d\d\.\d{3}$/);
-    expect(items[0].getAttribute("aria-expanded")).toBe("false");
+    expect(items[0].hasAttribute("aria-expanded")).toBe(false);
     fireEvent.keyDown(items[0], { key: "Enter" });
-    expect(items[0].getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("cart")).toBeTruthy();
+    const strip = document.getElementById(items[0].getAttribute("aria-describedby")!)!;
+    expect(strip.textContent).toContain("cart");
+    expect(strip.getAttribute("role")).toBe("status");
     fireEvent.keyDown(items[0], { key: "Enter" });
     expect(screen.queryByText("cart")).toBeNull();
   });
@@ -57,5 +63,49 @@ describe("logs panel", () => {
       <ChartView panel={panelOf("logs")} data={dataOf([], { logs: [logLine(1, "old")], state: "unreachable" })} range={RANGE} animate={false} changeId={0} />,
     );
     expect(screen.queryByText(/old/)).toBeNull();
+  });
+
+  const panel = (options: Record<string, unknown> = {}) => panelOf("logs", options);
+  const view = (logs: ReturnType<typeof logLine>[], options: Record<string, unknown> = {}, state: "ready" | "empty" | "error" = "ready") => (
+    <ChartView panel={panel(options)} data={dataOf([], { logs, state })} range={RANGE} animate={false} changeId={0} />
+  );
+  const burst = (n: number, from = 0) => Array.from({ length: n }, (_, i) => logLine(from + i, `line ${from + i}`));
+
+  it("draws the rows for its height after an empty answer and after an error", () => {
+    const { rerender } = render(view([], {}, "empty"));
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+    rerender(view(burst(400)));
+    const n = screen.getAllByRole("listitem").length;
+    expect(n).toBeGreaterThanOrEqual(13);
+    expect(n).toBeLessThan(35);
+    rerender(view(burst(400), {}, "error"));
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+    rerender(view(burst(400)));
+    expect(screen.getAllByRole("listitem").length).toBeLessThan(35);
+  });
+
+  it("virtualizes wrapped lines too", () => {
+    render(view(burst(400), { wrap: true }));
+    expect(screen.getAllByRole("listitem").length).toBeLessThan(40);
+  });
+
+  it("keeps focus on the same line when a refresh shifts the list", () => {
+    const { rerender } = render(view(burst(5)));
+    const items = screen.getAllByRole("listitem");
+    items[1].focus(); // line 3 (newest first: 4, 3, 2, 1, 0)
+    expect(items[1].textContent).toContain("line 3");
+    rerender(view(burst(8)));
+    expect(document.activeElement?.textContent).toContain("line 3");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("moves focus to a neighbour when the focused line rolls off", () => {
+    const { rerender } = render(view(burst(5)));
+    const oldest = screen.getAllByRole("listitem")[4];
+    oldest.focus();
+    expect(oldest.textContent).toContain("line 0");
+    rerender(view(burst(5, 3))); // lines 3..7: line 0 is gone
+    expect(document.activeElement).not.toBe(document.body);
+    expect(screen.getAllByRole("listitem")).toContain(document.activeElement);
   });
 });

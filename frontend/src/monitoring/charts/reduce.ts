@@ -54,30 +54,36 @@ export function tableRows(series: ChartSeries[], panel: TablePanel): TableData {
   const group = series.some((s) => s.projectName !== null);
   const { refs, names } = valueColumns(panel);
 
-  let labels: string[] = [];
+  // Every label but `__name__` tells rows apart; `columns` only picks which ones show.
+  const all: string[] = [];
   for (const s of series) {
     for (const name of Object.keys(s.labels)) {
-      if (name !== "__name__" && !labels.includes(name)) labels.push(name);
+      if (name !== "__name__" && !all.includes(name)) all.push(name);
     }
   }
   const wanted = panel.options.columns;
-  if (wanted.length > 0) labels = wanted.filter((name) => name !== "__name__");
+  const shown = wanted.length > 0 ? wanted.filter((name) => name !== "__name__") : all;
 
   const rows = new Map<string, { key: string; cells: (string | number | null)[] }>();
+  const seen = new Map<string, number>();
   for (const s of series) {
     const slot = refs.indexOf(s.queryRef);
     if (slot < 0) continue;
-    const identity = JSON.stringify([s.projectName, labels.map((l) => s.labels[l] ?? null)]);
-    let row = rows.get(identity);
+    const identity = JSON.stringify([s.projectName, all.map((l) => s.labels[l] ?? null)]);
+    // Series that share a label set within one query get a row each.
+    const nth = seen.get(`${slot}|${identity}`) ?? 0;
+    seen.set(`${slot}|${identity}`, nth + 1);
+    const key = `${identity}#${nth}`;
+    let row = rows.get(key);
     if (!row) {
       const cells: (string | number | null)[] = [];
       if (group) cells.push(s.projectName ?? "");
-      for (const l of labels) cells.push(s.labels[l] ?? "");
+      for (const l of shown) cells.push(s.labels[l] ?? "");
       for (let i = 0; i < refs.length; i++) cells.push(null);
-      row = { key: identity, cells };
-      rows.set(identity, row);
+      row = { key, cells };
+      rows.set(key, row);
     }
-    row.cells[(group ? 1 : 0) + labels.length + slot] = reduceSeries(s.points, "last");
+    row.cells[(group ? 1 : 0) + shown.length + slot] = reduceSeries(s.points, "last");
   }
-  return { columns: [...(group ? [PROJECT_COLUMN] : []), ...labels, ...names], rows: [...rows.values()] };
+  return { columns: [...(group ? [PROJECT_COLUMN] : []), ...shown, ...names], rows: [...rows.values()] };
 }

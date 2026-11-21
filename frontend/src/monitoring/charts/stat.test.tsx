@@ -3,9 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChartView, { type ChartViewProps } from "./index";
 import { dataOf, panelOf, RANGE, series, stubMotion } from "./panelFixtures";
 
-const tweenMock = vi.hoisted(() => vi.fn((_ms: number, _on: (k: number) => void) => () => {}));
-vi.mock("./motion", async (importOriginal) => ({ ...(await importOriginal<typeof import("./motion")>()), tween: tweenMock }));
-
 const view = (over: Partial<ChartViewProps> & { value?: number; options?: Record<string, unknown> }) => {
   const { value = 10, options = {}, ...rest } = over;
   return (
@@ -21,23 +18,28 @@ const view = (over: Partial<ChartViewProps> & { value?: number; options?: Record
 };
 
 beforeEach(() => {
-  tweenMock.mockClear();
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] });
   stubMotion(false);
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+const shown = () => document.querySelector("[data-tone]")!.textContent;
 
 describe("stat panel", () => {
   it("counts up after an edit", () => {
     const { rerender } = render(view({ value: 10 }));
     expect(screen.getByText("10")).toBeTruthy();
     rerender(view({ value: 20, changeId: 1 }));
-    expect(tweenMock).toHaveBeenCalledTimes(1);
-    act(() => tweenMock.mock.calls[0][1](0.5));
-    const mid = Number(document.querySelector("[data-tone]")!.textContent);
+    act(() => { vi.advanceTimersByTime(150); });
+    const mid = Number(shown());
     expect(mid).toBeGreaterThan(10);
     expect(mid).toBeLessThan(20);
-    act(() => tweenMock.mock.calls[0][1](1));
-    expect(screen.getByText("20")).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(600); });
+    expect(shown()).toBe("20");
   });
 
   it("jumps on a refresh and without animate", () => {
@@ -46,22 +48,23 @@ describe("stat panel", () => {
     expect(screen.getByText("20")).toBeTruthy();
     first.rerender(view({ value: 30, changeId: 1, animate: false }));
     expect(screen.getByText("30")).toBeTruthy();
-    expect(tweenMock).not.toHaveBeenCalled();
   });
 
   it("jumps under reduced motion", () => {
     stubMotion(true);
     const { rerender } = render(view({ value: 10 }));
     rerender(view({ value: 20, changeId: 1 }));
-    expect(screen.getByText("20")).toBeTruthy();
-    expect(tweenMock).not.toHaveBeenCalled();
+    expect(screen.getByText("20")).toBeTruthy(); // at once, before any frame
   });
 
   it("counts after a query edit seen only in the data", () => {
     const panel = panelOf("stat", { sparkline: false });
     const { rerender } = render(<ChartView panel={panel} data={dataOf([series("a", [1])])} range={RANGE} animate changeId={0} />);
     rerender(<ChartView panel={panel} data={dataOf([series("a", [5])], { editId: 1 })} range={RANGE} animate changeId={0} />);
-    expect(tweenMock).toHaveBeenCalledTimes(1);
+    act(() => { vi.advanceTimersByTime(100); });
+    expect(Number(shown())).toBeLessThan(5);
+    act(() => { vi.advanceTimersByTime(600); });
+    expect(shown()).toBe("5");
   });
 
   it("colours by threshold", () => {

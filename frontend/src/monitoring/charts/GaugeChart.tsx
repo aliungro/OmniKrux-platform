@@ -11,6 +11,7 @@ type GaugePanel = Extract<PanelSpec, { type: "gauge" }>;
 
 export const MAX_GAUGES = 6;
 export const NEEDS_MAX = "Set a maximum in Options to draw this gauge.";
+export const MAX_ABOVE_MIN = "Set a maximum above the minimum in Options to draw this gauge.";
 
 const CX = 60;
 const CY = 58;
@@ -43,20 +44,21 @@ export default function GaugeChart({ panel, series }: GaugeChartProps) {
   if (series.length === 0) return null;
   const max = gaugeMax(o);
   const min = o.min ?? 0;
-  if (max === null || max <= min) return <p className={styles.hint}>{NEEDS_MAX}</p>;
+  if (max === null) return <p className={styles.hint}>{NEEDS_MAX}</p>;
+  if (max <= min) return <p className={styles.hint}>{MAX_ABOVE_MIN}</p>;
   const frac = (v: number) => Math.min(1, Math.max(0, (v - min) / (max - min)));
   const bands = [...o.thresholds].sort((a, b) => a.value - b.value);
   const shown = series.slice(0, MAX_GAUGES);
   return (
     <div className={styles.stat}>
-      <ul className={styles.gaugeGrid} aria-label={panel.title}>
+      <div className={styles.gaugeGrid} role="group" aria-label={panel.title}>
         {shown.map((s) => {
           const value = reduceSeries(s.points, o.calc);
           const tone = value === null ? null : thresholdColor(value, o.thresholds);
           const text = formatValue(value, o.unit, o.decimals);
           const range = `${formatValue(min, o.unit, o.decimals)} to ${formatValue(max, o.unit, o.decimals)}`;
           return (
-            <li
+            <div
               key={s.key}
               className={styles.gaugeTile}
               data-tone={tone ?? "none"}
@@ -73,7 +75,7 @@ export default function GaugeChart({ panel, series }: GaugeChartProps) {
                   const end = bands[i + 1]?.value ?? max;
                   const f0 = frac(b.value);
                   const f1 = frac(end);
-                  return f1 > f0 ? <path key={b.value} className={styles.gaugeBand} style={{ color: `var(--${b.color})` }} d={arc(f0, f1)} /> : null;
+                  return f1 > f0 ? <path key={`${b.value}-${i}`} className={styles.gaugeBand} style={{ color: `var(--${b.color})` }} d={arc(f0, f1)} /> : null;
                 })}
                 {value !== null && frac(value) > 0 ? (
                   <path className={styles.gaugeValue} style={{ color: tone ? `var(--${tone})` : "var(--focus)" }} d={arc(0, frac(value))} />
@@ -81,10 +83,10 @@ export default function GaugeChart({ panel, series }: GaugeChartProps) {
               </svg>
               <span className={styles.gaugeText}>{text}</span>
               {series.length > 1 ? <span className={styles.statName} title={s.name}>{s.name}</span> : null}
-            </li>
+            </div>
           );
         })}
-      </ul>
+      </div>
       {series.length > MAX_GAUGES ? <p className={styles.note}>Showing {MAX_GAUGES} of {series.length} series.</p> : null}
     </div>
   );

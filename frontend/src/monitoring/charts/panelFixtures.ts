@@ -1,4 +1,5 @@
 // Shared fixtures for the panel tests (never imported by the app).
+import { vi } from "vitest";
 import type { ChartLogLine, ChartSeries, PanelData } from "../dashboards/runPanel";
 import { newPanel, type PanelSpec, type PanelType } from "../dashboards/schema";
 
@@ -27,8 +28,24 @@ export const query = (ref: string, legend = "") => ({
   ref, source: { type: "prometheus" as const, id: null }, expr: "x", legend, hidden: false,
 });
 
+/** Undone by `vi.unstubAllGlobals()`. */
 export function stubMotion(reduced = false) {
-  (globalThis as { matchMedia?: unknown }).matchMedia = (q: string) => ({
+  vi.stubGlobal("matchMedia", (q: string) => ({
     matches: reduced && q.includes("reduce"), addEventListener() {}, removeEventListener() {},
+  }));
+}
+
+/** jsdom lays nothing out: give scroll boxes a size so the virtualizer draws rows. Undone by `vi.restoreAllMocks()`. */
+export function fakeBox(height = 300, width = 800, rowHeight = 22) {
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(height);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(width);
+  // A virtualized row (it has a data-index) is one line tall, whatever the box is.
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.hasAttribute("data-index") ? rowHeight : height;
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(width);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const h = this.hasAttribute("data-index") ? rowHeight : height;
+    return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: h, width, height: h, toJSON: () => ({}) } as DOMRect;
   });
 }

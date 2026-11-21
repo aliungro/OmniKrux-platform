@@ -485,10 +485,6 @@
   min-width: 100%;
 }
 
-.logFlow {
-  min-width: 100%;
-}
-
 .logLine {
   display: flex;
   box-sizing: border-box;
@@ -498,10 +494,8 @@
   border-radius: 4px;
   color: var(--ink);
   line-height: 22px;
-}
-
-.logSpace .logLine {
   position: absolute;
+  top: 0;
   right: 0;
   left: 0;
   white-space: nowrap;
@@ -517,7 +511,7 @@
   background: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 
-.logLine[aria-expanded="true"] {
+.logLine[data-open="true"] {
   background: color-mix(in srgb, var(--focus) 12%, transparent);
 }
 
@@ -530,9 +524,13 @@
   min-width: 0;
 }
 
-.logSpace .logText {
+.logText {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.logWrap .logText {
+  overflow: visible;
 }
 
 .logProject {
@@ -559,11 +557,11 @@
   gap: 6px;
 }
 
-.logLabel dt {
+.logKey {
   color: var(--ink-3);
 }
 
-.logLabel dd {
+.logValue {
   margin: 0;
   color: var(--ink);
 }

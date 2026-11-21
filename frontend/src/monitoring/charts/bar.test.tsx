@@ -28,4 +28,20 @@ describe("bar panel", () => {
     );
     expect(document.querySelectorAll('[data-tone="bad"]')).toHaveLength(1);
   });
+
+  it("scales all-negative values from zero and mixed signs either side of it", () => {
+    const rect = () => [...document.querySelectorAll("rect")].filter((r) => r.getAttribute("class")?.includes("barFill"));
+    render(<ChartView panel={panelOf("bar")} data={dataOf([series("a", [-2]), series("b", [-8])])} range={RANGE} animate={false} changeId={0} />);
+    const [a, b] = rect();
+    expect(Number(b.getAttribute("width"))).toBeCloseTo(100);
+    expect(Number(a.getAttribute("width"))).toBeCloseTo(25);
+    expect(Number(a.getAttribute("x"))).toBeCloseTo(75);
+    cleanup();
+    render(<ChartView panel={panelOf("bar")} data={dataOf([series("p", [6]), series("n", [-2])])} range={RANGE} animate={false} changeId={0} />);
+    const [p, n] = rect();
+    expect(Number(p.getAttribute("x"))).toBeCloseTo(25);
+    expect(Number(p.getAttribute("width"))).toBeCloseTo(75);
+    expect(Number(n.getAttribute("x"))).toBeCloseTo(0);
+    expect(Number(n.getAttribute("width"))).toBeCloseTo(25);
+  });
 });
