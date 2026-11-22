@@ -1,6 +1,7 @@
 """The connector for Loki."""
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Awaitable, Sequence
 from decimal import Decimal
 from urllib.parse import quote
 
@@ -8,13 +9,19 @@ from omnikrux.monitoring.projects.types import Matcher
 from omnikrux.monitoring.query.filters import inject_logql, render_matchers
 from omnikrux.monitoring.query.series import QueryResult, series_result, streams_result
 from omnikrux.monitoring.sources.connector import (
+    DEFAULT_LIMITS,
     NOT_LIKE,
+    NOTE_STREAM_LABELS_TRUNCATED,
+    NOTE_STREAM_VALUES_TRUNCATED,
     RULER_OFF,
     AlertingCapability,
+    CatalogLimits,
     ClusterProbe,
     ConnectorQuery,
     FieldCatalog,
     QueryRejected,
+    SourceCatalog,
+    StreamLabel,
     TestResult,
     checked_json,
     json_object,
@@ -26,6 +33,7 @@ from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreach
 PROBE_SECONDS = 10.0
 QUERY_SECONDS = 30.0
 WHAT = "a Loki server"
+VALUE_CALLS_AT_ONCE = 6
 
 
 class LokiConnector:
@@ -103,6 +111,80 @@ class LokiConnector:
             labels = await self._list(t, "/loki/api/v1/labels", [])
         return FieldCatalog((), tuple(labels[:limit]), len(labels) > limit)
 
+    async def catalog(
+        self,
+        t: SourceTransport,
+        *,
+        matchers: Sequence[Matcher],
+        now: float,
+        limits: CatalogLimits = DEFAULT_LIMITS,
+    ) -> SourceCatalog:
+        window = [
+            ("start", _nanoseconds(now - limits.stream_window)),
+            ("end", _nanoseconds(now)),
+        ]
+        if matchers:
+            values = await self._series_values(t, matchers, window, limits)
+            names = sorted(n for n in values if not n.startswith("__"))
+        else:
+            listed = await self._list(t, "/loki/api/v1/labels", window)
+            names = sorted({n for n in listed if not n.startswith("__")})
+        cut = len(names) > limits.max_stream_labels
+        names = names[: limits.max_stream_labels]
+        if not matchers:
+            values = await self._values_of(t, names, window)
+        streams = []
+        for name in names:
+            found = sorted(values[name])
+            streams.append(
+                StreamLabel(
+                    name,
+                    tuple(found[: limits.max_stream_values]),
+                    len(found) > limits.max_stream_values,
+                )
+            )
+        notes = [NOTE_STREAM_LABELS_TRUNCATED] if cut else []
+        if any(s.truncated for s in streams):
+            notes.append(NOTE_STREAM_VALUES_TRUNCATED)
+        return SourceCatalog((), tuple(names), tuple(streams), tuple(notes))
+
+    async def _series_values(
+        self,
+        t: SourceTransport,
+        matchers: Sequence[Matcher],
+        window: list[tuple[str, str]],
+        limits: CatalogLimits,
+    ) -> dict[str, set[str]]:
+        """Label name -> values, from the label sets of the streams the filter selects: one call,
+        so nothing outside the filter is ever asked for."""
+        got = await t.request(
+            "GET",
+            "/loki/api/v1/series",
+            params=[("match[]", _selector(matchers)), *window],
+            timeout=PROBE_SECONDS,
+        )
+        data = checked_json(got, "The source", WHAT).get("data")
+        entries = [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
+        values: dict[str, set[str]] = {}
+        for entry in entries[: limits.max_stream_series]:
+            for key, value in entry.items():
+                values.setdefault(str(key), set()).add(str(value))
+        return values
+
+    async def _values_of(
+        self, t: SourceTransport, names: list[str], window: list[tuple[str, str]]
+    ) -> dict[str, set[str]]:
+        """Label name -> values, for a project with no filter; a few calls at a time."""
+        gate = asyncio.Semaphore(VALUE_CALLS_AT_ONCE)
+
+        async def values_of(name: str) -> set[str]:
+            async with gate:
+                path = f"/loki/api/v1/label/{quote(name, safe='')}/values"
+                return set(await self._list(t, path, window))
+
+        found = await _all([values_of(name) for name in names])
+        return dict(zip(names, found, strict=True))
+
     async def label_values(
         self,
         t: SourceTransport,
@@ -138,6 +220,18 @@ class LokiConnector:
         got = await t.request("GET", path, params=params, timeout=PROBE_SECONDS)
         data = checked_json(got, "The source", WHAT).get("data")
         return [str(item) for item in data] if isinstance(data, list) else []
+
+
+async def _all[T](calls: list[Awaitable[T]]) -> list[T]:
+    """Every call's result, in order. The first failure cancels the rest and is raised as is."""
+    tasks = [asyncio.ensure_future(call) for call in calls]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def _selector(matchers: Sequence[Matcher]) -> str:

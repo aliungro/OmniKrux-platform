@@ -1,20 +1,28 @@
 """The connector for Prometheus and the tools that speak its API (Thanos, VictoriaMetrics, Mimir)."""
 
 from collections.abc import Sequence
+from dataclasses import replace
 from urllib.parse import quote
 
 from omnikrux.monitoring.projects.types import Matcher
 from omnikrux.monitoring.query.filters import inject_promql, render_matchers
 from omnikrux.monitoring.query.series import QueryResult, series_result
 from omnikrux.monitoring.sources.connector import (
+    DEFAULT_LIMITS,
     NO_OPERATOR,
     NOT_LIKE,
+    NOTE_METRICS_TRUNCATED,
+    NOTE_NO_SERIES,
+    NOTE_SERIES_SAMPLED,
     AlertingCapability,
+    CatalogLimits,
+    CatalogMetric,
     ClusterProbe,
     ConnectorQuery,
     FieldCatalog,
     MetricField,
     QueryRejected,
+    SourceCatalog,
     TestResult,
     checked_json,
     json_object,
@@ -26,6 +34,12 @@ from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreach
 PROBE_SECONDS = 10.0
 QUERY_SECONDS = 30.0
 WHAT = "a Prometheus-compatible server"
+ALL_SERIES = '{__name__=~".+"}'
+FAMILY_TYPES = ("histogram", "gaugehistogram", "summary")
+FAMILY_SUFFIXES = ("_bucket", "_sum", "_count", "_created")
+
+# Metric name -> (its label names, its series count) from the series sample.
+PerMetric = dict[str, tuple[tuple[str, ...], int]]
 
 
 class PrometheusConnector:
@@ -98,6 +112,55 @@ class PrometheusConnector:
         truncated = len(names) > limit or len(labels) > limit
         return FieldCatalog(tuple(metrics), tuple(labels[:limit]), truncated)
 
+    async def catalog(
+        self,
+        t: SourceTransport,
+        *,
+        matchers: Sequence[Matcher],
+        now: float,
+        limits: CatalogLimits = DEFAULT_LIMITS,
+    ) -> SourceCatalog:
+        params = _match(matchers)
+        names = await self._list(t, "/api/v1/label/__name__/values", params)
+        labels = await self._list(t, "/api/v1/labels", params)
+        metadata = await self._metadata_or_empty(t)
+        notes: list[str] = []
+        if len(names) > limits.max_metrics:  # a long label list alone isn't worth a note
+            notes.append(NOTE_METRICS_TRUNCATED)
+        names = names[: limits.max_metrics]
+        sample = await self._series_sample(t, matchers, now, limits)
+        per_metric: PerMetric = {}
+        if sample is None:
+            notes.append(NOTE_NO_SERIES)
+        else:
+            series, full = sample
+            if full:
+                notes.append(NOTE_SERIES_SAMPLED)
+            per_metric = _labels_per_metric(series, limits.max_labels_per_metric)
+        metrics = []
+        for name in names:
+            # Only names the filtered list returned are looked up: metadata is read whole, and
+            # nothing else in it may reach the project.
+            kind, family, entry = _family(name, metadata, per_metric)
+            metric_labels, count = per_metric.get(name, ((), 0))
+            metrics.append(
+                CatalogMetric(
+                    name=name,
+                    type=kind,
+                    help=_cut(_text(entry, "help"), limits.max_help),
+                    unit=_text(entry, "unit"),
+                    labels=metric_labels,
+                    series=None if sample is None else count,
+                    family=family,
+                )
+            )
+        return SourceCatalog(
+            tuple(_follow_buckets(metrics)),
+            tuple(labels[: limits.max_metrics]),
+            (),
+            tuple(notes),
+        )
+
     async def label_values(
         self,
         t: SourceTransport,
@@ -135,9 +198,11 @@ class PrometheusConnector:
         data = checked_json(got, "The source", WHAT).get("data")
         return [str(item) for item in data] if isinstance(data, list) else []
 
-    async def _metadata(self, t: SourceTransport) -> dict[str, dict]:
+    async def _metadata(
+        self, t: SourceTransport, params: Sequence[tuple[str, str]] = ()
+    ) -> dict[str, dict]:
         """Metric name -> its first metadata entry; empty when the tool has none to give."""
-        got = await t.request("GET", "/api/v1/metadata", timeout=PROBE_SECONDS)
+        got = await t.request("GET", "/api/v1/metadata", params=list(params), timeout=PROBE_SECONDS)
         data = json_object(got.body) if got.status == 200 else None
         raw = data.get("data") if data is not None else None
         if not isinstance(raw, dict):
@@ -147,6 +212,101 @@ class PrometheusConnector:
             for name, entries in raw.items()
             if isinstance(entries, list) and entries and isinstance(entries[0], dict)
         }
+
+    async def _metadata_or_empty(self, t: SourceTransport) -> dict[str, dict]:
+        """Metadata for a catalog. An answer too large or too slow to read means none: types then
+        come only from the family rule. The endpoint takes no `match[]`."""
+        try:
+            return await self._metadata(t, [("limit_per_metric", "1")])
+        except SourceUnreachable as exc:
+            if exc.code in ("too_large", "timeout"):
+                return {}
+            raise
+
+    async def _series_sample(
+        self,
+        t: SourceTransport,
+        matchers: Sequence[Matcher],
+        now: float,
+        limits: CatalogLimits,
+    ) -> tuple[list[dict], bool] | None:
+        """The window's first `series_sample` label sets under the filter, and whether the
+        sample is full; None when the source refuses to list them (4xx) or answers too much."""
+        params = [
+            ("match[]", inject_promql(ALL_SERIES, matchers)),
+            ("start", number_text(now - limits.series_window)),
+            ("end", number_text(now)),
+            ("limit", str(limits.series_sample)),
+        ]
+        try:
+            got = await t.request("GET", "/api/v1/series", params=params, timeout=PROBE_SECONDS)
+        except SourceUnreachable as exc:
+            if exc.code == "too_large":
+                return None
+            raise
+        if 400 <= got.status < 500:
+            return None
+        data = checked_json(got, "The source", WHAT).get("data")
+        entries = [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
+        # A tool that ignores `limit` answers everything: read only the sample's worth.
+        return entries[: limits.series_sample], len(entries) >= limits.series_sample
+
+
+def _labels_per_metric(series: list[dict], cap: int) -> PerMetric:
+    """Metric name -> (its label names but `__name__`, sorted, at most `cap`; its series)."""
+    labels: dict[str, set[str]] = {}
+    counts: dict[str, int] = {}
+    for entry in series:
+        name = entry.get("__name__")
+        if not isinstance(name, str):
+            continue
+        labels.setdefault(name, set()).update(str(k) for k in entry if k != "__name__")
+        counts[name] = counts.get(name, 0) + 1
+    return {name: (tuple(sorted(labels[name])[:cap]), counts[name]) for name in labels}
+
+
+def _family(
+    name: str, metadata: dict[str, dict], per_metric: PerMetric
+) -> tuple[str | None, str | None, dict]:
+    """The name's type, the family it belongs to, and the metadata entry that describes it."""
+    own = metadata.get(name) or {}
+    own_type = _text(own, "type")
+    if own_type in FAMILY_TYPES:  # a summary's quantile series, or a native histogram
+        return own_type, name, own
+    for suffix in FAMILY_SUFFIXES:
+        if not name.endswith(suffix):
+            continue
+        base = name[: -len(suffix)]
+        entry = metadata.get(base) or {}
+        base_type = _text(entry, "type")
+        if base_type in FAMILY_TYPES:
+            return base_type, base, entry
+        no_metadata = own_type is None and base_type is None
+        if suffix == "_bucket" and no_metadata and "le" in per_metric.get(name, ((), 0))[0]:
+            return "histogram", base, own
+    return own_type, None, own
+
+
+def _follow_buckets(metrics: list[CatalogMetric]) -> list[CatalogMetric]:
+    """Without metadata, a histogram found by its `_bucket`'s `le` label takes its `_sum` and
+    `_count` along."""
+    found = {m.family for m in metrics if m.type == "histogram" and m.name.endswith("_bucket")}
+    out = []
+    for m in metrics:
+        if m.type is None and m.family is None:
+            for suffix in ("_sum", "_count"):
+                base = m.name[: -len(suffix)]
+                if m.name.endswith(suffix) and base in found:
+                    m = replace(m, type="histogram", family=base)
+        out.append(m)
+    return out
+
+
+def _cut(text: str | None, cap: int) -> str | None:
+    """Text over `cap` characters cut to `cap`, its last one an ellipsis."""
+    if text is None or len(text) <= cap:
+        return text
+    return text[: cap - 1] + "…"
 
 
 def _match(matchers: Sequence[Matcher]) -> list[tuple[str, str]]:

@@ -9,7 +9,9 @@ query string and a form body, headers). `mode` picks how a Prometheus or Loki an
 
 Seed `results` (exact query text -> the `data` object a query answers with; any other query gets
 an empty result of the right type), `errors` (exact query -> a `bad_data` error text, answered
-400), `labels`, `label_values` and `metadata`. `require` makes a request without the matching
+400), `labels`, `label_values`, `metadata` and `series` (the label sets `/api/v1/series` and
+`/loki/api/v1/series` answer with; Prometheus honours `limit`). `fail_paths` (path -> status)
+answers that status instead for one path. `require` makes a request without the matching
 credentials answer 401; `echo_auth_in_errors` makes error bodies repeat the request's
 `Authorization` header, for leak tests. With a `TlsMaterial` the server speaks HTTPS, and a
 `ClientCert` requirement also demands a client certificate signed by the material's CA.
@@ -102,6 +104,8 @@ class _FakeTool:
         self.labels: list[str] = []
         self.label_values: dict[str, list[str]] = {}
         self.metadata: dict[str, list[dict]] = {}
+        self.series: list[dict[str, str]] = []
+        self.fail_paths: dict[str, int] = {}
         self.echo_auth_in_errors = False
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
@@ -118,6 +122,8 @@ class _FakeTool:
             return self._error(401, "unauthorized", headers)
         if self.mode == "error500":
             return self._error(500, "internal error", headers)
+        if request.path in self.fail_paths:
+            return self._error(self.fail_paths[request.path], "refused", headers)
         if self.mode == "not_prometheus":
             return web.Response(text="<html><body>Sign in</body></html>", content_type="text/html")
         return self.route(request, params, headers)
@@ -146,9 +152,8 @@ class _FakeTool:
     def _label_values(self, name: str) -> web.Response:
         return web.json_response({"status": "success", "data": self.label_values.get(name, [])})
 
-    @staticmethod
-    def _series() -> web.Response:
-        return web.json_response({"status": "success", "data": []})
+    def _series(self, params: dict[str, list[str]]) -> web.Response:
+        return web.json_response({"status": "success", "data": self.series})
 
 
 class FakePrometheus(_FakeTool):
@@ -175,8 +180,13 @@ class FakePrometheus(_FakeTool):
         if path == "/api/v1/metadata":
             return web.json_response({"status": "success", "data": self.metadata})
         if path == "/api/v1/series":
-            return self._series()
+            return self._series(params)
         return web.Response(status=404, text="404 page not found")
+
+    def _series(self, params: dict[str, list[str]]) -> web.Response:
+        limit = (params.get("limit") or [""])[0]
+        data = self.series[: int(limit)] if limit.isdigit() and int(limit) > 0 else self.series
+        return web.json_response({"status": "success", "data": data})
 
 
 class FakeLoki(_FakeTool):
@@ -207,7 +217,7 @@ class FakeLoki(_FakeTool):
         if match := _LOKI_LABEL_VALUES.match(path):
             return self._label_values(match["name"])
         if path == "/loki/api/v1/series":
-            return self._series()
+            return self._series(params)
         if path == "/loki/api/v1/rules":
             if self.ruler:
                 return web.json_response({})

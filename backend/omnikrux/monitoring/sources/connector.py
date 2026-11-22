@@ -4,6 +4,10 @@ A connector knows a tool's API (what to ask, how to read the answer) and nothing
 it: the `SourceTransport` it is handed does that. `test` never raises for an unreachable tool (it
 reports it); every other call raises `SourceUnreachable` as the transport does, and
 `QueryRejected` when the tool itself refuses a request.
+
+`catalog` describes what a source holds for one project: every request it sends carries the
+project's matchers (Prometheus's `/api/v1/metadata` alone takes none, so only the entries of names
+the filtered list returned are used from it).
 """
 
 import json
@@ -59,6 +63,62 @@ class FieldCatalog:
     truncated: bool
 
 
+NOTE_METRICS_TRUNCATED = "Showing the first 5000 metrics. Search and the list cover only those."
+NOTE_SERIES_SAMPLED = "Labels per metric come from the first 50000 series."
+NOTE_NO_SERIES = "This source didn't list its series, so labels per metric are missing."
+NOTE_STREAM_LABELS_TRUNCATED = "Showing the first 50 log labels."
+NOTE_STREAM_VALUES_TRUNCATED = (
+    "Some log labels have more than 200 values; only the first 200 are listed."
+)
+
+
+@dataclass(frozen=True)
+class CatalogLimits:
+    """How much of a source a catalog reads. Windows are in seconds."""
+
+    max_metrics: int = 5000
+    max_help: int = 200
+    series_sample: int = 50000
+    max_labels_per_metric: int = 50
+    series_window: int = 900
+    max_stream_labels: int = 50
+    max_stream_values: int = 200
+    max_stream_series: int = 5000
+    stream_window: int = 3600
+
+
+DEFAULT_LIMITS = CatalogLimits()
+
+
+@dataclass(frozen=True)
+class CatalogMetric:
+    """One metric name. `series` is None when the source didn't list its series; `family` is the
+    histogram or summary the name belongs to."""
+
+    name: str
+    type: str | None
+    help: str | None
+    unit: str | None
+    labels: tuple[str, ...]
+    series: int | None
+    family: str | None
+
+
+@dataclass(frozen=True)
+class StreamLabel:
+    name: str
+    values: tuple[str, ...]
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class SourceCatalog:
+    metrics: tuple[CatalogMetric, ...]
+    labels: tuple[str, ...]
+    streams: tuple[StreamLabel, ...]
+    notes: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class AlertingCapability:
     omnikrux_engine: bool
@@ -110,6 +170,19 @@ class Connector(Protocol):
     async def describe_fields(
         self, t: SourceTransport, *, matchers: Sequence[Matcher], limit: int = 2000
     ) -> FieldCatalog: ...
+
+    async def catalog(
+        self,
+        t: SourceTransport,
+        *,
+        matchers: Sequence[Matcher],
+        now: float,
+        limits: CatalogLimits = DEFAULT_LIMITS,
+    ) -> SourceCatalog:
+        """What the source holds under `matchers`, read over windows ending at `now` (seconds).
+        Raises `SourceUnreachable` and `QueryRejected` as the lookups do; what a source can't
+        list but the catalog can do without becomes a note."""
+        ...
 
     async def label_values(
         self,
