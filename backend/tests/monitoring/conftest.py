@@ -155,9 +155,48 @@ async def linked_project(monitoring_app, fake_prometheus) -> LinkedProject:
     """A custom project linked to a Prometheus source over `fake_prometheus` with the filter
     `cluster="a"`, created through the API as a user would (a source, then the setup)."""
     http, _ = monitoring_app
+    return await _shop_project(http, fake_prometheus.url)
+
+
+@dataclass(frozen=True)
+class LinkedProjectWithLoki(LinkedProject):
+    """`linked_project`'s project, with a Loki source linked second with the same filter."""
+
+    loki_source_id: str
+
+
+@pytest.fixture
+async def linked_project_with_loki(
+    monitoring_app, fake_prometheus, fake_loki
+) -> LinkedProjectWithLoki:
+    """`linked_project`'s shape (the Prometheus source and the project are both "Shop", filter
+    `cluster="a"`), then a Loki source "Shop logs" over `fake_loki` linked with the same filter
+    by a later PUT, so the links read Prometheus, then Loki. Created through the API."""
+    http, _ = monitoring_app
+    shop = await _shop_project(http, fake_prometheus.url)
     source = await http.post(
         "/api/monitoring/sources",
-        json={"type": "prometheus", "reach": "url", "url": fake_prometheus.url, "name": "Shop"},
+        json={"type": "loki", "reach": "url", "url": fake_loki.url, "name": "Shop logs"},
+    )
+    assert source.status_code == 201, source.text
+    loki_id = source.json()["id"]
+    link = await http.put(
+        f"/api/monitoring/projects/{shop.project_id}/sources/{loki_id}",
+        json={"filter": 'cluster="a"'},
+    )
+    assert link.status_code == 200, link.text
+    return LinkedProjectWithLoki(
+        project_id=shop.project_id,
+        source_id=shop.source_id,
+        project_name=shop.project_name,
+        loki_source_id=loki_id,
+    )
+
+
+async def _shop_project(http: httpx.AsyncClient, prometheus_url: str) -> LinkedProject:
+    source = await http.post(
+        "/api/monitoring/sources",
+        json={"type": "prometheus", "reach": "url", "url": prometheus_url, "name": "Shop"},
     )
     assert source.status_code == 201, source.text
     source_id = source.json()["id"]

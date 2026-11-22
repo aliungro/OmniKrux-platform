@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.monitoring.dashboards.store import DashboardStore
+from omnikrux.monitoring.explore.catalog import CatalogCache
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
 from omnikrux.monitoring.sources.connector import ConnectorRegistry, default_connectors
 from omnikrux.monitoring.sources.discovery import Discovery
@@ -26,10 +27,12 @@ class MonitoringServices:
     connectors: ConnectorRegistry
     health: HealthCache
     discovery: Discovery
+    catalogs: CatalogCache
 
     async def close(self) -> None:
-        """Release what the services hold: the transports' HTTP session (the stores share the
-        app's engine)."""
+        """Release what the services hold: the catalog builds in flight (cancelled), then the
+        transports' HTTP session (the stores share the app's engine)."""
+        await self.catalogs.close()
         await self.transports.close()
 
 
@@ -52,4 +55,5 @@ def build_services(
         connectors=connectors,
         health=HealthCache(sources, transports, connectors, registry),
         discovery=Discovery(connections, registry, transports, connectors, sources),
+        catalogs=CatalogCache(),
     )

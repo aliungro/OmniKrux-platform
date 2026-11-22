@@ -6,8 +6,10 @@ reports it); every other call raises `SourceUnreachable` as the transport does, 
 `QueryRejected` when the tool itself refuses a request.
 
 `catalog` describes what a source holds for one project: every request it sends carries the
-project's matchers (Prometheus's `/api/v1/metadata` alone takes none, so only the entries of names
-the filtered list returned are used from it).
+project's matchers. Prometheus's `/api/v1/metadata` alone takes none, so it is read only for names
+the filtered list returned: a name's own entry gives its type, help and unit. A suffixed name
+(`_bucket`, `_sum`, `_count`, `_created`) with no entry of its own takes only its base's type and
+family from the base's entry, never its help or unit, which could be another project's.
 """
 
 import asyncio
