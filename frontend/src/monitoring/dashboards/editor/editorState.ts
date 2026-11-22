@@ -51,6 +51,16 @@ export type EditorAction =
 
 export const VIEW: EditorState = { mode: "view" };
 
+/** What the grid and the settings say when an edit is refused because the JSON text doesn't apply. */
+export const JSON_FIRST = "Fix the JSON first, or discard it.";
+
+const DRAFT_EDITS: ReadonlySet<EditorAction["type"]> = new Set(["updatePanel", "addPanel", "removePanel", "place", "nudge", "grow", "setDashboard"]);
+/**
+ * Edits made outside the JSON tab. While the JSON tab holds text that doesn't apply, they are
+ * refused: applying one would replace that text with the draft and drop it silently.
+ */
+export const isDraftEdit = (action: EditorAction): boolean => DRAFT_EDITS.has(action.type);
+
 /** Structural equality for JSON values; key order doesn't matter. */
 export function sameJson(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -108,8 +118,8 @@ const bump = (changes: Record<string, number>, ids: readonly string[]) => {
 
 /**
  * A new draft. `touched` are the panels the user acted on (their `changes` count goes up); panels
- * that only moved out of the way don't flash (F34). A draft change from outside the JSON tab
- * makes the JSON follow the draft again.
+ * that only moved out of the way don't flash (F34). The JSON follows the new draft (edits from
+ * outside the JSON tab are refused while its text doesn't apply, so no text is dropped here).
  */
 function withDraft(state: EditingState, draft: DashboardSpec, touched: readonly string[], extra: Partial<EditingState> = {}): EditingState {
   return { ...state, ...extra, draft, changes: bump(state.changes, touched), jsonText: null, jsonProblems: [] };
@@ -149,6 +159,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
   if (action.type === "start") return fresh(action.dashboardId, action.version, action.spec, action.spec, null, action.writer);
   if (action.type === "resume") return resumed(action);
   if (state.mode !== "edit") return state;
+  if (state.jsonText !== null && isDraftEdit(action)) return state;
   const panels = state.draft.panels;
 
   switch (action.type) {

@@ -149,7 +149,7 @@ describe("Dashboard drafts", () => {
     expect(banner.textContent).toContain("You have unsaved changes from 3 Mar 09:05.");
     expect(banner.textContent).toContain("The dashboard was saved again since then (version 2).");
 
-    // Restored, its base stays version 1: saving goes through the conflict review.
+    // Restored, its base stays version 1 (a save goes through the conflict review: jsonTab.test).
     await user.click(within(banner).getByRole("button", { name: "Restore draft" }));
     expect(await screen.findByText("Editing")).toBeTruthy();
     expect(tile("Requests per second")).toBeTruthy();
@@ -157,9 +157,11 @@ describe("Dashboard drafts", () => {
     expect(s?.mode === "edit" && s.baseVersion).toBe(1);
     // The kept JSON text shows its problems again.
     expect(s?.mode === "edit" && s.jsonProblems.length).toBeGreaterThan(0);
+    // While that text doesn't apply, Save is refused (saving the last valid draft would drop it).
     await user.click(screen.getByRole("button", { name: "Save dashboard" }));
-    expect(await screen.findByRole("button", { name: "Review differences" })).toBeTruthy();
-    expect(puts(api)).toHaveLength(1);
+    expect(await screen.findByText("The JSON has a problem. Fix it or discard it before saving.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show in JSON" })).toBeTruthy();
+    expect(puts(api)).toHaveLength(0);
     expect(api.state.dashboards.d1.out.version).toBe(2);
     expect(stored()).not.toBeNull();
 

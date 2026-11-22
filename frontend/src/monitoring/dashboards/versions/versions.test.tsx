@@ -6,6 +6,7 @@ import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardS
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { DashboardSpec } from "../schema";
 import { draftTime } from "../drafts/DraftBanner";
+import { writeDraft } from "../drafts/draftStore";
 import { editSessions } from "../editor/useDashboardEditor";
 
 // The chart chunk as a stub.
@@ -137,9 +138,9 @@ describe("The Versions tab", () => {
     expect(JSON.parse(within(diff).getByTestId("diff-before").textContent ?? "")).toEqual(v1());
     expect(JSON.parse(within(diff).getByTestId("diff-after").textContent ?? "")).toEqual(v3());
     expect(document.activeElement).toBe(compare);
-    // A third pick lets go of the earliest one.
+    // A third pick lets go of the lowest version.
     await user.click(pick(2));
-    expect([pick(1).checked, pick(2).checked, pick(3).checked]).toEqual([true, true, false]);
+    expect([pick(1).checked, pick(2).checked, pick(3).checked]).toEqual([false, true, true]);
     // Compare with current: that version on the left, the current one on the right.
     const two = await row(2);
     await user.click(within(two).getByRole("button", { name: "Compare with current" }));
@@ -192,6 +193,32 @@ describe("The Versions tab", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findByText("Save or discard your draft before restoring a version.")).toBeTruthy();
     expect(document.activeElement).toBe(opener);
+    expect(restores(api)).toHaveLength(0);
+  });
+
+  it("the refusal goes with the session, and a restore is asked again on confirm", async () => {
+    const { user, api } = await versionsTab();
+    await user.click(viewTab("Dashboard"));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await screen.findByRole("button", { name: "Save dashboard" });
+    await user.click(viewTab("Versions"));
+    await user.click(within(await row(2)).getByRole("button", { name: "Restore…" }));
+    expect(screen.getByText("Save or discard your draft before restoring a version.")).toBeTruthy();
+    // Edit mode ends (nothing changed, so nothing is asked): the refusal goes with it.
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(screen.queryByText("Save or discard your draft before restoring a version.")).toBeNull());
+    notBody();
+
+    // A draft appears while the question is open (another window): confirming is refused.
+    const opener = within(await row(2)).getByRole("button", { name: "Restore…" });
+    await user.click(opener);
+    expect(screen.getByRole("dialog", { name: "Restore version 2?" })).toBeTruthy();
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 3, savedAt: Date.now(), draft: v2(), jsonText: null, writer: "w-other" });
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("Save or discard your draft before restoring a version.")).toBeTruthy();
+    expect(document.activeElement).toBe(opener);
+    await new Promise((r) => setTimeout(r, 30));
     expect(restores(api)).toHaveLength(0);
   });
 

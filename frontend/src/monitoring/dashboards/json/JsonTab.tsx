@@ -48,6 +48,8 @@ interface Props {
   onStartEditing(): boolean;
   /** Task 14's save (conflicts included). */
   onSave(): Promise<void>;
+  /** What this tab's last save answered: the saved side before the dashboard query catches up. */
+  lastSaved: DashboardOut | null;
   /** The page's Discard (it asks first when there are changes); focus comes back to `from`. */
   onDiscard(from: RefObject<HTMLButtonElement | null>): void;
   saving: boolean;
@@ -55,10 +57,13 @@ interface Props {
   flushRef: { current: (() => EditorState | null) | null };
 }
 
-export function JsonTab({ dashboard, editing, dispatch, onStartEditing, onSave, onDiscard, saving, flushRef }: Props) {
+export function JsonTab({ dashboard, editing, dispatch, onStartEditing, onSave, lastSaved, onDiscard, saving, flushRef }: Props) {
   const ownerKind = dashboard.owner_kind;
-  // What the editor shows: the draft (or its invalid text) while editing, the saved document otherwise.
-  const shown = editing ? editing.draft : dashboard.spec;
+  // What the editor shows: the draft (or its invalid text) while editing, the saved document
+  // otherwise. Right after a save the dashboard query hasn't caught up yet: the save's answer is
+  // the saved document (so the editor isn't replaced by the older one under your typing).
+  const saved = lastSaved && lastSaved.id === dashboard.id && lastSaved.version > dashboard.version ? lastSaved.spec : dashboard.spec;
+  const shown = editing ? editing.draft : saved;
   const shownText = editing ? editing.jsonText : null;
 
   // The draft this editor's own typing made last: seeing it come back is no reason to remount.
@@ -83,7 +88,13 @@ export function JsonTab({ dashboard, editing, dispatch, onStartEditing, onSave, 
   started.current = editing !== null;
 
   const apply = useCallback((text: string): EditorState => {
-    const next = latest.current.dispatch({ type: "setJson", text, ownerKind: latest.current.ownerKind });
+    const action = { type: "setJson", text, ownerKind: latest.current.ownerKind } as const;
+    let next = latest.current.dispatch(action);
+    // Edit mode ended under the typing (a save answered before the pause): it starts again with it.
+    if (next.mode !== "edit" && latest.current.onStartEditing()) {
+      started.current = true;
+      next = latest.current.dispatch(action);
+    }
     if (next.mode === "edit") echo.current = { draft: next.draft, jsonText: next.jsonText };
     return next;
   }, []);
@@ -196,7 +207,7 @@ export function JsonTab({ dashboard, editing, dispatch, onStartEditing, onSave, 
       )}
       <JsonEditor key={rev} doc={doc} onChange={onChange} keys={keys} />
       {reviewing && editing && (
-        <ReviewChanges title={dashboard.title} version={dashboard.version} saved={dashboard.spec} draft={editing.draft}
+        <ReviewChanges title={dashboard.title} version={editing.baseVersion} saved={editing.base} draft={editing.draft}
           saving={saving} restoreFocusTo={reviewButton}
           onCancel={() => setReviewing(false)}
           onSave={() => { void onSave().finally(() => setReviewing(false)); }} />

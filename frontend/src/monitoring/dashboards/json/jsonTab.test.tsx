@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { gate, intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import { parseDashboardJson, type DashboardSpec } from "../schema";
+import { writeDraft } from "../drafts/draftStore";
 import type { EditingState } from "../editor/editorState";
-import { editSessions } from "../editor/useDashboardEditor";
+import { editSessions, JSON_SAVE_REFUSED } from "../editor/useDashboardEditor";
 
 // The chart chunk as a stub.
 vi.mock("../../charts", async () => {
@@ -66,10 +67,12 @@ const doc = (): DashboardSpec => spec("API latency", [
   panel("p-2", "Errors", "errors", { x: 12, y: 0, w: 12, h: 8 }),
 ]);
 
-function shop(): FakeMonitoringApi {
+function shop(version = 1): FakeMonitoringApi {
+  const d = seedDashboard("d1", SHOP, doc());
+  d.out.version = version;
   return installFakeMonitoringApi({
     projects: [linkedProject("p1", "Shop", "s1")],
-    dashboards: { d1: seedDashboard("d1", SHOP, doc()) },
+    dashboards: { d1: d },
     queryAnswers: { up: ok, errors: ok },
   }, async () => json([]));
 }
@@ -316,5 +319,93 @@ describe("The JSON tab", () => {
     expect((puts(api)[0].body as { spec: DashboardSpec }).spec.panels[1].title).toBe("Failures");
     await waitFor(() => expect(screen.queryByText("Editing")).toBeNull());
     notBody();
+  });
+  it("typing during a save that answers before the pause ends up in the draft", async () => {
+    const { user, area, api } = await editingJson();
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/dashboards/d1" ? held.opened.then(pass) : null));
+    area.focus();
+    type(area, changed((d) => { d.panels[1].title = "Failures"; }));
+    await user.keyboard("{Control>}s{/Control}");
+    // Still typing while the save is on its way; it answers before the pause.
+    type(area, changed((d) => { d.panels[1].title = "Failures"; d.panels[0].title = "Requests per second"; }));
+    held.open();
+    await waitFor(() => expect(puts(api)).toHaveLength(1));
+    expect((puts(api)[0].body as { spec: DashboardSpec }).spec.panels[0].title).toBe("Requests");
+    await waitFor(() => expect(session()?.draft.panels[0].title).toBe("Requests per second"));
+    expect(session()?.draft.panels[1].title).toBe("Failures");
+    expect(session()?.baseVersion).toBe(2);
+    expect(screen.getByText("Editing")).toBeTruthy();
+    expect(statusLine().textContent).toBe("✓ Valid · applied live");
+    notBody();
+  });
+
+  it("Review changes compares with the version the draft started from", async () => {
+    const api = shop(2);
+    const draft = doc();
+    draft.panels[0].title = "Requests per second";
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 1, savedAt: Date.now(), draft, jsonText: null, writer: "w-other" });
+    const { user } = await opened(api);
+    await user.click(within(screen.getByRole("region", { name: "Unsaved draft" })).getByRole("button", { name: "Restore draft" }));
+    await screen.findByText("Editing");
+    await user.click(viewTab("JSON"));
+    await editorField();
+    await user.click(screen.getByRole("button", { name: "Review changes" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Review changes to "API latency"' });
+    expect(within(dialog).getByText("Saved (version 1)")).toBeTruthy();
+    expect(JSON.parse(within(dialog).getByTestId("diff-after").textContent ?? "").panels[0].title).toBe("Requests per second");
+    // The save sends that base, so the newer version 2 is reviewed before anything is overwritten.
+    await user.click(within(dialog).getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(puts(api)).toHaveLength(1));
+    expect((puts(api)[0].body as { base_version: number }).base_version).toBe(1);
+    expect(await screen.findByRole("button", { name: "Review differences" })).toBeTruthy();
+    expect(api.state.dashboards.d1.out.version).toBe(2);
+    expect(screen.getByText("Editing")).toBeTruthy();
+    notBody();
+  });
+
+  it("Save is refused while the JSON text doesn't apply", async () => {
+    const { user, area, api } = await editingJson();
+    type(area, changed((d) => { d.panels[0].layout.w = 1; }));
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗/));
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    const notice = (await screen.findByText(JSON_SAVE_REFUSED)).closest('[role="alert"]') as HTMLElement;
+    expect(JSON_SAVE_REFUSED).toBe("The JSON has a problem. Fix it or discard it before saving.");
+    expect(notice.textContent).toContain("panels[0].layout.w");
+    expect(within(notice).getByRole("button", { name: "Show in JSON" })).toBeTruthy();
+    // Ctrl+S from the editor, right after typing: refused too.
+    area.focus();
+    type(area, changed((d) => { d.panels[0].layout.w = 1; d.title = "Typed"; }));
+    await user.keyboard("{Control>}s{/Control}");
+    await pause(50);
+    expect(puts(api)).toHaveLength(0);
+    expect(screen.getByText("Editing")).toBeTruthy();
+    expect(session()?.jsonText).toContain('"Typed"');
+    // Fixed, the notice goes, and Save goes through.
+    type(area, changed((d) => { d.panels[0].title = "Fixed"; }));
+    await waitFor(() => expect(screen.queryByText(JSON_SAVE_REFUSED)).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(puts(api)).toHaveLength(1));
+  });
+
+  it("grid and settings edits are refused while the JSON text doesn't apply", async () => {
+    const { user, area } = await editingJson();
+    const bad = changed((d) => { d.panels[0].layout.w = 1; });
+    type(area, bad);
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗/));
+    await user.click(viewTab("Dashboard"));
+    tile("Requests").focus();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
+    expect(await screen.findByText("Fix the JSON first, or discard it.")).toBeTruthy();
+    await user.keyboard("{Enter}");
+    const settings = await screen.findByRole("complementary", { name: "Panel settings" });
+    await user.click(within(settings).getByRole("tab", { name: "Options" }));
+    await user.selectOptions(within(settings).getByRole("combobox", { name: "Unit" }), "Seconds");
+    expect((session()?.draft.panels[0].options as { unit?: string }).unit).toBe("none");
+    // The text is kept as typed.
+    expect(session()?.jsonText).toBe(bad);
+    await user.click(viewTab("JSON"));
+    expect((await editorField()).value).toBe(bad);
   });
 });

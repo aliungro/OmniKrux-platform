@@ -9,7 +9,7 @@ import e from "../editor/EditBar.module.css";
 
 export function ReviewChanges({ title, version, saved, draft, saving, restoreFocusTo, onCancel, onSave }: {
   title: string;
-  /** The saved version and its document. */
+  /** The saved version the draft started from (its base), and that document. */
   version: number;
   saved: DashboardSpec;
   draft: DashboardSpec;

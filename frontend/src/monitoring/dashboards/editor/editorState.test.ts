@@ -139,8 +139,12 @@ describe("editorReducer", () => {
     expect(broken.draft).toBe(s1.draft);
     expect(broken.jsonText).toBe("{ nope");
     expect(broken.jsonProblems[0].message).toMatch(/^Not valid JSON/);
-    // A change made elsewhere makes the JSON follow the draft again.
-    const fixed = edit(run(broken, retitle("p-1", "Fixed")));
+    // A change made elsewhere is refused while the text doesn't apply: it would drop the text.
+    expect(run(broken, retitle("p-1", "Fixed"))).toBe(broken);
+    expect(run(broken, { type: "addPanel", panelType: "stat" })).toBe(broken);
+    expect(run(broken, { type: "setDashboard", update: (d) => ({ ...d, title: "x" }) })).toBe(broken);
+    // Fixed in the JSON, the draft follows it again.
+    const fixed = edit(run(broken, { type: "setJson", text: dashboardJson(next), ownerKind: "project" }));
     expect(fixed.jsonText).toBeNull();
     expect(fixed.jsonProblems).toEqual([]);
   });

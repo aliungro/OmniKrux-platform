@@ -13,7 +13,7 @@ import type { DashboardOwner } from "../runPanel";
 import { GRID_COLUMNS, type Layout, type OwnerKind, type PanelSpec } from "../schema";
 import { pageLetter } from "../page/keys";
 import { AddPanelTile, cellStyle } from "./AddPanelTile";
-import { editorReducer, type EditingState, type EditorAction } from "./editorState";
+import { editorReducer, isDraftEdit, JSON_FIRST, type EditingState, type EditorAction } from "./editorState";
 import { panelName, SidePanel, type PanelLive } from "./SidePanel";
 import s from "./EditableGrid.module.css";
 
@@ -136,10 +136,25 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     return !!el;
   }, [gridRef]);
 
+  /**
+   * While the JSON tab holds text that doesn't apply, edits here are refused (they would drop it)
+   * and the live region says why. True: refused.
+   */
+  const jsonBlocks = useCallback((action: EditorAction) => {
+    const ed = latest.current;
+    if (!ed || ed.state.jsonText === null || !isDraftEdit(action)) return false;
+    setMessage(JSON_FIRST);
+    return true;
+  }, []);
+  /** The settings' dispatch: the same refusal. */
+  const settingsDispatch = useCallback((action: EditorAction) => {
+    if (!jsonBlocks(action)) latest.current?.dispatch(action);
+  }, [jsonBlocks]);
+
   /** Dispatches `action` and says what it did; returns the state it makes. */
   const act = useCallback((action: EditorAction, say?: (next: EditingState) => string | null) => {
     const ed = latest.current;
-    if (!ed) return null;
+    if (!ed || jsonBlocks(action)) return null;
     const next = editorReducer(ed.state, action);
     ed.dispatch(action);
     if (next.mode !== "edit") return null;
@@ -148,7 +163,7 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
       if (words) setMessage(words);
     }
     return next;
-  }, []);
+  }, [jsonBlocks]);
 
   const openSettings = useCallback((id: string, focus: Settings["focus"]) => {
     setCurrent(id);
@@ -164,6 +179,7 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
   }, [act, openSettings]);
 
   const remove = (panel: PanelSpec, panels: PanelSpec[]) => {
+    if (jsonBlocks({ type: "removePanel", id: panel.id })) return;
     const to = (["right", "left", "down", "up"] as const).map((d) => neighbour(panels, panel.id, d)).find((id) => id !== null) ?? null;
     refocus.current = to ?? "add";
     setCurrent(to);
@@ -411,7 +427,7 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     ),
     aside: settings.open && selected
       ? (
-        <SidePanel key={selected.id} state={state} dispatch={editor.dispatch} owner={owner} ownerKind={editor.ownerKind}
+        <SidePanel key={selected.id} state={state} dispatch={settingsDispatch} owner={owner} ownerKind={editor.ownerKind}
           panelData={live?.data ?? null} live={live} initialFocus={settings.focus} seq={settings.seq} onClose={closeSettings} />
       )
       : null,

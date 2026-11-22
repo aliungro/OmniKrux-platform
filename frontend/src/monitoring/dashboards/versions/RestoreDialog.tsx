@@ -8,13 +8,15 @@ import { dashboardKey, restoreVersion, useDashboardMutation, type DashboardOut }
 import e from "../editor/EditBar.module.css";
 import v from "./VersionsTab.module.css";
 
-export function RestoreDialog({ dashboardId, version, baseVersion, restoreFocusTo, onCancel, onRestored }: {
+export function RestoreDialog({ dashboardId, version, baseVersion, restoreFocusTo, refuse, onCancel, onRestored }: {
   dashboardId: string;
   /** The version to restore. */
   version: number;
   /** The current saved version: the server refuses the restore if another save landed since. */
   baseVersion: number;
   restoreFocusTo: RefObject<HTMLElement | null>;
+  /** Asked on confirm: true when a draft or edit session exists now (the tab then says so). */
+  refuse(): boolean;
   onCancel(): void;
   onRestored(out: DashboardOut): void;
 }) {
@@ -27,7 +29,7 @@ export function RestoreDialog({ dashboardId, version, baseVersion, restoreFocusT
   // Back from a request that didn't go through: the keyboard returns to the action.
   useEffect(() => { if (!busy) go.current?.focus(); }, [busy]);
   const restore = () => {
-    if (busy) return;
+    if (busy || refuse()) return;
     mutation.mutate({ n: version, base: baseVersion }, {
       onSuccess: (out) => {
         client.setQueryData(dashboardKey(out.id), out);

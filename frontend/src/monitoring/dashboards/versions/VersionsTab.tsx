@@ -78,8 +78,11 @@ export function VersionsTab({ dashboard, restoreBlocked, onRestored }: {
   const compareOpener = useRef<HTMLButtonElement | null>(null);
   const restoreOpener = useRef<HTMLButtonElement | null>(null);
 
-  // At most two picks: a third lets go of the earliest.
-  const toggle = (n: number) => setPicked((p) => (p.includes(n) ? p.filter((x) => x !== n) : p.length >= 2 ? [p[p.length - 1], n] : [...p, n]));
+  // At most two picks: a third lets go of the lowest version.
+  const toggle = (n: number) => setPicked((p) => {
+    if (p.includes(n)) return p.filter((x) => x !== n);
+    return p.length >= 2 ? [...p.filter((x) => x !== Math.min(...p)), n] : [...p, n];
+  });
   const two = picked.length === 2;
   const compare = () => {
     if (!two) return;
@@ -104,6 +107,16 @@ export function VersionsTab({ dashboard, restoreBlocked, onRestored }: {
     setRefused(null);
     setRestoring(n);
   };
+  /** Asked again on confirm: a draft may have appeared since (another tab or window). True: refused. */
+  const refuseNow = (n: number) => {
+    if (!restoreBlocked()) return false;
+    setRestoring(null);
+    setRefused(n);
+    return true;
+  };
+  // The refusal stands only while the draft or session does (checked whenever the page draws).
+  const blockedNow = refused !== null && restoreBlocked();
+  if (refused !== null && !blockedNow) setRefused(null);
 
   if (versions.isPending) return <p className={s.note} role="status">Loading versions…</p>;
   if (versions.isError) {
@@ -145,14 +158,14 @@ export function VersionsTab({ dashboard, restoreBlocked, onRestored }: {
                   <button type="button" className={s.btn} onClick={(e) => askRestore(v.version, e)}>Restore…</button>
                 </div>
               )}
-              {refused === v.version && <p className={s.refused} role="alert">{RESTORE_REFUSED}</p>}
+              {blockedNow && refused === v.version && <p className={s.refused} role="alert">{RESTORE_REFUSED}</p>}
             </li>
           );
         })}
       </ul>
       {restoring !== null && (
         <RestoreDialog dashboardId={dashboard.id} version={restoring} baseVersion={dashboard.version} restoreFocusTo={restoreOpener}
-          onCancel={() => setRestoring(null)}
+          refuse={() => refuseNow(restoring)} onCancel={() => setRestoring(null)}
           onRestored={(out) => { setRestoring(null); onRestored(out); }} />
       )}
     </div>

@@ -320,7 +320,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
         {tab === "json" && (ready
           ? <ReadyMadeJson spec={dashboard.spec} />
           : <JsonTab dashboard={dashboard} editing={editing} dispatch={editor.dispatch} onStartEditing={() => startEditing(null)}
-              onSave={save} onDiscard={discard} saving={editor.saving} flushRef={flushJson} />)}
+              onSave={save} lastSaved={editor.lastSaved} onDiscard={discard} saving={editor.saving} flushRef={flushJson} />)}
         {tab === "versions" && !ready && (
           <VersionsTab dashboard={dashboard} restoreBlocked={restoreBlocked} onRestored={() => selectTab("dashboard")} />
         )}

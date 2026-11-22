@@ -3,9 +3,9 @@
 // leave check and drafts (Task 16) read the same map. The draft is kept in browser storage while
 // it has changes (`useDraft`), so a reload or Browser Back offers it back.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { dashboardKey, saveDashboard, useDashboardMutation, type DashboardOut, type DashboardRequestError } from "../api";
+import { dashboardKey, DashboardRequestError, saveDashboard, useDashboardMutation, type DashboardOut } from "../api";
 import { removeDraft, type StoredDraft } from "../drafts/draftStore";
 import { useDraft } from "../drafts/useDraft";
 import type { DashboardSpec, OwnerKind } from "../schema";
@@ -15,6 +15,9 @@ export { isDirty };
 
 /** Every live edit session, by workspace tab id. A tab not editing has no entry. */
 export const editSessions = new Map<string /* tab id */, EditorState>();
+
+/** Save refused because the JSON tab holds text that doesn't apply (no PUT is sent). */
+export const JSON_SAVE_REFUSED = "The JSON has a problem. Fix it or discard it before saving.";
 
 export interface DashboardEditor {
   state: EditorState;
@@ -34,6 +37,8 @@ export interface DashboardEditor {
   conflict: number | null;
   /** Whether this browser keeps drafts; false: a reload loses unsaved changes. */
   draftsWork: boolean;
+  /** The last save's answer (set with the save's own state change, before the dashboard query updates). */
+  lastSaved: DashboardOut | null;
 }
 
 const sessionFor = (tabId: string, dashboardId: string): EditorState => {
@@ -48,6 +53,9 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
   const [state, setState] = useState<EditorState>(current.current);
   const [saveError, setSaveError] = useState<DashboardRequestError | null>(null);
   const [conflict, setConflict] = useState<number | null>(null);
+  /** Save was pressed while the JSON text didn't apply; the notice lasts while it still doesn't. */
+  const [jsonRefused, setJsonRefused] = useState(false);
+  const [lastSaved, setLastSaved] = useState<DashboardOut | null>(null);
   const mutation = useDashboardMutation((v: { id: string; baseVersion: number; spec: DashboardSpec }) => saveDashboard(v.id, v.baseVersion, v.spec));
   const busy = useRef(false);
   const live = useCallback((): EditingState | null => {
@@ -70,6 +78,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
       setSaveError(null);
       setConflict(null);
     }
+    if (next.mode === "view" || next.jsonText === null) setJsonRefused(false);
     setState(next);
     return next;
   }, [tabId, dashboardId]);
@@ -79,9 +88,11 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
     if (s.mode !== "edit" || busy.current) return;
     busy.current = true;
     setSaveError(null);
+    setJsonRefused(false);
     try {
       const out: DashboardOut = await mutation.mutateAsync({ id: s.dashboardId, baseVersion, spec: s.draft });
       client.setQueryData(dashboardKey(out.id), out);
+      setLastSaved(out);
       // Changed while saving: editing goes on over the saved version, and the stored draft is
       // updated with the next write. Otherwise the draft is done with (also when the page went away).
       dispatch({ type: "saved", version: out.version, spec: out.spec, sent: s.draft });
@@ -106,6 +117,13 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
   const save = useCallback(async () => {
     const s = current.current;
     if (s.mode !== "edit") return;
+    // The JSON tab's text doesn't apply: saving the last valid draft would drop it silently.
+    if (s.jsonText !== null) {
+      setSaveError(null);
+      setConflict(null);
+      setJsonRefused(true);
+      return;
+    }
     // Nothing changed: no new version and no Audit record, just the end of editing.
     if (!isDirty(s)) dispatch({ type: "discard" });
     else await send(s.baseVersion);
@@ -128,5 +146,16 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
     if (s.mode === "edit") adopt(s, d.savedAt);
   }, [dispatch, adopt, dashboardId]);
 
-  return { state, dispatch, save, saveOver, discard, restore, saving: mutation.isPending, saveError, conflict, draftsWork: keeper.works };
+  // Shown like any other save problem, with the JSON problems and Show in JSON.
+  const jsonError = useMemo(
+    () => (jsonRefused && state.mode === "edit" && state.jsonText !== null
+      ? new DashboardRequestError(0, "invalid_dashboard", JSON_SAVE_REFUSED, state.jsonProblems)
+      : null),
+    [jsonRefused, state],
+  );
+
+  return {
+    state, dispatch, save, saveOver, discard, restore, saving: mutation.isPending, saveError: jsonError ?? saveError, conflict,
+    draftsWork: keeper.works, lastSaved,
+  };
 }
