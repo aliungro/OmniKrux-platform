@@ -25,6 +25,7 @@ from omnikrux.monitoring.sources.connector import (
     SourceCatalog,
     TestResult,
     checked_json,
+    gather_all,
     json_object,
     number_text,
     status_message,
@@ -121,9 +122,13 @@ class PrometheusConnector:
         limits: CatalogLimits = DEFAULT_LIMITS,
     ) -> SourceCatalog:
         params = _match(matchers)
-        names = await self._list(t, "/api/v1/label/__name__/values", params)
-        labels = await self._list(t, "/api/v1/labels", params)
-        metadata = await self._metadata_or_empty(t)
+        names, labels, metadata = await gather_all(
+            [
+                self._list(t, "/api/v1/label/__name__/values", params),
+                self._list(t, "/api/v1/labels", params),
+                self._metadata_or_empty(t),
+            ]
+        )
         notes: list[str] = []
         if len(names) > limits.max_metrics:  # a long label list alone isn't worth a note
             notes.append(NOTE_METRICS_TRUNCATED)
@@ -231,7 +236,8 @@ class PrometheusConnector:
         limits: CatalogLimits,
     ) -> tuple[list[dict], bool] | None:
         """The window's first `series_sample` label sets under the filter, and whether the
-        sample is full; None when the source refuses to list them (4xx) or answers too much."""
+        sample is full; None when the source refuses to list them (4xx), answers too much or
+        too slowly."""
         params = [
             ("match[]", inject_promql(ALL_SERIES, matchers)),
             ("start", number_text(now - limits.series_window)),
@@ -241,7 +247,7 @@ class PrometheusConnector:
         try:
             got = await t.request("GET", "/api/v1/series", params=params, timeout=PROBE_SECONDS)
         except SourceUnreachable as exc:
-            if exc.code == "too_large":
+            if exc.code in ("too_large", "timeout"):
                 return None
             raise
         if 400 <= got.status < 500:
@@ -268,23 +274,28 @@ def _labels_per_metric(series: list[dict], cap: int) -> PerMetric:
 def _family(
     name: str, metadata: dict[str, dict], per_metric: PerMetric
 ) -> tuple[str | None, str | None, dict]:
-    """The name's type, the family it belongs to, and the metadata entry that describes it."""
-    own = metadata.get(name) or {}
-    own_type = _text(own, "type")
-    if own_type in FAMILY_TYPES:  # a summary's quantile series, or a native histogram
-        return own_type, name, own
+    """The name's type, the family it belongs to, and its own metadata entry (help and unit come
+    only from there).
+
+    The base name of a suffix was never in the filtered list, so its entry is read only when the
+    name has none of its own, and only for its type: its help and unit could be another
+    project's."""
+    own = metadata.get(name)
+    if own is not None:
+        own_type = _text(own, "type")
+        if own_type in FAMILY_TYPES:  # a summary's quantile series, or a native histogram
+            return own_type, name, own
+        return own_type, None, own
     for suffix in FAMILY_SUFFIXES:
         if not name.endswith(suffix):
             continue
         base = name[: -len(suffix)]
-        entry = metadata.get(base) or {}
-        base_type = _text(entry, "type")
+        base_type = _text(metadata.get(base) or {}, "type")
         if base_type in FAMILY_TYPES:
-            return base_type, base, entry
-        no_metadata = own_type is None and base_type is None
-        if suffix == "_bucket" and no_metadata and "le" in per_metric.get(name, ((), 0))[0]:
-            return "histogram", base, own
-    return own_type, None, own
+            return base_type, base, {}
+        if suffix == "_bucket" and base_type is None and "le" in per_metric.get(name, ((), 0))[0]:
+            return "histogram", base, {}
+    return None, None, {}
 
 
 def _follow_buckets(metrics: list[CatalogMetric]) -> list[CatalogMetric]:

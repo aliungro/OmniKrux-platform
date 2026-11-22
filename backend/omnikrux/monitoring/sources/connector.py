@@ -10,8 +10,9 @@ project's matchers (Prometheus's `/api/v1/metadata` alone takes none, so only th
 the filtered list returned are used from it).
 """
 
+import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -285,6 +286,18 @@ def checked_json(response: TransportResponse, name: str, what: str) -> dict[str,
     if data is None:
         raise QueryRejected("tool_error", NOT_LIKE.format(name=name, what=what), 502)
     return data
+
+
+async def gather_all[T](calls: Sequence[Awaitable[T]]) -> list[T]:
+    """Every call's result, in order. The first failure cancels the rest and is raised as is."""
+    tasks = [asyncio.ensure_future(call) for call in calls]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def number_text(value: float) -> str:

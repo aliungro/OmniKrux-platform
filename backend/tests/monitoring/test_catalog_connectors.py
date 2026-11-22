@@ -41,13 +41,13 @@ class Failing:
 
 
 class Counting:
-    """A transport that counts the label value calls in flight at once."""
+    """A transport that counts the calls to paths ending in `ends` in flight at once."""
 
-    def __init__(self, inner) -> None:
-        self.inner, self.now, self.peak = inner, 0, 0
+    def __init__(self, inner, ends: tuple[str, ...] = ("/values",)) -> None:
+        self.inner, self.ends, self.now, self.peak = inner, ends, 0, 0
 
     async def request(self, method, path, **kwargs):
-        if not path.endswith("/values"):
+        if not path.endswith(self.ends):
             return await self.inner.request(method, path, **kwargs)
         self.now += 1
         self.peak = max(self.peak, self.now)
@@ -172,21 +172,21 @@ async def test_series_refused_keeps_the_metrics(fake_prometheus, direct):
     assert cat.notes == (NOTE_NO_SERIES,)
 
 
-async def test_series_too_large_keeps_the_metrics(fake_prometheus, direct):
+@pytest.mark.parametrize("code", ["too_large", "timeout"])
+async def test_series_too_large_or_slow_keeps_the_metrics(fake_prometheus, direct, code):
     fake_prometheus.label_values["__name__"] = ["up"]
-    t = Failing(direct(fake_prometheus.url), "/api/v1/series", "too_large")
+    t = Failing(direct(fake_prometheus.url), "/api/v1/series", code)
     cat = await PrometheusConnector().catalog(t, matchers=M, now=NOW)
     assert [(m.name, m.labels, m.series) for m in cat.metrics] == [("up", (), None)]
     assert cat.notes == (NOTE_NO_SERIES,)
 
 
-@pytest.mark.parametrize("code", ["timeout", "unreachable"])
-async def test_other_series_failures_raise(fake_prometheus, direct, code):
+async def test_an_unreachable_series_call_raises(fake_prometheus, direct):
     fake_prometheus.label_values["__name__"] = ["up"]
-    t = Failing(direct(fake_prometheus.url), "/api/v1/series", code)
+    t = Failing(direct(fake_prometheus.url), "/api/v1/series", "unreachable")
     with pytest.raises(SourceUnreachable) as caught:
         await PrometheusConnector().catalog(t, matchers=M, now=NOW)
-    assert caught.value.code == code
+    assert caught.value.code == "unreachable"
 
 
 async def test_a_series_error_answer_raises(fake_prometheus, direct):
@@ -268,11 +268,44 @@ async def test_summary_base_joins_its_family(fake_prometheus, direct):
     by = {m.name: m for m in cat.metrics}
     for name in ("rpc_duration_seconds", "rpc_duration_seconds_count", "rpc_duration_seconds_sum"):
         assert (by[name].type, by[name].family) == ("summary", "rpc_duration_seconds")
-    assert by["rpc_duration_seconds_sum"].help == "RPC time."
+    assert by["rpc_duration_seconds"].help == "RPC time."
     assert (by["native_seconds"].type, by["native_seconds"].family) == (
         "histogram",
         "native_seconds",
     )
+
+
+async def test_a_suffixed_name_with_its_own_metadata_never_borrows_the_base(
+    fake_prometheus, direct
+):
+    fake_prometheus.label_values["__name__"] = ["x_count"]
+    fake_prometheus.metadata = {
+        "x_count": [{"type": "gauge", "help": "", "unit": ""}],
+        "x": [{"type": "summary", "help": "Team B's secret help.", "unit": "bytes"}],
+    }
+    cat = await PrometheusConnector().catalog(direct(fake_prometheus.url), matchers=M, now=NOW)
+    [x] = cat.metrics
+    assert (x.type, x.family, x.help, x.unit) == ("gauge", None, None, None)
+    assert "Team B's secret help." not in json.dumps(asdict(cat))
+
+
+async def test_a_suffixed_name_without_metadata_takes_only_the_base_type(fake_prometheus, direct):
+    fake_prometheus.label_values["__name__"] = ["x_count"]
+    fake_prometheus.metadata = {
+        "x": [{"type": "summary", "help": "Team B's secret help.", "unit": "bytes"}],
+    }
+    cat = await PrometheusConnector().catalog(direct(fake_prometheus.url), matchers=M, now=NOW)
+    [x] = cat.metrics
+    assert (x.type, x.family, x.help, x.unit) == ("summary", "x", None, None)
+    text = json.dumps(asdict(cat))
+    assert "Team B's secret help." not in text and "bytes" not in text
+
+
+async def test_names_labels_and_metadata_are_read_together(fake_prometheus, direct):
+    fake_prometheus.label_values["__name__"] = ["up"]
+    t = Counting(direct(fake_prometheus.url), ("/values", "/api/v1/labels", "/api/v1/metadata"))
+    await PrometheusConnector().catalog(t, matchers=M, now=NOW)
+    assert t.peak == 3
 
 
 @pytest.mark.parametrize("code", ["too_large", "timeout"])

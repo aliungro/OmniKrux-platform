@@ -1,7 +1,7 @@
 """The connector for Loki."""
 
 import asyncio
-from collections.abc import Awaitable, Sequence
+from collections.abc import Sequence
 from decimal import Decimal
 from urllib.parse import quote
 
@@ -24,6 +24,7 @@ from omnikrux.monitoring.sources.connector import (
     StreamLabel,
     TestResult,
     checked_json,
+    gather_all,
     json_object,
     number_text,
     status_message,
@@ -182,7 +183,7 @@ class LokiConnector:
                 path = f"/loki/api/v1/label/{quote(name, safe='')}/values"
                 return set(await self._list(t, path, window))
 
-        found = await _all([values_of(name) for name in names])
+        found = await gather_all([values_of(name) for name in names])
         return dict(zip(names, found, strict=True))
 
     async def label_values(
@@ -220,18 +221,6 @@ class LokiConnector:
         got = await t.request("GET", path, params=params, timeout=PROBE_SECONDS)
         data = checked_json(got, "The source", WHAT).get("data")
         return [str(item) for item in data] if isinstance(data, list) else []
-
-
-async def _all[T](calls: list[Awaitable[T]]) -> list[T]:
-    """Every call's result, in order. The first failure cancels the rest and is raised as is."""
-    tasks = [asyncio.ensure_future(call) for call in calls]
-    try:
-        return list(await asyncio.gather(*tasks))
-    except BaseException:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
 
 
 def _selector(matchers: Sequence[Matcher]) -> str:
