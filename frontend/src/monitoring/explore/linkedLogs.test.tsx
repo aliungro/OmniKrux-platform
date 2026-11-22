@@ -15,6 +15,8 @@ type Range = { start: number; end: number };
 /** The window the stub chart selects: 10 to 20 minutes into the range it was given. */
 let lastRange: Range | null = null;
 const windowOf = (r: Range): Range => ({ start: r.start + 600, end: r.start + 1200 });
+/** Another window: 30 to 40 minutes in. */
+const laterOf = (r: Range): Range => ({ start: r.start + 1800, end: r.start + 2400 });
 
 // The chart chunk: log lines are the real logs chart (with its level column); the time series is a
 // stub that prints its ticks and band and selects a window the way the real chart reports one.
@@ -34,6 +36,7 @@ vi.mock("../charts", async (importOriginal) => {
       props.selection ? createElement("span", { "data-band": "" }, `band ${props.selection.start}-${props.selection.end}`) : null,
       props.onSelect ? createElement("button", { type: "button", onClick: () => select("pointer") }, "Drag a window") : null,
       props.onSelect ? createElement("button", { type: "button", onClick: () => select("keyboard") }, "Keys select a window") : null,
+      props.onSelect ? createElement("button", { type: "button", onClick: () => props.onSelect?.(laterOf(props.range), "pointer") }, "Drag a later window") : null,
     );
   };
   return { ...real, default: Stub };
@@ -76,16 +79,24 @@ function shop(answers: Record<string, FakeQueryAnswer> = {}, links = [linkTo("s1
   }, async () => json([]));
 }
 
-/** Every batch item sent; a rule may answer an item itself (after the fake has seen it). */
-function batchItems(rule: (q: QueryRequest) => BatchItemOut | null = () => null) {
+/**
+ * Every batch item sent; a rule may answer an item itself (after the fake has seen it), and `hold`
+ * may keep an answer back until its promise settles (ignoring the abort, as a slow network would).
+ */
+function batchItems(
+  rule: (q: QueryRequest) => BatchItemOut | null = () => null,
+  hold: (q: QueryRequest) => Promise<void> | null = () => null,
+) {
   const sent: QueryRequest[] = [];
   const inner = globalThis.fetch;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const body = typeof init?.body === "string" ? init.body : null;
     const res = await inner(input, init);
-    if (!url.includes("/query/batch") || typeof init?.body !== "string") return res;
-    const items = (JSON.parse(init.body) as { queries: QueryRequest[] }).queries;
+    if (!url.includes("/query/batch") || body === null) return res;
+    const items = (JSON.parse(body) as { queries: QueryRequest[] }).queries;
     sent.push(...items);
+    await Promise.all(items.map(hold).filter((p) => p !== null));
     const own = items.map(rule);
     if (own.every((o) => o === null)) return res;
     const theirs = ((await res.json()) as { results: BatchItemOut[] }).results;
@@ -143,13 +154,74 @@ describe("Metrics and logs on one timeline", () => {
     await openExplore();
     await linkByChip(user);
     const field = within(section()).getByRole("textbox", { name: "Logs query" }) as HTMLTextAreaElement;
-    await user.clear(field);
-    await user.type(field, '{{app="shop"}');
+    await user.type(field, '{{app="shop"}', { initialSelectionStart: 0, initialSelectionEnd: field.value.length });
     expect(field.value).toBe('{app="shop"}');
     await waitFor(() => expect(linesSent(sent).at(-1)?.query).toBe('{app="shop"}'));
     // A chip no longer rewrites it.
     await user.click(screen.getByRole("button", { name: "namespace=web" }));
     expect(field.value).toBe('{app="shop"}');
+  });
+
+  it("an emptied logs query follows the chips again", async () => {
+    shop();
+    batchItems();
+    const user = userEvent.setup();
+    await openExplore();
+    await linkByChip(user);
+    const field = within(section()).getByRole("textbox", { name: "Logs query" }) as HTMLTextAreaElement;
+    await user.type(field, "{{app=\"shop\"}", { initialSelectionStart: 0, initialSelectionEnd: field.value.length });
+    await user.clear(field);
+    expect(field.value).toBe('{namespace="api"}');
+    await user.click(screen.getByRole("button", { name: "namespace=web" }));
+    expect(field.value).toBe('{namespace="web"}');
+  });
+
+  it("the lines follow the time they show", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    shop();
+    const sent = batchItems();
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
+    await waitFor(() => expect(linesSent(sent).at(-1)?.query).toBe('{app="shop"}'));
+    const first = linesSent(sent).at(-1) as QueryRequest;
+    // Five minutes later, a new LogQL query: its lines end at the new "now", not the old one.
+    now += 5 * 60_000;
+    await user.type(screen.getByRole("textbox", { name: "Query" }), ' |= "boom"');
+    await waitFor(() => expect(linesSent(sent).at(-1)?.query).toBe('{app="shop"} |= "boom"'));
+    const later = linesSent(sent).at(-1) as QueryRequest;
+    expect(later.end! - first.end!).toBe(300);
+    expect(later.end! - later.start!).toBe(first.end! - first.start!);
+  });
+
+  it("an older window's late answer is dropped", async () => {
+    shop();
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    let holding = false;
+    const isWindow = (q: QueryRequest, of: (r: Range) => Range) => q.limit != null && lastRange !== null && q.start === of(lastRange).start;
+    const sent = batchItems(
+      (q) => (isWindow(q, laterOf) ? noLines(q) : null),
+      (q) => (holding && isWindow(q, windowOf) ? held : null),
+    );
+    const user = userEvent.setup();
+    await openExplore();
+    await linkByChip(user);
+    await within(section()).findByText("Last 1 hour · 3 log lines");
+    holding = true;
+    await user.click(screen.getByRole("button", { name: "Drag a window" }));
+    await waitFor(() => expect(sent.some((q) => isWindow(q, windowOf))).toBe(true));
+    await user.click(screen.getByRole("button", { name: "Drag a later window" }));
+    const later = laterOf(lastRange as Range);
+    const label = `${clock(later.start)} – ${clock(later.end)} · 0 log lines`;
+    expect(await within(section()).findByText(label)).toBeTruthy();
+    // The first window's three lines arrive late: they never replace the later window's answer.
+    release();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(within(section()).getByText(label)).toBeTruthy();
+    expect(within(section()).getByText("No log lines in this window.")).toBeTruthy();
+    expect(within(section()).queryByRole("list", { name: "Log lines" })).toBeNull();
+    expect(screen.getByText(`band ${later.start}-${later.end}`)).toBeTruthy();
   });
 
   it("dragging a window re-queries the lines for it", async () => {

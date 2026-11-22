@@ -33,6 +33,8 @@ export interface TimeSeriesChartProps {
   selection?: ChartRange | null;
   onSelect?: (range: ChartRange | null, via?: "pointer" | "keyboard") => void;
   marks?: ChartMark[];
+  /** Explore: the run's step in seconds; a chosen window snaps to it (else to the samples' spacing). */
+  step?: number;
 }
 
 interface Drawn {
@@ -120,7 +122,7 @@ function nearestIndex(samples: number[], t: number): number {
 }
 
 export default function TimeSeriesChart({
-  panel, series, range, animate, changeId, editId, selection = null, onSelect, marks = NO_MARKS as ChartMark[],
+  panel, series, range, animate, changeId, editId, selection = null, onSelect, marks = NO_MARKS as ChartMark[], step: runStep,
 }: TimeSeriesChartProps) {
   const opts = panel.options;
   const plotRef = useRef<HTMLDivElement>(null);
@@ -237,7 +239,8 @@ export default function TimeSeriesChart({
   }, [frame, samples, range.start, span]);
 
   // --- choosing a window (Explore): a drag, or Shift+arrows from the crosshair ---------------------
-  const step = useMemo(() => sampleStep(samples), [samples]);
+  const sampled = useMemo(() => sampleStep(samples), [samples]);
+  const step = runStep !== undefined && runStep > 0 ? runStep : sampled;
   const toWindow = (a: number, b: number): ChartRange | null => {
     const snap = (t: number) => Math.min(range.end, Math.max(range.start, range.start + Math.round((t - range.start) / step) * step));
     const start = snap(Math.min(a, b));
@@ -263,8 +266,20 @@ export default function TimeSeriesChart({
   };
   useEffect(() => () => { if (keyTimer.current !== null) clearTimeout(keyTimer.current); }, []);
 
+  // The brush went away (no `onSelect`, or no frame to draw on): a drag or key band in progress
+  // goes with it, so nothing is left holding Esc.
+  const canSelect = onSelect !== undefined && frame !== null;
+  useEffect(() => {
+    if (canSelect) return;
+    setDrag(null);
+    if (keyTimer.current !== null) clearTimeout(keyTimer.current);
+    keyTimer.current = null;
+    keyBandRef.current = null;
+    setKeyBand(null);
+  }, [canSelect]);
+
   // Esc while dragging cancels the drag, wherever the keyboard is.
-  const dragging = drag !== null;
+  const dragging = drag !== null && canSelect;
   useEffect(() => {
     if (!dragging) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
@@ -428,6 +443,7 @@ export default function TimeSeriesChart({
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={() => setDrag(null)}
+              onLostPointerCapture={() => setDrag(null)}
             />
           ) : null}
           {tip && frame ? (

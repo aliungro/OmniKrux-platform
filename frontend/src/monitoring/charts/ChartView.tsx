@@ -29,6 +29,8 @@ export interface ChartViewProps {
   onSelect?: (range: ChartRange | null, via?: "pointer" | "keyboard") => void;
   /** Time series only (Explore): log line ticks along the bottom. */
   marks?: ChartMark[];
+  /** Time series only (Explore): the run's step in seconds, which a chosen window snaps to. */
+  step?: number;
   /** Logs only (Explore): each line's tone for a level column; dashboards pass none. */
   lineTone?: (line: ChartLogLine) => ChartMark["tone"];
   /** Logs only (Explore): the key that brings the keyboard to the list (`aria-keyshortcuts`). */
@@ -41,7 +43,7 @@ const NO_SERIES: ChartSeries[] = [];
 const NO_LOGS: ChartLogLine[] = [];
 
 export default function ChartView({
-  panel, data, range, animate, changeId, selection, onSelect, marks, lineTone, listKeyshortcuts,
+  panel, data, range, animate, changeId, selection, onSelect, marks, step, lineTone, listKeyshortcuts,
 }: ChartViewProps) {
   // A panel that couldn't answer draws nothing, whatever its type: never the old answer.
   const answered = data.state !== "unreachable" && data.state !== "error" && data.state !== "noQuery";
@@ -50,7 +52,7 @@ export default function ChartView({
     case "timeseries":
       return (
         <TimeSeriesChart panel={panel} series={series} range={range} animate={animate} changeId={changeId} editId={data.editId}
-          selection={selection} onSelect={onSelect} marks={marks} />
+          selection={selection} onSelect={onSelect} marks={marks} step={step} />
       );
     case "stat":
       return <StatChart panel={panel} series={series} animate={animate} changeId={changeId} editId={data.editId} />;

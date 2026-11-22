@@ -347,15 +347,18 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
   // The Only chips' labels that Loki has, written by the Task 5 writer (F16).
   const linked = !logsMode && builder.metric !== null ? linkedLogSelector(builder.only, lokiLabels) : null;
   const fieldText = logsText ?? linked ?? "";
+  // An emptied field follows the chips again.
+  const editLogs = (text: string) => setLogsText(text === "" ? null : text);
   const linesText = logsMode ? expr : fieldText;
   const metricQuery = linesText.trim() !== "" && isLogQlMetric(linesText);
   const linesQuery = metricQuery ? "" : linesText;
   const selector = linesQuery.trim() === "" ? null : (logSelector(linesQuery) ?? linesQuery.trim());
-  // The lines' whole range stays put while the metric text changes; an explicit run reads "now" again.
+  // The lines' whole range stays put while only the metric text changes; a new lines text, place or
+  // explicit run reads "now" again, so the lines always cover the time their label names.
   const linesRange = useMemo(
     () => resolveTime(time, Math.floor(Date.now() / 1000)) ?? (resolveTime(DEFAULT_EXPLORE_TIME, Math.floor(Date.now() / 1000)) as { start: number; end: number }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [time.from, time.to, tick, project, linesSource?.source_id],
+    [time.from, time.to, tick, project, linesSource?.source_id, linesQuery],
   );
   const linesFor = linesKey({ project: projectOut, source: linesSource, query: linesQuery, range: linesRange });
   // A window belongs to the text, place and range it was chosen on: any change shows all again.
@@ -400,7 +403,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
         <div ref={chartBox} className={s.chartBox} data-explore-chart="" data-dim="false" tabIndex={-1}>
           <Suspense fallback={<p className={s.note}>{PANEL_COPY.loading}</p>}>
             <ChartView panel={drawPanel} data={state.data} range={state.range} animate={!reduced} changeId={state.runId}
-              selection={linesOn ? chosen : undefined} onSelect={linesOn ? onSelectWindow : undefined} marks={linesShown ? marks : undefined} />
+              selection={linesOn ? chosen : undefined} onSelect={linesOn ? onSelectWindow : undefined} marks={linesShown ? marks : undefined}
+              step={state.step ?? undefined} />
           </Suspense>
         </div>
       </>
@@ -542,7 +546,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
             {linesShown && linesSource && (
               <LinkedLogs ref={linesBox} headingRef={linesHeading} showAllRef={showAll}
                 mode={logsMode ? "logs" : "metrics"} sourceName={linesSource.source_name}
-                field={logsMode ? undefined : { value: fieldText, onChange: setLogsText }}
+                field={logsMode ? undefined : { value: fieldText, onChange: editLogs }}
                 selector={selector} metricQuery={metricQuery} state={lines} current={linesCurrent}
                 window={chosen} range={linesRange} onShowAll={showAllLines} onRetry={retryLines} />
             )}

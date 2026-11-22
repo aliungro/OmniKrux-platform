@@ -47,7 +47,7 @@
 .brush {
   position: absolute;
   cursor: crosshair;
-  touch-action: none;
+  touch-action: pan-y;
   user-select: none;
 }
 

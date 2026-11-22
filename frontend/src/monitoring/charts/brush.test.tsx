@@ -120,6 +120,57 @@ describe("selecting a window on the time series", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("a drag that starts outside the plot selects nothing", () => {
+    const onSelect = vi.fn();
+    render(<ChartView {...base({ onSelect })} />);
+    // On the axis gutter, outside the brush layer: no drag starts.
+    fireEvent.pointerDown(screen.getByRole("img"), { clientX: 10, clientY: 50, pointerId: 1, button: 0 });
+    const layer = brush()!;
+    fireEvent.pointerMove(layer, { clientX: 400, clientY: 50, pointerId: 1 });
+    expect(band()).toBeNull();
+    fireEvent.pointerUp(layer, { clientX: 400, clientY: 50, pointerId: 1 });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("a drag past the edge stops at the end of the range", () => {
+    const onSelect = vi.fn();
+    render(<ChartView {...base({ onSelect })} />);
+    const layer = drag(800, 1300);
+    fireEvent.pointerUp(layer, { clientX: 1300, clientY: 50, pointerId: 1 });
+    // 800 px = 3200 s → 3180 s; past 900 px is the end.
+    expect(onSelect.mock.calls[0][0]).toEqual({ start: START + 3180, end: START + SPAN });
+  });
+
+  it("a window snaps to the run's step when it is given", () => {
+    const onSelect = vi.fn();
+    render(<ChartView {...base({ onSelect, step: 300 })} />);
+    const layer = drag(100, 460);
+    fireEvent.pointerUp(layer, { clientX: 460, clientY: 50, pointerId: 1 });
+    // 400 s → 300 s; 1840 s → 1800 s.
+    expect(onSelect.mock.calls[0][0]).toEqual({ start: START + 300, end: START + 1800 });
+  });
+
+  it("a lost pointer capture ends the drag", () => {
+    const onSelect = vi.fn();
+    render(<ChartView {...base({ onSelect })} />);
+    const layer = drag(100, 460);
+    fireEvent.lostPointerCapture(layer, { pointerId: 1 });
+    expect(band()).toBeNull();
+    fireEvent.pointerUp(layer, { clientX: 460, clientY: 50, pointerId: 1 });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("a brush that goes away mid-drag leaves Esc alone", () => {
+    const onSelect = vi.fn();
+    const outer = vi.fn();
+    const { rerender } = render(<div onKeyDown={outer}><ChartView {...base({ onSelect })} /></div>);
+    drag(100, 460);
+    rerender(<div onKeyDown={outer}><ChartView {...base()} /></div>);
+    expect(band()).toBeNull();
+    fireEvent.keyDown(screen.getByRole("img"), { key: "Escape" });
+    expect(outer).toHaveBeenCalledTimes(1);
+  });
+
   it("the selection draws as a band over the full range", () => {
     render(<ChartView {...base({ onSelect: vi.fn(), selection: { start: START + 900, end: START + 1800 } })} />);
     const b = band()!;
