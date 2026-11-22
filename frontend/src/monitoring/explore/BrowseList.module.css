@@ -1,0 +1,187 @@
+/* The browse list (X2): a quiet rail on the left of Explore. Names in the page's own face, the
+   type of each metric small in Geist Mono at the right edge. The picked row carries a lilac bar on
+   its left edge, as the prototype's does. Territories tokens only. */
+
+.browse {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  height: 100%;
+  padding: 12px;
+}
+
+.heading {
+  margin: 2px 0 2px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.filter {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.filter::placeholder {
+  color: var(--ink-3);
+}
+
+.filter:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.line {
+  margin: 2px 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* The scroll box: it keeps the keyboard, and its own ring shows when it has it. */
+.list {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow: auto;
+  border-radius: 7px;
+  outline: none;
+}
+
+.list[data-empty] {
+  min-height: 0;
+  flex: 0 0 0;
+}
+
+.list:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.space {
+  position: relative;
+  width: 100%;
+}
+
+.run {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.option,
+.head {
+  box-sizing: border-box;
+  height: 30px;
+}
+
+.head {
+  display: flex;
+  align-items: flex-end;
+  padding: 0 9px 3px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.option:hover {
+  background: var(--surf-2);
+}
+
+.option[data-active="true"] {
+  background: color-mix(in srgb, var(--focus) 7%, transparent);
+  color: var(--ink);
+}
+
+.option[aria-selected="true"] {
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
+  color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--focus);
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.type {
+  flex: none;
+  color: var(--ink-3);
+  font: 10.5px "Geist Mono", ui-monospace, monospace;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.age {
+  margin-right: auto;
+}
+
+.refreshError {
+  flex-basis: 100%;
+  color: var(--bad);
+}
+
+.action {
+  padding: 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.action:hover {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+.action[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

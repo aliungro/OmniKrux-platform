@@ -103,6 +103,46 @@
 
 /* --- the work area ----------------------------------------------------------------------------- */
 
+/* The list (300 px) beside the work area; under 960 px the list folds behind a button. */
+.shell {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  align-items: start;
+}
+
+.browse {
+  position: sticky;
+  top: 49px;
+  box-sizing: border-box;
+  height: calc(100vh - 49px);
+  min-height: 420px;
+  border-right: 1px solid var(--rule);
+  background: var(--surf);
+}
+
+.browseToggle {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin: 12px 12px 0;
+  padding: 5px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.browseToggle[aria-expanded="true"] {
+  border-color: var(--focus);
+}
+
+.browseToggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .work {
   max-width: 1200px;
   padding: 16px 16px 40px;
@@ -393,6 +433,20 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+}
+
+@media (max-width: 959px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .browse {
+    position: static;
+    height: 60vh;
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
 }
 
 @media (max-width: 640px) {

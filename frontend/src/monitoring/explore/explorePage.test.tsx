@@ -111,7 +111,7 @@ describe("Explore", () => {
     expect(screen.getByText("Prometheus didn't answer in time.")).toBeTruthy();
     expect(screen.queryByText(/^chart /)).toBeNull();
     expect(screen.queryByText("Last good result")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Source unreachable" })).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(batches(api)).toHaveLength(2));
   });
 

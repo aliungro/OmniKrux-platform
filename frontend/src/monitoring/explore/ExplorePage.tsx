@@ -5,12 +5,14 @@
 
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { failure } from "../../api/http";
 import { pressed } from "../../features/chrome/shortcuts";
 import { getProject } from "../api/client";
 import { projectKey, useMonitoringTree } from "../api/hooks";
 import { RecommendationBar } from "../build/RecommendationBar";
 import { isLogQlMetric, quickCheck } from "../build/promql";
 import { useOwnerCatalog } from "../catalog/merge";
+import { browseMetrics } from "../catalog/metrics";
 import { PANEL_COPY } from "../dashboards/grid/PanelState";
 import { usePrefersReducedMotion } from "../dashboards/motion";
 import { pageLetter } from "../dashboards/page/keys";
@@ -23,6 +25,9 @@ import type { MonitoringPageProps } from "../MonitoringApp";
 import { keyboardIsFree } from "../pages/Gone";
 import { equalMonitoringView, type ExploreView, type MonitoringView } from "../shell/tabState";
 import { DEFAULT_EXPLORE_TIME, defaultExploreProject, defaultExploreSource, exploreTime } from "./exploreDefaults";
+import { BrowseList } from "./BrowseList";
+import { builderActive, builderQuery, builderReducer, EMPTY_BUILDER, metricMatch, writableLabel, type BuilderAction, type ExploreBuilder } from "./builderState";
+import { LabelChips } from "./LabelChips";
 import { FAILED_TITLE, MetaLine, QueryBar } from "./QueryBar";
 import { Trail, trailKey } from "./Trail";
 import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trailStore";
@@ -34,6 +39,8 @@ const ChartView = lazy(() => import("../charts"));
 /** A run that answered and whose text stayed this long goes into the trail. */
 const TRAIL_SETTLE_MS = 2000;
 const SOURCE_WORDS = { prometheus: "Prometheus-compatible", loki: "Loki" } as const;
+/** Under this width the list folds away behind a button. */
+const NARROW_QUERY = "(max-width: 959px)";
 const ADD_LATER = "Adding a query to a dashboard arrives in a later update.";
 
 /**
@@ -72,12 +79,19 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
   // Bumped by an explicit run (Ctrl+Enter, Try again, the trail): "now" is read again.
   const [tick, setTick] = useState(0);
   const [timeOpen, setTimeOpen] = useState(false);
+  // The point-and-click builder (X2) and the list that feeds it.
+  const [builder, setBuilder] = useState<ExploreBuilder>(EMPTY_BUILDER);
+  const [narrow, setNarrow] = useState(() => (typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false));
+  const [browseOpen, setBrowseOpen] = useState(false);
 
   const heading = useRef<HTMLHeadingElement>(null);
   const queryField = useRef<HTMLTextAreaElement>(null);
   const timeButton = useRef<HTMLButtonElement>(null);
   const chartBox = useRef<HTMLDivElement>(null);
   const page = useRef<HTMLElement>(null);
+  const listBox = useRef<HTMLDivElement>(null);
+  // `b` asked for the list while it was folded away: it takes the keyboard once it exists.
+  const wantList = useRef(false);
 
   // --- project and source ---------------------------------------------------------------------
   const project = tree.data ? defaultExploreProject({ project: projectId }, tree.data, recent) : null;
@@ -148,6 +162,9 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
     record(entry);
     setExpr(entry.expr);
     setSourceId(entry.sourceId);
+    // Another source has another list; the same one keeps its chips, now detached.
+    if (entry.sourceId !== source?.source_id) setBuilder(EMPTY_BUILDER);
+    else if (builderActive(builder)) setBuilder((b) => builderReducer(b, { type: "typed" }));
     runNow();
   };
   const clearAll = () => {
@@ -167,11 +184,29 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
       } else if (pressed("exploreTime", e) && timeButton.current) {
         e.preventDefault();
         if (!e.repeat) setTimeOpen(true);
+      } else if (pressed("exploreBrowse", e)) {
+        e.preventDefault();
+        if (listBox.current) listBox.current.focus();
+        else if (!e.repeat) { wantList.current = true; setBrowseOpen(true); }
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(NARROW_QUERY);
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, []);
+  useLayoutEffect(() => {
+    if (wantList.current && listBox.current) {
+      wantList.current = false;
+      listBox.current.focus({ preventScroll: true });
+    }
+  });
 
   // The heading takes the keyboard when the page opens (unless the user is busy elsewhere).
   useEffect(() => { if (keyboardIsFree()) heading.current?.focus({ preventScroll: true }); }, []);
@@ -193,7 +228,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
 
   // --- recommendations: per second and a wider window rewrite the text -------------------------
   const owner = useMemo<DashboardOwner | null>(() => (projectOut ? { kind: "project", project: projectOut } : null), [projectOut]);
-  const { catalog } = useOwnerCatalog(owner);
+  const { catalog, loading: catalogLoading, error: catalogError, refresh: refreshCatalog } = useOwnerCatalog(owner);
   const recPanel = useMemo<PanelSpec>(() => {
     const p = explorePanel(panelId, expr, source, kind);
     // Explore draws lines it can't restyle: the stacking suggestion never applies here.
@@ -213,7 +248,69 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
     // The hand-written text stays in the trail.
     if (source) record({ expr, sourceId: source.source_id });
     setExpr(next);
+    if (builderActive(builder)) setBuilder((b) => builderReducer(b, { type: "typed" }));
     runNow();
+  };
+
+  // --- browse: the list and the chips write the text through the builder ------------------------
+  const browseMode = source?.source_type === "loki" ? "streams" : "metrics";
+  const metrics = useMemo(
+    () => (catalog && browseMode === "metrics" ? browseMetrics(catalog).filter((m) => m.sourceId === null || m.sourceId === source?.source_id) : []),
+    [catalog, browseMode, source?.source_id],
+  );
+  const streams = useMemo(
+    () => (catalog && browseMode === "streams"
+      ? catalog.streams.filter((st) => (st.sourceId === null || st.sourceId === source?.source_id) && writableLabel(st.name))
+      : []),
+    [catalog, browseMode, source?.source_id],
+  );
+  const applyBuilder = (action: BuilderAction) => {
+    const next = builderReducer(builder, action);
+    const text = builderQuery(next, metrics, streams);
+    // A name the writers refuse leaves the text alone.
+    if (text === null) return;
+    // Text the chips didn't write is kept in the trail before they replace it.
+    if (source && text !== expr && quickCheck(expr) === null && (builder.detached || !builderActive(builder))) {
+      record({ expr, sourceId: source.source_id });
+    }
+    setBuilder(next);
+    setExpr(text);
+    runNow();
+  };
+  const onType = (text: string) => {
+    setExpr(text);
+    if (builderActive(builder)) setBuilder((b) => builderReducer(b, { type: "typed" }));
+  };
+  const pickedMetric = builder.metric === null ? null : (metrics.find((m) => m.name === builder.metric) ?? null);
+  const chipLabels = builder.stream ? streams.map((st) => st.name) : (pickedMetric?.labels ?? []);
+  const chipsShown = builder.stream || pickedMetric !== null;
+  // Label values are read for a range that stays put while the text changes.
+  const labelRange = useMemo(
+    () => resolveTime(time, Math.floor(Date.now() / 1000)) ?? (resolveTime(DEFAULT_EXPLORE_TIME, Math.floor(Date.now() / 1000)) as { start: number; end: number }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [time.from, time.to, builder.metric, project, source?.source_id],
+  );
+  const matchText = pickedMetric ? metricMatch(pickedMetric) : null;
+  const read = project && source && matchText !== null && !builder.stream
+    ? { projectId: project, sourceId: source.source_id, match: matchText, start: labelRange.start, end: labelRange.end }
+    : null;
+  const known = builder.stream ? Object.fromEntries(streams.map((st) => [st.name, st.values])) : null;
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+  const refreshList = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    refreshCatalog().then(
+      () => { if (alive.current) setRefreshing(false); },
+      (err: unknown) => { if (alive.current) { setRefreshing(false); setRefreshError(failure(err, "try again")); } },
+    );
   };
 
   // --- what is drawn -------------------------------------------------------------------------
@@ -286,14 +383,14 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
             <label className={s.field}>
               <span className={s.fieldLabel}>Project</span>
               <select className={s.select} value={project ?? ""}
-                onChange={(e) => { setProjectId(e.target.value); setSourceId(undefined); }}>
+                onChange={(e) => { setProjectId(e.target.value); setSourceId(undefined); setBuilder(EMPTY_BUILDER); }}>
                 {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </label>
             {working && projectOut && (
               <label className={s.field}>
                 <span className={s.fieldLabel}>Source</span>
-                <select className={s.select} value={source?.source_id ?? ""} onChange={(e) => setSourceId(e.target.value)}>
+                <select className={s.select} value={source?.source_id ?? ""} onChange={(e) => { setSourceId(e.target.value); setBuilder(EMPTY_BUILDER); }}>
                   {projectOut.links.map((l) => (
                     <option key={l.source_id} value={l.source_id}>{`${l.source_name} · ${SOURCE_WORDS[l.source_type]}`}</option>
                   ))}
@@ -338,21 +435,45 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
       )}
 
       {working && (
-        <div className={s.work}>
+        <div className={s.shell}>
+          {narrow && (
+            <button type="button" className={s.browseToggle} aria-expanded={browseOpen} aria-controls="explore-browse"
+              onClick={() => setBrowseOpen((o) => !o)}>
+              {browseMode === "metrics" ? "Metrics" : "Log streams"}
+            </button>
+          )}
+          {(!narrow || browseOpen) && (
+            <aside id="explore-browse" className={s.browse}>
+              <BrowseList ref={listBox} mode={browseMode} projectName={projectName} metrics={metrics} streams={streams}
+                selectedMetric={builder.metric} selectedStreams={builder.stream ? builder.only : {}}
+                loading={catalogLoading && catalog === null} error={catalogError}
+                notes={catalog ? [...catalog.problems, ...catalog.notes] : []} builtAt={catalog?.builtAt ?? null}
+                refreshing={refreshing} refreshError={refreshError} onRefresh={refreshList}
+                onPickMetric={(metric) => applyBuilder({ type: "pickMetric", metric })}
+                onPickStream={(label, value) => applyBuilder({ type: "pickStream", label, value })} />
+            </aside>
+          )}
+          <div className={s.work}>
           <div className={s.card}>
-            <QueryBar ref={queryField} expr={expr} language={language} onChange={setExpr}
+            <QueryBar ref={queryField} expr={expr} language={language} onChange={onType}
               onRun={() => {
                 // Only a text that reads as a query is worth keeping.
                 if (source && quickCheck(expr) === null) record({ expr, sourceId: source.source_id });
                 runNow();
               }}
               onLeave={leaveQuery} />
+            {chipsShown && (
+              <LabelChips builder={builder} labels={chipLabels} known={known} read={read}
+                onSplit={(label) => applyBuilder({ type: "split", label })}
+                onOnly={(label, value) => applyBuilder({ type: "only", label, value })} />
+            )}
             <MetaLine state={state} expr={expr} kind={kind} />
             <RecommendationBar context={recContext} scope={`explore:${project}`} onApply={applyRec}
               onDone={() => queryField.current?.focus()} />
             <div className={s.result}>{result}</div>
           </div>
           <Trail entries={shown} currentKey={current} onPick={pickTrail} onClear={clearAll} />
+          </div>
         </div>
       )}
     </section>
