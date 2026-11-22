@@ -12,13 +12,25 @@ export const ALL_PATTERN = ".+";
 /** A value that cannot be placed safely where its variable sits. */
 export class VariableError extends Error {
   readonly name: string;
-  constructor(name: string) {
-    super(
-      `The value of $${name} can't be used here. Put $${name} inside double quotes in the query.`,
-    );
+  constructor(
+    name: string,
+    message = `The value of $${name} can't be used here. Put $${name} inside double quotes in the query.`,
+  ) {
+    super(message);
     this.name = name;
   }
 }
+
+/**
+ * Said for a query with a lone carriage return (`\r` not followed by `\n`) outside quotes. PromQL
+ * ends a `#` comment there while this scan ends it only at `\n`, so the two could disagree on
+ * which quote a value lands in: the value isn't placed.
+ */
+export const loneReturnWords = (name: string) =>
+  `The query has a carriage return outside quotes, so $${name} can't be placed safely. Remove it, or start a new line instead.`;
+
+/** A carriage return not followed by a line feed. */
+const LONE_RETURN = /\r(?!\n)/;
 
 export function escapeQueryString(v: string): string {
   return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n");
@@ -71,16 +83,23 @@ export function interpolate(
   let out = "";
   let quote: Quote = null;
   let i = 0;
+  /** A lone `\r` outside quotes (code or comment), and the first variable placed. */
+  let loneReturn = false;
+  let placed: string | null = null;
   while (i < text.length) {
     const c = text[i];
     if (quote === null && c === "#") {
       // A line comment: copy to the end of the line untouched, no variables, no quote tracking.
       const nl = text.indexOf("\n", i);
       const end = nl === -1 ? text.length : nl;
-      out += text.slice(i, end);
+      const comment = text.slice(i, end);
+      // With the line feed that ends it: a Windows line break isn't a lone \r.
+      if (LONE_RETURN.test(text.slice(i, end + 1))) loneReturn = true;
+      out += comment;
       i = end;
       continue;
     }
+    if (quote === null && c === "\r" && text[i + 1] !== "\n") loneReturn = true;
     if (c === "$") {
       TOKEN.lastIndex = i;
       const m = TOKEN.exec(text);
@@ -91,7 +110,10 @@ export function interpolate(
         else if (name === "__rate_interval") {
           rendered = durationText(Math.max(4 * builtins.stepSeconds, 60));
         } else if (name === "__range") rendered = durationText(builtins.rangeSeconds);
-        else rendered = render(name, vars, quote);
+        else {
+          rendered = render(name, vars, quote);
+          if (rendered !== null) placed ??= name;
+        }
         out += rendered ?? m[0];
         i += m[0].length;
         continue;
@@ -112,5 +134,7 @@ export function interpolate(
     out += c;
     i++;
   }
+  // The text itself is never changed; with nothing placed there is nothing to misplace.
+  if (loneReturn && placed !== null) throw new VariableError(placed, loneReturnWords(placed));
   return out;
 }

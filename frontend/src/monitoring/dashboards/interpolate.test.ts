@@ -4,6 +4,7 @@ import {
   escapeQueryString,
   escapeRegex,
   interpolate,
+  loneReturnWords,
   VariableError,
 } from "./interpolate";
 
@@ -128,6 +129,28 @@ describe("interpolate", () => {
     expect(dbl).toBe(`up # it's\n{a="x\\"} or vector(1) or up{a=\\""}`);
     const sgl = interpolate(`up # say "hi\n{a='$v'}`, one(["x' or up{a='"]), B);
     expect(sgl).toBe(`up # say "hi\n{a='x\\' or up{a=\\''}`);
+  });
+
+  it("a lone carriage return outside quotes refuses to place a value", () => {
+    // PromQL ends the comment at the \r, so the backticks open a string there, and the double
+    // quotes that follow are outside it; this scan would see it the other way round.
+    const text = "up #\r" + "`" + "\n" + "`" + ' {a="$v"}';
+    const evil = 'x"} or vector(1) or up{a="';
+    expect(() => interpolate(text, one([evil]), B)).toThrow(VariableError);
+    try {
+      interpolate(text, one([evil]), B);
+    } catch (e) {
+      expect((e as VariableError).name).toBe("v");
+      expect((e as Error).message).toBe(loneReturnWords("v"));
+      expect((e as Error).message).toBe("The query has a carriage return outside quotes, so $v can't be placed safely. Remove it, or start a new line instead.");
+    }
+    // Outside a comment too.
+    expect(() => interpolate('up\r{a="$v"}', one(["x"]), B)).toThrow(VariableError);
+    // A Windows line break, a \r inside quotes, or no variable at all: the text goes as it is.
+    expect(interpolate('up # c\r\n{a="$v"}', one(["x"]), B)).toBe('up # c\r\n{a="x"}');
+    expect(interpolate('{a="\r$v"}', one(["x"]), B)).toBe('{a="\rx"}');
+    expect(interpolate("up #\r`\n` {a=\"b\"}", {}, B)).toBe("up #\r`\n` {a=\"b\"}");
+    expect(interpolate("rate(up[$__range])\r", {}, B)).toBe("rate(up[6h])\r");
   });
 
   it("comments are copied as they are and end at the line break", () => {
