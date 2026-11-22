@@ -7,7 +7,7 @@ import { failure } from "../../../api/http";
 import type { TabNav } from "../../../features/shell/browserHistory";
 import type { MonitoringView } from "../../shell/tabState";
 import { copyDashboard, dashboardKey, useDashboardMutation, type DashboardOut } from "../api";
-import { isDirty } from "../editor/editorState";
+import { hasUnsavedWork } from "../editor/editorState";
 import { editSessions } from "../editor/useDashboardEditor";
 import type { OwnerKind } from "../schema";
 
@@ -39,7 +39,7 @@ export function openMade(out: DashboardOut, arrival: Arrival, how: Opener): void
   arrivals.set(out.id, arrival);
   const view: MonitoringView = { page: "dashboard", id: out.id };
   const session = editSessions.get(how.tabId);
-  if (session?.mode === "edit" && isDirty(session)) how.openInNewTab(view);
+  if (session !== undefined && hasUnsavedWork(session)) how.openInNewTab(view);
   else how.nav.navigate(view, "push");
 }
 

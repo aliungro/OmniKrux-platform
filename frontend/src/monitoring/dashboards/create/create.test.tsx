@@ -6,10 +6,12 @@ import { recordRecent } from "../../home/recent";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
 import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, seedProject, tabsWith } from "../../test/renderMonitoringApp";
-import type { ReadyMadeOut } from "../api";
+import type { DashboardOut, ReadyMadeOut } from "../api";
 import { readDraft, writeDraft } from "../drafts/draftStore";
+import { editorReducer, VIEW } from "../editor/editorState";
 import { editSessions } from "../editor/useDashboardEditor";
 import { emptyDashboard } from "../schema";
+import { forgetArrival, openMade } from "./arrival";
 import { currentOwner } from "./currentOwner";
 
 vi.mock("../../charts", async () => {
@@ -189,6 +191,23 @@ describe("New dashboard", () => {
     await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")).toHaveLength(2));
     expect(screen.queryByRole("dialog", { name: /Leave/ })).toBeNull();
     expect(await screen.findByRole("heading", { level: 1, name: "New dashboard" })).toBeTruthy();
+  });
+});
+
+describe("Opening what was just made", () => {
+  it("opens in a new tab while this tab holds JSON text that doesn't apply (F33)", () => {
+    const started = editorReducer(VIEW, { type: "start", dashboardId: "api", version: 1, spec: spec("API latency", []) });
+    editSessions.set("t1", editorReducer(started, { type: "setJson", text: "{ nope", ownerKind: "project" }));
+    const navigate = vi.fn();
+    const openInNewTab = vi.fn();
+    openMade({ id: "made" } as DashboardOut, { edit: false }, { tabId: "t1", nav: { navigate }, openInNewTab });
+    expect(openInNewTab).toHaveBeenCalledWith({ page: "dashboard", id: "made" });
+    expect(navigate).not.toHaveBeenCalled();
+    // Without unsaved work it opens in the same tab.
+    editSessions.set("t1", started);
+    openMade({ id: "made" } as DashboardOut, { edit: false }, { tabId: "t1", nav: { navigate }, openInNewTab });
+    expect(navigate).toHaveBeenCalledWith({ page: "dashboard", id: "made" }, "push");
+    forgetArrival("made");
   });
 });
 

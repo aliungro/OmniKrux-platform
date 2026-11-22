@@ -81,6 +81,16 @@ export function isDirty(state: EditorState): boolean {
   return state.mode === "edit" && !sameJson(state.draft, state.base);
 }
 
+/**
+ * Whether ending the session now would lose something: a draft that differs from its base, or JSON
+ * text that doesn't apply (the draft keeps its last valid version, which may equal the base). The
+ * leave check, drafts in storage, the reload prompt, opening something just made and a save's
+ * answer all ask this one question.
+ */
+export function hasUnsavedWork(state: EditorState): boolean {
+  return state.mode === "edit" && (state.jsonText !== null || !sameJson(state.draft, state.base));
+}
+
 /** Panels whose JSON differs between the two documents, plus panels only `next` has. */
 export function changedPanelIds(prev: DashboardSpec, next: DashboardSpec): string[] {
   const before = new Map(prev.panels.map((p) => [p.id, p]));
@@ -212,8 +222,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "setDashboard":
       return applyDocument(state, action.update(state.draft));
     case "saved":
-      // Changed while the save was on its way: keep editing over the version just saved.
-      if (action.sent !== undefined && !sameJson(action.sent, state.draft)) return { ...state, baseVersion: action.version, base: action.spec };
+      // Changed while the save was on its way (JSON text typed that doesn't apply included): keep
+      // editing over the version just saved, so nothing typed meanwhile is dropped.
+      if (action.sent !== undefined && (state.jsonText !== null || !sameJson(action.sent, state.draft))) {
+        return { ...state, baseVersion: action.version, base: action.spec };
+      }
       return VIEW;
     case "rebase":
       return { ...state, baseVersion: action.version, base: action.base };

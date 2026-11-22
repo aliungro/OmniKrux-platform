@@ -8,7 +8,7 @@
 // last dirty writer wins and nothing is lost silently.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isDirty, type EditingState, type EditorState } from "../editor/editorState";
+import { hasUnsavedWork, type EditingState, type EditorState } from "../editor/editorState";
 import { draftKey, draftsWork, readDraft, removeDraft, writeDraft, type StoredDraft } from "./draftStore";
 
 export const DRAFT_DELAY_MS = 500;
@@ -141,7 +141,7 @@ export function useDraft(tabId: string, dashboardId: string, state: EditorState,
   const flush = useCallback(() => {
     cancel();
     const s = sessionRef.current();
-    if (!s || !isDirty(s)) return;
+    if (!s || !hasUnsavedWork(s)) return;
     const c = claimFor(tabId, s);
     if (c && !c.lost) write(s, c);
   }, [tabId, write]);
@@ -149,7 +149,7 @@ export function useDraft(tabId: string, dashboardId: string, state: EditorState,
   /** Another window changed this dashboard's draft (or this page opened again): settle with it. */
   const reconcile = useCallback(() => {
     const s = sessionRef.current();
-    if (!s || !isDirty(s)) return;
+    if (!s || !hasUnsavedWork(s)) return;
     const c = claimFor(tabId, s);
     if (!c) return;
     const how = settle(c, readDraft(dashboardId));
@@ -176,8 +176,9 @@ export function useDraft(tabId: string, dashboardId: string, state: EditorState,
       claims.delete(tabId);
       return;
     }
-    if (!isDirty(state)) {
-      // Back to the saved document: a draft this session stored has nothing left to offer.
+    if (!hasUnsavedWork(state)) {
+      // Back to the saved document (and no JSON text waiting to apply): a draft this session
+      // stored has nothing left to offer.
       cancel();
       if (keptFor(tabId, state)) removeDraft(dashboardId, state.writer);
       keptByTab.delete(tabId);
@@ -197,7 +198,7 @@ export function useDraft(tabId: string, dashboardId: string, state: EditorState,
   }, [state, tabId, dashboardId, flush]);
 
   // Storage blocked and changes unsaved: a reload or closing the window asks first.
-  const unsafe = state.mode === "edit" && isDirty(state) && !works;
+  const unsafe = hasUnsavedWork(state) && !works;
   useEffect(() => { holdUnload(tabId, unsafe); }, [tabId, unsafe]);
 
   useEffect(() => {

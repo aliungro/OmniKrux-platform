@@ -9,7 +9,7 @@ import { dashboardKey, DashboardRequestError, saveDashboard, useDashboardMutatio
 import { removeDraft, type StoredDraft } from "../drafts/draftStore";
 import { useDraft } from "../drafts/useDraft";
 import type { DashboardSpec, OwnerKind } from "../schema";
-import { editorReducer, isDirty, newWriter, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
+import { editorReducer, hasUnsavedWork, isDirty, newWriter, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
 
 export { isDirty };
 
@@ -136,7 +136,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
     const s = current.current;
     if (s.mode !== "edit") return;
     // Nothing changed (and no JSON text waiting to apply): no new version and no Audit record, just the end of editing.
-    if (!isDirty(s) && s.jsonText === null) dispatch({ type: "discard" });
+    if (!hasUnsavedWork(s)) dispatch({ type: "discard" });
     else await send(s.baseVersion);
   }, [dispatch, send]);
 

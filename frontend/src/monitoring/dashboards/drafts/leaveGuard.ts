@@ -3,7 +3,7 @@
 
 import type { AppTabs } from "../../../features/shell/workspace";
 import { sameMonitoringView, type MonitoringTabAction, type MonitoringView } from "../../shell/tabState";
-import { isDirty, type EditorState } from "../editor/editorState";
+import { hasUnsavedWork, type EditorState } from "../editor/editorState";
 
 export interface HeldLeave {
   tabId: string;
@@ -24,7 +24,7 @@ export function heldLeave(
 ): HeldLeave | null {
   if (action.type !== "closeTab" && action.type !== "navigate" && action.type !== "back" && action.type !== "forward") return null;
   const session = sessions.get(action.id);
-  if (!session || session.mode !== "edit" || !isDirty(session)) return null;
+  if (!session || session.mode !== "edit" || !hasUnsavedWork(session)) return null;
   const held = { tabId: action.id, dashboardId: session.dashboardId };
   if (action.type === "closeTab") return held;
   const tab = tabs.tabs.find((t) => t.id === action.id);

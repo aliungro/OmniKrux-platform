@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { panel, spec } from "../../test/dashboardSeeds";
 import { dashboardJson, type DashboardSpec } from "../schema";
-import { changedPanelIds, editorReducer, isDirty, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
+import { changedPanelIds, editorReducer, hasUnsavedWork, isDirty, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
 
 const doc = (): DashboardSpec => spec("API latency", [
   panel("p-1", "Requests", "up", { x: 0, y: 0, w: 12, h: 8 }),
@@ -77,6 +77,30 @@ describe("editorReducer", () => {
     const undone = edit(run(s2, retitle("p-2", sent.panels[1].title)));
     expect(undone.draft).not.toBe(sent);
     expect(run(undone, { type: "saved", version: 2, spec: sent, sent })).toEqual(VIEW);
+  });
+
+  it("JSON text that doesn't apply is unsaved work even when the draft equals its base", () => {
+    const s0 = start();
+    expect(hasUnsavedWork(s0)).toBe(false);
+    expect(hasUnsavedWork(VIEW)).toBe(false);
+    const s1 = edit(run(s0, { type: "setJson", text: "{ nope", ownerKind: "project" }));
+    expect(s1.draft).toBe(s0.draft);
+    expect(isDirty(s1)).toBe(false);
+    expect(hasUnsavedWork(s1)).toBe(true);
+    expect(hasUnsavedWork(run(s0, retitle("p-1", "New")))).toBe(true);
+  });
+
+  it("broken JSON typed while a save was on its way keeps edit mode, and its text", () => {
+    const s1 = edit(run(start(), retitle("p-1", "New")));
+    const sent = s1.draft;
+    // The draft didn't change (the text doesn't apply), but the text did.
+    const s2 = edit(run(s1, { type: "setJson", text: "{ nope", ownerKind: "project" }));
+    expect(s2.draft).toBe(sent);
+    const s3 = edit(run(s2, { type: "saved", version: 2, spec: sent, sent }));
+    expect(s3.baseVersion).toBe(2);
+    expect(s3.base).toBe(sent);
+    expect(s3.jsonText).toBe("{ nope");
+    expect(hasUnsavedWork(s3)).toBe(true);
   });
 
   it("each session gets its own writer", () => {

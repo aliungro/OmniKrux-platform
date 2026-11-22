@@ -20,6 +20,21 @@ vi.mock("../../charts", async () => {
   return { default: ({ data }: { data: { series: unknown[] } }) => createElement("span", null, `chart ${data.series.length}`) };
 });
 
+// CodeMirror doesn't run in jsdom: the JSON editor is a textarea.
+vi.mock("../../../features/actions/lazyCodeMirror", () => ({
+  loadCodeMirror: () => Promise.resolve({
+    mergeView: () => ({ destroy: () => {} }),
+    editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string) => {
+      const area = document.createElement("textarea");
+      area.value = doc;
+      area.setAttribute("aria-label", label);
+      area.addEventListener("input", () => onChange(area.value));
+      parent.append(area);
+      return { focus: () => area.focus(), destroy: () => area.remove() };
+    },
+  }),
+}));
+
 beforeEach(() => { localStorage.clear(); editSessions.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -218,6 +233,28 @@ describe("Leaving a dashboard with unsaved changes", () => {
     // Replaced, not pushed: Back doesn't return to the dashboard.
     expect(app.current().tabs[0].view).toEqual({ page: "project", id: "p1" });
     expect(app.current().tabs[0].back).toEqual([]);
+  });
+
+  it("Alt+W with only JSON text that doesn't apply asks first, and keeps the text", async () => {
+    setup();
+    const user = await editing({ change: false });
+    await user.click(within(screen.getByRole("tablist", { name: "Dashboard views" })).getByRole("tab", { name: "JSON" }));
+    const area = await screen.findByRole("textbox", { name: "Dashboard JSON" });
+    area.focus();
+    fireEvent.input(area, { target: { value: "{ nope" } });
+    // The draft still equals the saved document: only the text holds the change.
+    await waitFor(() => expect(editSessions.get("m0")).toMatchObject({ mode: "edit", jsonText: "{ nope" }));
+    // Keys never fire in an editable field: Alt+W from the view's tab.
+    within(screen.getByRole("tablist", { name: "Dashboard views" })).getByRole("tab", { name: "JSON" }).focus();
+    altKey("w", "KeyW");
+    const ask = dialog();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    expect(monitoringTabs()).toHaveLength(2);
+    fireEvent.keyDown(within(ask).getByRole("button", { name: "Stay" }), { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() => expect(monitoringTabs()).toHaveLength(1));
+    expect(JSON.parse(localStorage.getItem(KEY) ?? "null")?.jsonText).toBe("{ nope");
+    await frame();
+    notBody();
   });
 
   it("without changes nothing is asked", async () => {

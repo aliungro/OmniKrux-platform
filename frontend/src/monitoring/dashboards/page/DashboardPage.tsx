@@ -17,7 +17,7 @@ import type { VarValue } from "../interpolate";
 import type { RefreshSpec, TimeSpec } from "../schema";
 import { DashboardGrid } from "../grid/DashboardGrid";
 import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/EditBar";
-import { isDirty, type EditorState } from "../editor/editorState";
+import { hasUnsavedWork, type EditorState } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
 import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
 import { DraftBanner, DraftsOffNotice, EditedElsewhere } from "../drafts/DraftBanner";
@@ -90,7 +90,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   // A draft left behind (a reload, Browser Back, Keep draft and leave) is offered back when the
   // page opens without a live session; not while another tab has unsaved changes to this dashboard.
   const offer = useDraftOffer(dashboard.id, !ready && editor.state.mode === "view"
-    && ![...editSessions.values()].some((x) => x.mode === "edit" && x.dashboardId === dashboard.id && isDirty(x)));
+    && ![...editSessions.values()].some((x) => x.mode === "edit" && x.dashboardId === dashboard.id && hasUnsavedWork(x)));
   // Editing replaces the offer: the stored draft became the session's, or new changes replace it.
   const { dismiss: dismissOffer } = offer;
   useEffect(() => { if (editing) dismissOffer(); }, [editing, dismissOffer]);
@@ -187,7 +187,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   // Changes, or JSON text that doesn't apply yet, are asked about first.
   const discard = (from: RefObject<HTMLButtonElement | null> = discardButton) => {
     const st = flushJson.current?.() ?? editor.state;
-    if (isDirty(st) || (st.mode === "edit" && st.jsonText !== null)) setAskDiscard(from);
+    if (hasUnsavedWork(st)) setAskDiscard(from);
     else editor.discard();
   };
   // Restoring a version under a draft or an edit session (here, another tab, another window) would

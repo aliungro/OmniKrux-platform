@@ -340,6 +340,45 @@ describe("The JSON tab", () => {
     notBody();
   });
 
+  it("broken text typed during a save survives the answer", async () => {
+    const { user, area, api } = await editingJson();
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/dashboards/d1" ? held.opened.then(pass) : null));
+    area.focus();
+    type(area, changed((d) => { d.panels[1].title = "Failures"; }));
+    await user.keyboard("{Control>}s{/Control}");
+    // While the save is on its way the text breaks, and the pause applies it (the draft can't follow).
+    type(area, "{ nope");
+    await waitFor(() => expect(session()?.jsonText).toBe("{ nope"));
+    held.open();
+    await waitFor(() => expect(api.state.dashboards.d1.out.version).toBe(2));
+    await waitFor(() => expect(session()?.baseVersion).toBe(2));
+    expect(session()?.jsonText).toBe("{ nope");
+    expect(screen.getByText("Editing")).toBeTruthy();
+    expect((await editorField()).value).toBe("{ nope");
+    notBody();
+  });
+
+  it("invalid JSON alone is stored as a draft and offered back", async () => {
+    const { area } = await editingJson();
+    type(area, "{ nope");
+    await waitFor(() => expect(session()?.jsonText).toBe("{ nope"));
+    // The draft still equals the saved document; the text is what is kept.
+    expect(session()?.draft).toEqual(doc());
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("omnikrux.monitoring.draft.d1") ?? "null")?.jsonText).toBe("{ nope"), { timeout: 1500 });
+    // A reload: the page and its memory go, the draft stays.
+    cleanup();
+    editSessions.clear();
+    const { user } = await opened();
+    const banner = screen.getByRole("region", { name: "Unsaved draft" });
+    await user.click(within(banner).getByRole("button", { name: "Restore draft" }));
+    await screen.findByText("Editing");
+    expect(session()?.jsonText).toBe("{ nope");
+    await user.click(viewTab("JSON"));
+    expect((await editorField()).value).toBe("{ nope");
+    expect(statusLine().textContent).toMatch(/^✗ Not valid JSON/);
+  });
+
   it("Review changes compares with the version the draft started from", async () => {
     const api = shop(2);
     const draft = doc();
