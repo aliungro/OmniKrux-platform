@@ -1,7 +1,5 @@
 import s from "../MonitoringApp.module.css";
 
-export const EXPLORE_LATER =
-  "Explore isn't here yet. It comes in a later update of Monitoring, after dashboards: query as you type, browse metrics and logs, and send a query to a dashboard.";
 export const ALERTS_LATER =
   "Alerts aren't here yet. They come in a later update of Monitoring. Until then, nothing here evaluates rules or sends notifications.";
 

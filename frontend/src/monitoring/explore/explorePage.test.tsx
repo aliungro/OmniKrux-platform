@@ -1,0 +1,213 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { QueryResponse } from "../api/types";
+import { recordRecent } from "../home/recent";
+import { linkedProject } from "../test/dashboardSeeds";
+import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeQueryAnswer } from "../test/fakeMonitoringApi";
+import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
+import type { ExploreView } from "../shell/tabState";
+import { pushTrail } from "./trail";
+
+// The chart chunk as a stub: it prints how many series it was given.
+vi.mock("../charts", async () => {
+  const { createElement } = await import("react");
+  return { default: ({ data }: { data: { series: unknown[] } }) => createElement("span", { "data-chart": "" }, `chart ${data.series.length}`) };
+});
+
+beforeEach(() => localStorage.clear());
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+const three: Partial<QueryResponse> = {
+  result_type: "matrix",
+  series: ["a", "b", "c"].map((job) => ({ labels: { job }, points: [[1, 1], [2, 2]] as [number, number][] })),
+  took_ms: 41,
+};
+
+/** Shop (p1) with one Prometheus source; every query answers `answer` unless `answers` names it. */
+function shop(answers: Record<string, FakeQueryAnswer> = {}, answer: FakeQueryAnswer = three, extra: Parameters<typeof installFakeMonitoringApi>[0] = {}): FakeMonitoringApi {
+  return installFakeMonitoringApi({
+    projects: [linkedProject("p1", "Shop", "s1")],
+    queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: (_, key) => answers[String(key).replace(/^p1\|/, "")] ?? answer }),
+    ...extra,
+  }, async () => json([]));
+}
+
+type Batch = { queries: { query: string; project_id: string }[] };
+const batches = (api: FakeMonitoringApi) => api.requests.filter((r) => r.url === "/api/monitoring/query/batch").map((r) => r.body as Batch);
+const query = () => screen.getByRole("textbox", { name: "Query" }) as HTMLTextAreaElement;
+const meta = () => document.querySelector("[data-explore-meta]") as HTMLElement;
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function openExplore(view: ExploreView = { page: "explore", project: "p1", expr: "up" }) {
+  const result = renderMonitoringApp({ tabs: tabsWith(view) });
+  const heading = await screen.findByRole("heading", { level: 1, name: "Explore" });
+  await waitFor(() => expect(document.activeElement).toBe(heading));
+  return { ...result, heading };
+}
+
+describe("Explore", () => {
+  it("opens on the most recent project with focus on the heading", async () => {
+    installFakeMonitoringApi({ projects: [linkedProject("p1", "Alpha", "s1"), linkedProject("p2", "Zoo", "s2")] }, async () => json([]));
+    recordRecent({ kind: "project", id: "p1" }, 1);
+    recordRecent({ kind: "project", id: "p2" }, 2);
+    await openExplore({ page: "explore" });
+    const project = await screen.findByRole("combobox", { name: "Project" }) as HTMLSelectElement;
+    await waitFor(() => expect(project.value).toBe("p2"));
+    const source = await screen.findByRole("combobox", { name: "Source" }) as HTMLSelectElement;
+    await waitFor(() => expect(within(source).getByRole("option", { name: "s2 name · Prometheus-compatible" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: /Last 1 hour/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add to dashboard" }).getAttribute("aria-keyshortcuts")).toBe("a");
+    expect(query().getAttribute("aria-keyshortcuts")).toBe("q");
+    expect(query().getAttribute("spellcheck")).toBe("false");
+    expect(meta().textContent).toBe("Pick a metric on the left, or type a query.");
+  });
+
+  it("meta line reads like the prototype", async () => {
+    const api = shop();
+    await openExplore();
+    await waitFor(() => expect(meta().textContent).toContain("✓ 3 series · 41 ms"));
+    expect(meta().getAttribute("aria-live")).toBe("polite");
+    expect(meta().textContent).toContain("Last 1 hour");
+    expect(meta().textContent).toMatch(/updated \d\d:\d\d:\d\d/);
+    expect(await screen.findByText("chart 3")).toBeTruthy();
+    expect(batches(api)).toHaveLength(1);
+    expect(batches(api)[0].queries).toEqual([expect.objectContaining({ query: "up", project_id: "p1", source_id: "s1" })]);
+  });
+
+  it("an invalid query dims the last good chart and says so", async () => {
+    const api = shop();
+    await openExplore();
+    await screen.findByText("chart 3");
+    fireEvent.change(query(), { target: { value: "sum(up" } });
+    await waitFor(() => expect(meta().textContent).toBe("✗ The query has an unclosed quote or bracket. · showing the last result"));
+    const label = screen.getByText("Last good result");
+    const chart = screen.getByText("chart 3");
+    expect(chart.closest("[data-dim]")?.getAttribute("data-dim")).toBe("true");
+    expect(within(label.closest("[data-last-good]") as HTMLElement).getByText("up")).toBeTruthy();
+    expect(batches(api)).toHaveLength(1);
+  });
+
+  it("a failed run shows Source unreachable with Try again", async () => {
+    const api = shop({ up: { error: { code: "unreachable", message: "Prometheus didn't answer in time." }, status: 502 } });
+    await openExplore();
+    expect(await screen.findByRole("heading", { name: "Source unreachable" })).toBeTruthy();
+    expect(screen.getByText("Prometheus didn't answer in time.")).toBeTruthy();
+    expect(screen.queryByText(/^chart /)).toBeNull();
+    expect(screen.queryByText("Last good result")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(batches(api)).toHaveLength(2));
+  });
+
+  it("the trail restores a query by keyboard", async () => {
+    const api = shop();
+    pushTrail("p1", { expr: "up", sourceId: "s1", at: 1 });
+    pushTrail("p1", { expr: "rate(x[5m])", sourceId: "s1", at: 2 });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", expr: "rate(x[5m])" });
+    await screen.findByText("chart 3");
+    const trail = screen.getByRole("toolbar", { name: "Recent queries" });
+    const current = within(trail).getByRole("button", { name: "rate(x[5m])" });
+    expect(current.getAttribute("aria-current")).toBe("true");
+    query().focus();
+    for (let i = 0; i < 10 && !trail.contains(document.activeElement); i++) await user.tab();
+    expect(document.activeElement).toBe(current);
+    await user.keyboard("{ArrowLeft}");
+    expect(document.activeElement).toBe(within(trail).getByRole("button", { name: "up" }));
+    const before = batches(api).length;
+    await user.keyboard("{Enter}");
+    expect(query().value).toBe("up");
+    await waitFor(() => expect(batches(api)).toHaveLength(before + 1));
+    expect(batches(api)[before].queries[0].query).toBe("up");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the query survives a reload of the tab", async () => {
+    let api = shop();
+    const { current, unmount } = await openExplore({ page: "explore", project: "p1" });
+    await screen.findByRole("textbox", { name: "Query" });
+    fireEvent.change(query(), { target: { value: "up" } });
+    await waitFor(() => expect((current().tabs[0].view as ExploreView).expr).toBe("up"));
+    const saved = current().tabs[0].view as ExploreView;
+    expect(saved).toMatchObject({ page: "explore", project: "p1", source: "s1", expr: "up", time: { from: "now-1h", to: "now" } });
+    unmount();
+    vi.unstubAllGlobals();
+    api = shop();
+    await openExplore(saved);
+    expect((await screen.findByRole("textbox", { name: "Query" }) as HTMLTextAreaElement).value).toBe("up");
+    await screen.findByText("chart 3");
+    await pause(400);
+    expect(batches(api)).toHaveLength(1);
+  });
+
+  it("q focuses the query, Esc leaves it to the chart", async () => {
+    shop();
+    const user = userEvent.setup();
+    await openExplore();
+    await screen.findByText("chart 3");
+    await user.keyboard("q");
+    expect(document.activeElement).toBe(query());
+    expect(query().value).toBe("up");
+    await user.keyboard("{Escape}");
+    expect(document.activeElement?.closest("[data-explore-chart]")).toBeTruthy();
+  });
+
+  it("typing in Explore keeps focus in the query after its view is written", async () => {
+    shop();
+    const { current } = await openExplore();
+    await screen.findByText("chart 3");
+    query().focus();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.change(query(), { target: { value: "up2" } });
+    act(() => { vi.advanceTimersByTime(350); });
+    vi.useRealTimers();
+    expect((current().tabs[0].view as ExploreView).expr).toBe("up2");
+    expect(document.activeElement).toBe(query());
+    // A view write records nothing: Back still leads where the tab came from (nowhere).
+    expect(current().tabs[0].back).toHaveLength(0);
+  });
+
+  it("the Explore tab from the sidebar takes the current project", async () => {
+    installFakeMonitoringApi({ projects: [linkedProject("p1", "Alpha", "s1"), linkedProject("p2", "Zoo", "s2")] }, async () => json([]));
+    recordRecent({ kind: "project", id: "p1" }, 5);
+    renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p2" }) });
+    await screen.findByRole("heading", { level: 1, name: "Zoo" });
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    await screen.findByRole("heading", { level: 1, name: "Explore" });
+    const project = await screen.findByRole("combobox", { name: "Project" }) as HTMLSelectElement;
+    await waitFor(() => expect(project.value).toBe("p2"));
+    expect(screen.getByRole("button", { name: "Explore" }).getAttribute("aria-current")).toBe("page");
+  });
+
+  it("Apply on a recommendation rewrites the query, runs it and keeps the hand-written one", async () => {
+    const api = shop();
+    await openExplore({ page: "explore", project: "p1", expr: "http_requests_total" });
+    await screen.findByText("chart 3");
+    const bar = await screen.findByRole("region", { name: "Recommendation" });
+    const before = batches(api).length;
+    fireEvent.click(within(bar).getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(query().value).toMatch(/^rate\(http_requests_total\[/));
+    await waitFor(() => expect(batches(api)).toHaveLength(before + 1));
+    expect(batches(api)[before].queries[0].query).toMatch(/^rate\(http_requests_total\[\d+[smh]\]\)$/);
+    const trail = screen.getByRole("toolbar", { name: "Recent queries" });
+    expect(within(trail).getByRole("button", { name: "http_requests_total" })).toBeTruthy();
+    expect(document.activeElement).toBe(query());
+  });
+
+  it("no projects points to setup", async () => {
+    installFakeMonitoringApi({}, async () => json([]));
+    await openExplore({ page: "explore" });
+    expect(await screen.findByText("Explore reads the sources of a project. Set up a project first.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Set up a project" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "New project" })).toBeTruthy();
+  });
+
+  it("a project without sources says where to add one", async () => {
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Shop")] }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1" });
+    expect(await screen.findByText("Shop has no sources yet. Add one on the project page.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Shop" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Shop" })).toBeTruthy();
+  });
+});

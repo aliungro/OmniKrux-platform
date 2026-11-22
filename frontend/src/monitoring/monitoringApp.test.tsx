@@ -26,10 +26,6 @@ describe("Monitoring app shell", () => {
   it("Explore and Alerts say they come later", async () => {
     installFakeMonitoringApi();
     renderMonitoringApp();
-    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
-    expect(await screen.findByRole("heading", { name: "Explore" })).toBeTruthy();
-    expect(screen.getByText("Explore isn't here yet. It comes in a later update of Monitoring, after dashboards: query as you type, browse metrics and logs, and send a query to a dashboard.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Explore" }).getAttribute("aria-current")).toBe("page");
     fireEvent.click(screen.getByRole("button", { name: "Alerts" }));
     expect(await screen.findByRole("heading", { name: "Alerts" })).toBeTruthy();
     expect(screen.getByText("Alerts aren't here yet. They come in a later update of Monitoring. Until then, nothing here evaluates rules or sends notifications.")).toBeTruthy();

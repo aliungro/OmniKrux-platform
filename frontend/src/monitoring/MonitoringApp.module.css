@@ -81,3 +81,11 @@
     border-bottom: 1px solid var(--rule);
   }
 }
+
+/* A page loading its own chunk: a quiet line where the page will be. */
+.loadingPage {
+  margin: 0;
+  padding: 28px;
+  color: var(--ink-3);
+  font-size: 13px;
+}

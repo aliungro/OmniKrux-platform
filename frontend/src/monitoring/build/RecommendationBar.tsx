@@ -4,7 +4,7 @@
 // `onApply`, which makes it a normal draft edit (or answers with why it was refused).
 
 import { useEffect, useMemo, useState } from "react";
-import { sameJson } from "../dashboards/editor/editorState";
+import { sameJson } from "../dashboards/sameJson";
 import type { PanelSpec } from "../dashboards/schema";
 import { dismiss, readDismissed } from "./dismissals";
 import { recommendFor, type RecommendationContext, type RecText } from "./recommend";

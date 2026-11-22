@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useClusters } from "../api/useClusters";
 import type { TabNav } from "../features/shell/browserHistory";
 import type { AppTabs } from "../features/shell/workspace";
@@ -20,7 +20,7 @@ import { openMade, settleHeadingFocus } from "./dashboards/create/arrival";
 import { currentOwner, type Owner } from "./dashboards/create/currentOwner";
 import { NewDashboardDialog } from "./dashboards/create/NewDashboardDialog";
 import { pageLetter } from "./dashboards/page/keys";
-import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
+import { ALERTS_LATER, ComingLater } from "./pages/ComingLater";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
@@ -63,6 +63,9 @@ const later = (name: string, text?: string): ComponentType<MonitoringPageProps> 
   return Later;
 };
 
+/** Explore is its own chunk: it loads when a tab first shows it. */
+const ExplorePage = lazy(() => import("./explore/ExplorePage"));
+
 /**
  * Every page by `view.page`. A page that hasn't been built yet renders `ComingLater` with its name;
  * each later task replaces its entry (M2 adds `dashboard`).
@@ -75,7 +78,7 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   project: ProjectPage,
   group: GroupPage,
   newGroup: GroupForm,
-  explore: later("Explore", EXPLORE_LATER),
+  explore: ExplorePage,
   alerts: later("Alerts", ALERTS_LATER),
   dashboard: DashboardPage,
 };
@@ -85,9 +88,12 @@ function recordOpened(view: MonitoringView) {
   if (view.page === "project" || view.page === "group" || view.page === "dashboard") recordRecent({ kind: view.page, id: view.id });
 }
 
-/** The same page about the same item: a replace that only changes its view state (time, variables, tab). */
+/**
+ * The same page about the same item: a replace that only changes its view state (time, variables,
+ * tab). Explore has no item: every replace on it is its own view write (project, source, query, time).
+ */
 function samePageAndItem(a: MonitoringView, b: MonitoringView): boolean {
-  return a.page === b.page && "id" in a && "id" in b && a.id === b.id;
+  return a.page === b.page && (a.page === "explore" || ("id" in a && "id" in b && a.id === b.id));
 }
 
 /** Whether a dashboard is listed in the tree, under its project (saved or ready-made) or its group. */
@@ -121,7 +127,12 @@ function PageView({ page, tree, sources, onHome }: { page: MonitoringPageProps; 
   shownGone.current = gone ? key : null;
   if (gone) return <Gone key={key} what={gone} onHome={onHome} />;
   const Component = PAGES[view.page];
-  return <Component {...page} />;
+  // A page in its own chunk says it is on its way; the keyboard stays where it is meanwhile.
+  return (
+    <Suspense fallback={<p className={s.loadingPage} role="status">Loading…</p>}>
+      <Component {...page} />
+    </Suspense>
+  );
 }
 
 /** A way out held by the leave check: the dialog's question, and how to go on when it's answered. */

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import k from "../../features/chrome/key.module.css";
 import type { TreeColor, TreeOut } from "../api/types";
-import type { Owner } from "../dashboards/create/currentOwner";
+import { ownerOfDashboard, type Owner } from "../dashboards/create/currentOwner";
 import type { SearchEntry } from "../search/search";
 import type { MonitoringView } from "../shell/tabState";
 import { FindBox } from "./FindBox";
@@ -44,6 +44,20 @@ function currentKey(view: MonitoringView, rows: TreeRow[]): string | null {
 function isOpenPage(row: TreeRow, view: MonitoringView): boolean {
   if (row.kind === "shortcut" || !row.view || row.view.page !== view.page) return false;
   return "id" in row.view && "id" in view && row.view.id === view.id;
+}
+
+/**
+ * Explore opened from the sidebar: on the active tab's own project (a project page, or a project's
+ * dashboard), or Explore's own when the tab is already Explore; else Explore picks (F28).
+ */
+export function exploreFrom(view: MonitoringView, tree: TreeOut | undefined): MonitoringView {
+  if (view.page === "explore") return view.project ? { page: "explore", project: view.project } : { page: "explore" };
+  if (view.page === "project") return { page: "explore", project: view.id };
+  if (view.page === "dashboard" && tree) {
+    const owner = ownerOfDashboard(tree, view.id);
+    if (owner?.kind === "project") return { page: "explore", project: owner.id };
+  }
+  return { page: "explore" };
 }
 
 const ICONS: Record<"home" | "explore" | "alerts" | "sources", ReactNode> = {
@@ -216,7 +230,7 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
       <FindBox index={index} onOpen={onOpen} onLeave={onLeave} />
       <div className={s.nav}>
         {navItem({ page: "home" }, "Home", "home")}
-        {navItem({ page: "explore" }, "Explore", "explore")}
+        {navItem(exploreFrom(view, tree), "Explore", "explore")}
         {navItem({ page: "alerts" }, "Alerts", "alerts")}
         {navItem({ page: "sources" }, "Sources", "sources",
           tree && <span className={s.count}>{tree.source_count}</span>,

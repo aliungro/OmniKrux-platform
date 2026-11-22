@@ -1,0 +1,148 @@
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LinkOut, ProjectOut, QueryRequest, QueryResponse } from "../api/types";
+import { UNREADABLE } from "../build/promql";
+import { DashboardRequestError, type BatchItemOut } from "../dashboards/api";
+import { durationText, stepFor } from "../dashboards/time";
+import { EXPLORE_DEBOUNCE_MS, useExploreRun } from "./useExploreRun";
+
+const runBatch = vi.fn<(q: QueryRequest[], s?: AbortSignal) => Promise<BatchItemOut[]>>();
+vi.mock("../dashboards/api", async (orig) => ({
+  ...(await orig<typeof import("../dashboards/api")>()),
+  runBatch: (q: QueryRequest[], s?: AbortSignal) => runBatch(q, s),
+}));
+
+const link = (id: string, type: "prometheus" | "loki"): LinkOut => ({
+  source_id: id, source_name: id, source_type: type, filter: "", filter_origin: "none", created_by_project: false,
+});
+const project: ProjectOut = {
+  id: "p1", name: "Shop", kind: "custom", cluster_id: null, cluster_name: null, cluster_provider: null,
+  links: [link("prom", "prometheus"), link("loki", "loki")], group_ids: [], created_at: "", updated_at: "",
+};
+const source = project.links[0];
+const range = { start: 3600, end: 7200 };
+const input = (expr: string) => ({ project, source, expr, range, kind: "metrics" as const });
+
+const ok = (v: number, series = 1): BatchItemOut => ({
+  ok: true, error: null,
+  response: {
+    result_type: "matrix", series: Array.from({ length: series }, (_, i) => ({ labels: { job: `j${i}` }, points: [[3600, v], [3660, v]] })),
+    streams: [], warnings: [], truncated: false, source_id: "prom", source_name: "prom", source_type: "prometheus",
+    project_id: "p1", applied_filter: "", query: "", took_ms: 41,
+  } as QueryResponse,
+});
+const refused = (code: "bad_query" | "unreachable", message: string): BatchItemOut => ({
+  ok: false, response: null, error: { code, message, status: code === "bad_query" ? 400 : 502 },
+});
+
+beforeEach(() => { vi.useFakeTimers(); runBatch.mockReset(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+const flush = async (ms = EXPLORE_DEBOUNCE_MS) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+
+describe("useExploreRun", () => {
+  it("typing runs once 300 ms after the last keystroke", async () => {
+    runBatch.mockResolvedValue([ok(1, 3)]);
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "rate(up" } });
+    expect(EXPLORE_DEBOUNCE_MS).toBe(300);
+    await flush(100);
+    rerender({ expr: "rate(up[$__rate_interval]" });
+    await flush(100);
+    rerender({ expr: "rate(up[$__rate_interval])" });
+    expect(result.current.state.status).toBe("waiting");
+    await flush(299);
+    expect(runBatch).not.toHaveBeenCalled();
+    await flush(1);
+    expect(runBatch).toHaveBeenCalledTimes(1);
+    const [req] = runBatch.mock.calls[0][0];
+    const step = stepFor(3600, 24);
+    // The batch carries the substituted window, never `$__rate_interval`; and always the project.
+    expect(req).toMatchObject({ project_id: "p1", source_id: "prom", kind: "range", step });
+    expect(req.query).toBe(`rate(up[${durationText(Math.max(4 * step, 60))}])`);
+    expect(result.current.state.status).toBe("done");
+    expect(result.current.state.data?.series).toHaveLength(3);
+    expect(result.current.state.tookMs).toBe(41);
+    await flush(1000);
+    expect(runBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+Enter runs at once", async () => {
+    runBatch.mockResolvedValue([ok(1)]);
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "" } });
+    rerender({ expr: "up" });
+    await act(async () => { result.current.run(true); });
+    expect(runBatch).toHaveBeenCalledTimes(1);
+    expect(runBatch.mock.calls[0][0][0].query).toBe("up");
+    await flush(1000);
+    expect(runBatch).toHaveBeenCalledTimes(1);
+    expect(result.current.state.status).toBe("done");
+  });
+
+  it("an older answer never replaces a newer one", async () => {
+    let first!: (r: BatchItemOut[]) => void;
+    runBatch.mockImplementationOnce(() => new Promise((res) => { first = res; }));
+    runBatch.mockResolvedValueOnce([ok(2)]);
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "up" } });
+    await flush();
+    const signal = runBatch.mock.calls[0][1] as AbortSignal;
+    rerender({ expr: "up2" });
+    expect(signal.aborted).toBe(true);
+    await flush();
+    expect(result.current.state.status).toBe("done");
+    const runId = result.current.state.runId;
+    await act(async () => { first([ok(1)]); });
+    expect(result.current.state.runId).toBe(runId);
+    expect(result.current.state.data?.series[0].points[0][1]).toBe(2);
+    expect(result.current.state.lastGood?.expr).toBe("up2");
+  });
+
+  it("an unbalanced query is invalid without a request", async () => {
+    runBatch.mockResolvedValue([ok(1)]);
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "up" } });
+    await flush();
+    expect(runBatch).toHaveBeenCalledTimes(1);
+    rerender({ expr: 'sum(up{job="api}' });
+    await flush();
+    expect(runBatch).toHaveBeenCalledTimes(1);
+    expect(result.current.state.status).toBe("invalid");
+    expect(result.current.state.message).toBe("The query has an unclosed quote or bracket.");
+    expect(result.current.state.message).toBe(UNREADABLE);
+    expect(result.current.state.lastGood?.expr).toBe("up");
+  });
+
+  it("a bad query keeps the last good result", async () => {
+    runBatch.mockResolvedValueOnce([ok(1)]);
+    runBatch.mockResolvedValueOnce([refused("bad_query", "parse error: unexpected identifier")]);
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "up" } });
+    await flush();
+    rerender({ expr: "up up" });
+    await flush();
+    expect(result.current.state.status).toBe("invalid");
+    expect(result.current.state.message).toBe("parse error: unexpected identifier");
+    expect(result.current.state.data).toBeNull();
+    expect(result.current.state.lastGood?.expr).toBe("up");
+    expect(result.current.state.lastGood?.range).toEqual({ start: 3600, end: 7200 });
+    expect(result.current.state.lastGood?.step).toBe(stepFor(3600, 24));
+  });
+
+  it("a source failure replaces the last good chart", async () => {
+    runBatch.mockResolvedValueOnce([ok(1)]);
+    runBatch.mockResolvedValueOnce([refused("unreachable", "Prometheus didn't answer.")]);
+    runBatch.mockRejectedValueOnce(new DashboardRequestError(0, "network", "Can't reach the console's server."));
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "up" } });
+    await flush();
+    expect(result.current.state.data).not.toBeNull();
+    rerender({ expr: "up2" });
+    await flush();
+    expect(result.current.state.status).toBe("failed");
+    expect(result.current.state.data).toBeNull();
+    expect(result.current.state.message).toBe("Prometheus didn't answer.");
+    expect(result.current.state.failure).toBe("unreachable");
+    // A whole batch that didn't answer fails the same way.
+    rerender({ expr: "up3" });
+    await flush();
+    expect(result.current.state.status).toBe("failed");
+    expect(result.current.state.data).toBeNull();
+    expect(result.current.state.message).toBe("Can't reach the console's server.");
+  });
+});
