@@ -270,6 +270,8 @@ def _cluster() -> dict:
         ],
         columns=["namespace", "pod"],
         sort={"column": "Value", "descending": True},
+        # increase() extrapolates (11.2 restarts); restarts are counted in whole numbers.
+        decimals=0,
     )
     return _document("cluster", p, [])
 

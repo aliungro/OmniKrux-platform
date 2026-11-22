@@ -65,6 +65,13 @@ def test_every_ready_made_query_takes_a_filter(key):
                 assert all('cluster="a"' in body for body in bodies), filtered
 
 
+def test_restarts_in_the_last_hour_are_whole_numbers():
+    doc = build_ready_made("cluster", kind="kubernetes", has_loki=False)
+    panel = next(p for p in doc["panels"] if p["title"] == "Restarts in the last hour")
+    assert panel["type"] == "table"
+    assert panel["options"]["decimals"] == 0
+
+
 def test_ready_keys():
     assert ready_keys("kubernetes", True, False) == READY_ORDER
     assert ready_keys("kubernetes", True, True) == READY_ORDER

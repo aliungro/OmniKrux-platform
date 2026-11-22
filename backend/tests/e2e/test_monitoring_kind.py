@@ -271,11 +271,14 @@ def test_ready_made_views_run_on_the_cluster(client, prometheus_project):
 def test_node_health_on_the_cluster(client, prometheus_project):
     project = prometheus_project
     views = ready_views(client, project)
+    # "missing" only means something once the metric names were read.
+    assert views["nodes"]["checked"], views["nodes"]["check_message"]
     if "node_exporter" in views["nodes"]["missing"]:
         pytest.skip(NO_NODE_EXPORTER)
     document = dashboard(client, views["nodes"]["id"])["spec"]
     busy = run_panel(client, project, document, "CPU busy")[0]
     nodes = query(client, project, "prometheus", kind="instant", query="count(kube_node_info)")
+    assert nodes["series"], "kube_node_info has no series: is kube-state-metrics running?"
     count = nodes["series"][0]["points"][0][1]
     assert len(busy["series"]) == count
 

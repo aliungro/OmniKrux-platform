@@ -108,7 +108,19 @@ def _number(w: _Walk, raw: object, path: str) -> int | float | None:
     if isinstance(raw, float) and not math.isfinite(raw):
         w.add(path, "Expected a finite number.")
         return None
+    if isinstance(raw, int) and not _fits_a_double(raw):
+        # The browser reads such a number as Infinity: refused the same way on both sides.
+        w.add(path, "Expected a finite number.")
+        return None
     return _tidy(raw)
+
+
+def _fits_a_double(n: int) -> bool:
+    try:
+        float(n)
+    except OverflowError:
+        return False
+    return True
 
 
 def _whole(w: _Walk, raw: object, path: str, lo: int, hi: int, message: str) -> int | None:
