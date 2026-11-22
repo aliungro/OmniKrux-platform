@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { GroupOut } from "../../api/types";
 import { recordRecent } from "../../home/recent";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, seedProject, tabsWith } from "../../test/renderMonitoringApp";
 import type { DashboardOut, ReadyMadeOut } from "../api";
 import { readDraft, writeDraft } from "../drafts/draftStore";
@@ -274,6 +274,51 @@ describe("Copy and delete", () => {
     expect(api.state.dashboards.api).toBeUndefined();
     expect(api.requests.some((r) => r.method === "DELETE" && r.url === "/api/monitoring/dashboards/api?version=2")).toBe(true);
     expect(readDraft("api")).toBeNull();
+  });
+
+  it("deleting a dashboard already deleted elsewhere follows through as a delete", async () => {
+    const api = shop();
+    writeDraft({ v: 1, dashboardId: "api", baseVersion: 1, savedAt: 1, draft: spec("API latency", []), jsonText: null, writer: "w-other" });
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "api" }, { page: "dashboard", id: "api" }) });
+    await screen.findByRole("heading", { level: 1, name: "API latency" });
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete dashboard…" }));
+    const dialog = await screen.findByRole("alertdialog", { name: 'Delete dashboard "API latency"?' });
+    // Deleted in another window meanwhile: the delete answers 404.
+    delete api.state.dashboards.api;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete dashboard" }));
+    const heading = await screen.findByRole("heading", { level: 1, name: "Shop" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(readDraft("api")).toBeNull();
+    expect(api.requests.filter((r) => r.method === "DELETE")).toHaveLength(1);
+  });
+
+  it("after a delete whose owner page can't be shown, the keyboard is on the workspace, and the heading isn't taken later", async () => {
+    const api = shop();
+    let broken = true;
+    intercept((url) => (broken && url === "/api/monitoring/projects/p1"
+      ? Promise.resolve(new Response(JSON.stringify({ detail: "The project couldn't be read." }), { status: 500 }))
+      : null));
+    const app = renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "api" }) });
+    await screen.findByRole("heading", { level: 1, name: "API latency" });
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete dashboard…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
+    expect((await screen.findByRole("alert")).textContent).toContain("The project couldn't be read.");
+    expect(api.state.dashboards.api).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    // The tab moves on; the project opened later is a usual visit, not the one after the delete.
+    app.navigate({ page: "home" }, "push");
+    await screen.findByRole("heading", { level: 1, name: "Monitoring" });
+    broken = false;
+    screen.getByRole("combobox", { name: "Find anything" }).focus();
+    app.navigate({ page: "project", id: "p1" }, "push");
+    await screen.findByRole("heading", { level: 1, name: "Shop" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.activeElement).not.toBe(screen.getByRole("heading", { level: 1, name: "Shop" }));
   });
 
   it("stale delete says review it again", async () => {

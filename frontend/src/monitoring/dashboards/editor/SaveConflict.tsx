@@ -1,7 +1,7 @@
 // A save refused because another save landed first (409): a bar under the header says so, and
 // Review differences compares the saved version with the draft before anything is overwritten.
 // The draft is never dropped here.
-import { useEffect, useId, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { failure } from "../../../api/http";
 import { DialogShell } from "../../../features/dock/ConfirmDialog";
 import type { DashboardOut, DashboardRequestError } from "../api";
@@ -22,6 +22,9 @@ export function SaveConflict({ version, saved, draft, saving, error, onSaveOver 
 }) {
   const [open, setOpen] = useState(false);
   const review = useRef<HTMLButtonElement>(null);
+  // The refusal appears with the keyboard on its action (W12): reviews open with focus on their
+  // action, and wherever the save was pressed from (a tile, Save dashboard) gets nothing from it.
+  useLayoutEffect(() => { review.current?.focus({ preventScroll: true }); }, []);
   return (
     <>
       <div className={s.notice} data-kind="conflict" role="alert">

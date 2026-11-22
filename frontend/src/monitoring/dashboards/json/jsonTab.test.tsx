@@ -225,6 +225,20 @@ describe("The JSON tab", () => {
     expect(statusLine().textContent).toBe("✓ Valid");
   });
 
+  it("saving from Review changes puts the keyboard on Edit (W10)", async () => {
+    const { user, area } = await editingJson();
+    area.focus();
+    type(area, changed((d) => { d.panels[1].title = "Failures"; }));
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    const dialog = await screen.findByRole("dialog", { name: 'Review changes to "API latency"' });
+    await user.click(within(dialog).getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    await waitFor(() => expect(document.activeElement).toBe(edit));
+    await pause(50);
+    expect(document.activeElement).toBe(edit);
+  });
+
   it("Esc leaves the editor to Review changes", async () => {
     const { user, area } = await editingJson();
     area.focus();
@@ -377,6 +391,26 @@ describe("The JSON tab", () => {
     await user.click(viewTab("JSON"));
     expect((await editorField()).value).toBe("{ nope");
     expect(statusLine().textContent).toMatch(/^✗ Not valid JSON/);
+  });
+
+  it("with storage blocked, invalid JSON alone holds a reload", async () => {
+    const { area } = await editingJson();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+    const unload = () => {
+      const e = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    expect(unload()).toBe(false);
+    type(area, "{ nope");
+    await waitFor(() => expect(session()?.jsonText).toBe("{ nope"));
+    await waitFor(() => expect(unload()).toBe(true), { timeout: 1500 });
+    vi.mocked(Storage.prototype.setItem).mockRestore();
+    // Discarded, there is nothing left to lose.
+    await userEvent.click(jsonDiscard());
+    await userEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(screen.queryByText("Editing")).toBeNull());
+    expect(unload()).toBe(false);
   });
 
   it("Review changes compares with the version the draft started from", async () => {

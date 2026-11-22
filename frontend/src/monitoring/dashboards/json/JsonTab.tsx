@@ -6,7 +6,7 @@
 // The kit can't replace an editor's text, so the editor is mounted again (a key on a revision)
 // whenever the draft changes from outside it: Discard, a save, a restored draft or version, and
 // coming back from another tab. Its own changes never remount it, so the cursor stays put.
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { EDITOR_UNAVAILABLE, loadCodeMirror, type EditorKeys, type MountedEditor } from "../../../features/actions/lazyCodeMirror";
 import { isMac, keysFor } from "../../../features/chrome/shortcuts";
 import k from "../../../features/chrome/key.module.css";
@@ -25,7 +25,7 @@ const focusLost = () => { const a = document.activeElement; return a === null ||
 const canReview = (st: EditorState | null): boolean => st?.mode === "edit" && st.jsonProblems.length === 0 && isDirty(st);
 const problemLine = (p: Problem) => (p.path ? `${p.path}: ${p.message}` : p.message);
 
-/** A ready-made view's document: read-only, with Copy to edit. */
+/** A ready-made view's document: read-only, with Copy to edit (the header's; absent while it runs). */
 export function ReadyMadeJson({ spec, onCopy }: { spec: DashboardSpec; onCopy?(): void }) {
   return (
     <div className={s.frame}>
@@ -146,6 +146,15 @@ export function JsonTab({ dashboard, editing, dispatch, onStartEditing, onSave, 
 
   const reviewButton = useRef<HTMLButtonElement>(null);
   const discardButton = useRef<HTMLButtonElement>(null);
+  // Where Review changes returns the keyboard as it closes: Review changes, unless the save ended
+  // edit mode. Then the page has already put it on Edit (W10), and it stays there.
+  const reviewReturn = useMemo<RefObject<HTMLElement | null>>(() => ({
+    get current() {
+      if (latest.current.editing !== null) return reviewButton.current;
+      const active = document.activeElement;
+      return active instanceof HTMLElement && active !== document.body && active.isConnected ? active : reviewButton.current;
+    },
+  }), []);
   const [reviewing, setReviewing] = useState(false);
   const review = useCallback(() => {
     const st = flush() ?? latest.current.editing;
@@ -208,7 +217,7 @@ export function JsonTab({ dashboard, editing, dispatch, onStartEditing, onSave, 
       <JsonEditor key={rev} doc={doc} onChange={onChange} keys={keys} />
       {reviewing && editing && (
         <ReviewChanges title={dashboard.title} version={editing.baseVersion} saved={editing.base} draft={editing.draft}
-          saving={saving} restoreFocusTo={reviewButton}
+          saving={saving} restoreFocusTo={reviewReturn}
           onCancel={() => setReviewing(false)}
           onSave={() => { void onSave().finally(() => setReviewing(false)); }} />
       )}

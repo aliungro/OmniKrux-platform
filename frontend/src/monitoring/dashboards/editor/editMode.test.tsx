@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { DashboardSpec } from "../schema";
 import { editSessions } from "./useDashboardEditor";
@@ -228,6 +228,59 @@ describe("Edit mode", () => {
     const edit = await screen.findByRole("button", { name: "Edit" });
     await waitFor(() => expect(document.activeElement).toBe(edit));
     expect(api.state.dashboards.d1.out.version).toBe(3);
+  });
+
+  it("a save refused by Ctrl+S on a tile puts the keyboard on Review differences", async () => {
+    const { user, api } = await editing();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    expect(document.activeElement).toBe(tile("Requests"));
+    const d = api.state.dashboards.d1;
+    d.out = { ...d.out, version: 2 };
+    await user.keyboard("{Control>}s{/Control}");
+    const review = await screen.findByRole("button", { name: "Review differences" });
+    await waitFor(() => expect(document.activeElement).toBe(review));
+    // And stays there once the newer version has been read.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(document.activeElement).toBe(review);
+    expect(screen.getByText("Editing")).toBeTruthy();
+  });
+
+  it("a save refused from the Save button puts the keyboard on Review differences", async () => {
+    const { user, api } = await editing();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    const d = api.state.dashboards.d1;
+    d.out = { ...d.out, version: 2 };
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    const review = await screen.findByRole("button", { name: "Review differences" });
+    await waitFor(() => expect(document.activeElement).toBe(review));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(document.activeElement).toBe(review);
+  });
+
+  it("after a refused save, a re-read that fails keeps edit mode and the review", async () => {
+    const { user, api } = await editing();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    const d = api.state.dashboards.d1;
+    d.out = { ...d.out, version: 2 };
+    let broken = true;
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => (broken && (init?.method ?? "GET") === "GET" && String(input) === "/api/monitoring/dashboards/d1"
+      ? Promise.reject(new TypeError("Failed to fetch"))
+      : inner(input, init))));
+    await user.keyboard("{Control>}s{/Control}");
+    const notice = (await screen.findByText(/^Couldn't read this dashboard again/)).closest('[role="alert"]') as HTMLElement;
+    expect(notice.textContent).toContain("Check that it's running, then try again.");
+    expect(screen.getByText("Editing")).toBeTruthy();
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 2, row 1");
+    const review = screen.getByRole("button", { name: "Review differences" });
+    await waitFor(() => expect(document.activeElement).toBe(review));
+    broken = false;
+    await user.click(within(notice).getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.queryByText(/^Couldn't read this dashboard again/)).toBeNull());
+    notBody();
+    await user.click(review);
+    const dialog = screen.getByRole("dialog", { name: "Saved version 2 and your draft" });
+    expect(await within(dialog).findByTestId("diff-before")).toBeTruthy();
   });
 
   it("a save the server refuses as invalid shows its problems with Show in JSON", async () => {

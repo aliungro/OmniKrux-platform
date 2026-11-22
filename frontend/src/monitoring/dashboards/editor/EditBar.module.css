@@ -83,8 +83,14 @@
   min-width: 0;
 }
 
+/* The dashboard couldn't be read again: the page stays as last read (a failure, so rose). */
+.notice[data-kind="reread"] {
+  align-items: center;
+}
+
 .notice[data-kind="conflict"] .noticeLine,
-.notice[data-kind="json"] .noticeLine {
+.notice[data-kind="json"] .noticeLine,
+.notice[data-kind="reread"] .noticeLine {
   flex: 1 1 320px;
 }
 

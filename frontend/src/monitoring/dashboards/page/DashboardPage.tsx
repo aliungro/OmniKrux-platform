@@ -6,10 +6,11 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type 
 import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { isEditable, pressed } from "../../../features/chrome/shortcuts";
+import { focusMainFrom } from "../../focus";
 import type { MonitoringPageProps } from "../../MonitoringApp";
 import { Gone, keyboardIsFree } from "../../pages/Gone";
 import { MONITORING_HOME, type MonitoringView } from "../../shell/tabState";
-import { refreshAfterDashboardChange, useDashboard, useReadyMade, type DashboardOut } from "../api";
+import { refreshAfterDashboardChange, useDashboard, useReadyMade, type DashboardOut, type DashboardRequestError } from "../api";
 import { focusHeadingOnArrival, forgetArrival, openMade, peekArrival, useCopyToEdit } from "../create/arrival";
 import { CopyDashboardDialog } from "../create/CopyDashboardDialog";
 import { DeleteDashboardDialog } from "../create/DeleteDashboardDialog";
@@ -58,7 +59,34 @@ function ReadyNote({ dashboard }: { dashboard: DashboardOut }) {
   );
 }
 
-function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTab }: MonitoringPageProps & { view: DashboardViewState; dashboard: DashboardOut }) {
+/**
+ * A background re-read of the dashboard failed (window focus, after a save, after a refused save)
+ * while the page already shows it: the page and any edit session stay, and this says why in place.
+ */
+export interface RereadFailure {
+  error: DashboardRequestError;
+  retrying: boolean;
+  retry(): void;
+}
+
+/** Said above the tabs while the dashboard couldn't be read again; the page shows it as last read. */
+function RereadNotice({ failed, buttonRef }: { failed: RereadFailure; buttonRef: RefObject<HTMLButtonElement | null> }) {
+  return (
+    <div className={e.notice} data-kind="reread" role="alert">
+      <p className={e.noticeLine}>Couldn't read this dashboard again, so it shows as last read. {failure(failed.error, "try again")}</p>
+      <button ref={buttonRef} type="button" className={e.noticeAction} aria-disabled={failed.retrying || undefined}
+        onClick={() => { if (!failed.retrying) failed.retry(); }}>
+        {failed.retrying ? "Trying again…" : "Try again"}
+      </button>
+    </div>
+  );
+}
+
+function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, activateTab }: MonitoringPageProps & {
+  view: DashboardViewState;
+  dashboard: DashboardOut;
+  reread: RereadFailure | null;
+}) {
   const ready = dashboard.ready_made;
   const editor = useDashboardEditor(dashboard.id, tabId);
   const editing = editor.state.mode === "edit" ? editor.state : null;
@@ -277,6 +305,14 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
     if (wasFailed.current && !failed && (active === null || active === document.body)) title.current?.focus({ preventScroll: true });
     wasFailed.current = failed;
   }, [failed]);
+  // The same for the dashboard's own re-read: its Try again went with the notice.
+  const rereadRetry = useRef<HTMLButtonElement>(null);
+  const rereadFailed = reread !== null;
+  const wasRereadFailed = useRef(rereadFailed);
+  useLayoutEffect(() => {
+    if (wasRereadFailed.current && !rereadFailed && focusLost()) title.current?.focus({ preventScroll: true });
+    wasRereadFailed.current = rereadFailed;
+  }, [rereadFailed]);
 
   const openPage = (target: MonitoringView, e: MouseEvent<HTMLAnchorElement>) =>
     (e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push"));
@@ -289,6 +325,9 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   // Gone: its draft (whoever wrote it: the reader asked for it to go) and every edit session on
   // it, then the tab shows its owner, with the keyboard on the owner's heading.
   const deleted = () => {
+    // The page and the dialog's opener go away: the keyboard waits on the workspace until the
+    // owner's heading takes it, and stays there if that page can't be shown.
+    focusMainFrom(page.current);
     removeDraft(dashboard.id);
     for (const [t, x] of [...editSessions]) {
       if (x.mode !== "edit" || x.dashboardId !== dashboard.id) continue;
@@ -320,6 +359,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
         editControls={editing
           ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton} />
           : undefined} />
+      {reread && <RereadNotice failed={reread} buttonRef={rereadRetry} />}
       {editing && !editor.draftsWork && <DraftsOffNotice />}
       {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
       <p className={s.arrived} role="status">{editing ? arrivedWords : ""}</p>
@@ -371,7 +411,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
           </>
         )}
         {tab === "json" && (ready
-          ? <ReadyMadeJson spec={dashboard.spec} />
+          ? <ReadyMadeJson spec={dashboard.spec} onCopy={copyToEdit.busy ? undefined : edit} />
           : <JsonTab dashboard={dashboard} editing={editing} dispatch={editor.dispatch} onStartEditing={() => startEditing(null)}
               onSave={save} lastSaved={editor.lastSaved} onDiscard={discard} saving={editor.saving} flushRef={flushJson} />)}
         {tab === "versions" && !ready && (
@@ -382,23 +422,36 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   );
 }
 
-/** `PAGES.dashboard`: reads the dashboard, then shows it; a dashboard that is gone says so. */
+/** The dashboard couldn't be read at all: why, and Try again (with the keyboard, when it is free). */
+function PageFailure({ error, onRetry }: { error: DashboardRequestError; onRetry(): void }) {
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (keyboardIsFree()) button.current?.focus(); }, []);
+  return (
+    <section className={s.page}>
+      <p className={s.pageProblem} role="alert">{failure(error, "try again")}</p>
+      <button ref={button} type="button" className={s.retryPage} onClick={onRetry}>Try again</button>
+    </section>
+  );
+}
+
+/**
+ * `PAGES.dashboard`: reads the dashboard, then shows it; a dashboard that is gone says so. Once it
+ * is shown, a failed re-read never replaces the page (or its edit session): it is said in place.
+ */
 export default function DashboardPage(props: MonitoringPageProps) {
   const id = props.view.page === "dashboard" ? props.view.id : "";
   const dash = useDashboard(id);
+  const { refetch } = dash;
+  const retry = useCallback(() => { void refetch(); }, [refetch]);
   if (props.view.page !== "dashboard") return null;
   const view = props.view;
   if (dash.isPending) {
     return <section className={s.page} aria-busy="true"><p className={s.pageNote}>Loading the dashboard…</p></section>;
   }
-  if (dash.isError) {
-    if (dash.error.code === "not_found") return <Gone what="dashboard" onHome={() => props.nav.navigate(MONITORING_HOME, "push")} />;
-    return (
-      <section className={s.page}>
-        <p className={s.pageProblem} role="alert">{failure(dash.error, "try again")}</p>
-        <button type="button" className={s.retryPage} onClick={() => void dash.refetch()}>Try again</button>
-      </section>
-    );
+  if (dash.data === undefined) {
+    if (dash.error?.code === "not_found") return <Gone what="dashboard" onHome={() => props.nav.navigate(MONITORING_HOME, "push")} />;
+    return <PageFailure error={dash.error as DashboardRequestError} onRetry={retry} />;
   }
-  return <DashboardScreen key={view.id} {...props} view={view} dashboard={dash.data} />;
+  const reread = dash.isError ? { error: dash.error, retrying: dash.isFetching, retry } : null;
+  return <DashboardScreen key={view.id} {...props} view={view} dashboard={dash.data} reread={reread} />;
 }

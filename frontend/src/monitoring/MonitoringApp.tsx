@@ -16,7 +16,7 @@ import { heldLeave } from "./dashboards/drafts/leaveGuard";
 import { LeaveDialog } from "./dashboards/drafts/LeaveDialog";
 import { forgetSession, keepNow } from "./dashboards/drafts/useDraft";
 import { editSessions } from "./dashboards/editor/useDashboardEditor";
-import { openMade } from "./dashboards/create/arrival";
+import { openMade, settleHeadingFocus } from "./dashboards/create/arrival";
 import { currentOwner, type Owner } from "./dashboards/create/currentOwner";
 import { NewDashboardDialog } from "./dashboards/create/NewDashboardDialog";
 import { pageLetter } from "./dashboards/page/keys";
@@ -158,6 +158,8 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   const sources = useSources();
   const clusters = useClusters().data;
   const view = nav.view;
+  // A heading the page after a delete never took is dropped as the tab moves on.
+  useEffect(() => { settleHeadingFocus(view); }, [view]);
 
   const clusterNames = useMemo(() => Object.fromEntries((clusters ?? []).map((c) => [c.id, c.name])), [clusters]);
   const index = useMemo(

@@ -1,6 +1,7 @@
 // Delete dashboard…: asked first, with what goes with it (its saved versions, and a draft kept in
 // this browser). A save that landed since the question was asked refuses the delete (409): the
-// question says so and counts the versions again.
+// question says so and counts the versions again. Already deleted elsewhere (404): it is gone,
+// which is what was asked, so the page follows through as for a delete.
 import { useState, type RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
@@ -37,6 +38,10 @@ export function DeleteDashboardDialog({ dashboard, restoreFocusTo, onCancel, onD
       onDeleted();
     } catch (err) {
       const e = err as DashboardRequestError;
+      if (e.code === "not_found") {
+        onDeleted();
+        return;
+      }
       if (e.code === "version_conflict") {
         setError(STALE_DELETE);
         // Reviewed again: the versions as they are now, and the version a delete is checked against.

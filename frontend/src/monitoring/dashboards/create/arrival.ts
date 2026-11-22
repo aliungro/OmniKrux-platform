@@ -76,6 +76,15 @@ export function focusHeadingOnArrival(kind: OwnerKind, id: string): void {
   heading = `${kind}:${id}`;
 }
 
+/**
+ * The active tab shows `view`. Anything but the owner page waiting for the heading drops the wait:
+ * a page that never took it (it couldn't load) leaves nothing behind for a later visit.
+ */
+export function settleHeadingFocus(view: MonitoringView): void {
+  if (heading === null) return;
+  if ((view.page !== "project" && view.page !== "group") || heading !== `${view.page}:${view.id}`) heading = null;
+}
+
 /** Whether this owner page should take the keyboard to its heading; asked once. */
 export function takeHeadingFocus(kind: OwnerKind, id: string): boolean {
   if (heading !== `${kind}:${id}`) return false;

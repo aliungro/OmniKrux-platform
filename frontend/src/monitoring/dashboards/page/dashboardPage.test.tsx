@@ -387,6 +387,82 @@ describe("Dashboard page", () => {
     expect(api.requests.some((r) => r.url.includes("/versions"))).toBe(false);
   });
 
+  it("Copy to edit on a ready-made view's JSON tab copies it, like the header's", async () => {
+    const user = userEvent.setup();
+    const id = "ready:p1:pods";
+    const ready: ReadyMadeOut = { key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, notes: [] };
+    const api = installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { [id]: seedDashboard(id, SHOP, spec("Pod health", [panel("p-1", "Pods", "up")]), true) },
+      readyMade: { p1: [ready] },
+      queryAnswers: { up: ok },
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id }) });
+    await screen.findByRole("heading", { level: 1, name: "Pod health" });
+    await user.click(within(screen.getByRole("tablist", { name: "Dashboard views" })).getByRole("tab", { name: "JSON" }));
+    const copy = within(screen.getByRole("tabpanel")).getByRole("button", { name: "Copy to edit" });
+    expect(copy.getAttribute("aria-disabled")).toBeNull();
+    await user.click(copy);
+    await waitFor(() => expect(api.requests.filter((r) => r.method === "POST" && r.url === "/api/monitoring/dashboards/copy")).toHaveLength(1));
+    expect(api.requests.find((r) => r.url === "/api/monitoring/dashboards/copy")?.body).toEqual({ from_id: id, owner_kind: "project", owner_id: "p1" });
+    expect(await screen.findByText('Copied "Pod health". Changes go to your copy.')).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    notBody();
+  });
+
+  it("a re-read that fails on focus keeps the page and edit mode, and says so in place", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    await screen.findByText("chart 1");
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    const tile = document.activeElement;
+    let broken = true;
+    intercept((url) => (broken && url === "/api/monitoring/dashboards/d1"
+      ? Promise.resolve(new Response(JSON.stringify({ detail: { code: "unavailable", message: "The console's database didn't answer. Try again." } }), { status: 503 }))
+      : null));
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    const notice = await screen.findByRole("alert");
+    expect(notice.textContent).toBe("Couldn't read this dashboard again, so it shows as last read. The console's database didn't answer. Try again.Try again");
+    // The page, its edit session and the keyboard stay where they were.
+    expect(screen.getByText("Editing")).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "API latency" })).toBeTruthy();
+    expect(document.activeElement).toBe(tile);
+    focusManager.setFocused(undefined);
+    // Try again reads it; the notice and its button go, and the keyboard doesn't fall to <body>.
+    broken = false;
+    const again = within(notice).getByRole("button", { name: "Try again" });
+    again.focus();
+    await user.click(again);
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("heading", { level: 1, name: "API latency" }));
+    expect(screen.getByText("Editing")).toBeTruthy();
+  });
+
+  it("a dashboard that can't be read at all offers Try again with the keyboard", async () => {
+    const user = userEvent.setup();
+    shop();
+    let broken = true;
+    intercept((url) => (broken && url === "/api/monitoring/dashboards/d1"
+      ? Promise.resolve(new Response(JSON.stringify({ detail: { code: "unavailable", message: "The console's database didn't answer. Try again." } }), { status: 503 }))
+      : null));
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect((await screen.findByRole("alert")).textContent).toBe("The console's database didn't answer. Try again.");
+    const again = screen.getByRole("button", { name: "Try again" });
+    await waitFor(() => expect(document.activeElement).toBe(again));
+    broken = false;
+    await user.click(again);
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+  });
+
   it("a dashboard that no longer exists offers Go to Home", async () => {
     shop();
     renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "gone" }) });
