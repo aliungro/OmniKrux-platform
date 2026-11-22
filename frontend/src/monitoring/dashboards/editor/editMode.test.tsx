@@ -117,9 +117,13 @@ describe("Edit mode", () => {
     expect(document.activeElement).toBe(tile("Requests"));
   });
 
-  it("a adds a panel and focuses Query A", async () => {
+  it("a opens Add panel; Empty panel adds one and focuses Query A", async () => {
     const { user } = await editing();
     await user.keyboard("a");
+    const search = await screen.findByRole("combobox", { name: "What do you want to see" });
+    await waitFor(() => expect(document.activeElement).toBe(search));
+    await user.keyboard("{Control>}{End}{/Control}{Enter}");
+    expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull();
     // The free spot for 12 by 8: a new row under the two panels.
     expect(tile("New panel").getAttribute("aria-label")).toBe("New panel, 12 by 8, column 1, row 9");
     const field = await screen.findByRole("textbox", { name: "Query A" });
@@ -130,9 +134,11 @@ describe("Edit mode", () => {
     expect(document.activeElement).toBe(tile("New panel"));
   });
 
-  it("clicking the Add panel tile adds one there", async () => {
+  it("clicking the Add panel tile opens Add panel; Empty panel adds one there", async () => {
     const { user } = await editing();
     await user.click(screen.getByRole("button", { name: "Add panel" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add panel" });
+    await user.click(within(dialog).getByRole("option", { name: "Empty panel" }));
     expect(tile("New panel")).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Query A" })));
   });
@@ -286,6 +292,8 @@ describe("Edit mode", () => {
   it("a save the server refuses as invalid shows its problems with Show in JSON", async () => {
     const { user, api } = await editing();
     await user.keyboard("a");
+    await screen.findByRole("combobox", { name: "What do you want to see" });
+    await user.keyboard("{Control>}{End}{/Control}{Enter}");
     await screen.findByRole("textbox", { name: "Query A" });
     await user.click(screen.getByRole("button", { name: "Save dashboard" }));
     const problems = await screen.findByRole("alert");

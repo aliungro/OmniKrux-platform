@@ -130,13 +130,34 @@ describe("previews", () => {
   });
 });
 
+describe("previews (carried from review)", () => {
+  it("with no owner yet nothing runs and nothing says Loading", async () => {
+    const { result } = renderHook(() => usePreviews([cand("a")], { ...ctx, owner: null }));
+    expect(result.current.a).toBeUndefined();
+    await flush();
+    expect(runBatch).not.toHaveBeenCalled();
+    expect(result.current.a).toBeUndefined();
+  });
+
+  it("an answer that can't be read becomes the failure, never a stuck Loading", async () => {
+    const broken = response(1);
+    runBatch.mockResolvedValue([{ ...broken, response: { ...broken.response!, series: null as unknown as [] } }]);
+    const { result } = renderHook(() => usePreviews([cand("a")], ctx));
+    await flush();
+    expect(result.current.a).toEqual({ status: "failed", message: "The preview didn't answer. Try again." });
+  });
+});
+
 describe("preview card", () => {
   const card = (preview: Parameters<typeof PreviewCard>[0]["preview"], more = {}) =>
     render(<PreviewCard candidate={cand("a")} preview={preview} active={false} onPick={() => {}} {...more} />);
 
   it("says loading, empty, active and added", () => {
-    card({ status: "loading" });
+    const { container } = card({ status: "loading" });
     expect(screen.getByText("Loading…")).toBeTruthy();
+    // Phrasing content only inside the button, and no live region per card.
+    expect(container.querySelector("button div, button p")).toBeNull();
+    expect(container.querySelector('[role="status"]')).toBeNull();
     cleanup();
     card(
       { status: "done", data: { state: "empty", series: [], logs: [], problems: [], summary: { series: 0, points: 0, tookMs: 0 }, editId: 0 } },

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { panel, spec } from "../../test/dashboardSeeds";
-import { dashboardJson, type DashboardSpec } from "../schema";
-import { changedPanelIds, editorReducer, hasUnsavedWork, isDirty, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
+import type { NewPanel } from "../layout";
+import { dashboardJson, newPanel, type DashboardSpec } from "../schema";
+import { changedPanelIds, editorReducer, hasUnsavedWork, isDirty, isDraftEdit, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
 
 const doc = (): DashboardSpec => spec("API latency", [
   panel("p-1", "Requests", "up", { x: 0, y: 0, w: 12, h: 8 }),
@@ -191,5 +192,41 @@ describe("editorReducer", () => {
     const a = doc();
     const b = { ...a, panels: [a.panels[0], { ...a.panels[1], title: "x" }, panel("p-3", "New", "up")] };
     expect(changedPanelIds(a, b)).toEqual(["p-2", "p-3"]);
+  });
+});
+
+describe("insertPanel", () => {
+  const small = () => start(spec("Small", [panel("p-1", "Requests", "up", { x: 0, y: 0, w: 12, h: 8 })]));
+  const fresh = (id: string): NewPanel => {
+    const { layout: _layout, ...rest } = newPanel("timeseries", id, { x: 0, y: 0, w: 12, h: 8 });
+    void _layout;
+    return { ...rest, title: "Errors by route" };
+  };
+
+  it("insertPanel appends at the free spot and counts the change", () => {
+    const s0 = small();
+    const s1 = edit(run(s0, { type: "insertPanel", panel: fresh("p-2"), select: false }));
+    expect(s1.draft.panels.map((p) => p.id)).toEqual(["p-1", "p-2"]);
+    expect(s1.draft.panels[1]).toMatchObject({ id: "p-2", title: "Errors by route", layout: { x: 12, y: 0, w: 12, h: 8 } });
+    expect(s1.changes["p-2"]).toBe(1);
+    expect(s1.changes["p-1"]).toBeUndefined();
+    expect(s1.draft.panels[0]).toBe(s0.draft.panels[0]);
+    expect(s1.selected).toBeNull();
+    expect(isDirty(s1)).toBe(true);
+  });
+
+  it("insertPanel with select selects it", () => {
+    const s1 = edit(run(small(), { type: "insertPanel", panel: fresh("p-2"), select: true }));
+    expect(s1.selected).toBe("p-2");
+    expect(s1.sideTab).toBe("query");
+  });
+
+  it("insertPanel is refused while the JSON text doesn't apply", () => {
+    const action: EditorAction = { type: "insertPanel", panel: fresh("p-2"), select: false };
+    expect(isDraftEdit(action)).toBe(true);
+    const broken = edit(run(small(), { type: "setJson", text: "{ nope", ownerKind: "project" }));
+    const after = run(broken, action);
+    expect(after).toBe(broken);
+    expect(edit(after).jsonText).toBe("{ nope");
   });
 });

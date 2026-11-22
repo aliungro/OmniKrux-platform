@@ -48,7 +48,11 @@ function ownerKey(owner: DashboardOwner | null): string {
     : `g:${owner.group.id}:${owner.members.map((m) => `${m.id}/${m.links.map((l) => l.source_id).join(",")}`).join(",")}`;
 }
 
-/** The previews of the first `MAX_PREVIEWS` candidates, by candidate key. */
+/**
+ * The previews of the first `MAX_PREVIEWS` candidates, by candidate key. While the owner isn't
+ * known yet nothing runs and no candidate has a preview (nothing says Loading… for a run that
+ * hasn't started).
+ */
 export function usePreviews(candidates: Candidate[], ctx: PreviewContext): Record<string, PreviewState> {
   const shown = candidates.slice(0, MAX_PREVIEWS);
   const key = JSON.stringify([
@@ -85,10 +89,15 @@ export function usePreviews(candidates: Candidate[], ctx: PreviewContext): Recor
             map[cand.key] = { status: "failed", message: results.message || NO_ANSWER };
             continue;
           }
-          const data = mergePanelResults(panel, run, results.slice(from, from + run.requests.length), owner.kind);
-          map[cand.key] = data.state === "error" || data.state === "unreachable" || data.state === "noQuery"
-            ? { status: "failed", message: data.problems[0] ?? NO_ANSWER }
-            : { status: "done", data };
+          // An answer that can't be read fails this preview only; it never stays Loading.
+          try {
+            const data = mergePanelResults(panel, run, results.slice(from, from + run.requests.length), owner.kind);
+            map[cand.key] = data.state === "error" || data.state === "unreachable" || data.state === "noQuery"
+              ? { status: "failed", message: data.problems[0] ?? NO_ANSWER }
+              : { status: "done", data };
+          } catch {
+            map[cand.key] = { status: "failed", message: NO_ANSWER };
+          }
         }
         setAnswered({ key, map });
       };
@@ -106,6 +115,7 @@ export function usePreviews(candidates: Candidate[], ctx: PreviewContext): Recor
 
   const current = answered.key === key ? answered.map : {};
   const out: Record<string, PreviewState> = {};
+  if (ctx.owner === null) return out;
   for (const c of shown) out[c.key] = current[c.key] ?? LOADING;
   return out;
 }

@@ -52,6 +52,20 @@ export interface GridEditing {
   aside: ReactNode;
   /** The polite live region that says what a move, resize or removal did. */
   live: ReactNode;
+  /** M2's Empty panel: a time series in the first free 12 by 8 spot, settings open on Query A. */
+  addEmpty(): void;
+  /** Says `text` in the live region. */
+  announce(text: string): void;
+  /** Puts the keyboard on a panel's tile (it becomes the one in the Tab order); the tile, if found. */
+  focusPanel(id: string): HTMLElement | null;
+}
+
+export interface GridOptions {
+  /**
+   * "+ Add panel" and `a` call this (with what had the keyboard, or the tile) instead of adding
+   * an empty panel themselves: the page opens its search.
+   */
+  onAddPanel?(opener: HTMLElement | null): void;
 }
 
 const GAP = 10;
@@ -101,10 +115,14 @@ const byReading = (a: PanelSpec, b: PanelSpec) => a.layout.y - b.layout.y || a.l
 const panelIn = (st: EditingState, id: string | null) => (id === null ? undefined : st.draft.panels.find((p) => p.id === id));
 
 /** Edit mode for `DashboardGrid`; null outside edit mode. `gridRef` is the grid element (its width sets the cell size). */
-export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HTMLDivElement | null>, owner: DashboardOwner | null = null): GridEditing | null {
+export function useEditableGrid(
+  editor: GridEditor | null, gridRef: RefObject<HTMLDivElement | null>, owner: DashboardOwner | null = null, options: GridOptions = {},
+): GridEditing | null {
   const editing = editor !== null;
   const latest = useRef(editor);
   latest.current = editor;
+  const onAddPanel = useRef(options.onAddPanel);
+  onAddPanel.current = options.onAddPanel;
   const [current, setCurrent] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>({ open: false, focus: "tab", seq: 0 });
   const settingsOpen = useRef(settings.open);
@@ -126,15 +144,25 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     if (latest.current?.state.selected === id) liveChanged();
   }, []);
 
-  const focusTile = useCallback((id: string) => {
+  const findTile = useCallback((id: string) => {
     const root = gridRef.current;
-    if (!root) return false;
-    const el = id === "add"
+    if (!root) return null;
+    return (id === "add"
       ? root.querySelector<HTMLElement>("[data-add-tile]")
-      : Array.from(root.querySelectorAll<HTMLElement>("[data-tile-id]")).find((t) => t.dataset.tileId === id);
+      : Array.from(root.querySelectorAll<HTMLElement>("[data-tile-id]")).find((t) => t.dataset.tileId === id)) ?? null;
+  }, [gridRef]);
+  const focusTile = useCallback((id: string) => {
+    const el = findTile(id);
     el?.focus({ preventScroll: false });
     return !!el;
-  }, [gridRef]);
+  }, [findTile]);
+  const focusPanel = useCallback((id: string) => {
+    setCurrent(id);
+    const el = findTile(id);
+    el?.focus({ preventScroll: false });
+    return el;
+  }, [findTile]);
+  const announce = useCallback((text: string) => setMessage(text), []);
 
   /**
    * While the JSON tab holds text that doesn't apply, edits here are refused (they would drop it)
@@ -177,6 +205,13 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     const next = act({ type: "addPanel", panelType: "timeseries", at });
     if (next?.selected) openSettings(next.selected, "query");
   }, [act, openSettings]);
+
+  /** The Add tile and `a`: the page's search when it has one, else an empty panel. */
+  const openAdd = useCallback((opener: HTMLElement | null) => {
+    const open = onAddPanel.current;
+    if (open) open(opener);
+    else add();
+  }, [add]);
 
   const remove = (panel: PanelSpec, panels: PanelSpec[]) => {
     if (jsonBlocks({ type: "removePanel", id: panel.id })) return;
@@ -271,11 +306,14 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!pageLetter(e) || !pressed("panelAdd", e) || drag.current) return;
       e.preventDefault();
-      add();
+      // Esc in the search goes back to what had the keyboard: a tile, or else the Add tile.
+      const had = document.activeElement;
+      const opener = had instanceof HTMLElement && had !== document.body && had.isConnected ? had : findTile("add");
+      openAdd(opener);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [editing, add]);
+  }, [editing, openAdd, findTile]);
 
   if (!editor) return null;
   const { state } = editor;
@@ -422,7 +460,7 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
     layer: (
       <>
         {preview && <div data-testid="drop-target" className={s.target} style={cellStyle(preview.target)} aria-hidden="true" />}
-        <AddPanelTile at={addAt} size={ADD_SIZE} onAdd={add} />
+        <AddPanelTile at={addAt} size={ADD_SIZE} onAdd={openAdd} />
       </>
     ),
     aside: settings.open && selected
@@ -432,5 +470,8 @@ export function useEditableGrid(editor: GridEditor | null, gridRef: RefObject<HT
       )
       : null,
     live: <p className={s.live} role="status" aria-live="polite">{message}</p>,
+    addEmpty: add,
+    announce,
+    focusPanel,
   };
 }

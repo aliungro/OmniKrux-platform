@@ -3,7 +3,7 @@
 // changes the draft keeps unchanged panel objects identical, so only the panels it touched render
 // again. Loading a document never compacts; a user's move, resize, add or remove does (F34).
 
-import { compact, freeSpot, grow, nudge, placePanel, type Dir } from "../layout";
+import { appendPanel, compact, freeSpot, grow, nudge, placePanel, type Dir, type NewPanel } from "../layout";
 import {
   DEFAULT_SIZES, newPanel, nextPanelId, parseDashboardJson,
   type DashboardSpec, type Layout, type OwnerKind, type PanelSpec, type PanelType, type Problem,
@@ -37,6 +37,8 @@ export type EditorAction =
   | { type: "resume"; dashboardId: string; baseVersion: number; base: DashboardSpec; draft: DashboardSpec; jsonText: string | null; ownerKind?: OwnerKind; writer?: string }
   | { type: "updatePanel"; id: string; update: (p: PanelSpec) => PanelSpec }
   | { type: "addPanel"; panelType: PanelType; at?: { x: number; y: number } }
+  /** A ready-made panel (Add panel's search, the suggestions) at its layout, or the first free spot. */
+  | { type: "insertPanel"; panel: NewPanel; select: boolean }
   | { type: "removePanel"; id: string }
   | { type: "place"; id: string; to: Layout }
   | { type: "nudge" | "grow"; id: string; dir: Dir }
@@ -54,7 +56,7 @@ export const VIEW: EditorState = { mode: "view" };
 /** What the grid and the settings say when an edit is refused because the JSON text doesn't apply. */
 export const JSON_FIRST = "Fix the JSON first, or discard it.";
 
-const DRAFT_EDITS: ReadonlySet<EditorAction["type"]> = new Set(["updatePanel", "addPanel", "removePanel", "place", "nudge", "grow", "setDashboard"]);
+const DRAFT_EDITS: ReadonlySet<EditorAction["type"]> = new Set(["updatePanel", "addPanel", "insertPanel", "removePanel", "place", "nudge", "grow", "setDashboard"]);
 /**
  * Edits made outside the JSON tab. While the JSON tab holds text that doesn't apply, they are
  * refused: applying one would replace that text with the draft and drop it silently.
@@ -189,6 +191,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const added = newPanel(action.panelType, id, { ...spot, ...size });
       const placed = placePanel([...panels, added], id, added.layout);
       return withPanels(state, placed, [id], { selected: id, sideTab: "query" });
+    }
+    case "insertPanel": {
+      if (panels.some((p) => p.id === action.panel.id)) return state;
+      const select = action.select ? { selected: action.panel.id, sideTab: "query" as const } : {};
+      return withDraft(state, appendPanel(state.draft, action.panel), [action.panel.id], select);
     }
     case "removePanel": {
       if (!panels.some((p) => p.id === action.id)) return state;

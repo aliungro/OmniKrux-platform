@@ -109,9 +109,9 @@ function Bars({ series, unit }: { series: ChartSeries[]; unit: Unit }) {
   const colors = seriesColors(series);
   const top = Math.max(...rows.map((r) => r.v ?? 0), 0) || 1;
   return (
-    <div className={styles.miniBars}>
+    <span className={styles.miniBars}>
       {rows.map(({ s, v }) => (
-        <div key={s.key} className={styles.miniBarRow} data-bar="">
+        <span key={s.key} className={styles.miniBarRow} data-bar="">
           <span className={styles.miniBarName}>{s.name}</span>
           <span className={styles.miniBarTrack}>
             <span
@@ -120,9 +120,9 @@ function Bars({ series, unit }: { series: ChartSeries[]; unit: Unit }) {
             />
           </span>
           <span className={styles.miniBarValue}>{formatValue(v, unit, null)}</span>
-        </div>
+        </span>
       ))}
-    </div>
+    </span>
   );
 }
 
@@ -130,13 +130,13 @@ export function MiniChart({ data, panelType, unit, animate }: MiniChartProps) {
   let body;
   if (panelType === "logs") {
     body = (
-      <div className={styles.miniLogs}>
+      <span className={styles.miniLogs}>
         {data.logs.slice(0, MINI_LOG_LINES).map((l) => (
-          <div key={l.key} className={styles.miniLog} data-log="">
+          <span key={l.key} className={styles.miniLog} data-log="">
             <span className={styles.miniLogTime}>{logTime(l.ts)}</span> {l.line}
-          </div>
+          </span>
         ))}
-      </div>
+      </span>
     );
   } else if (panelType === "stat" || panelType === "gauge") {
     body = <span className={styles.miniValue}>{formatValue(lastValue(data.series[0]), unit, null)}</span>;
@@ -145,5 +145,5 @@ export function MiniChart({ data, panelType, unit, animate }: MiniChartProps) {
   } else {
     body = <Sparkline series={data.series} animate={animate} />;
   }
-  return <div className={styles.miniBox} aria-hidden="true">{body}</div>;
+  return <span className={styles.miniBox} aria-hidden="true">{body}</span>;
 }

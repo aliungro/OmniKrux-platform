@@ -49,9 +49,13 @@ describe("flyIn", () => {
     const to = tile();
     const done = flyIn(rect(0, 0, 100, 50), to, false);
     expect(document.body.children).toHaveLength(2);
+    // The tile is never hidden from the keyboard: it stays focusable during the flight.
+    expect(to.style.visibility).toBe("");
     await done;
     expect(document.body.children).toHaveLength(1);
-    const [ghost, land] = calls;
+    expect(to.getAttribute("style") ?? "").not.toContain("visibility");
+    const ghost = calls.find((c) => c.el !== to)!;
+    const land = calls.filter((c) => c.el === to).at(-1)!;
     expect(ghost.options.duration).toBe(FLY_MS);
     expect(JSON.stringify(ghost.keyframes)).toContain("translate");
     expect(land.el).toBe(to);
@@ -60,5 +64,18 @@ describe("flyIn", () => {
     expect(to.hasAttribute("data-landing")).toBe(true);
     vi.advanceTimersByTime(LAND_MS);
     expect(to.hasAttribute("data-landing")).toBe(false);
+  });
+
+  it("keeps the tile focusable while the ghost flies", async () => {
+    const to = tile();
+    to.tabIndex = 0;
+    const done = flyIn(rect(0, 0, 100, 50), to, false);
+    to.focus();
+    expect(document.activeElement).toBe(to);
+    // While it flies, the tile is see-through (opacity), not hidden.
+    const hold = calls.find((c) => c.el === to)!;
+    expect(JSON.stringify(hold.keyframes)).toContain('"opacity":0');
+    await done;
+    expect(document.activeElement).toBe(to);
   });
 });

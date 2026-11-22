@@ -1,6 +1,8 @@
 // The motion of adding a panel from a preview: a ghost of the card flies to the new tile, which
 // then lands. Both are `element.animate` on transform and opacity only. Nothing is created under
-// reduced motion. `data-landing` is a marker (tests, scripts); no stylesheet selects it.
+// reduced motion. `data-landing` is a marker (tests, scripts); no stylesheet selects it. While the
+// ghost flies, the tile waits see-through (opacity, never `visibility`), so it can hold the
+// keyboard from the moment it is added.
 
 import { useCallback, useRef } from "react";
 import { usePrefersReducedMotion } from "../dashboards/motion";
@@ -30,8 +32,7 @@ export async function flyIn(from: DOMRect, to: HTMLElement, reduced: boolean): P
     left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px`,
   });
   document.body.appendChild(ghost);
-  const previous = to.style.visibility;
-  to.style.visibility = "hidden";
+  const hold = to.animate([{ opacity: 0 }, { opacity: 0 }], { duration: FLY_MS, fill: "forwards" });
   try {
     const dx = target.left - from.left;
     const dy = target.top - from.top;
@@ -47,7 +48,7 @@ export async function flyIn(from: DOMRect, to: HTMLElement, reduced: boolean): P
     await finished(flight, FLY_MS);
   } finally {
     ghost.remove();
-    to.style.visibility = previous;
+    hold.cancel?.();
   }
   to.setAttribute("data-landing", "");
   to.animate(

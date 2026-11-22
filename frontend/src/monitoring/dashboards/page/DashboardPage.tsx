@@ -2,10 +2,13 @@
 // (the document, edited live) and, for a saved dashboard, the Versions tab. Edit turns the grid
 // into tiles and the header into Discard and Save dashboard (edit mode, kept per workspace tab).
 // Time, variables, auto-refresh and the view tab live in the tab's view (replace navigations).
+// "+ Add panel" (and `a`) open Add panel's search; what it adds goes into the edit draft.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { isEditable, pressed } from "../../../features/chrome/shortcuts";
+import { AddPanelSearch } from "../../build/AddPanelSearch";
+import { useFlyIn } from "../../build/flyIn";
 import { focusMainFrom } from "../../focus";
 import type { MonitoringPageProps } from "../../MonitoringApp";
 import { Gone, keyboardIsFree } from "../../pages/Gone";
@@ -15,10 +18,11 @@ import { focusHeadingOnArrival, forgetArrival, openMade, peekArrival, useCopyToE
 import { CopyDashboardDialog } from "../create/CopyDashboardDialog";
 import { DeleteDashboardDialog } from "../create/DeleteDashboardDialog";
 import type { VarValue } from "../interpolate";
+import type { NewPanel } from "../layout";
 import type { RefreshSpec, TimeSpec } from "../schema";
-import { DashboardGrid } from "../grid/DashboardGrid";
+import { DashboardGrid, type GridControls } from "../grid/DashboardGrid";
 import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/EditBar";
-import { hasUnsavedWork, type EditorState } from "../editor/editorState";
+import { hasUnsavedWork, isDraftEdit, JSON_FIRST, type EditorAction, type EditorState } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
 import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
 import { DraftBanner, DraftsOffNotice, EditedElsewhere } from "../drafts/DraftBanner";
@@ -223,6 +227,57 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const restoreBlocked = () => editor.state.mode === "edit" || readDraft(dashboard.id) !== null
     || [...editSessions.values()].some((x) => x.mode === "edit" && x.dashboardId === dashboard.id);
 
+  // Add panel's search. Esc goes back to what opened it; an add puts the keyboard on the new tile
+  // once the search has gone (an effect, so the dialog's own focus return comes first).
+  const grid = useRef<GridControls | null>(null);
+  const searchOpener = useRef<HTMLElement | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  const [added, setAdded] = useState<{ kind: "panel"; id: string; title: string } | { kind: "empty" } | null>(null);
+  const { launch, tileRef } = useFlyIn();
+  const openSearch = useCallback((opener: HTMLElement | null) => {
+    searchOpener.current = opener;
+    setRefused(null);
+    setSearching(true);
+  }, []);
+  /** While the JSON text doesn't apply, nothing is added (it would drop that text): the search stays open and says why. */
+  const refusedByJson = (action: EditorAction) => {
+    const st = editor.state;
+    if (st.mode !== "edit" || st.jsonText === null || !isDraftEdit(action)) return false;
+    grid.current?.announce(JSON_FIRST);
+    setRefused(JSON_FIRST);
+    return true;
+  };
+  const addFromSearch = (panel: NewPanel, from: DOMRect) => {
+    const action: EditorAction = { type: "insertPanel", panel, select: false };
+    if (editor.state.mode !== "edit" || refusedByJson(action)) return;
+    editor.dispatch(action);
+    launch(panel.id, from);
+    searchOpener.current = null;
+    setSearching(false);
+    setAdded({ kind: "panel", id: panel.id, title: panel.title.trim() || "Untitled panel" });
+  };
+  const emptyFromSearch = () => {
+    if (editor.state.mode !== "edit" || refusedByJson({ type: "addPanel", panelType: "timeseries" })) return;
+    searchOpener.current = null;
+    setSearching(false);
+    setAdded({ kind: "empty" });
+  };
+  useEffect(() => {
+    if (!added) return;
+    setAdded(null);
+    const g = grid.current;
+    if (!g) return;
+    // Empty panel is M2's: settings open on Query with the keyboard in Query A.
+    if (added.kind === "empty") {
+      g.addEmpty();
+      return;
+    }
+    const tile = g.focusPanel(added.id);
+    if (tile) tileRef(added.id)(tile);
+    g.announce(`Added "${added.title}". Enter opens its settings.`);
+  }, [added, tileRef]);
+
   // Edit mode ended (saved or discarded): the keyboard goes to Edit, never to <body>.
   const isEditing = editing !== null;
   const wasEditing = useRef(isEditing);
@@ -231,6 +286,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   useLayoutEffect(() => {
     if (wasEditing.current && !isEditing) {
       setAskDiscard(null);
+      setSearching(false);
       editButton.current?.focus();
     } else if (!wasEditing.current && isEditing && focusLost()) {
       saveButton.current?.focus();
@@ -376,6 +432,11 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
       {asking === "delete" && !ready && (
         <DeleteDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)} onDeleted={deleted} />
       )}
+      {searching && editing && (
+        <AddPanelSearch owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name} ownerKind={dashboard.owner_kind}
+          vars={ctx.vars} range={ctx.range} draft={editing.draft} refused={refused}
+          onAdd={addFromSearch} onEmpty={emptyFromSearch} onClose={() => setSearching(false)} restoreFocusTo={searchOpener} />
+      )}
       {askDiscard && editing && (
         <DiscardDialog title={editing.base.title || dashboard.title} restoreFocusTo={askDiscard}
           onCancel={() => setAskDiscard(null)} onDiscard={() => editor.discard()} />
@@ -407,7 +468,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
               vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} blocked={ctx.blocked} refreshSeq={ctx.refreshSeq} status={ctx.status}
               editor={editing ? {
                 state: editing, dispatch: editor.dispatch, ownerKind: dashboard.owner_kind, onLeave: () => saveButton.current?.focus(),
-              } : undefined} />
+              } : undefined}
+              onAddPanel={editing ? openSearch : undefined} controls={grid} />
           </>
         )}
         {tab === "json" && (ready

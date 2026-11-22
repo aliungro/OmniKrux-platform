@@ -1,0 +1,237 @@
+/* Add panel (D3): the search bar, the result cards in three columns and Empty panel last.
+   Territories tokens only; translucency with color-mix. */
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(720px, 100%);
+  max-height: calc(100vh - 32px);
+  padding: 14px;
+}
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The one strong thing here: the field, with a soft violet halo. */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--focus) 45%, transparent);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 8%, transparent);
+}
+
+.bar:focus-within {
+  border-color: var(--focus);
+}
+
+.plus {
+  flex: none;
+  color: var(--focus);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.input::placeholder {
+  color: var(--ink-3);
+}
+
+.hint {
+  flex: none;
+  color: var(--ink-3);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.refused {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.heading {
+  margin: 2px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.line {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.muted {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.none {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.action,
+.refresh {
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surf-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.action:hover,
+.refresh:hover {
+  border-color: var(--ink-3);
+}
+
+.action[aria-disabled="true"],
+.refresh[aria-disabled="true"] {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.results {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+/* Empty panel: dashed like the grid's Add tile, the same height as a card. */
+.empty {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-height: 112px;
+  padding: 10px 12px;
+  border: 1.5px dashed var(--rule);
+  border-radius: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.empty:hover {
+  border-color: var(--ink-3);
+  background: color-mix(in srgb, var(--surf-2) 40%, transparent);
+}
+
+.empty[data-active="true"] {
+  border-color: var(--focus);
+  background: color-mix(in srgb, var(--focus) 6%, transparent);
+}
+
+.emptyMark {
+  color: var(--focus);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.emptyTitle {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.emptyLine {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.emptyKey {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: var(--focus);
+  font-size: 11px;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+
+.age {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.refresh {
+  margin-left: auto;
+}
+
+.refreshError {
+  flex-basis: 100%;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+@media (max-width: 719px) {
+  .dialog {
+    width: 100%;
+  }
+
+  .results {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hint {
+    display: none;
+  }
+}
