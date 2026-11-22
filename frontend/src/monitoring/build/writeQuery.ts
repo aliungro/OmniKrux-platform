@@ -6,6 +6,7 @@ import type { OwnerStreamLabel } from "../catalog/merge";
 import type { BrowseMetric } from "../catalog/metrics";
 import { escapeQueryString } from "../dashboards/interpolate";
 import type { Unit } from "../dashboards/schema";
+import { quickCheck } from "./promql";
 
 export const SPLIT_LABELS = ["route", "handler", "path", "endpoint", "uri", "method"];
 export const STATUS_LABELS = ["status", "code", "status_code", "http_status", "response_code"];
@@ -13,11 +14,22 @@ export const STREAM_LABELS = ["namespace", "app", "service_name", "job", "contai
 export const LEVEL_LABELS = ["level", "detected_level", "severity", "lvl"];
 
 export type Only = Record<string, string>;
+/**
+ * An extra matcher. For `=` and `!=` the value is plain text. For `=~` and `!~` it is a raw regex
+ * (it is only string-escaped here), so a catalog value must go through M2's `escapeRegex` first.
+ */
 export type Extra = { label: string; op: "=" | "!=" | "=~" | "!~"; value: string };
 
 const METRIC_NAME = /^[A-Za-z_:][A-Za-z0-9_:]*$/;
 const LABEL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const OPS = new Set(["=", "!=", "=~", "!~"]);
+
+// Words PromQL reads as syntax, not as a metric name: such a name is written as {__name__="..."}.
+const RESERVED = new Set([
+  "and", "or", "unless", "by", "without", "on", "ignoring", "group_left", "group_right", "offset", "bool",
+  "atan2", "inf", "nan", "sum", "min", "max", "avg", "group", "stddev", "stdvar", "count", "count_values",
+  "bottomk", "topk", "quantile", "limitk", "limit_ratio",
+]);
 
 export class UnwritableQuery extends Error {}
 
@@ -43,15 +55,19 @@ function matchers(only: Only, extra: Extra[]): string {
   return all.map((m) => `${m.label}${m.op}"${escapeQueryString(m.value)}"`).join(",");
 }
 
-/** `metric` or `metric{a="x",b="y"}`, matchers sorted by label. */
+/** `metric` or `metric{a="x",b="y"}`, matchers sorted by label; a reserved word is `{__name__="..."}`. */
 export function selectorText(metric: string, only: Only, extra: Extra[] = []): string {
   const body = matchers(only, extra);
-  return body ? `${metricName(metric)}{${body}}` : metricName(metric);
+  if (RESERVED.has(metricName(metric).toLowerCase())) {
+    return `{__name__="${metric}"${body ? `,${body}` : ""}}`;
+  }
+  return body ? `${metric}{${body}}` : metric;
 }
 
 const sumBy = (labels: string[]) => (labels.length ? `sum by (${labels.join(", ")}) ` : "sum");
 const rated = (sel: string) => `rate(${sel}[$__rate_interval])`;
 
+/** `extra` matchers join `only` ("=" ones), sorted by label; see `Extra` for regex values. */
 export function writeMetricQuery(
   m: BrowseMetric,
   split: string | null,
@@ -72,17 +88,25 @@ export function writeMetricQuery(
   return split === null ? sel() : `sum by (${by[0]}) (${sel()})`;
 }
 
+/** A log matcher never has an empty value (it would match everything or be refused by Loki). */
 export function writeLogQuery(only: Only, streams: OwnerStreamLabel[]): string {
-  if (Object.keys(only).length > 0) return `{${matchers(only, [])}}`;
-  const names = streams.map((s) => s.name);
+  if (Object.keys(only).length > 0) {
+    const kept = Object.fromEntries(Object.entries(only).filter(([, v]) => v !== ""));
+    if (Object.keys(kept).length === 0) throw new UnwritableQuery("A log query needs a label value to select by.");
+    return `{${matchers(kept, [])}}`;
+  }
+  const names = streams.map((s) => s.name).filter((n) => LABEL_NAME.test(n));
   const label = STREAM_LABELS.find((l) => names.includes(l)) ?? names[0];
   if (label === undefined) throw new UnwritableQuery("There is no label to select log streams by.");
   return `{${matchers({}, [{ label, op: "=~", value: ".+" }])}}`;
 }
 
+/** Refuses a log query that doesn't balance; a trailing `#` comment ends on its own line. */
 export function writeVolumeQuery(logQuery: string, split: string | null): string {
   const by = split === null ? [] : [labelName(split)];
-  return `${sumBy(by)}(count_over_time(${logQuery}[$__interval]))`;
+  if (quickCheck(logQuery) !== null) throw new UnwritableQuery("That log query can't be written into a query.");
+  const lineEnd = logQuery.includes("#") ? "\n" : "";
+  return `${sumBy(by)}(count_over_time(${logQuery}${lineEnd}[$__interval]))`;
 }
 
 export function guessUnit(m: BrowseMetric): Unit {

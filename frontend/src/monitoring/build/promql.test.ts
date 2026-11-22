@@ -12,6 +12,8 @@ describe("promql", () => {
     ['sum by (route) (http_requests_total{status="500"})', 'sum by (route) (rate(http_requests_total{status="500"}[$__rate_interval]))'],
     ["a_total / b_total", "rate(a_total[$__rate_interval]) / rate(b_total[$__rate_interval])"],
     ["x_total # http_requests_total", "rate(x_total[$__rate_interval]) # http_requests_total"],
+    ["${env}_requests_total", "${env}_requests_total"],
+    ["${a}_total + x_total${b}", "${a}_total + x_total${b}"],
     ['label_replace(up, "d", "http_requests_total", "", "")', 'label_replace(up, "d", "http_requests_total", "", "")'],
   ])("wrapRate %s", (q, out) => expect(wrapRate(q, findRawCounters(q, counter))).toBe(out));
 
@@ -61,5 +63,23 @@ describe("promql", () => {
     expect(isLogQlMetric('{a="b"}')).toBe(false);
     expect(logSelector('{app="api"} |= "x{y}"')).toBe('{app="api"}');
     expect(logSelector("no braces")).toBeNull();
+  });
+
+  it("variables glued to a name are never selectors", () => {
+    expect(findRawCounters("${env}_requests_total", counter)).toEqual([]);
+    expect(scanSelectors("${a}_total{x=\"y\"}")!.map((r) => r.metric)).toEqual([null]);
+  });
+
+  it("comments are handled the same everywhere", () => {
+    expect(isRateQuery("sum by (a) (rate(x[5m])) # c")).toBe(true);
+    expect(isRateQuery("sum(rate(x[5m])) by (a)")).toBe(true);
+    expect(isLogQlMetric("# c\nsum(x)")).toBe(true);
+    expect(logSelector('# {no}\n{a="b"}')).toBe('{a="b"}');
+  });
+
+  it("by and without are case-insensitive", () => {
+    expect(firstMetric("sum BY (a) (x)")).toBe("x");
+    expect(isRateQuery("SUM(rate(x[5m]))")).toBe(false);
+    expect(isRateQuery("sum WITHOUT (a) (rate(x[5m]))")).toBe(true);
   });
 });

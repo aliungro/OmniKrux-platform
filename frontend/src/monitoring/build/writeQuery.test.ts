@@ -78,4 +78,25 @@ describe("writeQuery", () => {
     expect(humanTitle("container_cpu_usage_seconds_total")).toBe("CPU");
     expect(humanTitle("up")).toBe("Targets up");
   });
+
+  it("a volume query is not swallowed by a trailing comment", () => {
+    expect(writeVolumeQuery('{a="b"} # c', null)).toBe('sum(count_over_time({a="b"} # c\n[$__interval]))');
+    expect(() => writeVolumeQuery('{a="b', null)).toThrow();
+  });
+
+  it("reserved words are written as __name__", () => {
+    for (const n of ["nan", "inf", "NaN", "sum", "Count", "offset", "by", "bool", "and"]) {
+      expect(writeMetricQuery(m(n, "gauge"), null, {})).toBe(`{__name__="${n}"}`);
+    }
+    expect(writeMetricQuery(m("sum", "gauge"), null, { a: "x" })).toBe('{__name__="sum",a="x"}');
+    expect(writeMetricQuery(m("count", "counter"), null, {})).toBe('sum(rate({__name__="count"}[$__rate_interval]))');
+    expect(writeMetricQuery(m("sum", "histogram"), null, {})).toContain("sum_bucket");
+  });
+
+  it("log queries skip unwritable stream labels and empty values", () => {
+    expect(writeLogQuery({}, [stream("a b"), stream("zed")])).toBe('{zed=~".+"}');
+    expect(writeLogQuery({ a: "", b: "x" }, [])).toBe('{b="x"}');
+    expect(() => writeLogQuery({ a: "" }, [stream("job")])).toThrow();
+    expect(() => writeLogQuery({}, [stream("a b"), stream("1x")])).toThrow();
+  });
 });
