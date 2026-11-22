@@ -2,12 +2,14 @@
 // goes into the draft at once (`updatePanel`), so the JSON and the panel agree; the panel's frame
 // redraws in place, and its queries run once the typing stops (D1).
 import { useId, useLayoutEffect, useRef, type KeyboardEvent } from "react";
+import { RecommendationBar } from "../../build/RecommendationBar";
+import { useOwnerCatalog } from "../../catalog/merge";
 import { escapeCloses } from "../../focus";
 import type { DashboardOwner, PanelData } from "../runPanel";
 import type { OwnerKind, PanelSpec } from "../schema";
 import { AlertTab } from "./AlertTab";
 import { ChartTab } from "./ChartTab";
-import type { EditingState, EditorAction, SideTab } from "./editorState";
+import { JSON_FIRST, type EditingState, type EditorAction, type SideTab } from "./editorState";
 import { OptionsTab } from "./OptionsTab";
 import { QueryTab } from "./QueryTab";
 import s from "./SidePanel.module.css";
@@ -23,6 +25,8 @@ export interface PanelLive {
   pending: boolean;
   /** Run the draft's queries now. */
   flush(): void;
+  /** The step the run used, in seconds; null when the panel has no run. */
+  step: number | null;
 }
 
 /** Changes one panel of the draft; `update` gets the panel as the draft has it. */
@@ -53,6 +57,7 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
   const body = useRef<HTMLDivElement>(null);
   const panel = state.draft.panels.find((p) => p.id === state.selected);
   const tab = state.sideTab;
+  const { catalog } = useOwnerCatalog(owner);
 
   useLayoutEffect(() => {
     if (initialFocus === "query") body.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
@@ -76,6 +81,12 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
     select(TABS[(to + TABS.length) % TABS.length][0]);
   };
 
+  // Apply is a draft edit, so it is refused while the JSON tab holds text that doesn't apply.
+  const applyRecommendation = (next: PanelSpec) => {
+    if (state.jsonText !== null) return JSON_FIRST;
+    update(() => next);
+  };
+
   return (
     <aside className={s.side} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>
       <div className={s.head}>
@@ -84,6 +95,9 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
           <span aria-hidden="true">✕</span>
         </button>
       </div>
+      <RecommendationBar
+        context={{ panel, data: panelData, catalog, stepSeconds: live?.step ?? 0 }}
+        scope={state.dashboardId} onApply={applyRecommendation} onDone={() => select("query")} />
       <div role="tablist" aria-label="Panel settings" className={s.tabs} onKeyDown={onTabKey}>
         {TABS.map(([t, label]) => (
           <button key={t} ref={(el) => { tabs.current[t] = el; }} id={`${base}-tab-${t}`} type="button" role="tab"

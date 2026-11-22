@@ -1,0 +1,98 @@
+/* The recommendation bar (D1): a soft lilac strip with the suggestion, Apply and a dismiss. It
+   rises in once, over half a second, and not at all under reduced motion. Territories tokens only. */
+
+.wrap {
+  margin: 10px 14px 0;
+}
+
+.rec {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--focus) 30%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--focus) 7%, transparent);
+  color: var(--ink-2);
+  font-size: 13px;
+  animation: rise 0.5s ease;
+}
+
+.icon {
+  flex: none;
+}
+
+.text {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.text strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.apply {
+  flex: none;
+  padding: 4px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--focus);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.x {
+  flex: none;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  cursor: pointer;
+}
+
+.x:hover {
+  color: var(--ink);
+}
+
+.apply:focus-visible,
+.x:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The refusal is the live region's text; empty, it takes no room. */
+.refused {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.refused:not(:empty) {
+  margin-top: 6px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rec {
+    animation: none;
+  }
+}
