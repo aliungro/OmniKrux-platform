@@ -129,10 +129,11 @@ describe("shortcut registry", () => {
     const titles = allGroups(undefined, "monitoring").map(([t]) => t);
     const at = titles.indexOf("Monitoring");
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(titles.slice(at, at + 2)).toEqual(["Monitoring", "Dashboards"]);
-    expect(allGroups().map(([t]) => t)).not.toContain("Dashboards");
-    expect(allGroups().map(([t]) => t)).not.toContain("Monitoring");
-    expect(allGroups("pods", "kubernetes").map(([t]) => t)).not.toContain("Dashboards");
+    expect(titles.slice(at, at + 3)).toEqual(["Monitoring", "Dashboards", "Explore"]);
+    for (const title of ["Monitoring", "Dashboards", "Explore"]) {
+      expect(allGroups().map(([t]) => t)).not.toContain(title);
+      expect(allGroups("pods", "kubernetes").map(([t]) => t)).not.toContain(title);
+    }
     const dashboards = allGroups(undefined, "monitoring").find(([t]) => t === "Dashboards")![1];
     expect(dashboards.map((s) => [s.id, s.keys, s.label])).toEqual([
       ["dashboardEdit", ["e"], "Edit the dashboard"],
@@ -144,7 +145,9 @@ describe("shortcut registry", () => {
       ["panelMove", ["Shift ← → ↑ ↓"], "While editing: move the panel one step"],
       ["panelResize", ["Ctrl Shift ← → ↑ ↓"], "While editing: make the panel narrower, wider, shorter or taller"],
       ["panelSettings", ["Enter"], "While editing: open the panel's settings"],
-      ["panelAdd", ["a"], "While editing: add a panel"],
+      ["panelAdd", ["a"], "While editing: add a panel (type what you want to see)"],
+      ["addPanelPick", ["↑ ↓", "Enter"], "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)"],
+      ["suggestionsFocus", ["s"], "While editing a new dashboard: go to the suggestions"],
       ["panelRemove", ["Ctrl Del"], "While editing: remove the panel from the draft"],
       ["panelLeave", ["Esc"], "Close the panel's settings, then go to Save dashboard"],
       ["queryRun", ["Ctrl Enter"], "In a query: run it now; in the JSON: review the changes"],
@@ -156,6 +159,50 @@ describe("shortcut registry", () => {
     expect(keysFor("panelResize", true)).toEqual(["⌘ Shift ← → ↑ ↓"]);
     expect(keysFor("panelRemove", true)).toEqual(["⌘ ⌫"]);
     expect(keysFor("queryRun", true)).toEqual(["⌘ Enter"]);
+  });
+
+  it("the Explore group appears only in Monitoring, after Dashboards", () => {
+    const titles = allGroups(undefined, "monitoring").map(([t]) => t);
+    const at = titles.indexOf("Dashboards");
+    expect(titles[at + 1]).toBe("Explore");
+    expect(titles.filter((t) => t === "Explore")).toHaveLength(1);
+    expect(allGroups().map(([t]) => t)).not.toContain("Explore");
+    expect(allGroups("pods", "kubernetes").map(([t]) => t)).not.toContain("Explore");
+    const explore = allGroups(undefined, "monitoring").find(([t]) => t === "Explore")![1];
+    expect(explore.map((s) => [s.id, s.keys, s.label])).toEqual([
+      ["exploreQuery", ["q"], "Go to the query"],
+      ["exploreBrowse", ["b"], "Go to the metric or log stream list"],
+      ["exploreLogs", ["l"], "Go to the log lines"],
+      ["exploreTime", ["t"], "Pick the time range"],
+      ["exploreRun", ["Ctrl Enter"], "In the query: run it now"],
+      ["exploreAdd", ["a"], "Add the query to a dashboard"],
+      ["exploreWindow", ["Shift ← →"], "On the chart: select a time window for the log lines"],
+      ["exploreShowAll", ["Esc"], "On the chart: show all log lines again"],
+    ]);
+    expect(keysFor("exploreRun", true)).toEqual(["⌘ Enter"]);
+  });
+
+  it("explore keys match only as listed", () => {
+    expect(pressed("exploreQuery", { ...base, key: "q" })).toBe(true);
+    expect(pressed("exploreQuery", { ...base, key: "q", ctrlKey: true })).toBe(false);
+    expect(pressed("exploreQuery", { ...base, key: "q", metaKey: true })).toBe(false);
+    expect(pressed("exploreQuery", { ...base, key: "q", altKey: true })).toBe(false);
+    expect(pressed("exploreWindow", { ...base, key: "ArrowLeft", shiftKey: true })).toBe(true);
+    expect(pressed("exploreWindow", { ...base, key: "ArrowRight", shiftKey: true })).toBe(true);
+    expect(pressed("exploreWindow", { ...base, key: "ArrowLeft" })).toBe(false);
+    expect(pressed("exploreWindow", { ...base, key: "ArrowUp", shiftKey: true })).toBe(false);
+    expect(pressed("exploreRun", { ...base, key: "Enter", ctrlKey: true })).toBe(true);
+    expect(pressed("exploreRun", { ...base, key: "Enter", metaKey: true })).toBe(true);
+    expect(pressed("exploreRun", { ...base, key: "Enter" })).toBe(false);
+    expect(pressed("exploreTime", { ...base, key: "t" })).toBe(true);
+    expect(pressed("exploreShowAll", { ...base, key: "Escape" })).toBe(true);
+    expect(pressed("exploreBrowse", { ...base, key: "b" })).toBe(true);
+    expect(pressed("exploreLogs", { ...base, key: "l" })).toBe(true);
+    expect(pressed("exploreAdd", { ...base, key: "a" })).toBe(true);
+    expect(pressed("suggestionsFocus", { ...base, key: "s" })).toBe(true);
+    expect(pressed("suggestionsFocus", { ...base, key: "s", ctrlKey: true })).toBe(false);
+    expect(pressed("addPanelPick", { ...base, key: "Enter" })).toBe(true);
+    expect(pressed("addPanelPick", { ...base, key: "ArrowDown" })).toBe(true);
   });
 
   it("panel resize needs Ctrl and Shift with an arrow", () => {

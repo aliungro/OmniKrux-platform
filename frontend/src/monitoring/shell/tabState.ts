@@ -4,7 +4,7 @@ import type { AppTabs, Tab } from "../../features/shell/workspace";
 
 export type MonitoringView =
   | { page: "home" }
-  | { page: "explore" }
+  | ExploreView
   | { page: "alerts" }
   | { page: "sources" }
   | { page: "source"; id: string }
@@ -25,6 +25,16 @@ export interface DashboardView {
   vars?: Record<string, string[] | "all">;
   time?: { from: string; to: string };
   refresh?: string | null;
+}
+
+/** Explore and its state: the project, the source, the query, the logs query and the time range. */
+export interface ExploreView {
+  page: "explore";
+  project?: string;
+  source?: string;
+  expr?: string;
+  logs?: string;
+  time?: { from: string; to: string };
 }
 
 export const MONITORING_HOME: MonitoringView = { page: "home" };
@@ -61,13 +71,15 @@ export function defaultMonitoringTabs(): AppTabs<MonitoringView> {
 }
 
 /**
- * The same place: page and id, and a dashboard's tab (no tab is the Dashboard tab). Its variables,
- * time and refresh are view state, not another place. Used for push de-duplication and the leave check.
+ * The same place: page and id, a dashboard's tab (no tab is the Dashboard tab) and Explore's project.
+ * Variables, time, refresh and Explore's query are view state, not another place. Used for push
+ * de-duplication and the leave check.
  */
 export function sameMonitoringView(a: MonitoringView, b: MonitoringView): boolean {
   if (a.page !== b.page) return false;
   if (a.page === "dashboard" && b.page === "dashboard") return a.id === b.id && (a.tab ?? "dashboard") === (b.tab ?? "dashboard");
   if ("id" in a && "id" in b) return a.id === b.id;
+  if (a.page === "explore" && b.page === "explore") return a.project === b.project;
   if (a.page === "setup" && b.page === "setup") return a.clusterId === b.clusterId;
   return true;
 }
@@ -182,11 +194,26 @@ function parseDashboard(x: Record<string, unknown>): DashboardView | null {
   return view;
 }
 
+const MAX_QUERY = 10000;
+
+/** Explore: each bad part of its state is dropped on its own, the view kept. */
+function parseExplore(x: Record<string, unknown>): ExploreView {
+  const view: ExploreView = { page: "explore" };
+  if (validId(x.project)) view.project = x.project;
+  if (validId(x.source)) view.source = x.source;
+  if (shortText(x.expr, MAX_QUERY)) view.expr = x.expr;
+  if (shortText(x.logs, MAX_QUERY)) view.logs = x.logs;
+  if (record(x.time) && shortText(x.time.from, 40) && shortText(x.time.to, 40)) view.time = { from: x.time.from, to: x.time.to };
+  return view;
+}
+
 /** A saved view, rebuilt from its known fields only; an unknown page (a later version's) is null. */
 function parseView(x: unknown): MonitoringView | null {
   if (!record(x)) return null;
   switch (x.page) {
-    case "home": case "explore": case "alerts": case "sources": case "newGroup":
+    case "explore":
+      return parseExplore(x);
+    case "home": case "alerts": case "sources": case "newGroup":
       return { page: x.page };
     case "source": case "project": case "group":
       return validId(x.id) ? { page: x.page, id: x.id } : null;

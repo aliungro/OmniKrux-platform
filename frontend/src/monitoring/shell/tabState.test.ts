@@ -165,6 +165,48 @@ describe("monitoring tab state", () => {
     expect(equalMonitoringView(a, { ...a, vars: { ns: ["api"] }, time: { to: "now", from: "now-1h" } })).toBe(true);
   });
 
+  it("an explore view survives storage with its state", () => {
+    const view: MonitoringView = { page: "explore", project: "p1", source: "s1", expr: "up", logs: '{app="api"}', time: { from: "now-1h", to: "now" } };
+    const saved = JSON.parse(JSON.stringify({ tabs: [{ id: "a", view, back: [{ page: "explore" }], forward: [], scrollTop: 0 }], active: "a", closed: [] }));
+    const { tabs, dropped } = parseMonitoringTabs(saved);
+    expect(dropped).toBe(0);
+    expect(tabs.tabs[0].view).toEqual(view);
+    expect(tabs.tabs[0].back).toEqual([{ page: "explore" }]);
+    expect(monitoringTabLabel(view, {})).toBe("Explore");
+    // Empty query text is still a query (the user cleared it).
+    const empty: MonitoringView = { page: "explore", project: "p1", expr: "", logs: "" };
+    expect(parseMonitoringTabs({ tabs: [{ id: "a", view: empty }] }).tabs.tabs[0].view).toEqual(empty);
+  });
+
+  it("bad explore state is dropped, the view kept", () => {
+    const parse = (view: unknown) => {
+      const { tabs, dropped } = parseMonitoringTabs({ tabs: [{ id: "a", view, back: [], forward: [], scrollTop: 0 }], active: "a", closed: [] });
+      expect(dropped).toBe(0);
+      return tabs.tabs[0].view;
+    };
+    const bare = { page: "explore" };
+    expect(parse({ ...bare, expr: 5 })).toEqual(bare);
+    expect(parse({ ...bare, project: "p1", expr: 5 })).toEqual({ ...bare, project: "p1" });
+    expect(parse({ ...bare, project: "", source: "" })).toEqual(bare);
+    expect(parse({ ...bare, project: "p".repeat(201), source: 7 })).toEqual(bare);
+    expect(parse({ ...bare, project: "p".repeat(200) })).toEqual({ ...bare, project: "p".repeat(200) });
+    expect(parse({ ...bare, expr: "x".repeat(10001), logs: null })).toEqual(bare);
+    expect(parse({ ...bare, expr: "x".repeat(10000) })).toEqual({ ...bare, expr: "x".repeat(10000) });
+    expect(parse({ ...bare, time: { from: "x".repeat(41), to: "now" } })).toEqual(bare);
+    expect(parse({ ...bare, time: { from: "now-1h" } })).toEqual(bare);
+    expect(parse({ ...bare, time: "now-1h" })).toEqual(bare);
+    expect(parse({ ...bare, extra: "kept out" })).toEqual(bare);
+  });
+
+  it("explore views in different projects are different views", () => {
+    const a: MonitoringView = { page: "explore", project: "p1", expr: "up" };
+    expect(sameMonitoringView(a, { page: "explore", project: "p1", expr: "rate(x[5m])", source: "s2" })).toBe(true);
+    expect(sameMonitoringView(a, { page: "explore", project: "p2", expr: "up" })).toBe(false);
+    expect(sameMonitoringView(a, { page: "explore" })).toBe(false);
+    expect(sameMonitoringView({ page: "explore" }, { page: "explore" })).toBe(true);
+    expect(equalMonitoringView(a, { ...a, expr: "up2" })).toBe(false);
+  });
+
   it("replace with new time changes the view; back history unchanged", () => {
     let tabs = defaultMonitoringTabs();
     const id = tabs.active;

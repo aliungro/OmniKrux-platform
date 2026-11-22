@@ -47,7 +47,8 @@ export type ShortcutId =
   | "monitoringFind" | "monitoringTree" | "monitoringNewDashboard"
   | "dashboardEdit" | "dashboardViews" | "dashboardTime" | "dashboardRefresh" | "dashboardSave"
   | "panelFocus" | "panelMove" | "panelResize" | "panelSettings" | "panelAdd" | "panelRemove" | "panelLeave"
-  | "queryRun" | "chartCrosshair" | "tableSort" | "logLabels";
+  | "queryRun" | "chartCrosshair" | "tableSort" | "logLabels" | "addPanelPick" | "suggestionsFocus"
+  | "exploreQuery" | "exploreBrowse" | "exploreLogs" | "exploreTime" | "exploreRun" | "exploreAdd" | "exploreWindow" | "exploreShowAll";
 
 export interface Shortcut {
   id: ShortcutId;
@@ -59,9 +60,9 @@ export interface Shortcut {
   label: string;
   /**
    * Where it works: on a table row (and in its open details), anywhere on the page, in a log pane,
-   * in the dock, in the Monitoring app, or on a Monitoring dashboard. Also the "?" sheet's group.
+   * in the dock, in the Monitoring app, on a Monitoring dashboard or in Explore. Also the "?" sheet's group.
    */
-  scope: "row" | "global" | "logs" | "dock" | "shell" | "monitoring" | "dashboard";
+  scope: "row" | "global" | "logs" | "dock" | "shell" | "monitoring" | "dashboard" | "explore";
   /** The kinds it acts on; absent: every kind (a row key still needs the row to offer it). */
   kinds?: string[];
   /** `KeyboardEvent.key` values that trigger it, where something reads them from here. */
@@ -152,7 +153,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "panelMove", scope: "dashboard", keys: ["Shift ← → ↑ ↓"], match: ARROWS, shift: true, label: "While editing: move the panel one step" },
   { id: "panelResize", scope: "dashboard", keys: ["Ctrl Shift ← → ↑ ↓"], macKeys: ["⌘ Shift ← → ↑ ↓"], match: ARROWS, ctrl: true, shift: true, label: "While editing: make the panel narrower, wider, shorter or taller" },
   { id: "panelSettings", scope: "dashboard", keys: ["Enter"], match: ["Enter"], label: "While editing: open the panel's settings" },
-  { id: "panelAdd", scope: "dashboard", keys: ["a"], match: ["a"], label: "While editing: add a panel" },
+  { id: "panelAdd", scope: "dashboard", keys: ["a"], match: ["a"], label: "While editing: add a panel (type what you want to see)" },
+  { id: "addPanelPick", scope: "dashboard", keys: ["↑ ↓", "Enter"], match: ["ArrowUp", "ArrowDown", "Enter"], label: "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)" },
+  { id: "suggestionsFocus", scope: "dashboard", keys: ["s"], match: ["s"], label: "While editing a new dashboard: go to the suggestions" },
   // Matched with isDeleteKey, like deleteFocused.
   { id: "panelRemove", scope: "dashboard", keys: ["Ctrl Del"], macKeys: ["⌘ ⌫"], label: "While editing: remove the panel from the draft" },
   { id: "panelLeave", scope: "dashboard", keys: ["Esc"], match: ["Escape"], label: "Close the panel's settings, then go to Save dashboard" },
@@ -160,6 +163,14 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "chartCrosshair", scope: "dashboard", keys: ["← →"], match: ["ArrowLeft", "ArrowRight"], label: "On a chart: move the crosshair; Esc hides it" },
   { id: "tableSort", scope: "dashboard", keys: ["Enter"], match: ["Enter"], label: "On a table column: sort by it" },
   { id: "logLabels", scope: "dashboard", keys: ["Enter"], match: ["Enter"], label: "On a log line: show its labels" },
+  { id: "exploreQuery", scope: "explore", keys: ["q"], match: ["q"], label: "Go to the query" },
+  { id: "exploreBrowse", scope: "explore", keys: ["b"], match: ["b"], label: "Go to the metric or log stream list" },
+  { id: "exploreLogs", scope: "explore", keys: ["l"], match: ["l"], label: "Go to the log lines" },
+  { id: "exploreTime", scope: "explore", keys: ["t"], match: ["t"], label: "Pick the time range" },
+  { id: "exploreRun", scope: "explore", keys: ["Ctrl Enter"], macKeys: ["⌘ Enter"], match: ["Enter"], ctrl: true, label: "In the query: run it now" },
+  { id: "exploreAdd", scope: "explore", keys: ["a"], match: ["a"], label: "Add the query to a dashboard" },
+  { id: "exploreWindow", scope: "explore", keys: ["Shift ← →"], match: ["ArrowLeft", "ArrowRight"], shift: true, label: "On the chart: select a time window for the log lines" },
+  { id: "exploreShowAll", scope: "explore", keys: ["Esc"], match: ["Escape"], label: "On the chart: show all log lines again" },
 ];
 
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));
@@ -227,16 +238,16 @@ export function barFor(kindKey: string | undefined, zone: KeyboardZone, mac: boo
 
 export type ShortcutGroup = readonly [title: string, rows: readonly Shortcut[]];
 
-const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs", row: "Table", global: "Anywhere", logs: "Logs", dock: "Dock", monitoring: "Monitoring", dashboard: "Dashboards" };
+const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs", row: "Table", global: "Anywhere", logs: "Logs", dock: "Dock", monitoring: "Monitoring", dashboard: "Dashboards", explore: "Explore" };
 
 /**
  * The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's.
- * The Monitoring and Dashboards groups are there only while Monitoring is shown (`app`); there "/"
+ * The Monitoring, Dashboards and Explore groups are there only while Monitoring is shown (`app`); there "/"
  * is Find, so the Anywhere group leaves out Filter rows.
  */
 export function allGroups(kindKey?: string, app?: AppId): ShortcutGroup[] {
   const monitoring = app === "monitoring";
-  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "dashboard", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
+  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "dashboard", "explore", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
   return scopes.map((scope) => [
     GROUP_TITLES[scope],
     SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey)) && !(monitoring && s.id === "filter")),
