@@ -18,13 +18,15 @@ interface Props {
   vars: ResolvedVars;
   range: { start: number; end: number };
   waiting(panel: PanelSpec): boolean;
+  /** Why a panel can't run (a variable it uses has no values), else null. */
+  blocked(panel: PanelSpec): string | null;
   refreshSeq: number;
   status: PanelStatusStore;
   /** Edit mode: the draft's panels are `panels`. */
   editor?: GridEditor;
 }
 
-export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, range, waiting, refreshSeq, status, editor }: Props) {
+export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, range, waiting, blocked, refreshSeq, status, editor }: Props) {
   const gridRef = useRef<HTMLDivElement>(null);
   const edit = useEditableGrid(editor ?? null, gridRef, owner);
   const ordered = useMemo(
@@ -38,7 +40,7 @@ export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, ran
         role={edit ? "group" : undefined} aria-label={edit ? "Panels" : undefined}>
         {ordered.map((panel) => (
           <PanelFrame key={panel.id} dashboardId={dashboardId} panel={panel} owner={owner} ownerName={ownerName}
-            vars={vars} range={range} waiting={waiting(panel)} refreshSeq={refreshSeq} status={status}
+            vars={vars} range={range} waiting={waiting(panel)} blocked={blocked(panel)} refreshSeq={refreshSeq} status={status}
             changeId={editor?.state.changes[panel.id] ?? 0} layout={edit?.layoutOf(panel)} tile={edit?.tile(panel)} />
         ))}
         {edit?.layer}

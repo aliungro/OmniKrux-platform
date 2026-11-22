@@ -404,7 +404,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
               onVar={setVar} onProjects={(value) => setVar(PROJECTS_VAR, value)} onRetry={ctx.retryVariable}
               onOpenProject={(p, e) => openPage({ page: "project", id: p.id }, e)} />
             <DashboardGrid dashboardId={dashboard.id} panels={spec.panels} owner={ctx.owner} ownerName={ctx.ownerName}
-              vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} refreshSeq={ctx.refreshSeq} status={ctx.status}
+              vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} blocked={ctx.blocked} refreshSeq={ctx.refreshSeq} status={ctx.status}
               editor={editing ? {
                 state: editing, dispatch: editor.dispatch, ownerKind: dashboard.owner_kind, onLeave: () => saveButton.current?.focus(),
               } : undefined} />

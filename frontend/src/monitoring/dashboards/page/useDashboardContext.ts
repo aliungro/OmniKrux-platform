@@ -132,6 +132,9 @@ function projectSelection(raw: VarValue | undefined, all: ProjectRef[]): VarValu
 }
 
 /** The variables a panel's shown queries use. */
+/** What a panel says about a variable it uses that couldn't load and has nothing chosen. */
+export const variableFailed = (name: string) => `$${name} couldn't load its values. Its menu above says why.`;
+
 export function panelVariables(panel: PanelSpec): string[] {
   return [...new Set(panel.queries.filter((q) => !q.hidden).flatMap((q) => variablesUsed(q.expr)))];
 }
@@ -158,6 +161,11 @@ export interface DashboardContext {
   retryVariable(name: string): void;
   /** Whether a panel must wait: its owner or a variable it uses is still loading. */
   waiting(panel: PanelSpec): boolean;
+  /**
+   * Why a panel can't run, else null: a variable it uses couldn't load its values and has nothing
+   * chosen, so its query would run with an empty value and a failure would read as "No data".
+   */
+  blocked(panel: PanelSpec): string | null;
   /** The owner (its project, or its group and the projects) couldn't be read. */
   ownerFailure: OwnerFailure | null;
   status: PanelStatusStore;
@@ -262,6 +270,8 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
   const states: VariableState[] = [];
   const resolved: ResolvedVars = {};
   const pending = new Set<string>();
+  /** Variables that couldn't load their values and have nothing chosen: nothing may run with them. */
+  const unusable = new Set<string>();
   for (const v of spec.variables) {
     let selected = startingSelection(v, view.vars?.[v.name]);
     let values: string[] = [];
@@ -269,8 +279,13 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     let error: string | null = null;
     let errorKind: VariableErrorKind | null = null;
     let fix: ProjectRef | null = null;
+    const failedEarlier = variablesUsed(v.match).find((name) => unusable.has(name));
     if (owner === null || variablesUsed(v.match).some((name) => pending.has(name))) loading = true;
-    else {
+    else if (failedEarlier !== undefined) {
+      // Its selector needs an earlier variable that has no value: reading with "" would answer wrong.
+      error = `It needs $${failedEarlier}, which couldn't load its values.`;
+      errorKind = "variable";
+    } else {
       let match: string | null = null;
       try {
         match = interpolate(v.match, resolved, builtins);
@@ -319,6 +334,7 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     const missing = loaded && selected !== "all" ? selected.filter((x) => !values.includes(x)) : [];
     resolved[v.name] = { multi: v.multi, value: selected };
     if (loading) pending.add(v.name);
+    if (error !== null && selected !== "all" && selected.length === 0) unusable.add(v.name);
     states.push({ spec: v, values, loading, error, errorKind, fix, selected, missing });
   }
 
@@ -346,6 +362,12 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     (panel: PanelSpec) => owner === null || panelVariables(panel).some((name) => loadingNames.has(name)),
     [owner, loadingNames],
   );
+  const unusableKey = [...unusable].join("|");
+  const blocked = useCallback((panel: PanelSpec): string | null => {
+    const names = new Set(unusableKey === "" ? [] : unusableKey.split("|"));
+    const name = panelVariables(panel).find((n) => names.has(n));
+    return name === undefined ? null : variableFailed(name);
+  }, [unusableKey]);
   const paramsRef = useRef(paramsByVariable);
   paramsRef.current = paramsByVariable;
   const retryVariable = useCallback((name: string) => {
@@ -356,6 +378,6 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
 
   return {
     owner, ownerName, vars, variables, projects, range, time, now: clock.now, refresh, refreshMs,
-    refreshSeq: clock.seq, refreshNow, retryVariable, waiting, ownerFailure, status,
+    refreshSeq: clock.seq, refreshNow, retryVariable, waiting, blocked, ownerFailure, status,
   };
 }

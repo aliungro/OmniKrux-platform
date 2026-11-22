@@ -5,7 +5,7 @@
 // Memoised: an edit re-renders only the panel it changed.
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ResolvedVars } from "../interpolate";
-import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelRun } from "../runPanel";
+import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun } from "../runPanel";
 import type { Layout, PanelSpec } from "../schema";
 import type { TileProps } from "../editor/EditableGrid";
 import { useDebouncedQueries } from "../editor/useDebouncedQueries";
@@ -22,6 +22,8 @@ interface Props {
   vars: ResolvedVars;
   range: { start: number; end: number };
   waiting: boolean;
+  /** Why it can't run (a variable it uses has no values): said as its failure, and nothing is sent. */
+  blocked: string | null;
   refreshSeq: number;
   status: PanelStatusStore;
   /** `changes[panel.id]` in edit mode (0 in view mode): the chart's `changeId` and the run's `editId`. */
@@ -69,7 +71,12 @@ function useFlash(count: number, on: boolean): boolean {
   return flash && on;
 }
 
-export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, ownerName, vars, range, waiting, refreshSeq, status, changeId: changes = 0, layout, tile }: Props) {
+/** A panel that can't run, as a failure: the same words in its body, its state and the Query tab. */
+const blockedData = (reason: string): PanelData => ({
+  state: "error", series: [], logs: [], problems: [reason], summary: { series: 0, points: 0, tookMs: 0 }, editId: 0,
+});
+
+export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, ownerName, vars, range, waiting, blocked, refreshSeq, status, changeId: changes = 0, layout, tile }: Props) {
   const titleId = useId();
   const tipId = useId();
   const problemsId = useId();
@@ -93,7 +100,11 @@ export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, 
     [runPanel, owner, vars, range, ownerName],
   );
   const run = useStableRun(built);
-  const result = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting, changeId);
+  const ran = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting && blocked === null, changeId);
+  const result = useMemo<PanelDataResult>(
+    () => (blocked === null || waiting ? ran : { ...ran, data: blockedData(blocked), fetching: false, updatedAt: null, failedAt: null }),
+    [ran, blocked, waiting],
+  );
   const key = panelRunKey(run);
 
   // A refresh whose window didn't move (the range is aligned to the step) reads it again; a new
@@ -102,8 +113,8 @@ export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, 
   useEffect(() => {
     const before = seen.current;
     seen.current = { seq: refreshSeq, key };
-    if (refreshSeq !== before.seq && key === before.key && !waiting) result.refetch();
-  }, [refreshSeq, key, waiting, result]);
+    if (refreshSeq !== before.seq && key === before.key && !waiting && blocked === null) result.refetch();
+  }, [refreshSeq, key, waiting, blocked, result]);
 
   const loading = waiting || result.fetching;
   const updatedAt = waiting ? null : result.updatedAt;

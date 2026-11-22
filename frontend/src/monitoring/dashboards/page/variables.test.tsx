@@ -155,6 +155,34 @@ describe("Dashboard variables", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Namespace: api" }));
   });
 
+  it("a variable whose values can't be read stops its panels with its failure, not No data", async () => {
+    const user = userEvent.setup();
+    const { api, answer, view } = seed(undefined);
+    answer['kube_pod_restarts{namespace=~"api", pod=~".+"}'] = ok;
+    let broken = true;
+    intercept((url, pass) => (broken && url.includes("/label-values") && url.includes("label=namespace")
+      ? serverFailure(502, "unreachable", "Can't reach Prometheus: the connection was refused.")
+      : pass()));
+    renderMonitoringApp({ tabs: tabsWith(view) });
+    const restarts = within(await screen.findByRole("region", { name: "Restarts" }));
+    expect(await restarts.findByText("Query error")).toBeTruthy();
+    expect(restarts.getByText("$namespace couldn't load its values. Its menu above says why.")).toBeTruthy();
+    expect(restarts.queryByText("No data in this time range.")).toBeNull();
+    // Nothing ran with an empty value: no panel query, and Pod (which needs it) wasn't read.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(batches(api)).toEqual([]);
+    expect(labelReads(api).some((p) => p.get("label") === "pod")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Pod: All" }));
+    expect(within(screen.getByRole("group", { name: "Pod" })).getByText("Couldn't load values: It needs $namespace, which couldn't load its values.")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    // Read again, it loads, and the panel runs with its value.
+    broken = false;
+    await user.click(screen.getByRole("button", { name: "Namespace: couldn't load" }));
+    await user.click(within(screen.getByRole("group", { name: "Namespace" })).getByRole("button", { name: "Try again" }));
+    expect(await restarts.findByText("chart 1")).toBeTruthy();
+    expect(batches(api).every((b) => b.every((q) => q.query.includes('namespace=~"api"')))).toBe(true);
+  });
+
   it("a panel using an unrelated variable keeps running when another variable reloads", async () => {
     const user = userEvent.setup();
     const doc = spec("Mixed", [
