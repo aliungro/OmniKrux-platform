@@ -7,7 +7,7 @@ import type { ChartSeries } from "../dashboards/runPanel";
 import type { Threshold, TimeseriesOptions } from "../dashboards/schema";
 import { decimate } from "./decimate";
 import { niceTicks, formatTimeTick, timeTicks } from "./scale";
-import { seriesColor } from "./colors";
+import { seriesColors } from "./colors";
 import { formatValue } from "./units";
 
 /** The subset of `CanvasRenderingContext2D` the chart calls, so tests can record calls. */
@@ -139,6 +139,7 @@ export function buildFrame(
   hidden: ReadonlySet<string>,
 ): TimeSeriesFrame {
   const visible = series.filter((s) => !hidden.has(s.key));
+  const colors = seriesColors(series);
   const filled = opts.style !== "lines";
   const stacked = opts.style === "stacked";
   const plotH = Math.max(1, size.height - TOP - BOTTOM);
@@ -231,7 +232,7 @@ export function buildFrame(
         ys[c] = v === v ? yOf(v) : Number.NaN;
       }
     }
-    out.push({ key: s.key, name: s.name, color: seriesColor(s.key), values, ys, base });
+    out.push({ key: s.key, name: s.name, color: colors.get(s.key) as string, values, ys, base });
   });
 
   const thresholds = opts.thresholds.map((t: Threshold) => ({ value: t.value, color: `--${t.color}`, y: yOf(t.value) }));

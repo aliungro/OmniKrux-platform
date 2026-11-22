@@ -9,7 +9,7 @@ import {
 import type { ChartSeries } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
 import { buildFrame, drawTimeSeries, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
-import { resolveToken, seriesColor } from "./colors";
+import { resolveToken, seriesColors } from "./colors";
 import Legend from "./Legend";
 import { easeOutCubic, MORPH_MS, mixColumns, tween, usePrefersReducedMotion } from "./motion";
 import { formatTooltipTime } from "./scale";
@@ -121,6 +121,8 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
     return () => ro.disconnect();
   }, []);
 
+  // The same tokens the frame draws with, for the tooltip and the legend.
+  const colors = useMemo(() => seriesColors(series), [series]);
   const frame = useMemo(
     () => (size.width > 0 && size.height > 0
       ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden)
@@ -219,7 +221,7 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
     const tolerance = samples.length > 1 ? ((samples[samples.length - 1] - samples[0]) / (samples.length - 1)) * 1.5 : Infinity;
     const rows = visible.map((s) => {
       const v = valueAt(s.points, t, tolerance);
-      return { key: s.key, name: s.name, color: seriesColor(s.key), value: v, text: formatValue(v, opts.unit, opts.decimals) };
+      return { key: s.key, name: s.name, color: colors.get(s.key) as string, value: v, text: formatValue(v, opts.unit, opts.decimals) };
     });
     rows.sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
     tip = { x: frame.plot.x + ((t - range.start) / span) * frame.plot.w, time: formatTooltipTime(t), rows };
@@ -280,7 +282,7 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
       </div>
       {opts.legend === "bottom" && series.length > 0 ? (
         <Legend
-          items={series.map((s) => ({ key: s.key, name: s.name, color: seriesColor(s.key) }))}
+          items={series.map((s) => ({ key: s.key, name: s.name, color: colors.get(s.key) as string }))}
           hidden={hidden}
           onSolo={solo}
           onToggle={toggle}

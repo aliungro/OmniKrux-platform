@@ -16,6 +16,16 @@ describe("bar panel", () => {
     expect(document.querySelectorAll("svg")).toHaveLength(2);
   });
 
+  it("gives each bar its own series colour", () => {
+    const five = ["a", "b", "c", "d", "e"].map((n) => series(n, [1]));
+    render(<ChartView panel={panelOf("bar")} data={dataOf(five)} range={RANGE} animate={false} changeId={0} />);
+    const colors = [...document.querySelectorAll<HTMLElement>('[data-tone="none"]')].map((li) => li.style.color);
+    expect(colors).toHaveLength(5);
+    expect(new Set(colors).size).toBe(5);
+    expect(colors).not.toContain("var(--ok)");
+    expect(colors).not.toContain("var(--warn)");
+  });
+
   it("draws vertical bars and threshold colours", () => {
     render(
       <ChartView

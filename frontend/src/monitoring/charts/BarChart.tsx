@@ -3,7 +3,7 @@
 
 import type { ChartSeries } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
-import { seriesColor, thresholdColor } from "./colors";
+import { seriesColors, thresholdColor } from "./colors";
 import { reduceSeries } from "./reduce";
 import { formatValue } from "./units";
 import styles from "./Charts.module.css";
@@ -19,6 +19,7 @@ export default function BarChart({ panel, series }: BarChartProps) {
   const o = panel.options;
   if (series.length === 0) return null;
   const rows = series.map((s) => ({ s, value: reduceSeries(s.points, "last") }));
+  const colors = seriesColors(series);
   const values = rows.map((r) => r.value).filter((v): v is number => v !== null);
   const min = o.min ?? Math.min(0, ...values);
   let max = Math.max(0, ...values, min);
@@ -36,7 +37,7 @@ export default function BarChart({ panel, series }: BarChartProps) {
         const size = Math.abs(end - zero) * 100;
         const text = formatValue(value, o.unit, o.decimals);
         return (
-          <li key={s.key} className={styles.barItem} data-tone={tone ?? "none"} style={{ color: tone ? `var(--${tone})` : `var(${seriesColor(s.key)})` }}>
+          <li key={s.key} className={styles.barItem} data-tone={tone ?? "none"} style={{ color: tone ? `var(--${tone})` : `var(${colors.get(s.key)})` }}>
             <span className={styles.barName} title={s.name}>{s.name}</span>
             <svg className={styles.bar} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
               <rect className={styles.barTrack} x="0" y="0" width="100" height="100" />

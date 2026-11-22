@@ -1,24 +1,39 @@
-// Series and threshold colours. Series take a Territories token by a stable hash of their key; the
-// canvas reads the token's value at draw time (`resolveToken`), never a hard-coded colour.
+// Series and threshold colours. A panel's series take Territories tokens in turn, so no two share
+// one until all eight are used; the canvas reads the token's value at draw time (`resolveToken`),
+// never a hard-coded colour.
 
+import type { ChartSeries } from "../dashboards/runPanel";
 import type { Threshold, ThresholdColor } from "../dashboards/schema";
 
-/** Never `--bad`: rose means a breached threshold, not "series 4". */
-export const SERIES_COLORS = ["--focus", "--kind", "--ok", "--warn", "--eks", "--aks", "--gke", "--onprem"] as const;
+/**
+ * In the order series take them: neighbours far apart in hue (lavender, orange, green, blue, grey,
+ * sky), and `--ok` and `--warn` last, since stat, gauge, bar and threshold lines use them for Good
+ * and Warning. Never `--bad`: rose means a breached threshold, not "series 4".
+ */
+export const SERIES_COLORS = ["--focus", "--eks", "--gke", "--aks", "--onprem", "--kind", "--ok", "--warn"] as const;
 
-/** FNV-1a over UTF-16 code units. */
-function fnv1a(text: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
+type Colored = Pick<ChartSeries, "key" | "labels" | "queryRef" | "projectName">;
 
-/** The token name (e.g. `--kind`) for a series key: the same key always gets the same one. */
-export function seriesColor(key: string): string {
-  return SERIES_COLORS[fnv1a(key) % SERIES_COLORS.length];
+const labelText = (labels: Record<string, string>) => JSON.stringify(Object.keys(labels).sort().map((k) => [k, labels[k]]));
+
+/**
+ * A token for each of a panel's series (by key), all of them, hidden ones included, so hiding one
+ * never recolours the rest. Series take the tokens in the panel's order: its queries and projects
+ * as they run, then each one's series by their labels (a source may list them in any order), so
+ * the same series keep the same colours from one refresh to the next. The tokens repeat only
+ * after all eight are used.
+ */
+export function seriesColors(series: readonly Colored[]): Map<string, string> {
+  const groups = new Map<string, number>();
+  const ranked = series.map((s) => {
+    const group = `${s.queryRef}\u0000${s.projectName ?? ""}`;
+    if (!groups.has(group)) groups.set(group, groups.size);
+    return { key: s.key, group: groups.get(group) as number, labels: labelText(s.labels) };
+  });
+  ranked.sort((a, b) => a.group - b.group || (a.labels < b.labels ? -1 : a.labels > b.labels ? 1 : 0) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const out = new Map<string, string>();
+  for (const r of ranked) if (!out.has(r.key)) out.set(r.key, SERIES_COLORS[out.size % SERIES_COLORS.length]);
+  return out;
 }
 
 /** The highest threshold at or below the value, or null below them all. */
