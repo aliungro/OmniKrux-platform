@@ -7,6 +7,7 @@ import type {
   AuthOut, DashboardRefOut, DiscoveryOut, FieldCatalogOut, GroupOut, HealthOut, LinkOut, ProjectKind, ProjectOut,
   QueryErrorCode, QueryRequest, QueryResponse, SetupIn, SourceIn, SourceOut, SuggestOut, TreeColor, TreeDashboard, TreeOut,
 } from "../api/types";
+import type { CatalogOut } from "../catalog/api";
 import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut } from "../dashboards/api";
 import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem } from "../dashboards/schema";
 
@@ -41,6 +42,8 @@ export interface FakeMonitoringState {
   readyMade: Record<string, ReadyMadeOut[]>;
   /** Label values by `"<project id>|<label>"`. */
   labelValues: Record<string, string[]>;
+  /** Project catalogs by project id (`GET /projects/{id}/catalog`; absent answers 404). */
+  catalogs: Record<string, CatalogOut>;
 }
 
 export interface FakeMonitoringApi {
@@ -116,7 +119,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
   const state: FakeMonitoringState = {
     sources: [], projects: [], groups: [], health: {}, discovery: {}, fields: {}, queries: {},
     suggestion: { filter: "", origin: "none", reason: null },
-    queryAnswers: {}, dashboards: {}, readyMade: {}, labelValues: {},
+    queryAnswers: {}, dashboards: {}, readyMade: {}, labelValues: {}, catalogs: {},
     ...seed,
   };
   const requests: FakeMonitoringApi["requests"] = [];
@@ -386,6 +389,10 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     if (a === "dashboards") return dashboardRoute(method, seg, query, body);
     if (is("GET", "projects", null, "ready-made")) {
       return project(b) ? json(state.readyMade[b] ?? []) : dashboardError(404, "not_found", DASHBOARD_GONE);
+    }
+    if (is("GET", "projects", null, "catalog")) {
+      const found = state.catalogs[b];
+      return found && project(b) ? json(found) : queryError(404, "not_found", QUERY_PROJECT_GONE);
     }
     if (is("POST", "query", "batch")) {
       const items = (body as Obj).queries;

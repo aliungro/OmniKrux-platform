@@ -29,7 +29,7 @@ function validationWords(detail: unknown[]): string | undefined {
   return parts.length ? `The query was refused: ${parts.join("; ")}.` : undefined;
 }
 
-async function failureOf(res: Response): Promise<QueryFailure> {
+export async function failureOf(res: Response): Promise<QueryFailure> {
   let detail: unknown;
   try {
     detail = ((await res.json()) as { detail?: unknown } | null)?.detail;

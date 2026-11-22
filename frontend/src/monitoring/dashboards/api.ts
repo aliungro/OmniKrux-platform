@@ -265,9 +265,9 @@ export const useLabelValues = (p: LabelValuesParams | null): UseQueryResult<Labe
     retry: false,
   });
 
-/** Keys a dashboard change leaves alone: the queries behind panels and variables didn't change. */
+/** Keys a dashboard change leaves alone: panel queries, label values and catalogs did not change. */
 function keepsData(key: readonly unknown[]): boolean {
-  return key[0] === "monitoring" && (key[1] === "panel" || key[1] === "labelValues");
+  return key[0] === "monitoring" && (key[1] === "panel" || key[1] === "labelValues" || key[1] === "catalog");
 }
 
 /**
