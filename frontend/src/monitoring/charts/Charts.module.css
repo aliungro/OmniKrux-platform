@@ -565,3 +565,97 @@
   margin: 0;
   color: var(--ink);
 }
+
+/* The small chart in a preview card. */
+.miniBox {
+  display: block;
+  min-height: 56px;
+  min-width: 0;
+}
+
+.mini {
+  display: block;
+  width: 100%;
+  height: 56px;
+}
+
+.miniDraw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: miniDraw 700ms cubic-bezier(.2, .8, .2, 1) forwards;
+}
+
+@keyframes miniDraw {
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .miniDraw { animation: none; stroke-dashoffset: 0; }
+}
+
+.miniValue {
+  display: block;
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 22px;
+  line-height: 56px;
+}
+
+.miniBars {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 4px;
+}
+
+.miniBarRow {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.miniBarName {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.miniBarTrack {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surf-2);
+  overflow: hidden;
+}
+
+.miniBarFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.miniBarValue {
+  color: var(--ink-2);
+  font-family: "Geist Mono", ui-monospace, monospace;
+}
+
+.miniLogs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.miniLog {
+  color: var(--ink-2);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.miniLogTime {
+  color: var(--ink-3);
+}
