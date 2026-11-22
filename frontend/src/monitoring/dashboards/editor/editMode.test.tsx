@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { DashboardSpec } from "../schema";
 import { editSessions } from "./useDashboardEditor";
