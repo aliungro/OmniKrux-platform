@@ -264,8 +264,7 @@
 .varButton:focus-visible,
 .apply:focus-visible,
 .retry:focus-visible,
-.retryPage:focus-visible,
-.json:focus-visible {
+.retryPage:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -453,16 +452,9 @@
   padding: 10px 16px 32px;
 }
 
-.json {
-  margin: 0;
-  padding: 14px 16px;
-  overflow: auto;
-  border: 1px solid var(--rule);
-  border-radius: 10px;
-  background: var(--bg);
-  color: var(--ink);
-  font: 12px/1.6 "Geist Mono", ui-monospace, monospace;
-  white-space: pre;
+/* On the Dashboard tab while the JSON tab holds text that doesn't apply (the notice's own look). */
+.jsonWarning {
+  margin: 0 0 10px;
 }
 
 /* --- Variables ---------------------------------------------------------------------------- */

@@ -1,0 +1,249 @@
+/* The Versions tab: the versions are a sequence, so they hang off one thin rail, newest at the
+   top, the current one a filled focus-coloured node. Picked rows tint quietly. Territories tokens
+   only. */
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 1080px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.hint {
+  flex: 1 1 240px;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.list {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf);
+  overflow: hidden;
+}
+
+.row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px 14px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 10px 14px;
+}
+
+.row + .row {
+  border-top: 1px solid var(--rule);
+}
+
+/* The rail: a line through every node, stopping at the first and last. */
+.row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(14px + 18px + 12px + 6px);
+  width: 2px;
+  background: var(--rule);
+}
+
+.row:first-child::before {
+  top: 50%;
+}
+
+.row:last-child::before {
+  bottom: 50%;
+}
+
+.row:only-child::before {
+  display: none;
+}
+
+.row[data-picked] {
+  background: color-mix(in srgb, var(--focus) 7%, var(--surf));
+}
+
+.pick {
+  grid-column: 1;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--focus);
+  cursor: pointer;
+}
+
+.node {
+  position: relative;
+  grid-column: 2;
+  justify-self: center;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--ink-3);
+  border-radius: 50%;
+  background: var(--surf);
+}
+
+.row[data-current] .node {
+  border-color: var(--focus);
+  background: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 22%, transparent);
+}
+
+.what {
+  grid-column: 3;
+  min-width: 0;
+}
+
+.nameLine {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.name {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.current {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--focus) 16%, transparent);
+  color: var(--focus);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.meta {
+  margin: 2px 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  grid-column: 4;
+  display: flex;
+  gap: 6px;
+}
+
+.refused {
+  grid-column: 3 / -1;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--warn);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--surf));
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not([aria-disabled="true"]) {
+  border-color: var(--ink-3);
+}
+
+.go {
+  border-color: var(--focus);
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.go:hover:not([aria-disabled="true"]) {
+  border-color: var(--focus);
+}
+
+.go[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn:focus-visible,
+.pick:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.compare {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compareBar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.compareProblem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--rule));
+  border-left: 3px solid var(--bad);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 7%, var(--surf));
+}
+
+.problemLine {
+  flex: 1 1 280px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.note {
+  margin: 0;
+  padding: 14px 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* The restore question's body (inside the shared dialog shell). */
+.dialogText {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .row {
+    grid-template-columns: 18px 14px minmax(0, 1fr);
+    row-gap: 8px;
+  }
+
+  .actions {
+    grid-column: 3;
+  }
+}

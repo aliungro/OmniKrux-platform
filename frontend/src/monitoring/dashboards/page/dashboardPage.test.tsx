@@ -81,7 +81,7 @@ describe("Dashboard page", () => {
 
     const views = screen.getByRole("tablist", { name: "Dashboard views" });
     expect(within(views).getAllByRole("tab").map((t) => [t.textContent, t.getAttribute("aria-keyshortcuts")]))
-      .toEqual([["Dashboard", "1"], ["JSON", "2"]]);
+      .toEqual([["Dashboard", "1"], ["JSON", "2"], ["Versions", "3"]]);
     await user.keyboard("2");
     const jsonTab = within(views).getByRole("tab", { name: "JSON" });
     expect(jsonTab.getAttribute("aria-selected")).toBe("true");

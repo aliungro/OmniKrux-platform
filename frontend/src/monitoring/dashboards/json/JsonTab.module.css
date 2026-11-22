@@ -1,0 +1,183 @@
+/* The JSON tab: one framed document with its state line on top. The state line is the live
+   signal (D1): green while the text applies, rose while the dashboard holds the last valid
+   version. Editing draws a focus-coloured rule along the bar's left, as the YAML editor does.
+   Territories tokens only. */
+.frame {
+  container-type: inline-size;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 12px 8px 14px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surf);
+}
+
+.frame[data-state="live"] .bar {
+  box-shadow: inset 2px 0 0 var(--focus);
+}
+
+.frame[data-state="bad"] .bar {
+  box-shadow: inset 2px 0 0 var(--bad);
+  background: color-mix(in srgb, var(--bad) 6%, var(--surf));
+}
+
+.state {
+  min-width: 0;
+  margin: 0;
+  color: var(--ok);
+  font: 11px/1.5 "Geist Mono", ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+
+.frame[data-state="bad"] .state {
+  color: color-mix(in srgb, var(--bad) 70%, var(--ink));
+}
+
+.more {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--rule));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.more:hover,
+.more[aria-expanded="true"] {
+  color: var(--ink);
+  border-color: var(--bad);
+}
+
+.push {
+  flex: 1;
+}
+
+.hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.k {
+  min-width: 17px;
+  height: 17px;
+  margin: 0 1px;
+  padding: 0 4px;
+  font-size: 10px;
+  vertical-align: middle;
+}
+
+@container (max-width: 640px) {
+  .hint {
+    display: none;
+  }
+}
+
+.btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not([aria-disabled="true"]) {
+  border-color: var(--ink-3);
+}
+
+.btn[aria-disabled="true"] {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.go {
+  border-color: var(--focus);
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.go:hover:not([aria-disabled="true"]) {
+  border-color: var(--focus);
+}
+
+.go[aria-disabled="true"] {
+  opacity: 0.5;
+  color: var(--bg);
+}
+
+.btn:focus-visible,
+.more:focus-visible,
+.code:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.problems {
+  margin: 0;
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--rule);
+  list-style: none;
+  background: color-mix(in srgb, var(--bad) 4%, var(--bg));
+}
+
+.problem {
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.path {
+  color: var(--ink);
+  font: 11px "Geist Mono", ui-monospace, monospace;
+}
+
+.editorBox {
+  outline: none;
+}
+
+.editor {
+  max-height: min(68vh, 760px);
+  overflow: auto;
+}
+
+/* Before CodeMirror has loaded, and for ready-made views: the same type and colours. */
+.code {
+  margin: 0;
+  max-height: min(68vh, 760px);
+  padding: 10px 16px;
+  overflow: auto;
+  color: var(--ink);
+  font: 12px/1.6 "Geist Mono", ui-monospace, monospace;
+  white-space: pre;
+}
+
+.failed {
+  margin: 0;
+  padding: 8px 14px;
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-size: 13px;
+  font-weight: 600;
+}

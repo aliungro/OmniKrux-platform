@@ -70,7 +70,8 @@
   background: color-mix(in srgb, var(--bad) 7%, var(--surf));
 }
 
-.notice[data-kind="conflict"] {
+.notice[data-kind="conflict"],
+.notice[data-kind="json"] {
   align-items: center;
   border-color: color-mix(in srgb, var(--warn) 40%, var(--rule));
   border-left-color: var(--warn);
@@ -82,7 +83,8 @@
   min-width: 0;
 }
 
-.notice[data-kind="conflict"] .noticeLine {
+.notice[data-kind="conflict"] .noticeLine,
+.notice[data-kind="json"] .noticeLine {
   flex: 1 1 320px;
 }
 

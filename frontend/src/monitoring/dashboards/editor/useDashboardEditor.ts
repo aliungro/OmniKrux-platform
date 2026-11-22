@@ -18,7 +18,8 @@ export const editSessions = new Map<string /* tab id */, EditorState>();
 
 export interface DashboardEditor {
   state: EditorState;
-  dispatch(action: EditorAction): void;
+  /** Applies the action now; returns the state it made (the JSON tab reads its own result). */
+  dispatch(action: EditorAction): EditorState;
   /** Saves the draft over the version it started from; a refusal is kept in `saveError`. */
   save(): Promise<void>;
   /** Moves the base to the newer saved version (after reviewing it), then saves over it. */
@@ -61,7 +62,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
     const live = sessionFor(tabId, dashboardId);
     const from = live.mode === "edit" ? live : current.current;
     const next = editorReducer(from, action);
-    if (next === from) return;
+    if (next === from) return from;
     current.current = next;
     if (next.mode === "edit") editSessions.set(tabId, next);
     else if (sessionFor(tabId, dashboardId).mode === "edit") editSessions.delete(tabId);
@@ -70,6 +71,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
       setConflict(null);
     }
     setState(next);
+    return next;
   }, [tabId, dashboardId]);
 
   const send = useCallback(async (baseVersion: number) => {

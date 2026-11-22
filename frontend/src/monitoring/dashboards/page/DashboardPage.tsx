@@ -1,8 +1,8 @@
-// A dashboard: header, Updated line, ready-made note, variables and the panel grid; and the JSON
-// tab (the document, read-only until the JSON editor arrives). Edit turns the grid into tiles and
-// the header into Discard and Save dashboard (edit mode, kept per workspace tab). Time,
-// variables, auto-refresh and the view tab live in the tab's view (replace navigations).
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+// A dashboard: header, Updated line, ready-made note, variables and the panel grid; the JSON tab
+// (the document, edited live) and, for a saved dashboard, the Versions tab. Edit turns the grid
+// into tiles and the header into Discard and Save dashboard (edit mode, kept per workspace tab).
+// Time, variables, auto-refresh and the view tab live in the tab's view (replace navigations).
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { failure } from "../../../api/http";
 import { isEditable, pressed } from "../../../features/chrome/shortcuts";
 import type { MonitoringPageProps } from "../../MonitoringApp";
@@ -10,15 +10,18 @@ import { Gone, keyboardIsFree } from "../../pages/Gone";
 import { MONITORING_HOME, type MonitoringView } from "../../shell/tabState";
 import { useDashboard, useReadyMade, type DashboardOut } from "../api";
 import type { VarValue } from "../interpolate";
-import { dashboardJson, type RefreshSpec, type TimeSpec } from "../schema";
+import type { RefreshSpec, TimeSpec } from "../schema";
 import { DashboardGrid } from "../grid/DashboardGrid";
 import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/EditBar";
-import { isDirty } from "../editor/editorState";
+import { isDirty, type EditorState } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
 import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
 import { DraftBanner, DraftsOffNotice, EditedElsewhere } from "../drafts/DraftBanner";
 import { useDraftOffer } from "../drafts/useDraft";
 import { readDraft, type StoredDraft } from "../drafts/draftStore";
+import { JsonTab, ReadyMadeJson } from "../json/JsonTab";
+import { VersionsTab } from "../versions/VersionsTab";
+import e from "../editor/EditBar.module.css";
 import { DashboardHeader, type DashboardTab, type MenuAction } from "./DashboardHeader";
 import { pageLetter } from "./keys";
 import { RefreshControl } from "./RefreshControl";
@@ -58,7 +61,8 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   // In edit mode the page shows the draft; the saved document otherwise.
   const spec = editing ? editing.draft : dashboard.spec;
   const ctx = useDashboardContext(view, spec, dashboard.owner_kind, dashboard.owner_id);
-  const tabs: DashboardTab[] = ["dashboard", "json"];
+  // Ready-made views have no versions (their ids answer 404 there).
+  const tabs: DashboardTab[] = ready ? ["dashboard", "json"] : ["dashboard", "json", "versions"];
   const tab: DashboardTab = view.tab && tabs.includes(view.tab) ? view.tab : "dashboard";
 
   const base = useId();
@@ -74,7 +78,10 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   const saveButton = useRef<HTMLButtonElement>(null);
   const page = useRef<HTMLElement>(null);
   const [timeOpen, setTimeOpen] = useState(false);
-  const [askDiscard, setAskDiscard] = useState(false);
+  /** Asking before Discard drops changes; the keyboard goes back to the Discard it came from. */
+  const [askDiscard, setAskDiscard] = useState<RefObject<HTMLButtonElement | null> | null>(null);
+  /** The JSON tab's typing that hasn't paused yet: Save and Discard apply it first. */
+  const flushJson = useRef<(() => EditorState | null) | null>(null);
 
   // A draft left behind (a reload, Browser Back, Keep draft and leave) is offered back when the
   // page opens without a live session; not while another tab has unsaved changes to this dashboard.
@@ -94,15 +101,17 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   /**
    * Edit, or Restore draft: a stored draft is where editing starts (Discard draft starts afresh).
    * Its base stays the version it started from, so a save over a newer one is reviewed first.
+   * False: another tab of this window edits it, and the page says so.
    */
-  const startEditing = (offered: StoredDraft | null) => {
+  const startEditing = (offered: StoredDraft | null): boolean => {
     const other = editingTab();
     setElsewhere(other);
-    if (other) return;
+    if (other) return false;
     const d = readDraft(dashboard.id) ?? offered;
     if (d) editor.restore(d, dashboard.spec, dashboard.owner_kind);
     else editor.dispatch({ type: "start", dashboardId: dashboard.id, version: dashboard.version, spec: dashboard.spec });
     offer.dismiss();
+    return true;
   };
   useLayoutEffect(() => { if (elsewhere) goElsewhere.current?.focus(); }, [elsewhere]);
   const restoreDraft = () => startEditing(offer.draft);
@@ -145,14 +154,23 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
     refreshButton.current?.focus();
   }, [ctx]);
   // Copy to edit (a ready-made view) arrives with creating and copying.
-  const edit = ready ? undefined : () => startEditing(null);
-  const save = () => { void editor.save(); };
+  const edit = ready ? undefined : () => { startEditing(null); };
+  const save = () => {
+    flushJson.current?.();
+    return editor.save();
+  };
   const saveRef = useRef(save);
   saveRef.current = save;
-  const discard = () => {
-    if (isDirty(editor.state)) setAskDiscard(true);
+  // Changes, or JSON text that doesn't apply yet, are asked about first.
+  const discard = (from: RefObject<HTMLButtonElement | null> = discardButton) => {
+    const st = flushJson.current?.() ?? editor.state;
+    if (isDirty(st) || (st.mode === "edit" && st.jsonText !== null)) setAskDiscard(from);
     else editor.discard();
   };
+  // Restoring a version under a draft or an edit session (here, another tab, another window) would
+  // leave that draft based on a version that is no longer current: it is refused.
+  const restoreBlocked = () => editor.state.mode === "edit" || readDraft(dashboard.id) !== null
+    || [...editSessions.values()].some((x) => x.mode === "edit" && x.dashboardId === dashboard.id);
 
   // Edit mode ended (saved or discarded): the keyboard goes to Edit, never to <body>.
   const isEditing = editing !== null;
@@ -161,7 +179,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   // went away under it, so it goes to Save dashboard. With the grid, the first tile already has it.
   useLayoutEffect(() => {
     if (wasEditing.current && !isEditing) {
-      setAskDiscard(false);
+      setAskDiscard(null);
       editButton.current?.focus();
     } else if (!wasEditing.current && isEditing && focusLost()) {
       saveButton.current?.focus();
@@ -215,7 +233,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
       if (!here && isEditable(t)) return;
       e.preventDefault();
       if (document.querySelector('[aria-modal="true"]') !== null || e.repeat) return;
-      saveRef.current();
+      void saveRef.current();
     };
     document.addEventListener("keydown", onSave, true);
     return () => document.removeEventListener("keydown", onSave, true);
@@ -256,7 +274,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
           ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft} />
           : undefined}
         editControls={editing
-          ? <EditControls saving={editor.saving} onDiscard={discard} onSave={save} discardRef={discardButton} saveRef={saveButton} />
+          ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton} />
           : undefined} />
       {editing && !editor.draftsWork && <DraftsOffNotice />}
       {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
@@ -266,8 +284,8 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
       )}
       {editing && conflict === null && otherError && <EditNotice error={otherError} onShowJson={() => selectTab("json")} actionRef={showInJson} />}
       {askDiscard && editing && (
-        <DiscardDialog title={editing.base.title || dashboard.title} restoreFocusTo={discardButton}
-          onCancel={() => setAskDiscard(false)} onDiscard={() => editor.discard()} />
+        <DiscardDialog title={editing.base.title || dashboard.title} restoreFocusTo={askDiscard}
+          onCancel={() => setAskDiscard(null)} onDiscard={() => editor.discard()} />
       )}
       <UpdatedLine status={ctx.status} />
       {ready && <ReadyNote dashboard={dashboard} />}
@@ -279,6 +297,12 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
               onClick={() => { if (!ctx.ownerFailure?.retrying) ctx.ownerFailure?.retry(); }}>
               {ctx.ownerFailure.retrying ? "Trying again…" : "Try again"}
             </button>
+          </div>
+        )}
+        {tab === "dashboard" && editing && editing.jsonProblems.length > 0 && (
+          <div className={`${e.notice} ${s.jsonWarning}`} data-kind="json" role="status">
+            <p className={e.noticeLine}>The JSON has a problem, so the dashboard shows the last valid version. Fix it on the JSON tab.</p>
+            <button type="button" className={e.noticeAction} onClick={() => selectTab("json")}>Go to JSON</button>
           </div>
         )}
         {tab === "dashboard" && !ctx.ownerFailure && (
@@ -293,7 +317,13 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
               } : undefined} />
           </>
         )}
-        {tab === "json" && <pre className={s.json} aria-label="Dashboard JSON" tabIndex={0}>{dashboardJson(spec)}</pre>}
+        {tab === "json" && (ready
+          ? <ReadyMadeJson spec={dashboard.spec} />
+          : <JsonTab dashboard={dashboard} editing={editing} dispatch={editor.dispatch} onStartEditing={() => startEditing(null)}
+              onSave={save} onDiscard={discard} saving={editor.saving} flushRef={flushJson} />)}
+        {tab === "versions" && !ready && (
+          <VersionsTab dashboard={dashboard} restoreBlocked={restoreBlocked} onRestored={() => selectTab("dashboard")} />
+        )}
       </div>
     </section>
   );
