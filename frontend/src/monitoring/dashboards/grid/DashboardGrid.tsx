@@ -28,11 +28,13 @@ interface Props {
   onAddPanel?(opener: HTMLElement | null): void;
   /** Edit mode: what the page may ask of the grid (Empty panel, the live region, a tile's focus); null otherwise. */
   controls?: RefObject<GridControls | null>;
+  /** Edit mode on a new dashboard with the suggestions open: the dashed "Your new dashboard" board. */
+  board?: boolean;
 }
 
 export type GridControls = Pick<GridEditing, "addEmpty" | "announce" | "focusPanel">;
 
-export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, range, waiting, blocked, refreshSeq, status, editor, onAddPanel, controls }: Props) {
+export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, range, waiting, blocked, refreshSeq, status, editor, onAddPanel, controls, board }: Props) {
   const gridRef = useRef<HTMLDivElement>(null);
   const edit = useEditableGrid(editor ?? null, gridRef, owner, { onAddPanel });
   const addEmpty = edit?.addEmpty;
@@ -58,6 +60,14 @@ export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, ran
             vars={vars} range={range} waiting={waiting(panel)} blocked={blocked(panel)} refreshSeq={refreshSeq} status={status}
             changeId={editor?.state.changes[panel.id] ?? 0} layout={edit?.layoutOf(panel)} tile={edit?.tile(panel)} />
         ))}
+        {edit && board && (
+          <div className={s.board} data-board="">
+            <p className={s.boardText}>
+              <strong className={s.boardTitle}>Your new dashboard</strong>
+              <span>Click a suggestion on the left; it flies into place.</span>
+            </p>
+          </div>
+        )}
         {edit?.layer}
       </div>
       {edit?.aside}

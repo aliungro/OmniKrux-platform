@@ -49,12 +49,12 @@ function ownerKey(owner: DashboardOwner | null): string {
 }
 
 /**
- * The previews of the first `MAX_PREVIEWS` candidates, by candidate key. While the owner isn't
+ * The previews of the first `max` (`MAX_PREVIEWS`) candidates, by candidate key. While the owner isn't
  * known yet nothing runs and no candidate has a preview (nothing says Loading… for a run that
  * hasn't started).
  */
-export function usePreviews(candidates: Candidate[], ctx: PreviewContext): Record<string, PreviewState> {
-  const shown = candidates.slice(0, MAX_PREVIEWS);
+export function usePreviews(candidates: Candidate[], ctx: PreviewContext, max: number = MAX_PREVIEWS): Record<string, PreviewState> {
+  const shown = candidates.slice(0, max);
   const key = JSON.stringify([
     shown.map((c) => [c.key, c.expr, c.panelType, c.sourceId, c.options ?? null]),
     ownerKey(ctx.owner), ctx.vars, ctx.range.start, ctx.range.end,

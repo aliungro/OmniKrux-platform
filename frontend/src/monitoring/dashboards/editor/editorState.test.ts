@@ -229,4 +229,23 @@ describe("insertPanel", () => {
     expect(after).toBe(broken);
     expect(edit(after).jsonText).toBe("{ nope");
   });
+
+  it("suggestions: start opens it for a draft with no panels, resume likewise, and it isn't a draft edit", () => {
+    expect(start().suggestions).toBe("closed");
+    const empty = start(spec("Empty", []));
+    expect(empty.suggestions).toBe("open");
+    const closed = edit(run(empty, { type: "suggestions", open: false }));
+    expect(closed.suggestions).toBe("closed");
+    expect(edit(run(closed, { type: "suggestions", open: false }))).toBe(closed);
+    expect(isDraftEdit({ type: "suggestions", open: true })).toBe(false);
+    const resumeWith = (draft: DashboardSpec) => edit(editorReducer(VIEW, { type: "resume", dashboardId: "d1", baseVersion: 1, base: spec("Empty", []), draft, jsonText: null }));
+    expect(resumeWith(spec("Empty", [])).suggestions).toBe("open");
+    expect(resumeWith(doc()).suggestions).toBe("closed");
+  });
+
+  it("suggestions can be closed while the JSON text doesn't apply", () => {
+    const bad = edit(run(start(spec("Empty", [])), { type: "setJson", text: "{ nope", ownerKind: "project" }));
+    expect(bad.jsonText).not.toBeNull();
+    expect(edit(run(bad, { type: "suggestions", open: false })).suggestions).toBe("closed");
+  });
 });

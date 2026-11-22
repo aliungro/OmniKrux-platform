@@ -9,6 +9,7 @@ import { failure } from "../../../api/http";
 import { isEditable, pressed } from "../../../features/chrome/shortcuts";
 import { AddPanelSearch } from "../../build/AddPanelSearch";
 import { useFlyIn } from "../../build/flyIn";
+import { RailLayout, SuggestionsRail } from "../../build/SuggestionsRail";
 import { focusMainFrom } from "../../focus";
 import type { MonitoringPageProps } from "../../MonitoringApp";
 import { Gone, keyboardIsFree } from "../../pages/Gone";
@@ -257,6 +258,28 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     setSearching(false);
     setAdded({ kind: "panel", id: panel.id, title: panel.title.trim() || "Untitled panel" });
   };
+  // The suggestions rail (D2): an add flies the card to its tile and leaves the keyboard in the rail.
+  const [flying, setFlying] = useState<string | null>(null);
+  const addFromRail = (panel: NewPanel, from: DOMRect): boolean => {
+    const action: EditorAction = { type: "insertPanel", panel, select: false };
+    // Refused while the JSON text doesn't apply: the rail says why in its own live region.
+    if (editor.state.mode !== "edit" || editor.state.jsonText !== null || !isDraftEdit(action)) return false;
+    editor.dispatch(action);
+    launch(panel.id, from);
+    setFlying(panel.id);
+    return true;
+  };
+  useEffect(() => {
+    if (flying === null) return;
+    setFlying(null);
+    const tile = Array.from(page.current?.querySelectorAll<HTMLElement>("[data-tile-id]") ?? []).find((t) => t.dataset.tileId === flying);
+    if (tile) tileRef(flying)(tile);
+  }, [flying, tileRef]);
+  const toAddPanel = () => (page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current)?.focus();
+  const hideSuggestions = () => {
+    toAddPanel();
+    editor.dispatch({ type: "suggestions", open: false });
+  };
   const emptyFromSearch = () => {
     if (editor.state.mode !== "edit" || refusedByJson({ type: "addPanel", panelType: "timeseries" })) return;
     searchOpener.current = null;
@@ -464,12 +487,19 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
             <VariablesBar projects={ctx.projects} projectsLoading={ctx.owner === null} variables={ctx.variables}
               onVar={setVar} onProjects={(value) => setVar(PROJECTS_VAR, value)} onRetry={ctx.retryVariable}
               onOpenProject={(p, e) => openPage({ page: "project", id: p.id }, e)} />
+            <RailLayout rail={editing && editing.suggestions === "open" ? (
+              <SuggestionsRail key={editing.writer} owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name}
+                ownerKind={dashboard.owner_kind} vars={ctx.vars} range={ctx.range} draft={editing.draft}
+                onAdd={addFromRail} onClose={hideSuggestions} onEscape={toAddPanel} />
+            ) : null}>
             <DashboardGrid dashboardId={dashboard.id} panels={spec.panels} owner={ctx.owner} ownerName={ctx.ownerName}
               vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} blocked={ctx.blocked} refreshSeq={ctx.refreshSeq} status={ctx.status}
               editor={editing ? {
                 state: editing, dispatch: editor.dispatch, ownerKind: dashboard.owner_kind, onLeave: () => saveButton.current?.focus(),
               } : undefined}
-              onAddPanel={editing ? openSearch : undefined} controls={grid} />
+              onAddPanel={editing ? openSearch : undefined} controls={grid}
+              board={editing !== null && editing.suggestions === "open" && editing.draft.panels.length === 0} />
+            </RailLayout>
           </>
         )}
         {tab === "json" && (ready

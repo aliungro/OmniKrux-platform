@@ -74,6 +74,7 @@ export default function PreviewCard({ candidate, preview, active, added = false,
       className={styles.card}
       data-active={active ? "true" : undefined}
       data-added={added ? "true" : undefined}
+      aria-disabled={added || undefined}
       onClick={pick}
     >
       {content}

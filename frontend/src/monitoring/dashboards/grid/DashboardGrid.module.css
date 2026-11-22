@@ -83,6 +83,38 @@
   font-size: 13.5px;
 }
 
+/* A new dashboard with the suggestions open: a dashed board under the Add panel tile, which sits
+   in its left half; the words are in the right half. */
+.board {
+  grid-column: 1 / -1;
+  grid-row: 1 / span 8;
+  display: grid;
+  grid-template-columns: subgrid;
+  min-width: 0;
+  border: 1.5px dashed var(--rule);
+  border-radius: 12px;
+}
+
+.boardText {
+  grid-column: 13 / -1;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 20px;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.boardTitle {
+  color: var(--ink-2);
+  font-size: 16px;
+  font-weight: 600;
+}
+
 .panel {
   grid-column: var(--col);
   grid-row: var(--row);
@@ -287,6 +319,16 @@
 
   .grid[data-editing] {
     background-image: none;
+  }
+
+  .board {
+    grid-row: auto;
+    display: block;
+    border: 0;
+  }
+
+  .boardText {
+    padding: 4px 0;
   }
 
   .panel {

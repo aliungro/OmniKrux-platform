@@ -27,6 +27,8 @@ export interface EditingState {
   changes: Record<string, number>;
   /** This session's id in browser storage: it removes only a draft it wrote itself. */
   writer: string;
+  /** The suggestions rail (D2): open for a draft with no panels. Opening or closing it isn't a draft edit. */
+  suggestions: "open" | "closed";
 }
 
 export type EditorState = { mode: "view" } | EditingState;
@@ -43,6 +45,7 @@ export type EditorAction =
   | { type: "place"; id: string; to: Layout }
   | { type: "nudge" | "grow"; id: string; dir: Dir }
   | { type: "select"; id: string | null }
+  | { type: "suggestions"; open: boolean }
   | { type: "sideTab"; tab: SideTab }
   | { type: "setJson"; text: string; ownerKind: OwnerKind }
   | { type: "setDashboard"; update: (d: DashboardSpec) => DashboardSpec }
@@ -153,7 +156,7 @@ export function newWriter(): string {
 }
 
 function fresh(dashboardId: string, baseVersion: number, base: DashboardSpec, draft: DashboardSpec, jsonText: string | null, writer = newWriter()): EditingState {
-  return { mode: "edit", dashboardId, baseVersion, base, draft, selected: null, sideTab: "query", jsonText, jsonProblems: [], changes: {}, writer };
+  return { mode: "edit", dashboardId, baseVersion, base, draft, selected: null, sideTab: "query", jsonText, jsonProblems: [], changes: {}, writer, suggestions: draft.panels.length === 0 ? "open" : "closed" };
 }
 
 /**
@@ -219,6 +222,10 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "select":
       if (action.id === state.selected) return state;
       return { ...state, selected: action.id, ...(action.id !== null ? { sideTab: "query" as const } : {}) };
+    case "suggestions": {
+      const next = action.open ? "open" : "closed";
+      return next === state.suggestions ? state : { ...state, suggestions: next };
+    }
     case "sideTab":
       return action.tab === state.sideTab ? state : { ...state, sideTab: action.tab };
     case "setJson": {
