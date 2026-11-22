@@ -88,14 +88,16 @@ Variables are placed in a query with care. OmniKrux escapes a value for the quot
 
 ### What a panel says
 
-- **Loading…** while its queries run.
+- **Loading…** until its queries first answer. Later runs (a refresh, another time range or variable value) keep the chart until the new answer arrives, and the **Updating…** line above says data is being read.
 - **This panel has no query yet.** when no query has text.
 - **No data in this time range.** when the queries answered with nothing.
 - **Partial** (a mark in the panel's header; hover or focus it for the reasons) when some queries failed, were skipped, or an answer was cut short. The rest is drawn and the reasons say what is missing. A failure is never shown as "no data".
 - **Source unreachable** when every query failed because the tool did not answer (it is down, refused the sign-in, timed out or answered with an error of its own). **Try again** runs the panel's queries once more.
-- **Query error** when every query was refused, for example a query the tool can't parse, a variable that can't be placed, or a source that is no longer linked. The reason is the tool's or OmniKrux's own words.
+- **Query error** when every query was refused, for example a query the tool can't parse, a variable that can't be placed, or a source that is no longer linked. The reason is the tool's or OmniKrux's own words. A panel using a variable whose values couldn't be read, with nothing chosen, doesn't run at all: it says "$name couldn't load its values. Its menu above says why."
 
 A panel's **ⓘ** shows its description when it has one. A failed panel draws no chart; it never shows the answer from an earlier run as if it were current.
+
+If the dashboard itself can't be read again (for example when you come back to the window and the server doesn't answer), the page stays as it was, edits included, and says "Couldn't read this dashboard again, so it shows as last read." with the reason and **Try again**.
 
 The panel types are **Time series** (**Lines**, **Area** or **Stacked**), **Stat**, **Gauge**, **Bar**, **Table** (click a column header to sort it) and **Logs** (one Loki query; press Enter on a line to show its labels).
 
@@ -123,7 +125,7 @@ Charts redraw as you edit. A panel whose query you change morphs to the new data
 While you edit, OmniKrux keeps your unsaved changes as a draft in this browser: half a second after each change, and straight away when the page is hidden or goes away. The draft is removed when you save or discard.
 
 - Open the dashboard again (after a reload, after browser Back, or after **Keep draft and leave**) and a banner says "You have unsaved changes from …". **Restore draft** goes on editing from it, and **Discard draft** drops it. If the dashboard was saved again meanwhile, the banner says so, and saving your draft is then reviewed first (see below).
-- Closing a tab, or going elsewhere in it, with unsaved changes asks **Leave "…" with unsaved changes?** with **Stay**, **Discard changes** and **Keep draft and leave**. The browser's own Back button and a reload are not held back; they rely on the draft.
+- Closing a tab, or going elsewhere in it, with unsaved changes (JSON text that doesn't apply yet counts too) asks **Leave "…" with unsaved changes?** with **Stay**, **Discard changes** and **Keep draft and leave**. The browser's own Back button and a reload are not held back; they rely on the draft.
 - Only one edit session per dashboard runs in a browser window. Pressing **Edit** while another tab is editing it says "This dashboard is being edited in another tab." with **Go to that tab**.
 - If the same dashboard is edited in two browser windows, only one draft is stored: the one changed last wins.
 - If this browser blocks storage, the edit bar says "This browser isn't keeping drafts, so a reload loses unsaved changes." and the browser asks before a reload or close that would lose them. Leaving through OmniKrux then says "This browser can't keep drafts, so leaving loses these changes."
@@ -136,7 +138,7 @@ While the JSON text doesn't apply, **Save dashboard** is refused ("The JSON has 
 
 **Review changes** (Ctrl Enter in the editor) shows the saved version beside your changes and saves from there. If someone saved the dashboard in the meantime, the save is refused with "This dashboard was saved somewhere else since you started (version N). Review the differences before saving." **Review differences** shows both, **Save over it** saves your draft on top, and **Keep editing** goes back.
 
-A ready-made view's JSON is **Read-only**.
+A ready-made view's JSON is **Read-only**, with **Copy to edit** beside it.
 
 ### Versions
 
@@ -150,13 +152,13 @@ A project with a Prometheus-compatible source gets ready-made views, listed unde
 
 Each says what its Prometheus lacks and what that leaves empty: kube-state-metrics, container usage from the kubelet (cAdvisor) or node-exporter. If OmniKrux can't read the metric names to tell, it says why and doesn't guess. Node health needs node-exporter; where it isn't running the view still opens, with a note.
 
-**Copy to edit** (on the project's page, or in the view's header) copies the view into the project and opens the copy in edit mode. The copy is a normal dashboard with the same title.
+**Copy to edit** (on the project's page, in the view's header, or on its **JSON** tab) copies the view into the project and opens the copy in edit mode. The copy is a normal dashboard with the view's title, without "(copy)". If the project already has a dashboard with that title, a number is added, for example "Pod health (2)".
 
 ### Create, copy and delete
 
 - **New dashboard** is in the sidebar (also `N`, from anywhere in Monitoring) and on every project and group page. The **+** beside a project or group in the sidebar starts one for that owner. The dialog asks for a **Title** and **Goes to**, a project or a group, and **Create dashboard** opens the new, empty dashboard in edit mode with the keyboard on **Add panel**. A group dashboard runs each panel once per project in the group. The sidebar footer says where a new dashboard goes, and the button stays off until a project exists.
-- **Copy dashboard…** is in the **More actions** menu (**⋯**). It makes a new dashboard with the same panels for any project or group, titled "… (copy)" unless you choose another; the title must be unused by that owner. Sources the new owner doesn't have are set to its own first source of that type.
-- **Delete dashboard…** is in the same menu, and shows a review first: how many saved versions go with it, and your unsaved draft in this browser if there is one. If the dashboard was saved since you opened the review, it asks you to review again.
+- **Copy dashboard…** is in the **More actions** menu (**⋯**). It makes a new dashboard with the same panels for any project or group. The dialog suggests "… (copy)" as the title; whatever title you give must be unused by that owner. Sources the new owner doesn't have are set to its own first source of that type.
+- **Delete dashboard…** is in the same menu, and shows a review first: how many saved versions go with it, and your unsaved draft in this browser if there is one. If the dashboard was saved since you opened the review, it asks you to review again. If it was already deleted elsewhere, the delete simply goes through.
 - When the tab you create or copy from holds unsaved edits, the new dashboard opens in a new tab, so those edits aren't left with a question.
 - Deleting a project or a group deletes its dashboards and their versions with it; the review lists them first.
 
