@@ -2,7 +2,7 @@
 // the newest); ← and → move between them; Enter or a click brings one back with its source.
 
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { TrailEntry } from "./trail";
+import type { TrailEntry } from "./trailStore";
 import s from "./ExplorePage.module.css";
 
 const SHORT = 38;

@@ -9,7 +9,7 @@ import { pressed } from "../../features/chrome/shortcuts";
 import { getProject } from "../api/client";
 import { projectKey, useMonitoringTree } from "../api/hooks";
 import { RecommendationBar } from "../build/RecommendationBar";
-import { isLogQlMetric } from "../build/promql";
+import { isLogQlMetric, quickCheck } from "../build/promql";
 import { useOwnerCatalog } from "../catalog/merge";
 import { PANEL_COPY } from "../dashboards/grid/PanelState";
 import { usePrefersReducedMotion } from "../dashboards/motion";
@@ -24,9 +24,8 @@ import { keyboardIsFree } from "../pages/Gone";
 import { equalMonitoringView, type ExploreView, type MonitoringView } from "../shell/tabState";
 import { DEFAULT_EXPLORE_TIME, defaultExploreProject, defaultExploreSource, exploreTime } from "./exploreDefaults";
 import { FAILED_TITLE, MetaLine, QueryBar } from "./QueryBar";
-// With its extension: on a case-insensitive disk, "./Trail" would also match trail.ts.
-import { Trail, trailKey } from "./Trail.tsx";
-import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trail";
+import { Trail, trailKey } from "./Trail";
+import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trailStore";
 import { EXPLORE_DEBOUNCE_MS, explorePanel, useExploreRun } from "./useExploreRun";
 import s from "./ExplorePage.module.css";
 
@@ -62,7 +61,7 @@ interface ExploreProps extends MonitoringPageProps {
   write(next: ExploreView): void;
 }
 
-function Explore({ explore, write, nav, tabId }: ExploreProps) {
+function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
   const tree = useMonitoringTree();
   const recent = useMemo(() => readRecent(), []);
   const reduced = usePrefersReducedMotion();
@@ -98,11 +97,15 @@ function Explore({ explore, write, nav, tabId }: ExploreProps) {
     [time.from, time.to, expr, project, source?.source_id, tick],
   );
   const panelId = `explore:${tabId}`;
-  const { run, state } = useExploreRun({ project: projectOut, source, expr, range, kind, panelId });
+  const { run, state } = useExploreRun({ project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time) });
   const runNow = useCallback(() => { setTick((n) => n + 1); run(true); }, [run]);
 
   // --- the view: written a pause after a change; a replace keeps the keyboard where it is ---------
   const ready = tree.data !== undefined && (project === null || projectOut !== null);
+  // The view change waiting for its pause, the last view written (or opened), and this page's tab.
+  const pending = useRef<ExploreView | null>(null);
+  const written = useRef<MonitoringView>(explore);
+  const mountedTab = useRef(tabId);
   const logs = explore.logs;
   useEffect(() => {
     if (!ready) return;
@@ -111,9 +114,19 @@ function Explore({ explore, write, nav, tabId }: ExploreProps) {
     if (source) next.source = source.source_id;
     if (expr) next.expr = expr;
     if (logs) next.logs = logs;
-    const timer = setTimeout(() => write(next), EXPLORE_DEBOUNCE_MS);
+    pending.current = next;
+    const timer = setTimeout(() => {
+      pending.current = null;
+      written.current = next;
+      write(next);
+    }, EXPLORE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [ready, project, source, expr, time, logs, write]);
+  // Leaving before the pause is over (another tab, another app): the last change still goes to this
+  // tab's own view, and only if that view is still the one this page wrote (not a page opened since).
+  useEffect(() => () => {
+    if (pending.current) replaceTabView?.(mountedTab.current, pending.current, written.current);
+  }, [replaceTabView]);
 
   // --- the trail -------------------------------------------------------------------------------
   const [trailVersion, setTrailVersion] = useState(0);
@@ -187,8 +200,12 @@ function Explore({ explore, write, nav, tabId }: ExploreProps) {
     return p.type === "timeseries" ? { ...p, options: { ...p.options, style: "area" } } : p;
   }, [panelId, expr, source, kind]);
   const recContext = useMemo(
-    () => ({ panel: recPanel, data: state.shown === "done" ? state.data : null, catalog, stepSeconds: state.step ?? 0 }),
-    [recPanel, state.shown, state.data, catalog, state.step],
+    () => {
+      // Only an answer about exactly this text, project and source: never one being replaced.
+      const fresh = state.status === "done" && state.expr === expr && state.projectId === project && state.sourceId === (source?.source_id ?? null);
+      return { panel: recPanel, data: fresh ? state.data : null, catalog, stepSeconds: fresh ? (state.step ?? 0) : 0 };
+    },
+    [recPanel, state.status, state.expr, state.projectId, state.sourceId, state.data, state.step, expr, project, source, catalog],
   );
   const applyRec = (apply: (p: PanelSpec) => PanelSpec): string | void => {
     const next = apply(recPanel).queries[0]?.expr;
@@ -324,9 +341,13 @@ function Explore({ explore, write, nav, tabId }: ExploreProps) {
         <div className={s.work}>
           <div className={s.card}>
             <QueryBar ref={queryField} expr={expr} language={language} onChange={setExpr}
-              onRun={() => { if (source) record({ expr, sourceId: source.source_id }); runNow(); }}
+              onRun={() => {
+                // Only a text that reads as a query is worth keeping.
+                if (source && quickCheck(expr) === null) record({ expr, sourceId: source.source_id });
+                runNow();
+              }}
               onLeave={leaveQuery} />
-            <MetaLine state={state} expr={expr} kind={kind} timeText={timeLabel(time)} />
+            <MetaLine state={state} expr={expr} kind={kind} />
             <RecommendationBar context={recContext} scope={`explore:${project}`} onApply={applyRec}
               onDone={() => queryField.current?.focus()} />
             <div className={s.result}>{result}</div>

@@ -144,5 +144,36 @@ describe("useExploreRun", () => {
     expect(result.current.state.status).toBe("failed");
     expect(result.current.state.data).toBeNull();
     expect(result.current.state.message).toBe("Can't reach the console's server.");
+    // A typo after a failure never brings back the chart from before it.
+    expect(result.current.state.lastGood).toBeNull();
+    rerender({ expr: "sum(up" });
+    await flush();
+    expect(result.current.state.status).toBe("invalid");
+    expect(result.current.state.lastGood).toBeNull();
+  });
+
+  it("another project or source starts over, the last good result included", async () => {
+    runBatch.mockResolvedValue([ok(1)]);
+    const other: ProjectOut = { ...project, id: "p2", name: "Zoo" };
+    const { result, rerender } = renderHook(({ p, s, expr }) => useExploreRun({ project: p, source: s, expr, range, kind: "metrics" }), {
+      initialProps: { p: project, s: source, expr: "up" },
+    });
+    await flush();
+    rerender({ p: project, s: source, expr: "sum(up" });
+    await flush();
+    expect(result.current.state.lastGood?.expr).toBe("up");
+    // Another source of the same project: nothing from the first is kept, not even for a frame.
+    rerender({ p: project, s: project.links[1], expr: "sum(up" });
+    expect(result.current.state).toMatchObject({ status: "waiting", shown: "idle", data: null, lastGood: null });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "invalid", lastGood: null });
+    // Another project: the same.
+    rerender({ p: project, s: source, expr: "up" });
+    await flush();
+    expect(result.current.state.status).toBe("done");
+    rerender({ p: other, s: other.links[0], expr: "up" });
+    expect(result.current.state).toMatchObject({ shown: "idle", data: null, lastGood: null });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "done", projectId: "p2", sourceId: "prom" });
   });
 });

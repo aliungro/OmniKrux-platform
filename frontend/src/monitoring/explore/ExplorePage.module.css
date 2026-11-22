@@ -166,16 +166,32 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
 }
 
-/* The meta line: how the last run went. */
+/* The meta line: how the last run went; Running… sits beside it, outside the live region. */
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-height: 17px;
+  padding: 7px 14px 0;
+  font: 11.5px/1.5 "Geist Mono", ui-monospace, monospace;
+}
+
+.running {
+  color: var(--focus);
+}
+
 .meta {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 8px;
-  min-height: 17px;
   margin: 0;
-  padding: 7px 14px 0;
   color: var(--ink-3);
-  font: 11.5px/1.5 "Geist Mono", ui-monospace, monospace;
+  font: inherit;
+}
+
+.metaStale {
+  opacity: 0.55;
 }
 
 .metaOk {

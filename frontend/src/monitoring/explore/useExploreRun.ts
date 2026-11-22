@@ -48,6 +48,11 @@ export type ExploreRunState = {
   kind: ExploreKind | null;
   /** When the last run ended (ms since the epoch). */
   at: number | null;
+  /** The time range the last run read, in words ("Last 1 hour"). */
+  timeText: string | null;
+  /** The project and source the last run read. A change of either starts over from INITIAL. */
+  projectId: string | null;
+  sourceId: string | null;
 };
 
 export interface ExploreRunInput {
@@ -58,11 +63,14 @@ export interface ExploreRunInput {
   kind: ExploreKind;
   /** The synthetic panel's id (stable per tab). */
   panelId?: string;
+  /** The range in words, kept with the run that read it. */
+  timeText?: string;
 }
 
 const INITIAL: ExploreRunState = {
   status: "idle", data: null, lastGood: null, message: null, tookMs: null, runId: 0,
   shown: "idle", expr: null, failure: null, range: null, step: null, kind: null, at: null,
+  timeText: null, projectId: null, sourceId: null,
 };
 
 /** The tool couldn't answer: the same family M2 calls unreachable. */
@@ -97,12 +105,15 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
   const immediate = useRef(-1);
 
   const fire = useCallback(async () => {
-    const { project, source, expr, range, kind, panelId = "explore" } = latest.current;
+    const { project, source, expr, range, kind, panelId = "explore", timeText = null } = latest.current;
     controller.current?.abort();
     controller.current = null;
     const runId = ++runIds.current;
     const end = (patch: Partial<ExploreRunState>) =>
-      setState((s) => ({ ...s, runId, expr, kind, at: Date.now(), ...patch }));
+      setState((s) => ({
+        ...s, runId, expr, kind, at: Date.now(), timeText,
+        projectId: project?.id ?? null, sourceId: source?.source_id ?? null, ...patch,
+      }));
     const invalid = (message: string) =>
       end({ status: "invalid", shown: "invalid", data: null, message, failure: null, tookMs: null });
 
@@ -134,7 +145,8 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
         const code = first?.error?.code ?? "unreachable";
         const message = first?.error?.message || NO_ANSWER;
         if (INVALID.has(code)) invalid(message);
-        else end({ status: "failed", shown: "failed", data: null, message, failure: UNREACHABLE.has(code) ? "unreachable" : "error", tookMs: null });
+        // A failure replaces the chart for good: a later typo never brings back what came before it.
+        else end({ status: "failed", shown: "failed", data: null, lastGood: null, message, failure: UNREACHABLE.has(code) ? "unreachable" : "error", tookMs: null });
         return;
       }
       const data = mergePanelResults(panel, run, results, "project");
@@ -146,13 +158,25 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
       if (isAbort(err) || ctl.signal.aborted || runId !== runIds.current) return;
       const code = err instanceof DashboardRequestError ? err.code : "network";
       end({
-        status: "failed", shown: "failed", data: null, message: failure(err, "try again") || NO_ANSWER,
+        status: "failed", shown: "failed", data: null, lastGood: null, message: failure(err, "try again") || NO_ANSWER,
         failure: UNREACHABLE.has(code as QueryErrorCode) ? "unreachable" : "error", tookMs: null,
       });
     } finally {
       if (controller.current === ctl) controller.current = null;
     }
   }, []);
+
+  // Another project or source: nothing read before is about it, the last good result included.
+  // Reset while rendering, so no frame ever draws the old results under the new names.
+  const scope = JSON.stringify([input.project?.id ?? null, input.source?.source_id ?? null]);
+  const [scopeSeen, setScopeSeen] = useState(scope);
+  if (scopeSeen !== scope) {
+    setScopeSeen(scope);
+    controller.current?.abort();
+    controller.current = null;
+    runIds.current++;
+    setState((s) => ({ ...INITIAL, runId: s.runId }));
+  }
 
   const key = JSON.stringify([
     input.project?.id ?? null, input.source?.source_id ?? null, input.source?.source_type ?? null,

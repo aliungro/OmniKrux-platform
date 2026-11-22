@@ -28,7 +28,7 @@ import SetupPage from "./setup/SetupPage";
 import { buildSearchIndex } from "./search/search";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
 import {
-  MONITORING_HOME, monitoringTabLabel, setMonitoringLeaveCheck, type MonitoringTabAction, type MonitoringView,
+  equalMonitoringView, MONITORING_HOME, monitoringTabLabel, setMonitoringLeaveCheck, type MonitoringTabAction, type MonitoringView,
 } from "./shell/tabState";
 import { DOT, Sidebar } from "./sidebar/Sidebar";
 import s from "./MonitoringApp.module.css";
@@ -53,6 +53,11 @@ export interface MonitoringPageProps {
   /** Shows another workspace tab (the one editing this dashboard). */
   activateTab(id: string): void;
   onOpenSettings(): void;
+  /**
+   * Replaces the view of tab `tabId` (not the active one) with `view`, only while that tab still
+   * shows `expected`. For a page that leaves with a view change still waiting (Explore's last keys).
+   */
+  replaceTabView?(tabId: string, view: MonitoringView, expected: MonitoringView): void;
 }
 
 type Page = MonitoringView["page"];
@@ -332,7 +337,12 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     // Only when the tab changes; scrolling itself updates nav.scrollTop.
   }, [tabId]);
 
-  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings };
+  const replaceTabView = useCallback((id: string, next: MonitoringView, expected: MonitoringView) => {
+    const tab = latest.current.tabs.tabs.find((t) => t.id === id);
+    if (!tab || !equalMonitoringView(tab.view, expected)) return;
+    latest.current.dispatchTabs({ type: "navigate", id, view: next, mode: "replace" });
+  }, []);
+  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView };
   return (
     <div ref={root} className={s.app}>
       <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}

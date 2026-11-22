@@ -3,11 +3,11 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import userEvent from "@testing-library/user-event";
 import type { QueryResponse } from "../api/types";
 import { recordRecent } from "../home/recent";
-import { linkedProject } from "../test/dashboardSeeds";
+import { gate, intercept, linkedProject, seedDashboard, spec } from "../test/dashboardSeeds";
 import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeQueryAnswer } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import type { ExploreView } from "../shell/tabState";
-import { pushTrail } from "./trail";
+import { pushTrail, readTrail } from "./trailStore";
 
 // The chart chunk as a stub: it prints how many series it was given.
 vi.mock("../charts", async () => {
@@ -39,6 +39,21 @@ const batches = (api: FakeMonitoringApi) => api.requests.filter((r) => r.url ===
 const query = () => screen.getByRole("textbox", { name: "Query" }) as HTMLTextAreaElement;
 const meta = () => document.querySelector("[data-explore-meta]") as HTMLElement;
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const one: Partial<QueryResponse> = { result_type: "matrix", series: [{ labels: { job: "a" }, points: [[1, 1], [2, 2]] }], took_ms: 7 };
+/** Two projects (Alpha p1 on s1 and s3, Zoo p2 on s2); answers keyed "<project>|<text>". */
+function twoProjects(answers: Record<string, FakeQueryAnswer>): FakeMonitoringApi {
+  return installFakeMonitoringApi({
+    projects: [linkedProject("p1", "Alpha", "s1", "s3"), linkedProject("p2", "Zoo", "s2")],
+    queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: (_, key) => answers[String(key)] }),
+  }, async () => json([]));
+}
+/** Holds every batch request while `hold.on`, until `hold.release()`. */
+function holdBatches() {
+  const held = gate();
+  const hold = { on: false, release: () => held.open() };
+  intercept((url, pass) => (hold.on && url.includes("/query/batch") ? held.opened.then(pass) : null));
+  return hold;
+}
 
 async function openExplore(view: ExploreView = { page: "explore", project: "p1", expr: "up" }) {
   const result = renderMonitoringApp({ tabs: tabsWith(view) });
@@ -193,6 +208,128 @@ describe("Explore", () => {
     const trail = screen.getByRole("toolbar", { name: "Recent queries" });
     expect(within(trail).getByRole("button", { name: "http_requests_total" })).toBeTruthy();
     expect(document.activeElement).toBe(query());
+  });
+
+  it("the live meta line changes only when a run ends, and names the range that run read", async () => {
+    shop({ up2: one });
+    const hold = holdBatches();
+    await openExplore();
+    await waitFor(() => expect(meta().textContent).toContain("✓ 3 series · 41 ms"));
+    const before = meta().textContent;
+    const seen: string[] = [];
+    const watch = new MutationObserver(() => seen.push(meta().textContent ?? ""));
+    watch.observe(meta(), { childList: true, subtree: true, characterData: true });
+    hold.on = true;
+    fireEvent.change(query(), { target: { value: "up2" } });
+    // Running… shows beside the live line, never inside it.
+    await waitFor(() => expect(document.querySelector("[data-explore-running]")?.textContent).toBe("Running…"));
+    expect(meta().contains(document.querySelector("[data-explore-running]"))).toBe(false);
+    expect(meta().textContent).toBe(before);
+    // The picker's new range isn't the finished run's: the line keeps the range that run read.
+    fireEvent.click(screen.getByRole("button", { name: /Last 1 hour/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Last 6 hours/ }));
+    expect(meta().textContent).toBe(before);
+    expect(seen).toEqual([]);
+    hold.release();
+    await waitFor(() => expect(meta().textContent).toContain("✓ 1 series · 7 ms"));
+    await waitFor(() => expect(meta().textContent).toContain("Last 6 hours"));
+    expect(seen.every((t) => !t.includes("Running…"))).toBe(true);
+    watch.disconnect();
+  });
+
+  it("a project switch never shows the old project's chart, last good included", async () => {
+    twoProjects({ "p1|up": three, "p2|up": one });
+    await openExplore({ page: "explore", project: "p1", expr: "up" });
+    await screen.findByText("chart 3");
+    fireEvent.change(query(), { target: { value: "sum(up" } });
+    await screen.findByText("Last good result");
+    fireEvent.change(screen.getByRole("combobox", { name: "Project" }), { target: { value: "p2" } });
+    expect(screen.queryByText("Last good result")).toBeNull();
+    expect(screen.queryByText(/^chart /)).toBeNull();
+    expect(meta()?.textContent ?? "").not.toMatch(/✓|showing the last result/);
+    // Zoo reads the same text on its own: invalid, with nothing of Alpha's to show.
+    await waitFor(() => expect(meta().textContent).toBe("✗ The query has an unclosed quote or bracket."));
+    expect(screen.queryByText("Last good result")).toBeNull();
+    expect(screen.queryByText(/^chart /)).toBeNull();
+    // Back to Alpha (its project is cached): its earlier chart doesn't come back either.
+    fireEvent.change(screen.getByRole("combobox", { name: "Project" }), { target: { value: "p1" } });
+    expect(screen.queryByText("Last good result")).toBeNull();
+    expect(screen.queryByText(/^chart /)).toBeNull();
+    expect(meta().textContent).not.toMatch(/✓|showing the last result/);
+  });
+
+  it("a source switch never shows the old source's chart", async () => {
+    const api = twoProjects({ "p1|up": three });
+    const hold = holdBatches();
+    await openExplore({ page: "explore", project: "p1", source: "s1", expr: "up" });
+    await screen.findByText("chart 3");
+    hold.on = true;
+    fireEvent.change(screen.getByRole("combobox", { name: "Source" }), { target: { value: "s3" } });
+    // Through the pause and the run, nothing of s1's answer is drawn or reported as current.
+    expect(screen.queryByText(/^chart /)).toBeNull();
+    expect(meta().textContent).not.toContain("✓");
+    await waitFor(() => expect(document.querySelector("[data-explore-running]")).toBeTruthy());
+    expect(screen.queryByText(/^chart /)).toBeNull();
+    expect(meta().textContent).not.toContain("✓");
+    hold.release();
+    await screen.findByText("chart 3");
+    expect(batches(api).at(-1)?.queries[0]).toMatchObject({ source_id: "s3", project_id: "p1", query: "up" });
+  });
+
+  it("recommendations read only an answer about the text in the field", async () => {
+    const noisy: Partial<QueryResponse> = {
+      result_type: "matrix",
+      series: [{ labels: { job: "api" }, points: Array.from({ length: 60 }, (_, i) => [1_000 + i * 15, i % 2 ? 10 : 0] as [number, number]) }],
+    };
+    shop({ "rate(x[1m])": noisy });
+    await openExplore({ page: "explore", project: "p1", expr: "rate(x[1m])" });
+    await screen.findByText("chart 1");
+    expect(await screen.findByText(/The line is noisy at this window/)).toBeTruthy();
+    // A new text: the noisy answer was about the old one, so nothing is suggested from it.
+    fireEvent.change(query(), { target: { value: "rate(y[1m])" } });
+    expect(screen.queryByText(/The line is noisy at this window/)).toBeNull();
+    await screen.findByText("chart 3");
+    expect(screen.queryByText(/The line is noisy at this window/)).toBeNull();
+  });
+
+  it("Ctrl+Enter keeps only a readable query in the trail", async () => {
+    shop();
+    await openExplore({ page: "explore", project: "p1" });
+    await screen.findByRole("textbox", { name: "Query" });
+    fireEvent.change(query(), { target: { value: "sum(up" } });
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    expect(readTrail("p1")).toEqual([]);
+    fireEvent.change(query(), { target: { value: "sum(up)" } });
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    expect(readTrail("p1").map((e) => e.expr)).toEqual(["sum(up)"]);
+  });
+
+  it("typing just before switching tabs still lands in the Explore tab", async () => {
+    shop();
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "explore", project: "p1", expr: "up" }, { page: "home" }) });
+    await screen.findByRole("textbox", { name: "Query" });
+    fireEvent.change(query(), { target: { value: "up9" } });
+    const strip = screen.getByRole("tablist", { name: "Monitoring tabs" });
+    fireEvent.click(within(strip).getAllByRole("tab")[1]);
+    await screen.findByRole("heading", { level: 1, name: "Monitoring" });
+    expect((current().tabs[0].view as ExploreView).expr).toBe("up9");
+    expect(current().tabs[1].view).toEqual({ page: "home" });
+    fireEvent.click(within(strip).getAllByRole("tab")[0]);
+    expect((await screen.findByRole("textbox", { name: "Query" }) as HTMLTextAreaElement).value).toBe("up9");
+  });
+
+  it("the sidebar's Explore from a project dashboard takes that dashboard's project", async () => {
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Alpha", "s1"), linkedProject("p2", "Zoo", "s2")],
+      dashboards: { d1: seedDashboard("d1", { kind: "project", id: "p2", name: "Zoo" }, spec("Zoo board", [])) },
+    }, async () => json([]));
+    recordRecent({ kind: "project", id: "p1" }, 5);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    await screen.findByRole("heading", { level: 1, name: "Zoo board" });
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    await screen.findByRole("heading", { level: 1, name: "Explore" });
+    const project = await screen.findByRole("combobox", { name: "Project" }) as HTMLSelectElement;
+    await waitFor(() => expect(project.value).toBe("p2"));
   });
 
   it("no projects points to setup", async () => {

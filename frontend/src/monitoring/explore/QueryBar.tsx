@@ -1,6 +1,6 @@
 // The live query bar (X1): the query in Geist Mono, which runs as you type, and the meta line under
-// it saying how the last run ended. The meta line is a polite live region; it changes when a run
-// starts and ends, never on each keystroke.
+// it saying how the last run ended. Only that line is a polite live region, and it changes only when
+// a run ends; **Running…** shows beside it, outside the live region, and never on each keystroke.
 
 import { forwardRef, type KeyboardEvent, type ReactNode } from "react";
 import { pressed } from "../../features/chrome/shortcuts";
@@ -63,23 +63,29 @@ const clock = (ms: number) => {
   return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
 };
 
-/** The meta line: how the last run ended (while the next waits), or Running…. */
-export function MetaLine({ state, expr, kind, timeText }: { state: ExploreRunState; expr: string; kind: ExploreKind; timeText: string }) {
+/**
+ * The meta line: how the last run ended, kept while the next one waits and runs (dimmed, with
+ * Running… beside it). Its time words are the ones that run read, not the picker's current range.
+ */
+export function MetaLine({ state, expr, kind }: { state: ExploreRunState; expr: string; kind: ExploreKind }) {
   let body: ReactNode = null;
   let tone: "bad" | "quiet" = "quiet";
-  if (state.status === "running") {
-    body = "Running…";
-  } else if (state.shown === "idle") {
-    // Nothing ran yet, or the field was emptied: the hint, only while the field is empty.
-    body = expr.trim() === "" ? NO_QUERY : null;
+  const running = state.status === "running";
+  if (state.shown === "idle") {
+    // Nothing ran, or an emptied field ended its run: the hint. Before the first end, the field says.
+    body = (state.expr ?? expr).trim() === "" ? NO_QUERY : null;
   } else if (state.shown === "done" && state.data) {
     const n = (state.kind ?? kind) === "logs" ? `${state.data.logs.length} ${state.data.logs.length === 1 ? "line" : "lines"}`
       : `${state.data.series.length} series`;
     body = (
       <>
         <span className={s.metaOk}>✓ {n} · {state.tookMs ?? 0} ms</span>
-        <span className={s.metaSep}>·</span>
-        <span>{timeText}</span>
+        {state.timeText && (
+          <>
+            <span className={s.metaSep}>·</span>
+            <span>{state.timeText}</span>
+          </>
+        )}
         {state.at !== null && (
           <>
             <span className={s.metaSep}>·</span>
@@ -96,8 +102,11 @@ export function MetaLine({ state, expr, kind, timeText }: { state: ExploreRunSta
     body = `✗ ${FAILED_TITLE[state.failure ?? "error"]}`;
   }
   return (
-    <p className={`${s.meta} ${tone === "bad" ? s.metaBad : ""}`} data-explore-meta="" aria-live="polite">
-      {body}
-    </p>
+    <div className={s.metaRow}>
+      {running && <span className={s.running} data-explore-running="">Running…</span>}
+      <p className={`${s.meta} ${tone === "bad" ? s.metaBad : ""} ${running ? s.metaStale : ""}`} data-explore-meta="" aria-live="polite">
+        {body}
+      </p>
+    </div>
   );
 }

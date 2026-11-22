@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearTrail, pushTrail, readTrail, TRAIL_MAX, TRAIL_PREFIX, TRAIL_SHOWN } from "./trail";
+import { clearTrail, pushTrail, readTrail, TRAIL_MAX, TRAIL_PREFIX, TRAIL_SHOWN } from "./trailStore";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
