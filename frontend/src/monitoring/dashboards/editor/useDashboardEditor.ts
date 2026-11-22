@@ -83,9 +83,27 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
     return next;
   }, [tabId, dashboardId]);
 
-  const send = useCallback(async (baseVersion: number) => {
-    const s = current.current;
+  /**
+   * Every save goes through here (Save dashboard, Ctrl+S, Review changes, the conflict review's
+   * Save over it). `rebase`: the newer saved version to save over, taken only if the save is sent.
+   */
+  const send = useCallback(async (baseVersion: number, rebase?: { version: number; base: DashboardSpec }) => {
+    let s = current.current;
     if (s.mode !== "edit" || busy.current) return;
+    // The JSON tab's text doesn't apply: saving the last valid draft would drop it silently. No
+    // PUT; the edit bar says so with Show in JSON. A conflict under review stays unresolved (no
+    // rebase), so the next save is refused and reviewed again.
+    if (s.jsonText !== null) {
+      setSaveError(null);
+      setConflict(null);
+      setJsonRefused(true);
+      return;
+    }
+    if (rebase) {
+      dispatch({ type: "rebase", version: rebase.version, base: rebase.base });
+      s = current.current;
+      if (s.mode !== "edit") return;
+    }
     busy.current = true;
     setSaveError(null);
     setJsonRefused(false);
@@ -117,22 +135,14 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
   const save = useCallback(async () => {
     const s = current.current;
     if (s.mode !== "edit") return;
-    // The JSON tab's text doesn't apply: saving the last valid draft would drop it silently.
-    if (s.jsonText !== null) {
-      setSaveError(null);
-      setConflict(null);
-      setJsonRefused(true);
-      return;
-    }
-    // Nothing changed: no new version and no Audit record, just the end of editing.
-    if (!isDirty(s)) dispatch({ type: "discard" });
+    // Nothing changed (and no JSON text waiting to apply): no new version and no Audit record, just the end of editing.
+    if (!isDirty(s) && s.jsonText === null) dispatch({ type: "discard" });
     else await send(s.baseVersion);
   }, [dispatch, send]);
 
   const saveOver = useCallback(async (version: number, base: DashboardSpec) => {
-    dispatch({ type: "rebase", version, base });
-    await send(version);
-  }, [dispatch, send]);
+    await send(version, { version, base });
+  }, [send]);
 
   const discard = useCallback(() => dispatch({ type: "discard" }), [dispatch]);
 

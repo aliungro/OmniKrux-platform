@@ -408,4 +408,35 @@ describe("The JSON tab", () => {
     await user.click(viewTab("JSON"));
     expect((await editorField()).value).toBe(bad);
   });
+  it("the conflict review's Save over it refuses JSON text that doesn't apply", async () => {
+    const { user, area, api } = await editingJson();
+    // Saved somewhere else meanwhile: this save is refused (409) and reviewed.
+    api.state.dashboards.d1.out = { ...api.state.dashboards.d1.out, version: 2 };
+    area.focus();
+    type(area, changed((d) => { d.panels[1].title = "Failures"; }));
+    await user.keyboard("{Control>}s{/Control}");
+    const review = await screen.findByRole("button", { name: "Review differences" });
+    expect(puts(api)).toHaveLength(1);
+    // Then the JSON goes invalid, and Save over it is confirmed.
+    const bad = changed((d) => { d.panels[1].title = "Failures"; d.panels[0].layout.w = 1; });
+    type(area, bad);
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗/));
+    await user.click(review);
+    const dialog = await screen.findByRole("dialog", { name: "Saved version 2 and your draft" });
+    const over = within(dialog).getByRole("button", { name: "Save over it" });
+    await waitFor(() => expect(over.getAttribute("aria-disabled")).toBeNull());
+    await user.click(over);
+    // Nothing is sent, the text stays, and the edit bar says why.
+    const notice = (await screen.findByText(JSON_SAVE_REFUSED)).closest('[role="alert"]') as HTMLElement;
+    expect(within(notice).getByRole("button", { name: "Show in JSON" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await pause(50);
+    expect(puts(api)).toHaveLength(1);
+    expect(api.state.dashboards.d1.out.version).toBe(2);
+    expect(screen.getByText("Editing")).toBeTruthy();
+    expect(session()?.jsonText).toBe(bad);
+    // Not rebased: the newer version is still reviewed before anything is saved over it.
+    expect(session()?.baseVersion).toBe(1);
+    notBody();
+  });
 });
