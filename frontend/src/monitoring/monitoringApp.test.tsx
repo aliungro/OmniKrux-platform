@@ -9,15 +9,17 @@ const tablist = () => screen.getByRole("tablist", { name: "Monitoring tabs" });
 const tabs = () => within(tablist()).getAllByRole("tab");
 
 describe("Monitoring app shell", () => {
-  it("the New dashboard bar is visible and disabled", async () => {
+  it("the New dashboard bar is live; with no project it asks for one first", async () => {
     installFakeMonitoringApi();
     renderMonitoringApp();
-    const create = screen.getByRole("button", { name: /New dashboard/ });
+    const create = screen.getByRole("button", { name: "New dashboard" });
+    expect(await screen.findByText("Set up a project first.")).toBeTruthy();
     expect(create.getAttribute("aria-disabled")).toBe("true");
     const importButton = screen.getByRole("button", { name: "Import" });
     expect(importButton.getAttribute("aria-disabled")).toBe("true");
-    expect(screen.getByText("Dashboards arrive in the next update.")).toBeTruthy();
+    expect(importButton.getAttribute("aria-description")).toBe("Importing dashboards arrives in a later update.");
     fireEvent.click(create);
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(tabs()).toHaveLength(1);
   });
 

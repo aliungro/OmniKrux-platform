@@ -29,6 +29,10 @@ export const ACTION_LABELS: readonly (readonly [action: string, label: string])[
   ["group_add", "Added a group"],
   ["group_change", "Changed a group"],
   ["group_remove", "Removed a group"],
+  ["dashboard_add", "Added a dashboard"],
+  ["dashboard_save", "Saved a dashboard"],
+  ["dashboard_remove", "Removed a dashboard"],
+  ["dashboard_restore", "Restored a dashboard version"],
 ];
 
 const BY_ACTION = new Map(ACTION_LABELS);

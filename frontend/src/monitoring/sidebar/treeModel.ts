@@ -1,4 +1,4 @@
-import type { TreeOut, TreeProject } from "../api/types";
+import type { TreeDashboard, TreeOut, TreeProject } from "../api/types";
 import type { MonitoringView } from "../shell/tabState";
 
 export type TreeRow = {
@@ -9,6 +9,8 @@ export type TreeRow = {
   view?: MonitoringView;
   expanded?: boolean;
   color?: TreeProject["color"];
+  /** A dashboard row: a ready-made view (generated from the project's Prometheus, not saved). */
+  readyMade?: boolean;
 };
 
 export const SIDEBAR_KEY = "omnikrux.monitoring.sidebar";
@@ -16,9 +18,16 @@ export const SIDEBAR_KEY = "omnikrux.monitoring.sidebar";
 export const groupKey = (id: string) => `group:${id}`;
 export const projectKey = (id: string) => `project:${id}`;
 
+/** A dashboard's row under its project or group: it opens the dashboard. */
+const dashboardRow = (parent: string, d: TreeDashboard): TreeRow => ({
+  key: `${parent}/dashboard:${d.id}`, level: 1, kind: "dashboard", label: d.title,
+  view: { page: "dashboard", id: d.id }, readyMade: d.ready_made,
+});
+
 /**
- * The sidebar's rows: the Groups section, each group with its shortcuts while open, then the
- * Projects section, each project with its dashboards (or "No dashboards yet") while open.
+ * The sidebar's rows: the Groups section, each group with its shortcuts then its dashboards while
+ * open, then the Projects section, each project with its saved dashboards then its ready-made
+ * views (or "No dashboards yet") while open.
  */
 export function treeRows(tree: TreeOut, expanded: ReadonlySet<string>): TreeRow[] {
   const rows: TreeRow[] = [{ key: "section:groups", level: 0, kind: "section", label: "Groups" }];
@@ -33,6 +42,7 @@ export function treeRows(tree: TreeOut, expanded: ReadonlySet<string>): TreeRow[
       if (!p) continue;
       rows.push({ key: `${key}/${projectKey(id)}`, level: 1, kind: "shortcut", label: p.name, view: { page: "project", id }, color: p.color });
     }
+    for (const d of g.dashboards) rows.push(dashboardRow(key, d));
   }
   rows.push({ key: "section:projects", level: 0, kind: "section", label: "Projects" });
   for (const p of tree.projects) {
@@ -41,7 +51,8 @@ export function treeRows(tree: TreeOut, expanded: ReadonlySet<string>): TreeRow[
     rows.push({ key, level: 0, kind: "project", label: p.name, view: { page: "project", id: p.id }, expanded: open, color: p.color });
     if (!open) continue;
     if (!p.dashboards.length) rows.push({ key: `${key}/empty`, level: 1, kind: "empty", label: "No dashboards yet" });
-    for (const d of p.dashboards) rows.push({ key: `${key}/dashboard:${d.id}`, level: 1, kind: "dashboard", label: d.title });
+    for (const d of p.dashboards) if (!d.ready_made) rows.push(dashboardRow(key, d));
+    for (const d of p.dashboards) if (d.ready_made) rows.push(dashboardRow(key, d));
   }
   return rows;
 }

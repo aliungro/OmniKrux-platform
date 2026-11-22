@@ -507,6 +507,25 @@ describe("monitoring entries", () => {
     expect(row.className).toMatch(/gke/);
   });
 
+  it("audit shows dashboard actions in words", async () => {
+    serve(() => ({ records: [
+      monitoring({ id: 4, action: "dashboard_restore", kind: "dashboard", name: "API latency" }),
+      monitoring({ id: 3, action: "dashboard_remove", kind: "dashboard", name: "Errors" }),
+      monitoring({ id: 2, action: "dashboard_save", kind: "dashboard", name: "API latency" }),
+      monitoring({ id: 1, action: "dashboard_add", kind: "dashboard", name: "Errors" }),
+    ], next_before: null }));
+    show();
+    for (const [label, name] of [["Restored a dashboard version", "API latency"], ["Removed a dashboard", "Errors"],
+      ["Saved a dashboard", "API latency"], ["Added a dashboard", "Errors"]]) {
+      const row = await screen.findByRole("row", { name: new RegExp(label) });
+      expect(within(row).getByText("dashboard")).toBeTruthy();
+      expect(within(row).getByText(name)).toBeTruthy();
+    }
+    const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    for (const l of ["Added a dashboard", "Saved a dashboard", "Removed a dashboard", "Restored a dashboard version"]) expect(labels).toContain(l);
+  });
+
   it("the action filter offers the monitoring actions", async () => {
     serve(() => ({ records: [record(1)], next_before: null }));
     show();

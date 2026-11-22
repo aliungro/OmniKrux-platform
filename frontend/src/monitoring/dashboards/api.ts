@@ -4,7 +4,7 @@
 // which M1's `HttpError` would reduce to its status. Only dashboard code imports this module.
 
 import {
-  useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult,
+  useMutation, useQuery, useQueryClient, type QueryClient, type UseMutationResult, type UseQueryResult,
 } from "@tanstack/react-query";
 import { NETWORK_MESSAGE, UNREADABLE_ANSWER } from "../api/query";
 import type { QueryErrorCode, QueryRequest, QueryResponse } from "../api/types";
@@ -271,6 +271,21 @@ function keepsData(key: readonly unknown[]): boolean {
 }
 
 /**
+ * After a dashboard change: re-reads Monitoring (tree, dashboards, versions, lists) and the audit
+ * log, but not panel data or label values. `gone`: a dashboard just deleted, whose own reads are
+ * left alone rather than asked again (they would only answer 404).
+ */
+export function refreshAfterDashboardChange(client: QueryClient, gone?: string): Promise<unknown> {
+  return Promise.all([
+    client.invalidateQueries({
+      queryKey: ["monitoring"],
+      predicate: (q) => !keepsData(q.queryKey) && !(gone !== undefined && q.queryKey[1] === "dashboard" && q.queryKey[2] === gone),
+    }),
+    client.invalidateQueries({ queryKey: ["audit"] }),
+  ]);
+}
+
+/**
  * A dashboard change (create, save, delete, restore, copy). On success it re-reads Monitoring
  * (tree, dashboards, versions, lists) and the audit log, but not panel data or label values, so a
  * save doesn't re-run every panel. No dashboard body holds a secret, so TanStack may keep it.
@@ -279,10 +294,12 @@ export function useDashboardMutation<V, R>(fn: (vars: V) => Promise<R>): UseMuta
   const client = useQueryClient();
   return useMutation<R, DashboardRequestError, V>({
     mutationFn: fn,
-    onSuccess: () =>
-      Promise.all([
-        client.invalidateQueries({ queryKey: ["monitoring"], predicate: (q) => !keepsData(q.queryKey) }),
-        client.invalidateQueries({ queryKey: ["audit"] }),
-      ]),
+    onSuccess: () => refreshAfterDashboardChange(client),
   });
 }
+
+export const ownerDashboardsKey = (owner: { kind: OwnerKind; id: string }) => ["monitoring", "dashboards", owner.kind, owner.id] as const;
+
+/** An owner's saved dashboards, by title (ready-made views are not in this list). */
+export const useOwnerDashboards = (owner: { kind: OwnerKind; id: string }): UseQueryResult<DashboardSummaryOut[], DashboardRequestError> =>
+  useQuery<DashboardSummaryOut[], DashboardRequestError>({ queryKey: ownerDashboardsKey(owner), queryFn: () => listDashboards(owner), retry: false });

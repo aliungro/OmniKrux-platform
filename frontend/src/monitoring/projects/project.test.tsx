@@ -4,8 +4,10 @@ import userEvent from "@testing-library/user-event";
 import type { GroupOut, LinkOut, ProjectOut, SourceOut } from "../api/types";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
+import { panel, seedDashboard, spec } from "../test/dashboardSeeds";
+import { editSessions } from "../dashboards/editor/useDashboardEditor";
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => { localStorage.clear(); editSessions.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const T = "2026-01-01T00:00:00Z";
@@ -171,9 +173,63 @@ describe("Project page", () => {
     }, fallback);
     open("p1");
     expect(await screen.findByText("Cluster no longer connected")).toBeTruthy();
-    expect(within(document.querySelector("[data-monitoring-page]") as HTMLElement).getByText("Dashboards arrive in the next update.")).toBeTruthy();
+    const page = within(document.querySelector("[data-monitoring-page]") as HTMLElement);
+    expect(page.getByText("No dashboards yet. Start one with New dashboard, or copy a ready-made view.")).toBeTruthy();
+    expect(page.getByText("Link a Prometheus-compatible source to get ready-made views.")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Prod" }));
     expect(await screen.findByRole("heading", { name: "Prod" })).toBeTruthy();
+  });
+  it("project page lists dashboards and ready-made views with notes", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const DEV = { kind: "project" as const, id: "p1", name: "Dev" };
+    const api = installFakeMonitoringApi({
+      sources: [prom],
+      projects: [project("p1", "Dev", [link(prom)])],
+      dashboards: {
+        a1: seedDashboard("a1", DEV, spec("API latency", [panel("a", "A", "up"), panel("b", "B", "up", { x: 12 })])),
+        a2: seedDashboard("a2", DEV, spec("Errors", [panel("a", "A", "up")])),
+        "ready:p1:nodes": seedDashboard("ready:p1:nodes", DEV, spec("Node health", []), true),
+      },
+      readyMade: { p1: [{
+        key: "nodes", id: "ready:p1:nodes", title: "Node health", description: "CPU, memory and disk of each node.",
+        missing: ["node_exporter"], notes: ["Node exporter isn't reporting, so node panels stay empty."], checked: true, check_message: null,
+      }] },
+    }, fallback);
+    open("p1");
+    const list = await screen.findByRole("list", { name: "Dashboards of Dev" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows.map((r) => within(r).getByRole("button").textContent)).toEqual([
+      expect.stringContaining("API latency"), expect.stringContaining("Errors"),
+    ]);
+    expect(within(rows[0]).getByText("2 panels")).toBeTruthy();
+    expect(within(rows[1]).getByText("1 panel")).toBeTruthy();
+    expect(within(rows[0]).getByText(/^saved /)).toBeTruthy();
+    const ready = screen.getByRole("list", { name: "Ready-made views" });
+    expect(within(ready).getByText("Node health")).toBeTruthy();
+    expect(within(ready).getByText("CPU, memory and disk of each node.")).toBeTruthy();
+    expect(within(ready).getByText("Node exporter isn't reporting, so node panels stay empty.")).toBeTruthy();
+    expect(screen.queryByText(/Link a Prometheus-compatible source/)).toBeNull();
+    // Ctrl+Enter opens a dashboard in a new tab; a click opens it here.
+    fireEvent.keyDown(within(rows[1]).getByRole("button"), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")).toHaveLength(2));
+    expect(await screen.findByRole("heading", { level: 1, name: "Errors" })).toBeTruthy();
+    await user.click(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")[0]);
+    await user.click(within(await screen.findByRole("list", { name: "Ready-made views" })).getByRole("button", { name: "Copy to edit Node health" }));
+    expect(await screen.findByText('Copied "Node health". Changes go to your copy.')).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    expect(api.requests.find((r) => r.url === "/api/monitoring/dashboards/copy")?.body).toEqual({ from_id: "ready:p1:nodes", owner_kind: "project", owner_id: "p1" });
+  });
+
+  it("New dashboard on the project page goes to the project", async () => {
+    const api = installFakeMonitoringApi({ projects: [project("p1", "Dev"), project("p2", "Stage")] }, fallback);
+    open("p1");
+    fireEvent.click(await screen.findByRole("button", { name: "New dashboard for Dev" }));
+    const dialog = await screen.findByRole("dialog", { name: "New dashboard" });
+    expect((within(dialog).getByLabelText("Goes to") as HTMLSelectElement).value).toBe("project:p1");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create dashboard" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "New dashboard" })).toBeTruthy();
+    expect(Object.values(api.state.dashboards).map((d) => d.out.owner_id)).toEqual(["p1"]);
   });
 });
 
@@ -208,6 +264,25 @@ describe("Project delete review", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete project…" }));
+  });
+
+  it("project delete review lists dashboards", async () => {
+    const user = userEvent.setup();
+    const DEV = { kind: "project" as const, id: "p1", name: "Dev" };
+    const api = installFakeMonitoringApi({
+      projects: [project("p1", "Dev"), project("p2", "Stage")],
+      dashboards: { a1: seedDashboard("a1", DEV, spec("API latency", [])), a2: seedDashboard("a2", DEV, spec("Errors", [])) },
+    }, fallback);
+    const d2 = api.state.dashboards.a2;
+    d2.versions.push({ ...d2.versions[0], out: { ...d2.versions[0].out, version: 2 } });
+    d2.out.version = 2;
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    const lines = [...dialog.querySelectorAll("p")].map((p) => p.textContent);
+    // First, before what happens to its sources.
+    expect(lines[0]).toBe("Dashboards that go with it: API latency (1 version), Errors (2 versions).");
+    expect(lines).not.toContain("Only the project itself is removed.");
   });
 
   it("says plainly when only the project goes", async () => {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import k from "../../features/chrome/key.module.css";
 import type { TreeColor, TreeOut } from "../api/types";
+import type { Owner } from "../dashboards/create/currentOwner";
 import type { SearchEntry } from "../search/search";
 import type { MonitoringView } from "../shell/tabState";
 import { FindBox } from "./FindBox";
@@ -22,16 +23,27 @@ interface Props {
   onOpen(view: MonitoringView, newTab: boolean): void;
   /** Gives the keyboard back to the workspace's <main>. */
   onLeave(): void;
+  /** Where new dashboards go (the open page's project or group, else the most recent one). */
+  owner: Owner | null;
+  /** Opens New dashboard for `owner` (null: picked in the dialog); the keyboard returns to `from`. */
+  onNewDashboard(owner: Owner | null, from: HTMLElement): void;
 }
 
 const FOCUSABLE = new Set<TreeRow["kind"]>(["group", "project", "shortcut", "dashboard"]);
 const ctrl = (e: { ctrlKey: boolean; metaKey: boolean }) => e.ctrlKey || e.metaKey;
 
-/** The row the open page belongs to: the project's own row, or the group's. */
-function currentKey(view: MonitoringView): string | null {
+/** The row the open page belongs to: the project's own row, the group's, or the dashboard's. */
+function currentKey(view: MonitoringView, rows: TreeRow[]): string | null {
   if (view.page === "project") return projectKey(view.id);
   if (view.page === "group") return groupKey(view.id);
+  if (view.page === "dashboard") return rows.find((r) => r.kind === "dashboard" && r.view?.page === "dashboard" && r.view.id === view.id)?.key ?? null;
   return null;
+}
+
+/** The open page's own row (not a group's shortcut to a project). */
+function isOpenPage(row: TreeRow, view: MonitoringView): boolean {
+  if (row.kind === "shortcut" || !row.view || row.view.page !== view.page) return false;
+  return "id" in row.view && "id" in view && row.view.id === view.id;
 }
 
 const ICONS: Record<"home" | "explore" | "alerts" | "sources", ReactNode> = {
@@ -41,7 +53,7 @@ const ICONS: Record<"home" | "explore" | "alerts" | "sources", ReactNode> = {
   sources: <><ellipse cx="8" cy="4" rx="5" ry="1.75" /><path d="M3 4v8c0 .97 2.24 1.75 5 1.75s5-.78 5-1.75V4M3 8c0 .97 2.24 1.75 5 1.75S13 8.97 13 8" /></>,
 };
 
-export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeave }: Props) {
+export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeave, owner, onNewDashboard }: Props) {
   const [expanded, setExpanded] = useState(readExpanded);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const refs = useRef(new Map<string, HTMLElement>());
@@ -49,7 +61,8 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
   const lastFocused = useRef<HTMLElement | null>(null);
   const rows = useMemo(() => (tree ? treeRows(tree, expanded) : []), [tree, expanded]);
   const focusable = rows.filter((r) => FOCUSABLE.has(r.kind));
-  const selected = currentKey(view);
+  const selected = currentKey(view, rows);
+  const ownerKey = owner ? (owner.kind === "project" ? projectKey(owner.id) : groupKey(owner.id)) : null;
   const roving = focusable.find((r) => r.key === focusKey)?.key ?? focusable.find((r) => r.key === selected)?.key ?? focusable[0]?.key;
 
   // A row that goes away with focus on it (its project was removed) hands focus to the tree's
@@ -153,7 +166,8 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
       return <div key={row.key} role="none" className={`${s.row} ${s.child} ${s.muted}`} data-row-kind="empty" data-row-label={row.label}>{row.label}</div>;
     }
     const expandable = row.kind === "group" || row.kind === "project";
-    const label = row.kind === "shortcut" ? `Go to project ${row.label}` : row.label;
+    const label = row.kind === "shortcut" ? `Go to project ${row.label}` : row.readyMade ? `${row.label}, ready-made` : row.label;
+    const plusFor = owner && row.key === ownerKey ? owner : null;
     return (
       <div
         key={row.key}
@@ -163,6 +177,7 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
         aria-level={row.level + 1}
         aria-expanded={expandable ? !!row.expanded : undefined}
         aria-selected={row.key === selected}
+        aria-current={isOpenPage(row, view) ? "page" : undefined}
         tabIndex={row.key === roving ? 0 : -1}
         className={`${s.row} ${row.level === 1 ? s.child : ""} ${s[row.kind] ?? ""}`}
         data-row-kind={row.kind}
@@ -180,7 +195,14 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
         {row.kind === "group" && <i className={`${s.folder} ${row.expanded ? s.folderOpen : ""}`} aria-hidden="true" />}
         {row.color && <i className={s.dot} data-dot={row.color} style={{ background: DOT[row.color] }} aria-hidden="true" />}
         <span className={s.label}>{row.label}</span>
+        {row.readyMade && <span className={s.readyTag} aria-hidden="true">ready-made</span>}
         {row.kind === "shortcut" && <span className={s.arrow} aria-hidden="true">↗</span>}
+        {plusFor && (
+          // Pointer only (tabIndex -1): from the keyboard, N does the same from anywhere.
+          <button type="button" tabIndex={-1} className={s.rowPlus} aria-label={`New dashboard in ${plusFor.name}`}
+            title={`New dashboard in ${plusFor.name}`}
+            onClick={(e) => { e.stopPropagation(); onNewDashboard(plusFor, e.currentTarget.closest<HTMLElement>('[role="treeitem"]') ?? e.currentTarget); }}>+</button>
+        )}
       </div>
     );
   };
@@ -214,7 +236,8 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
           </div>
         ) : <p className={s.emptyLine} role="status">Loading projects…</p>}
       </div>
-      <NewDashboardBar />
+      <NewDashboardBar owner={owner} loaded={tree !== undefined} hasProjects={(tree?.projects.length ?? 0) > 0}
+        onNew={(from) => onNewDashboard(owner, from)} />
     </nav>
   );
 }

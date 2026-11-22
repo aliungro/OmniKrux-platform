@@ -4,6 +4,7 @@ import type { GroupOut } from "../api/types";
 import { readRecent, recordRecent } from "../home/recent";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
+import { seedDashboard, spec } from "../test/dashboardSeeds";
 import { treeRows } from "./treeModel";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -200,6 +201,62 @@ describe("Monitoring sidebar", () => {
     expect(out.map((r) => [r.kind, r.level, r.label])).toEqual([
       ["section", 0, "Groups"], ["group", 0, "G"], ["shortcut", 1, "A"],
       ["section", 0, "Projects"], ["project", 0, "A"], ["empty", 1, "No dashboards yet"],
+    ]);
+  });
+  it("tree lists dashboards then ready-made views", async () => {
+    const A = { kind: "project" as const, id: "p1", name: "A" };
+    const BOTH = { kind: "group" as const, id: "g1", name: "Both" };
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "A"), seedProject("p2", "B")],
+      groups: [group("g1", "Both", ["p1", "p2"])],
+      dashboards: {
+        d1: seedDashboard("d1", A, spec("Zeta", [])),
+        d2: seedDashboard("d2", A, spec("Alpha", [])),
+        d3: seedDashboard("d3", BOTH, spec("Overview", [])),
+        "ready:p1:nodes": seedDashboard("ready:p1:nodes", A, spec("Node health", []), true),
+      },
+      readyMade: { p1: [{ key: "nodes", id: "ready:p1:nodes", title: "Node health", description: "", missing: [], notes: [], checked: true, check_message: null }] },
+    });
+    localStorage.setItem("omnikrux.monitoring.sidebar", JSON.stringify(["group:g1", "project:p1", "project:p2"]));
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Overview" });
+    expect(rowTexts()).toEqual([
+      "section:Groups", "group:Both", "shortcut:A", "shortcut:B", "dashboard:Overview",
+      "section:Projects", "project:A", "dashboard:Alpha", "dashboard:Zeta", "dashboard:Node health",
+      "project:B", "empty:No dashboards yet",
+    ]);
+    const ready = screen.getByRole("treeitem", { name: "Node health, ready-made" });
+    expect(within(ready).getByText("ready-made")).toBeTruthy();
+    expect(within(screen.getByRole("treeitem", { name: "Alpha" })).queryByText("ready-made")).toBeNull();
+    // Enter opens the dashboard in this tab; its row is the current page.
+    const alpha = screen.getByRole("treeitem", { name: "Alpha" });
+    alpha.focus();
+    fireEvent.keyDown(alpha, { key: "Enter" });
+    await waitFor(() => expect(activeTab().textContent).toContain("Alpha"));
+    await waitFor(() => expect(screen.getByRole("treeitem", { name: "Alpha" }).getAttribute("aria-current")).toBe("page"));
+    expect(screen.getByRole("treeitem", { name: "Zeta" }).hasAttribute("aria-current")).toBe(false);
+    // A group's dashboard opens from the group too; ← goes back to the group.
+    const overview = screen.getByRole("treeitem", { name: "Overview" });
+    overview.focus();
+    fireEvent.keyDown(overview, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(screen.getByRole("treeitem", { name: "Both" }));
+    fireEvent.click(overview);
+    await waitFor(() => expect(activeTab().textContent).toContain("Overview"));
+    await waitFor(() => expect(screen.getByRole("treeitem", { name: "Overview" }).getAttribute("aria-current")).toBe("page"));
+  });
+
+  it("treeRows gives dashboard rows their view and ready-made flag", () => {
+    const out = treeRows({
+      projects: [{ id: "p1", name: "A", kind: "custom", cluster_id: null, color: "custom", dashboards: [
+        { id: "ready:p1:nodes", title: "Node health", ready_made: true }, { id: "d1", title: "Mine", ready_made: false },
+      ] }],
+      groups: [{ id: "g1", name: "G", project_ids: ["p1"], dashboards: [{ id: "d2", title: "Shared", ready_made: false }] }],
+      source_count: 0,
+    }, new Set(["group:g1", "project:p1"]));
+    expect(out.filter((r) => r.kind === "dashboard").map((r) => [r.label, r.view, r.readyMade])).toEqual([
+      ["Shared", { page: "dashboard", id: "d2" }, false],
+      ["Mine", { page: "dashboard", id: "d1" }, false],
+      ["Node health", { page: "dashboard", id: "ready:p1:nodes" }, true],
     ]);
   });
 });

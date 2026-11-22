@@ -4,8 +4,9 @@ import type { TabNav } from "../features/shell/browserHistory";
 import type { AppTabs } from "../features/shell/workspace";
 import { useMonitoringTree, useSources } from "./api/hooks";
 import type { SourceOut, TreeOut } from "./api/types";
+import { pressed } from "../features/chrome/shortcuts";
 import { focusMainFrom } from "./focus";
-import { recordRecent } from "./home/recent";
+import { readRecent, recordRecent } from "./home/recent";
 import GroupForm from "./groups/GroupForm";
 import GroupPage from "./groups/GroupPage";
 import MonitoringHome from "./home/MonitoringHome";
@@ -15,6 +16,10 @@ import { heldLeave } from "./dashboards/drafts/leaveGuard";
 import { LeaveDialog } from "./dashboards/drafts/LeaveDialog";
 import { forgetSession, keepNow } from "./dashboards/drafts/useDraft";
 import { editSessions } from "./dashboards/editor/useDashboardEditor";
+import { openMade } from "./dashboards/create/arrival";
+import { currentOwner, type Owner } from "./dashboards/create/currentOwner";
+import { NewDashboardDialog } from "./dashboards/create/NewDashboardDialog";
+import { pageLetter } from "./dashboards/page/keys";
 import { ALERTS_LATER, ComingLater, EXPLORE_LATER } from "./pages/ComingLater";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
@@ -282,6 +287,30 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     else pageNav.navigate(v, "push");
   }, [pageNav, openInNewTab]);
   const leave = useCallback(() => focusMainFrom(root.current), []);
+
+  // --- New dashboard: the L1 bar, N, and the current project's or group's + in the tree --------
+  // `view` changes whenever something is opened (and Recently opened with it), so the owner follows.
+  const owner = useMemo(() => (tree.data ? currentOwner(view, tree.data, readRecent()) : null), [view, tree.data]);
+  const canCreate = (tree.data?.projects.length ?? 0) > 0;
+  const [creating, setCreating] = useState<{ owner: Owner | null } | null>(null);
+  const createFrom = useRef<HTMLElement | null>(null);
+  const newDashboard = useCallback((o: Owner | null, from: HTMLElement | null) => {
+    createFrom.current = from ?? root.current?.closest("main") ?? null;
+    setCreating({ owner: o });
+  }, []);
+  // N anywhere in Monitoring, outside a field, a dialog, a menu or edit mode.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!pressed("monitoringNewDashboard", e) || !pageLetter(e)) return;
+      if (editSessions.get(latest.current.tabs.active)?.mode === "edit" || creating || !canCreate) return;
+      e.preventDefault();
+      if (e.repeat) return;
+      const active = document.activeElement;
+      newDashboard(owner, active instanceof HTMLElement && active !== document.body ? active : null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [owner, canCreate, creating, newDashboard]);
   const goHome = useCallback(() => pageNav.navigate(MONITORING_HOME, "push"), [pageNav]);
 
   // Each tab keeps where its page was scrolled.
@@ -294,7 +323,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   return (
     <div ref={root} className={s.app}>
       <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
-        index={index} onOpen={open} onLeave={leave} />
+        index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} />
       <div className={s.work}>
         <MonitoringTabs tabs={tabs} labelFor={names.label} colorFor={names.color}
           onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
@@ -305,6 +334,10 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
             tree={{ data: tree.data, fetching: tree.isFetching }} sources={{ data: sources.data, fetching: sources.isFetching }} />
         </div>
       </div>
+      {creating && (
+        <NewDashboardDialog owner={creating.owner} restoreFocusTo={createFrom} onCancel={() => setCreating(null)}
+          onCreated={(out) => { setCreating(null); openMade(out, { edit: true }, { tabId, nav: pageNav, openInNewTab }); }} />
+      )}
       {leaving && (
         <LeaveDialog title={leaving.title} draftsWork={leaving.draftsWork} restoreFocusTo={returnFocus}
           onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />

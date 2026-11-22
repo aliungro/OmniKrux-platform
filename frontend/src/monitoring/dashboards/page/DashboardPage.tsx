@@ -3,12 +3,16 @@
 // into tiles and the header into Discard and Save dashboard (edit mode, kept per workspace tab).
 // Time, variables, auto-refresh and the view tab live in the tab's view (replace navigations).
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { isEditable, pressed } from "../../../features/chrome/shortcuts";
 import type { MonitoringPageProps } from "../../MonitoringApp";
 import { Gone, keyboardIsFree } from "../../pages/Gone";
 import { MONITORING_HOME, type MonitoringView } from "../../shell/tabState";
-import { useDashboard, useReadyMade, type DashboardOut } from "../api";
+import { refreshAfterDashboardChange, useDashboard, useReadyMade, type DashboardOut } from "../api";
+import { focusHeadingOnArrival, forgetArrival, openMade, peekArrival, useCopyToEdit } from "../create/arrival";
+import { CopyDashboardDialog } from "../create/CopyDashboardDialog";
+import { DeleteDashboardDialog } from "../create/DeleteDashboardDialog";
 import type { VarValue } from "../interpolate";
 import type { RefreshSpec, TimeSpec } from "../schema";
 import { DashboardGrid } from "../grid/DashboardGrid";
@@ -17,8 +21,8 @@ import { isDirty, type EditorState } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
 import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
 import { DraftBanner, DraftsOffNotice, EditedElsewhere } from "../drafts/DraftBanner";
-import { useDraftOffer } from "../drafts/useDraft";
-import { readDraft, type StoredDraft } from "../drafts/draftStore";
+import { forgetSession, useDraftOffer } from "../drafts/useDraft";
+import { readDraft, removeDraft, type StoredDraft } from "../drafts/draftStore";
 import { JsonTab, ReadyMadeJson } from "../json/JsonTab";
 import { VersionsTab } from "../versions/VersionsTab";
 import e from "../editor/EditBar.module.css";
@@ -129,6 +133,23 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
   // The page opens with the keyboard on its title, unless the user is working elsewhere (Find, the tree).
   useEffect(() => { if (keyboardIsFree()) title.current?.focus({ preventScroll: true }); }, []);
 
+  // Just made or copied here: in edit mode with the keyboard on + Add panel (and a word on what it
+  // is), or as it is with the keyboard on its title. Read once: a later visit opens as usual.
+  const [arrival] = useState(() => peekArrival(dashboard.id));
+  const [arrivedWords, setArrivedWords] = useState("");
+  const toAddTile = useRef(false);
+  useEffect(() => {
+    if (!arrival) return;
+    forgetArrival(dashboard.id);
+    if (arrival.edit && !ready && editor.state.mode === "view" && startEditing(null)) {
+      toAddTile.current = true;
+      setArrivedWords(arrival.status ?? "");
+    } else {
+      title.current?.focus({ preventScroll: true });
+    }
+    // Once, as the page opens.
+  }, []);
+
   // View state changes replace the view: Back still goes to where the user came from.
   const replace = useCallback((patch: Partial<DashboardViewState>) => {
     nav.navigate((v) => (v.page === "dashboard" && v.id === view.id ? { ...v, ...patch } : v), "replace");
@@ -153,8 +174,10 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
     ctx.refreshNow();
     refreshButton.current?.focus();
   }, [ctx]);
-  // Copy to edit (a ready-made view) arrives with creating and copying.
-  const edit = ready ? undefined : () => { startEditing(null); };
+  // Copy to edit (a ready-made view): copied into its project as it is, then opened in edit mode.
+  const opener = { tabId, nav, openInNewTab };
+  const copyToEdit = useCopyToEdit(opener);
+  const edit = ready ? () => copyToEdit.copy(dashboard.id, dashboard.owner_id) : () => { startEditing(null); };
   const save = () => {
     flushJson.current?.();
     return editor.save();
@@ -185,6 +208,11 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
       saveButton.current?.focus();
     }
     wasEditing.current = isEditing;
+  }, [isEditing]);
+  useLayoutEffect(() => {
+    if (!isEditing || !toAddTile.current) return;
+    toAddTile.current = false;
+    (page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current)?.focus();
   }, [isEditing]);
 
   // The conflict review closed because the draft itself was refused (422): the keyboard goes to
@@ -254,7 +282,23 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
     (e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push"));
   const ownerView = { page: dashboard.owner_kind, id: dashboard.owner_id } as const;
   const openOwner = (e: MouseEvent<HTMLAnchorElement>) => openPage(ownerView, e);
-  const actions: MenuAction[] = ready ? [{ label: "Copy dashboard…" }] : [{ label: "Copy dashboard…" }, { label: "Delete dashboard…", danger: true }];
+  const [asking, setAsking] = useState<"copy" | "delete" | null>(null);
+  const copyAction: MenuAction = { label: "Copy dashboard…", onSelect: () => setAsking("copy") };
+  const actions: MenuAction[] = ready ? [copyAction] : [copyAction, { label: "Delete dashboard…", danger: true, onSelect: () => setAsking("delete") }];
+  const client = useQueryClient();
+  // Gone: its draft (whoever wrote it: the reader asked for it to go) and every edit session on
+  // it, then the tab shows its owner, with the keyboard on the owner's heading.
+  const deleted = () => {
+    removeDraft(dashboard.id);
+    for (const [t, x] of [...editSessions]) {
+      if (x.mode !== "edit" || x.dashboardId !== dashboard.id) continue;
+      editSessions.delete(t);
+      forgetSession(t);
+    }
+    focusHeadingOnArrival(dashboard.owner_kind, dashboard.owner_id);
+    nav.navigate(ownerView, "replace");
+    void refreshAfterDashboardChange(client, dashboard.id);
+  };
   const ids = tabIds(tab);
 
   const { saveError, conflict } = editor;
@@ -268,7 +312,7 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
         timeControl={<TimeRangePicker time={ctx.time} open={timeOpen} onOpen={() => setTimeOpen(true)} onClose={closeTime} onPick={pickTime} buttonRef={timeButton} />}
         refreshControl={<RefreshControl value={ctx.refresh} onRefresh={refreshNow} buttonRef={refreshButton}
           onChange={(r: RefreshSpec) => replace({ refresh: r })} />}
-        editRef={editButton} onEdit={edit} moreRef={moreButton} actions={actions}
+        editRef={editButton} onEdit={copyToEdit.busy ? undefined : edit} moreRef={moreButton} actions={actions}
         badge={editing ? <EditingPill /> : undefined}
         afterTitle={offer.draft && !editing
           ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft} />
@@ -278,11 +322,20 @@ function DashboardScreen({ view, tabId, dashboard, nav, openInNewTab, activateTa
           : undefined} />
       {editing && !editor.draftsWork && <DraftsOffNotice />}
       {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
+      <p className={s.arrived} role="status">{editing ? arrivedWords : ""}</p>
+      {copyToEdit.error && <p className={s.copyProblem} role="alert">{copyToEdit.error.text}</p>}
       {editing && conflict !== null && (
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />
       )}
       {editing && conflict === null && otherError && <EditNotice error={otherError} onShowJson={() => selectTab("json")} actionRef={showInJson} />}
+      {asking === "copy" && (
+        <CopyDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)}
+          onCopied={(out) => { setAsking(null); openMade(out, { edit: false }, opener); }} />
+      )}
+      {asking === "delete" && !ready && (
+        <DeleteDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)} onDeleted={deleted} />
+      )}
       {askDiscard && editing && (
         <DiscardDialog title={editing.base.title || dashboard.title} restoreFocusTo={askDiscard}
           onCancel={() => setAskDiscard(null)} onDiscard={() => editor.discard()} />

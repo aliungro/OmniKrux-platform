@@ -13,6 +13,10 @@ export function ProjectDeleteReview({ review, busy, error, restoreFocusTo, onCan
 }) {
   const names = (list: { name: string }[]) => list.map((x) => x.name).join(", ");
   const lines: string[] = [];
+  if (review.dashboards.length > 0) {
+    const versions = (n: number) => (n === 1 ? "1 version" : `${n} versions`);
+    lines.push(`Dashboards that go with it: ${review.dashboards.map((d) => `${d.title} (${versions(d.versions)})`).join(", ")}.`);
+  }
   if (review.sources_removed.length > 0) lines.push(`Sources it created that go with it: ${names(review.sources_removed)}.`);
   if (review.sources_kept.length > 0) {
     const kept = review.sources_kept.map((x) => `${x.name} (used by ${x.used_by.join(", ")})`).join("; ");

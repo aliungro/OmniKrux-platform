@@ -366,6 +366,48 @@
   font-size: 11px;
 }
 
+.dashboard {
+  font-size: 12.5px;
+}
+
+.row.dashboard[aria-current="page"] {
+  color: var(--ink);
+}
+
+/* A ready-made view: generated from the project's Prometheus, not saved. */
+.readyTag {
+  flex: none;
+  margin-left: auto;
+  color: var(--ink-3);
+  font: 10.5px "Geist Mono", ui-monospace, monospace;
+}
+
+/* New dashboard in the current project or group, at the end of its row. */
+.rowPlus {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--focus) 45%, transparent);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--focus);
+  font: 12px/1 "Geist Mono", ui-monospace, monospace;
+  cursor: pointer;
+}
+
+.rowPlus:hover {
+  background: color-mix(in srgb, var(--focus) 14%, transparent);
+}
+
+.rowPlus:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 .failed {
   padding-top: 10px;
 }
@@ -413,6 +455,15 @@
   font: inherit;
   font-weight: 500;
   text-align: left;
+  cursor: pointer;
+}
+
+.newDashboard:not([aria-disabled="true"]):hover {
+  background: color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.newKey {
+  margin-left: auto;
 }
 
 .newIcon {
@@ -457,14 +508,24 @@
 .footNote {
   margin: 0;
   padding: 6px 4px 0;
+  overflow: hidden;
   color: var(--ink-3);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footOwner {
+  color: var(--ink-2);
+  font-weight: 500;
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .row,
   .navItem,
-  .plus {
+  .plus,
+  .rowPlus,
+  .newDashboard {
     transition: background-color 0.12s ease;
   }
 

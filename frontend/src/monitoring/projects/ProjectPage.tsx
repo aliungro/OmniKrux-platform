@@ -5,6 +5,8 @@ import { failure, HttpError } from "../../api/http";
 import { deleteProject, linkSource, projectDeleteReview, renameProject, sourceFields, suggestFilter, unlinkSource } from "../api/client";
 import { invalidateMonitoring, useGroups, useProject, useSourceHealth, useSources } from "../api/hooks";
 import type { FilterOrigin, HealthOut, LinkOut, ProjectDeleteReviewOut, ProjectOut } from "../api/types";
+import { takeHeadingFocus } from "../dashboards/create/arrival";
+import { OwnerDashboards } from "../dashboards/OwnerDashboards";
 import { EditableName } from "../EditableName";
 import { escapeCloses } from "../focus";
 import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
@@ -19,9 +21,17 @@ import s from "./ProjectPage.module.css";
 const UNKNOWN: HealthOut = { state: "unknown", message: null, version: null, checked_at: null };
 const STALE_REVIEW = "Something changed since the review. Review it again.";
 
-/** Where a project's dashboards will be listed. M2 replaces this body. */
-export function ProjectDashboardsSlot() {
-  return <p className={s.later}>Dashboards arrive in the next update.</p>;
+/** The project's dashboards, then its ready-made views (generated from its Prometheus). */
+export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab }: {
+  project: ProjectOut;
+  tabId: string;
+  nav: MonitoringPageProps["nav"];
+  openInNewTab(view: MonitoringView): void;
+}) {
+  return (
+    <OwnerDashboards owner={{ kind: "project", id: project.id, name: project.name }} tabId={tabId} nav={nav} openInNewTab={openInNewTab}
+      prometheus={project.links.some((l) => l.source_type === "prometheus")} />
+  );
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -221,7 +231,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   );
 }
 
-export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageProps) {
+export default function ProjectPage({ view, tabId, nav, openInNewTab }: MonitoringPageProps) {
   const id = view.page === "project" ? view.id : "";
   const client = useQueryClient();
   const projectQuery = useProject(id);
@@ -249,6 +259,11 @@ export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageP
   const closePanel = useCallback(() => { backTo.current = adding; setAdding(null); }, [adding]);
 
   const project = projectQuery.data;
+  // Back here after one of its dashboards was deleted: the keyboard goes to the project's name.
+  const loaded = project !== undefined;
+  useEffect(() => {
+    if (loaded && takeHeadingFocus("project", id)) document.getElementById("monitoring-project-title")?.focus({ preventScroll: true });
+  }, [loaded, id]);
   if (!project) {
     if (projectQuery.isError) {
       return (
@@ -372,7 +387,7 @@ export default function ProjectPage({ view, nav, openInNewTab }: MonitoringPageP
 
       <section aria-labelledby="monitoring-project-dashboards" className={s.section}>
         <h2 id="monitoring-project-dashboards" className={s.heading}>Dashboards</h2>
-        <ProjectDashboardsSlot />
+        <ProjectDashboardsSlot project={project} tabId={tabId} nav={nav} openInNewTab={openInNewTab} />
       </section>
 
       <section aria-labelledby="monitoring-project-groups" className={s.section}>

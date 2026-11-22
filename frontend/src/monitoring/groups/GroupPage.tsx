@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { failure } from "../../api/http";
-import { deleteGroup, updateGroup } from "../api/client";
+import { failure, HttpError } from "../../api/http";
+import { deleteGroup, groupDeleteReview, updateGroup } from "../api/client";
 import { invalidateMonitoring, useGroups, useProjects } from "../api/hooks";
-import type { GroupOut } from "../api/types";
+import type { GroupDeleteReviewOut, GroupOut } from "../api/types";
+import { takeHeadingFocus } from "../dashboards/create/arrival";
+import { OwnerDashboards } from "../dashboards/OwnerDashboards";
 import { DeleteReviewDialog } from "../DeleteReviewDialog";
 import { EditableName } from "../EditableName";
 import { escapeCloses } from "../focus";
@@ -56,7 +58,9 @@ function EditProjects({ group, onDone }: { group: GroupOut; onDone(): void }) {
   );
 }
 
-export default function GroupPage({ view, nav, openInNewTab }: MonitoringPageProps) {
+const STALE_REVIEW = "Something changed since the review. Review it again.";
+
+export default function GroupPage({ view, tabId, nav, openInNewTab }: MonitoringPageProps) {
   const id = view.page === "group" ? view.id : "";
   const client = useQueryClient();
   const groups = useGroups();
@@ -65,9 +69,10 @@ export default function GroupPage({ view, nav, openInNewTab }: MonitoringPagePro
   const deleteButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(false);
   const [editing, setEditing] = useState(false);
-  const [asking, setAsking] = useState(false);
+  const [review, setReview] = useState<GroupDeleteReviewOut | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!editing && wasEditing.current) editButton.current?.focus();
@@ -75,6 +80,11 @@ export default function GroupPage({ view, nav, openInNewTab }: MonitoringPagePro
   }, [editing]);
 
   const group = groups.data?.find((g) => g.id === id);
+  // Back here after one of its dashboards was deleted: the keyboard goes to the group's name.
+  const loaded = group !== undefined;
+  useEffect(() => {
+    if (loaded && takeHeadingFocus("group", id)) document.getElementById("monitoring-group-title")?.focus({ preventScroll: true });
+  }, [loaded, id]);
   if (!group) {
     if (groups.isError && !groups.data) {
       return (
@@ -100,17 +110,37 @@ export default function GroupPage({ view, nav, openInNewTab }: MonitoringPagePro
     await invalidateMonitoring(client);
   };
 
+  // What deleting it takes (its dashboards) is read first; the delete carries that review's token.
+  const askDelete = async () => {
+    setPageError(null);
+    setError(null);
+    try {
+      setReview(await groupDeleteReview(group.id));
+    } catch (err) {
+      setPageError(failure(err));
+    }
+  };
+
   const confirmDelete = async () => {
-    if (busy) return;
+    if (busy || !review) return;
     setBusy(true);
     setError(null);
     try {
-      await deleteGroup(group.id);
+      await deleteGroup(group.id, review.token);
       nav.navigate(MONITORING_HOME, "replace");
       void invalidateMonitoring(client);
     } catch (err) {
       setBusy(false);
-      setError(failure(err, "try again"));
+      if (err instanceof HttpError && err.status === 409) {
+        setError(STALE_REVIEW);
+        try {
+          setReview(await groupDeleteReview(group.id));
+        } catch (again) {
+          setError(`${STALE_REVIEW} ${failure(again, "try again")}`);
+        }
+      } else {
+        setError(failure(err, "try again"));
+      }
     }
   };
 
@@ -143,17 +173,19 @@ export default function GroupPage({ view, nav, openInNewTab }: MonitoringPagePro
 
       <section aria-labelledby="monitoring-group-dashboards" className={s.section}>
         <h2 id="monitoring-group-dashboards" className={s.heading}>Dashboards</h2>
-        <p className={s.later}>Group dashboards arrive in the next update.</p>
+        <OwnerDashboards owner={{ kind: "group", id: group.id, name: group.name }} tabId={tabId} nav={nav} openInNewTab={openInNewTab} />
       </section>
 
       <footer className={s.foot}>
-        <button ref={deleteButton} type="button" className={s.dangerQuiet} onClick={() => { setError(null); setAsking(true); }}>Delete group…</button>
+        {pageError && <p className={s.bad} role="alert">{pageError}</p>}
+        <button ref={deleteButton} type="button" className={s.dangerQuiet} onClick={() => void askDelete()}>Delete group…</button>
       </footer>
 
-      {asking && (
+      {review && (
         <DeleteReviewDialog title={`Delete group ${group.name}?`} action="Delete group" busy={busy} error={error} restoreFocusTo={deleteButton}
-          onCancel={() => { if (!busy) setAsking(false); }} onConfirm={() => void confirmDelete()}>
+          onCancel={() => { if (!busy) { setReview(null); setError(null); } }} onConfirm={() => void confirmDelete()}>
           <p>Its projects stay as they are.</p>
+          {review.dashboards.length > 0 && <p>Its dashboards go with it: {review.dashboards.map((d) => d.title).join(", ")}.</p>}
         </DeleteReviewDialog>
       )}
     </section>

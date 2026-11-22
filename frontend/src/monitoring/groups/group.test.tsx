@@ -4,8 +4,10 @@ import userEvent from "@testing-library/user-event";
 import type { GroupOut } from "../api/types";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
+import { seedDashboard, spec } from "../test/dashboardSeeds";
+import { editSessions } from "../dashboards/editor/useDashboardEditor";
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => { localStorage.clear(); editSessions.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const T = "2026-01-01T00:00:00Z";
@@ -30,7 +32,7 @@ describe("Groups", () => {
     expect(await screen.findByRole("heading", { name: "Everything dev" })).toBeTruthy();
     const shortcuts = screen.getByRole("list", { name: "Projects in this group" });
     expect(within(shortcuts).getAllByRole("button").map((b) => b.textContent)).toEqual(["↗Dev", "↗Stage"]);
-    expect(screen.getByText("Group dashboards arrive in the next update.")).toBeTruthy();
+    expect(screen.getByText("No group dashboards yet. A group dashboard runs each panel once per project in the group.")).toBeTruthy();
     // The shortcut opens the project as it is.
     await user.click(within(shortcuts).getByRole("button", { name: /Dev/ }));
     expect(await screen.findByRole("heading", { name: "Dev" })).toBeTruthy();
@@ -98,6 +100,33 @@ describe("Groups", () => {
     const sidebar = document.querySelector("nav, aside") as HTMLElement;
     expect(within(sidebar).getByText("Dev")).toBeTruthy();
     expect(within(sidebar).getByText("Stage")).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+  it("group page lists group dashboards and its delete lists them", async () => {
+    const user = userEvent.setup();
+    const PROD = { kind: "group" as const, id: "g1", name: "Prod" };
+    const api = installFakeMonitoringApi({
+      projects: projects(), groups: [group("g1", "Prod", ["p1", "p2"])],
+      dashboards: { a1: seedDashboard("a1", PROD, spec("Overview", [])), a2: seedDashboard("a2", PROD, spec("Errors", [])) },
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    const list = await screen.findByRole("list", { name: "Dashboards of Prod" });
+    expect(within(list).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      expect.stringContaining("Errors"), expect.stringContaining("Overview"),
+    ]);
+    expect(screen.queryByRole("list", { name: "Ready-made views" })).toBeNull();
+    expect(screen.queryByText(/No group dashboards yet/)).toBeNull();
+    expect(screen.getByRole("button", { name: "New dashboard for Prod" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Delete group…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Its projects stay as they are.")).toBeTruthy();
+    expect(within(dialog).getByText("Its dashboards go with it: Errors, Overview.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete group" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
+    expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
+    expect(api.requests.some((r) => r.method === "DELETE" && r.url === "/api/monitoring/groups/g1?token=review-token")).toBe(true);
+    expect(api.state.groups).toHaveLength(0);
+    expect(Object.keys(api.state.dashboards)).toEqual([]);
     expect(document.activeElement).not.toBe(document.body);
   });
 });

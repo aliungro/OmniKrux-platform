@@ -447,6 +447,32 @@
   color: var(--ink-3);
 }
 
+/* Said once a copy opens in edit mode: where its changes go. Empty, it takes no room but stays a
+   live region, so the words are announced when they arrive. */
+.arrived {
+  margin: 8px 16px 0;
+  padding: 7px 12px;
+  border-radius: 0 8px 8px 0;
+  box-shadow: inset 2px 0 var(--focus);
+  background: color-mix(in srgb, var(--focus) 8%, transparent);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.arrived:empty {
+  margin: 0;
+  padding: 0;
+  box-shadow: none;
+  background: none;
+}
+
+.copyProblem {
+  margin: 8px 16px 0;
+  color: var(--bad);
+  font-size: 13px;
+}
+
 .content {
   flex: 1;
   padding: 10px 16px 32px;

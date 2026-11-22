@@ -23,10 +23,6 @@
   composes: muted from "../projects/ProjectPage.module.css";
 }
 
-.later {
-  composes: later from "../projects/ProjectPage.module.css";
-}
-
 .note {
   composes: note from "../projects/ProjectPage.module.css";
 }
