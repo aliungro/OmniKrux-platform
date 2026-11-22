@@ -242,9 +242,12 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     setSearching(true);
   }, []);
   /** While the JSON text doesn't apply, nothing is added (it would drop that text): the search stays open and says why. */
-  const refusedByJson = (action: EditorAction) => {
+  const jsonBlocks = (action: EditorAction) => {
     const st = editor.state;
-    if (st.mode !== "edit" || st.jsonText === null || !isDraftEdit(action)) return false;
+    return st.mode === "edit" && st.jsonText !== null && isDraftEdit(action);
+  };
+  const refusedByJson = (action: EditorAction) => {
+    if (!jsonBlocks(action)) return false;
     grid.current?.announce(JSON_FIRST);
     setRefused((was) => ({ text: JSON_FIRST, attempt: (was?.attempt ?? 0) + 1 }));
     return true;
@@ -263,7 +266,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const addFromRail = (panel: NewPanel, from: DOMRect): boolean => {
     const action: EditorAction = { type: "insertPanel", panel, select: false };
     // Refused while the JSON text doesn't apply: the rail says why in its own live region.
-    if (editor.state.mode !== "edit" || editor.state.jsonText !== null || !isDraftEdit(action)) return false;
+    if (editor.state.mode !== "edit" || jsonBlocks(action)) return false;
     editor.dispatch(action);
     launch(panel.id, from);
     setFlying(panel.id);
@@ -488,7 +491,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
               onVar={setVar} onProjects={(value) => setVar(PROJECTS_VAR, value)} onRetry={ctx.retryVariable}
               onOpenProject={(p, e) => openPage({ page: "project", id: p.id }, e)} />
             <RailLayout rail={editing && editing.suggestions === "open" ? (
-              <SuggestionsRail key={editing.writer} owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name}
+              <SuggestionsRail owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name}
                 ownerKind={dashboard.owner_kind} vars={ctx.vars} range={ctx.range} draft={editing.draft}
                 onAdd={addFromRail} onClose={hideSuggestions} onEscape={toAddPanel} />
             ) : null}>

@@ -1,8 +1,9 @@
 // Suggestions on a new dashboard (D2): a rail beside the grid with up to eight ready-made panels,
 // each with a live preview. Picking one adds it and it flies from its card to its tile; the card
 // then reads Added. The keyboard stays in the rail on the next suggestion, so a dashboard can be
-// built with Enter alone. The Added marks are this component's own state: the page keys it by the
-// edit session, so Discard and a new Edit start clean (F34).
+// built with Enter alone. A card reads Added when the draft already holds that panel (same type,
+// same query), so the mark survives a tab switch, clears when the panel is removed and Discard
+// clears it with the draft.
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { failure } from "../../api/http";
@@ -48,7 +49,6 @@ export function RailLayout({ rail, children }: { rail: ReactNode; children: Reac
 export function SuggestionsRail({ owner, ownerName, ownerKind, vars, range, draft, onAdd, onClose, onEscape }: SuggestionsRailProps) {
   const list = useRef<HTMLUListElement>(null);
   const hide = useRef<HTMLButtonElement>(null);
-  const [added, setAdded] = useState<ReadonlySet<string>>(() => new Set());
   // Each message is a new node, so the same words said twice are read again.
   const [message, setMessage] = useState<{ text: string; seq: number; refused: boolean }>({ text: "", seq: 0, refused: false });
   const say = (text: string, refused = false) => setMessage((m) => ({ text, seq: m.seq + 1, refused }));
@@ -57,6 +57,15 @@ export function SuggestionsRail({ owner, ownerName, ownerKind, vars, range, draf
   const catalog = cat.catalog;
   const candidates = useMemo(() => (catalog ? suggestPanels(catalog).slice(0, MAX_SUGGESTIONS) : []), [catalog]);
   const previews = usePreviews(candidates, { owner, ownerName, vars, range }, MAX_SUGGESTIONS);
+
+  /** The candidates the draft already holds, by key. */
+  const added = useMemo(() => {
+    const held = new Set<string>();
+    for (const c of candidates) {
+      if (draft.panels.some((p) => p.type === c.panelType && p.queries.some((q) => q.expr === c.expr))) held.add(c.key);
+    }
+    return held;
+  }, [candidates, draft.panels]);
 
   const cards = () => Array.from(list.current?.querySelectorAll<HTMLElement>("button") ?? []);
   const firstUnused = (from: number, used: ReadonlySet<string>) => {
@@ -73,7 +82,6 @@ export function SuggestionsRail({ owner, ownerName, ownerKind, vars, range, draf
       return;
     }
     const used = new Set(added).add(c.key);
-    setAdded(used);
     say(`Added "${panel.title.trim() || "Untitled panel"}" to the dashboard.`);
     const next = firstUnused(i + 1, used);
     (next === -1 ? hide.current : cards()[next])?.focus();

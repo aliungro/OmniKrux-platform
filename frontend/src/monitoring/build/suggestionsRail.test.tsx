@@ -60,7 +60,8 @@ function shop(panels: DashboardSpec["panels"] = [], catalog: CatalogOut = shopCa
     projects: [{ ...linkedProject("p1", "Shop", "s1"), links: [linkTo("s1"), linkTo("s2", "loki")] }],
     catalogs: { p1: catalog },
     dashboards: { d1: seedDashboard("d1", { kind: "project", id: "p1", name: "Shop" }, spec("API latency", panels)) },
-    queryAnswers: { up: ok },
+    // Every query the previews ask has an answer.
+    queryAnswers: new Proxy({} as Record<string, typeof ok>, { get: () => ok }),
   }, async () => json([]));
 }
 
@@ -104,7 +105,8 @@ describe("Suggestions rail", () => {
     expect(screen.getByText("Click a suggestion on the left; it flies into place.")).toBeTruthy();
     expect(addTile()).toBeTruthy();
     // Every card previews live, in one batch with each project.
-    await waitFor(() => expect(within(rail()).queryAllByText("Loading…")).toHaveLength(0));
+    await waitFor(() => expect(within(rail()).queryAllByText("Loadingâ€¦")).toHaveLength(0));
+    expect(within(rail()).getAllByText(/^(mini chart|No data in this time range\.)$/)).toHaveLength(7);
   });
 
   it("previews run as one batch with project ids", async () => {
@@ -292,5 +294,53 @@ describe("Suggestions rail", () => {
     await waitFor(() => expect(cards().length).toBeGreaterThan(1));
     expect(cards().some((c) => c.textContent?.includes("Added"))).toBe(false);
     expect(draft().draft.panels).toHaveLength(0);
+  });
+
+  it("a tab switch to JSON and back keeps the Added marks", async () => {
+    const { user } = await loaded();
+    await user.click(cards()[0]);
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    await screen.findByRole("textbox", { name: "Dashboard JSON" });
+    await user.click(screen.getByRole("tab", { name: "Dashboard" }));
+    await waitFor(() => expect(cards().length).toBeGreaterThan(1));
+    expect(cards()[0].textContent).toContain("Added");
+    expect(cards()[0].getAttribute("aria-disabled")).toBe("true");
+    await user.click(cards()[0]);
+    expect(draft().draft.panels).toHaveLength(1);
+  });
+
+  it("removing the added panel makes its card addable again", async () => {
+    const { user } = await loaded();
+    await user.click(cards()[0]);
+    const id = draft().draft.panels[0].id;
+    const tile = document.querySelector<HTMLElement>(`[data-tile-id="${id}"]`)!;
+    tile.focus();
+    await user.keyboard("{Control>}{Delete}{/Control}");
+    expect(draft().draft.panels).toHaveLength(0);
+    // The board copy and the cards agree: an empty dashboard, every card enabled.
+    expect(screen.getByText("Your new dashboard")).toBeTruthy();
+    expect(cards().some((c) => c.getAttribute("aria-disabled") === "true" || c.textContent?.includes("Added"))).toBe(false);
+    await user.click(cards()[0]);
+    expect(draft().draft.panels).toHaveLength(1);
+  });
+
+  it("focus skips suggestions the draft already holds", async () => {
+    const { user } = await loaded();
+    await user.click(cards()[1]);
+    cards()[0].focus();
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(cards()[2]);
+  });
+
+  it("s does nothing while the Add panel dialog is open", async () => {
+    const { user } = await loaded();
+    await user.click(addTile());
+    const input = await screen.findByRole("combobox", { name: "What do you want to see" });
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    fireEvent.keyDown(document.activeElement!, { key: "s" });
+    expect(document.activeElement).toBe(input);
+    // From the dialog's own list too.
+    fireEvent.keyDown(within(screen.getByRole("dialog")).getAllByRole("option")[0], { key: "s" });
+    expect(cards().includes(document.activeElement as HTMLElement)).toBe(false);
   });
 });
