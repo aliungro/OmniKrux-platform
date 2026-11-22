@@ -3,7 +3,7 @@ import type { OwnerCatalog } from "../catalog/merge";
 import type { PanelData } from "../dashboards/runPanel";
 import type { PanelSpec, QuerySpec } from "../dashboards/schema";
 import { durationText } from "../dashboards/time";
-import { findRawCounters, isRateQuery, rangeDurations, replaceDurations, wrapRate } from "./promql";
+import { findRawCounters, isRateQuery, rangeDurations, replaceDurations, scanSelectors, wrapRate } from "./promql";
 
 export type RecText = (string | { strong: string })[];
 
@@ -34,9 +34,24 @@ const keyOf = (id: string, panel: PanelSpec, ref: string | null) => `${id}:${pan
 const visiblePrometheus = (panel: PanelSpec): QuerySpec[] =>
   panel.queries.filter((q) => !q.hidden && q.source.type === "prometheus");
 
-/** Replaces one query's text; every other part of the panel stays as it was. */
-function withExpr(panel: PanelSpec, ref: string, change: (expr: string) => string): PanelSpec {
-  return { ...panel, queries: panel.queries.map((q) => (q.ref === ref ? { ...q, expr: change(q.expr) } : q)) } as PanelSpec;
+/** Replaces one query's text, only if it still reads as it did when evaluated; nothing else changes. */
+function withExpr(panel: PanelSpec, ref: string, seen: string, change: (expr: string) => string): PanelSpec {
+  const q = panel.queries.find((x) => x.ref === ref);
+  if (!q || q.expr !== seen) return panel;
+  return { ...panel, queries: panel.queries.map((x) => (x.ref === ref ? { ...x, expr: change(x.expr) } : x)) } as PanelSpec;
+}
+
+const SMOOTHING = new Set(["rate", "irate", "avg_over_time"]);
+
+/** Range windows directly inside rate, irate or avg_over_time: a wider one smooths without changing meaning. */
+function smoothingWindows(expr: string) {
+  const refs = scanSelectors(expr) ?? [];
+  return rangeDurations(expr).filter((d) => {
+    const ref = refs.filter((r) => r.end <= d.start).sort((a, b) => b.end - a.end)[0];
+    if (!ref) return false;
+    const m = /([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*$/.exec(expr.slice(0, ref.start));
+    return m !== null && SMOOTHING.has(m[1]);
+  });
 }
 
 export function roughness(points: [number, number | null][]): number {
@@ -77,12 +92,13 @@ const perSecond: RecommendationRule = {
     for (const q of visiblePrometheus(panel)) {
       const refs = findRawCounters(q.expr, counts);
       if (refs.length === 0) continue;
-      const metric = refs[0].metric as string;
+      const names = [...new Set(refs.map((r) => r.metric as string))];
+      const named = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
       return {
         id: "perSecond",
         key: keyOf("perSecond", panel, q.ref),
-        text: [{ strong: metric }, " is a counter, so its raw value only goes up. Show it per second?"],
-        apply: (p) => withExpr(p, q.ref, (expr) => wrapRate(expr, findRawCounters(expr, counts))),
+        text: [{ strong: named }, `${names.length === 1 ? " is a counter, so its" : " are counters, so their"} raw value${names.length === 1 ? "" : "s"} only go${names.length === 1 ? "es" : ""} up. Show ${names.length === 1 ? "it" : "them"} per second?`],
+        apply: (p) => withExpr(p, q.ref, q.expr, (expr) => wrapRate(expr, findRawCounters(expr, counts))),
       };
     }
     return null;
@@ -96,7 +112,9 @@ const widerWindow: RecommendationRule = {
   id: "widerWindow",
   evaluate({ panel, data, stepSeconds }) {
     if (panel.type !== "timeseries" || !usable(data) || !(stepSeconds > 0)) return null;
+    const visibleRefs = new Set(panel.queries.filter((q) => !q.hidden).map((q) => q.ref));
     const rough = data.series
+      .filter((s) => visibleRefs.has(s.queryRef))
       .filter((s) => s.points.filter(([, y]) => y !== null).length >= 20)
       .map((s) => roughness(s.points))
       .sort((a, b) => a - b);
@@ -105,14 +123,14 @@ const widerWindow: RecommendationRule = {
     const median = rough.length % 2 ? rough[mid] : (rough[mid - 1] + rough[mid]) / 2;
     if (!(median > 0.3)) return null;
     const target = Math.max(300, 4 * stepSeconds);
-    const shorter = (expr: string) => rangeDurations(expr).filter((d) => d.seconds < target);
+    const shorter = (expr: string) => smoothingWindows(expr).filter((d) => d.seconds < target);
     const q = visiblePrometheus(panel).find((x) => shorter(x.expr).length > 0);
     if (!q) return null;
     return {
       id: "widerWindow",
       key: keyOf("widerWindow", panel, q.ref),
       text: ["The line is noisy at this window. ", { strong: durationWords(target) }, " is smoother and still shows spikes."],
-      apply: (p) => withExpr(p, q.ref, (expr) => replaceDurations(expr, shorter(expr), durationText(target))),
+      apply: (p) => withExpr(p, q.ref, q.expr, (expr) => replaceDurations(expr, shorter(expr), durationText(target))),
     };
   },
 };
@@ -121,9 +139,11 @@ const stackedArea: RecommendationRule = {
   id: "stackedArea",
   evaluate({ panel, data }) {
     if (panel.type !== "timeseries" || panel.options.style !== "lines" || !usable(data)) return null;
-    const n = data.series.length;
+    const visibleRefs = new Set(panel.queries.filter((q) => !q.hidden).map((q) => q.ref));
+    const shown = data.series.filter((s) => visibleRefs.has(s.queryRef));
+    const n = shown.length;
     if (n < 2 || n > 10) return null;
-    if (data.series.some((s) => s.points.some(([, y]) => y !== null && y < 0))) return null;
+    if (shown.some((s) => s.points.some(([, y]) => y !== null && y < 0))) return null;
     const visible = panel.queries.filter((q) => !q.hidden);
     if (visible.length === 0 || !visible.every((q) => isRateQuery(q.expr))) return null;
     return {

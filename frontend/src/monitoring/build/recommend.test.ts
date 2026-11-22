@@ -157,4 +157,49 @@ describe("recommendations", () => {
     expect(durationWords(3600)).toBe("1 hour");
     expect(durationWords(7200)).toBe("2 hours");
   });
+
+  it("several raw counters are all named and all wrapped", () => {
+    const panel = panelWith("a_total / b_total");
+    const rec = recommendFor(ctx(panel), new Set())!;
+    expect(textOf(rec)).toBe("a_total and b_total are counters, so their raw values only go up. Show them per second?");
+    expect(rec.apply(panel).queries[0].expr).toBe("rate(a_total[$__rate_interval]) / rate(b_total[$__rate_interval])");
+  });
+
+  it("Apply leaves a panel unchanged when the query changed after evaluation", () => {
+    const panel = panelWith("foo_total");
+    const rec = recommendFor(ctx(panel), new Set())!;
+    const edited = panelWith("other_total");
+    expect(rec.apply(edited)).toBe(edited);
+    const noisy = panelWith("rate(x[1m])");
+    const wide = recommendFor(ctx(noisy, { data: dataOf([alternating]) }), new Set())!;
+    const edited2 = panelWith("rate(y[1m])");
+    expect(wide.apply(edited2)).toBe(edited2);
+  });
+
+  it("stackedArea Apply leaves a non-timeseries panel unchanged", () => {
+    const panel = panelWith("sum by (route) (rate(x[5m]))");
+    const smooth = (n: string) => line(n, Array.from({ length: 60 }, (_, i) => 5 + Math.sin(i / 10)));
+    const rec = recommendFor(ctx(panel, { data: dataOf([smooth("a"), smooth("b")]) }), new Set())!;
+    const stat = newPanel("stat", "p1", { x: 0, y: 0, w: 6, h: 4 });
+    expect(rec.apply(stat)).toBe(stat);
+  });
+
+  it("widerWindow only widens rate, irate and avg_over_time windows", () => {
+    const data = dataOf([alternating]);
+    expect(recommendFor(ctx(panelWith("increase(x[1m])"), { data }), new Set())).toBeNull();
+    expect(recommendFor(ctx(panelWith("max_over_time(x[1m])"), { data }), new Set())).toBeNull();
+    const panel = panelWith("avg_over_time(x[1m]) + increase(y[1m])");
+    const rec = recommendFor(ctx(panel, { data }), new Set())!;
+    expect(rec.apply(panel).queries[0].expr).toBe("avg_over_time(x[5m]) + increase(y[1m])");
+  });
+
+  it("series from hidden queries are ignored", () => {
+    const panel = panelWith("rate(x[1m])");
+    const hiddenNoisy = { ...alternating, queryRef: "B" };
+    expect(recommendFor(ctx(panel, { data: dataOf([hiddenNoisy]) }), new Set())).toBeNull();
+    const two = panelWith("sum(rate(x[5m]))");
+    two.queries.push({ ...two.queries[0], ref: "B", hidden: true });
+    const flat = (n: string, ref: string) => ({ ...line(n, Array.from({ length: 60 }, () => 1)), queryRef: ref });
+    expect(recommendFor(ctx(two, { data: dataOf([flat("a", "A"), flat("b", "B")]) }), new Set())).toBeNull();
+  });
 });
