@@ -4,7 +4,7 @@
 // goes to Empty panel, Esc clears and then closes). Empty panel, always last, is M2's blank time
 // series. Matching is fixed rules over names, help text and labels: no AI, no paid service.
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { failure } from "../../api/http";
 import { DialogShell } from "../../features/dock/ConfirmDialog";
 import { catalogAge, useOwnerCatalog } from "../catalog/merge";
@@ -33,8 +33,11 @@ export interface AddPanelSearchProps {
   onAdd(panel: NewPanel, from: DOMRect): void;
   onEmpty(): void;
   onClose(): void;
-  /** Why the last pick wasn't added (the JSON text doesn't apply); the search stays open. */
-  refused?: string | null;
+  /**
+   * Why the last pick wasn't added (the JSON text doesn't apply); the search stays open. `attempt`
+   * counts the refusals, so each one is said again (the page behind a modal dialog isn't heard).
+   */
+  refused?: { text: string; attempt: number } | null;
   /** Where Esc returns the keyboard (the Add tile, or the tile that had it); else what had it on open. */
   restoreFocusTo?: RefObject<HTMLElement | null>;
 }
@@ -93,10 +96,12 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     } else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       if (e.repeat) return;
-      if (text !== query && catalog) {
+      // Only spaces: that is no text (the suggestions), as the list shows.
+      const typed = text.trim() === "" ? "" : text;
+      if (typed !== query && catalog) {
         // Typed faster than the list followed: Enter adds the first match of what is typed now.
-        const now = listFor(text);
-        setQuery(text);
+        const now = listFor(typed);
+        setQuery(typed);
         if (now.length > 0) add(now[0], rectOf(0));
         else onEmpty();
         return;
@@ -131,6 +136,14 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
 
   const reading = !catalog && !cat.error && (owner === null || cat.loading);
   const readFailed = !catalog && !reading ? (refreshError ?? cat.error) : null;
+  // Try again worked: its button went with the failure, and the keyboard goes back to the field.
+  const failedShown = readFailed !== null;
+  const hadFailed = useRef(failedShown);
+  useLayoutEffect(() => {
+    const lost = () => { const a = document.activeElement; return a === null || a === document.body || !a.isConnected; };
+    if (hadFailed.current && !failedShown && lost()) input.current?.focus();
+    hadFailed.current = failedShown;
+  }, [failedShown]);
   const nothing = searching && catalog !== null && candidates.length === 0;
   const found = searching && candidates.length > 0
     ? `${candidates.length} ${candidates.length === 1 ? "panel matches" : "panels match"}.`
@@ -151,7 +164,7 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
           value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} />
         <span id={ids.hint} className={s.hint}>{active === 0 ? "Enter adds the first" : "Enter adds the highlighted one"}</span>
       </div>
-      {refused && <p className={s.refused}>{refused}</p>}
+      {refused && <p key={refused.attempt} className={s.refused} role="alert">{refused.text}</p>}
 
       <div className={s.body}>
         {reading && <p className={s.line}>Reading what {ownerName}'s sources have…</p>}

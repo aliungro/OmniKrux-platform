@@ -232,7 +232,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const grid = useRef<GridControls | null>(null);
   const searchOpener = useRef<HTMLElement | null>(null);
   const [searching, setSearching] = useState(false);
-  const [refused, setRefused] = useState<string | null>(null);
+  const [refused, setRefused] = useState<{ text: string; attempt: number } | null>(null);
   const [added, setAdded] = useState<{ kind: "panel"; id: string; title: string } | { kind: "empty" } | null>(null);
   const { launch, tileRef } = useFlyIn();
   const openSearch = useCallback((opener: HTMLElement | null) => {
@@ -245,7 +245,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     const st = editor.state;
     if (st.mode !== "edit" || st.jsonText === null || !isDraftEdit(action)) return false;
     grid.current?.announce(JSON_FIRST);
-    setRefused(JSON_FIRST);
+    setRefused((was) => ({ text: JSON_FIRST, attempt: (was?.attempt ?? 0) + 1 }));
     return true;
   };
   const addFromSearch = (panel: NewPanel, from: DOMRect) => {

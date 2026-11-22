@@ -8,7 +8,7 @@ import { JSON_FIRST, type EditingState } from "../dashboards/editor/editorState"
 import { editSessions } from "../dashboards/editor/useDashboardEditor";
 import type { DashboardSpec, OwnerKind } from "../dashboards/schema";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../test/dashboardSeeds";
+import { gate, intercept, linkedProject, panel, seedDashboard, spec } from "../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../test/renderMonitoringApp";
 import { buildFinderIndex, findPanels } from "./finder";
 import { CAT } from "./testCatalogs";
@@ -259,6 +259,78 @@ describe("Add panel search", () => {
     expect(screen.getByRole("dialog", { name: "Add panel" })).toBeTruthy();
     expect(draft().draft.panels).toHaveLength(1);
     expect(grid().textContent).toBe(JSON_FIRST);
+    expect(document.activeElement).toBe(input());
+    // Behind the modal dialog the grid isn't heard: the dialog says it as an alert, every time.
+    const first = within(dialog()).getByRole("alert");
+    expect(first.textContent).toBe(JSON_FIRST);
+    const said = grid().firstElementChild;
+    await user.keyboard("{Enter}");
+    // The grid says it again too: the same words as a new node.
+    expect(grid().textContent).toBe(JSON_FIRST);
+    expect(grid().firstElementChild).not.toBe(said);
+    const again = within(dialog()).getByRole("alert");
+    expect(again.textContent).toBe(JSON_FIRST);
+    expect(again).not.toBe(first);
+    expect(within(dialog()).getAllByRole("alert")).toHaveLength(1);
+    expect(draft().draft.panels).toHaveLength(1);
+  });
+
+  it("Enter before the list follows adds the first match of what is typed", async () => {
+    await opened();
+    // Typed and Enter in one go: the 150 ms haven't passed, so the list still shows suggestions.
+    fireEvent.change(input(), { target: { value: "errors by route" } });
+    fireEvent.keyDown(input(), { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull());
+    expect(draft().draft.panels.at(-1)!.title).toBe(ERRORS_BY_ROUTE.title);
+    await waitFor(() => expect(document.activeElement).toBe(tile(ERRORS_BY_ROUTE.title)));
+  });
+
+  it("only spaces count as no text, so Enter adds what is highlighted", async () => {
+    const { user } = await opened();
+    await within(dialog()).findByText("Suggested for Shop · from what Prometheus have");
+    await user.keyboard("   ");
+    await new Promise((r) => setTimeout(r, 200));
+    await user.keyboard("{Control>}{End}{/Control}");
+    expect(active()).toBe(options().at(-1));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull());
+    expect(tile("New panel")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Query A" })));
+  });
+
+  it("clicking a result adds it and focuses the new tile", async () => {
+    const { user } = await typed("errors by route");
+    await user.click(options()[0]);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull());
+    expect(draft().draft.panels.at(-1)!.queries[0].expr).toBe(ERRORS_BY_ROUTE.expr);
+    await waitFor(() => expect(document.activeElement).toBe(tile(ERRORS_BY_ROUTE.title)));
+  });
+
+  it("says it is reading the catalog while it loads", async () => {
+    const api = shop();
+    const held = gate();
+    intercept((url, pass) => (url.includes("/catalog") ? held.opened.then(pass) : null));
+    await opened(api);
+    expect(within(dialog()).getByText("Reading what Shop's sources have…")).toBeTruthy();
+    // Empty panel is there while it reads.
+    expect(options()).toHaveLength(1);
+    held.open();
+    expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus have")).toBeTruthy();
+    expect(within(dialog()).queryByText("Reading what Shop's sources have…")).toBeNull();
+  });
+
+  it("a catalog that can't be read says why, and Try again reads it", async () => {
+    const api = shop();
+    delete api.state.catalogs.p1;
+    const { user } = await opened(api);
+    const why = await within(dialog()).findByText(/^Couldn't read the metrics: /);
+    expect(why.textContent).toBe("Couldn't read the metrics: That project no longer exists.");
+    expect(options()).toHaveLength(1);
+    api.state.catalogs.p1 = shopCatalog("p1");
+    await user.click(within(dialog()).getByRole("button", { name: "Try again" }));
+    expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus have")).toBeTruthy();
+    expect(api.requests.some((r) => r.url === "/api/monitoring/projects/p1/catalog?refresh=true")).toBe(true);
+    // The keyboard stayed in the search.
     expect(document.activeElement).toBe(input());
   });
 });

@@ -127,7 +127,10 @@ export function useEditableGrid(
   const [settings, setSettings] = useState<Settings>({ open: false, focus: "tab", seq: 0 });
   const settingsOpen = useRef(settings.open);
   settingsOpen.current = settings.open;
-  const [message, setMessage] = useState("");
+  // Each message is a new node, so the same words said twice (two adds with one title, a second
+  // refusal) are read again.
+  const [message, setMessageState] = useState({ text: "", seq: 0 });
+  const setMessage = useCallback((text: string) => setMessageState((m) => ({ text, seq: m.seq + 1 })), []);
   const [preview, setPreview] = useState<Preview | null>(null);
   const drag = useRef<Drag | null>(null);
   /** A tile id (or "add") to put the keyboard on after the next render. */
@@ -162,7 +165,7 @@ export function useEditableGrid(
     el?.focus({ preventScroll: false });
     return el;
   }, [findTile]);
-  const announce = useCallback((text: string) => setMessage(text), []);
+  const announce = useCallback((text: string) => setMessage(text), [setMessage]);
 
   /**
    * While the JSON tab holds text that doesn't apply, edits here are refused (they would drop it)
@@ -173,7 +176,7 @@ export function useEditableGrid(
     if (!ed || ed.state.jsonText === null || !isDraftEdit(action)) return false;
     setMessage(JSON_FIRST);
     return true;
-  }, []);
+  }, [setMessage]);
   /** The settings' dispatch: the same refusal. */
   const settingsDispatch = useCallback((action: EditorAction) => {
     if (!jsonBlocks(action)) latest.current?.dispatch(action);
@@ -469,7 +472,7 @@ export function useEditableGrid(
           panelData={live?.data ?? null} live={live} initialFocus={settings.focus} seq={settings.seq} onClose={closeSettings} />
       )
       : null,
-    live: <p className={s.live} role="status" aria-live="polite">{message}</p>,
+    live: <p className={s.live} role="status" aria-live="polite"><span key={message.seq}>{message.text}</span></p>,
     addEmpty: add,
     announce,
     focusPanel,
