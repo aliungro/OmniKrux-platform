@@ -86,10 +86,9 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
     if (state.jsonText !== null) return JSON_FIRST;
     update(apply);
   };
-  // The run's data is what the draft's queries answered: not while they are changing or running,
-  // and not when the panel has been edited since that answer began.
-  const fresh = live !== null && !live.pending && !live.fetching && panelData !== null
-    && panelData.editId >= (state.changes[panel.id] ?? 0);
+  // The run's data is what the draft's queries answered: not while they are changing or running
+  // (a query edit changes the run key, so pending and fetching cover it).
+  const fresh = live !== null && !live.pending && !live.fetching && panelData !== null;
 
   return (
     <aside className={s.side} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>

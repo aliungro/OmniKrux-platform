@@ -175,6 +175,17 @@ describe("Recommendation bar", () => {
     expect(user).toBeTruthy();
   });
 
+  it("an option-only edit keeps a data-based recommendation", async () => {
+    const { user } = await openSettings(shop("rate(http_requests_total[1m])", noisy));
+    await waitFor(() => expect(bar()?.textContent).toContain("is smoother"));
+    await user.click(tabNamed("Options"));
+    await user.clear(within(settings()).getByRole("textbox", { name: "Title" }));
+    await user.type(within(settings()).getByRole("textbox", { name: "Title" }), "Renamed");
+    expect(draftPanel().title).toBe("Renamed");
+    await new Promise((r) => setTimeout(r, 450));
+    expect(bar()?.textContent).toContain("is smoother");
+  });
+
   it("widerWindow appears in the side panel once the panel has run (it has a step)", async () => {
     await openSettings(shop("rate(http_requests_total[1m])", noisy));
     const region = await waitFor(() => bar()!);
