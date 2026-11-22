@@ -67,7 +67,7 @@ const clock = (ms: number) => {
  * The meta line: how the last run ended, kept while the next one waits and runs (dimmed, with
  * Running… beside it). Its time words are the ones that run read, not the picker's current range.
  */
-export function MetaLine({ state, expr, kind }: { state: ExploreRunState; expr: string; kind: ExploreKind }) {
+export function MetaLine({ state, expr }: { state: ExploreRunState; expr: string; kind?: ExploreKind }) {
   let body: ReactNode = null;
   let tone: "bad" | "quiet" = "quiet";
   const running = state.status === "running";
@@ -75,8 +75,8 @@ export function MetaLine({ state, expr, kind }: { state: ExploreRunState; expr: 
     // Nothing ran, or an emptied field ended its run: the hint. Before the first end, the field says.
     body = (state.expr ?? expr).trim() === "" ? NO_QUERY : null;
   } else if (state.shown === "done" && state.data) {
-    const n = (state.kind ?? kind) === "logs" ? `${state.data.logs.length} ${state.data.logs.length === 1 ? "line" : "lines"}`
-      : `${state.data.series.length} series`;
+    // Logs mode charts the volume (its lines are listed under the chart): both count series.
+    const n = `${state.data.series.length} series`;
     body = (
       <>
         <span className={s.metaOk}>✓ {n} · {state.tookMs ?? 0} ms</span>

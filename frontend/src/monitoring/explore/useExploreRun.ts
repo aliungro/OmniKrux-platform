@@ -2,14 +2,23 @@
 // item per run on the project, so its filter always applies. A newer run aborts the older one and
 // an older answer is dropped. Honest states: a query the tool can't read is `invalid` and keeps the
 // last good result (drawn dimmed and labelled); any other failure is `failed` and draws nothing.
+// In logs mode the chart is the log volume (Task 5's `writeVolumeQuery`, split by the Split chip).
+//
+// `useLinesRun` is the log lines under the chart (X3): one batch item of at most 1000 lines, newest
+// first, on the project, for the whole range or a chosen window. It has its own honest states: a
+// failure stays in its section, and an answer for an older window or text is dropped.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { failure } from "../../api/http";
-import type { LinkOut, ProjectOut, QueryErrorCode } from "../api/types";
+import type { LinkOut, ProjectOut, QueryErrorCode, QueryRequest } from "../api/types";
 import { quickCheck } from "../build/promql";
+import { UnwritableQuery, writeVolumeQuery } from "../build/writeQuery";
 import { DashboardRequestError } from "../dashboards/api";
-import { buildPanelRun, mergePanelResults, runRequests, type PanelData } from "../dashboards/runPanel";
+import { interpolate, VariableError } from "../dashboards/interpolate";
+import { buildPanelRun, mergePanelResults, runRequests, type ChartLogLine, type PanelData, type PanelRun } from "../dashboards/runPanel";
 import { GRID_COLUMNS, newPanel, type PanelSpec } from "../dashboards/schema";
+import { stepFor } from "../dashboards/time";
+import { LINES_LIMIT } from "./logLinks";
 
 export const EXPLORE_DEBOUNCE_MS = 300;
 
@@ -26,6 +35,8 @@ export interface ExploreLastGood {
   step: number;
   /** Logs or a chart: how it is drawn. */
   kind: ExploreKind;
+  /** The panel the run drew (in logs mode, the volume chart). */
+  panel: PanelSpec;
 }
 
 export type ExploreRunState = {
@@ -44,8 +55,10 @@ export type ExploreRunState = {
   /** The last answered run's aligned range and step (the chart's axis; the recommendations' step). */
   range: Range | null;
   step: number | null;
-  /** What the last run asked for: a chart or log lines. */
+  /** What the last run asked for: a chart or log lines (charted as their volume). */
   kind: ExploreKind | null;
+  /** The panel the last run drew: a time series (the volume in logs mode) or the query's own. */
+  panel: PanelSpec | null;
   /** When the last run ended (ms since the epoch). */
   at: number | null;
   /** The time range the last run read, in words ("Last 1 hour"). */
@@ -65,11 +78,13 @@ export interface ExploreRunInput {
   panelId?: string;
   /** The range in words, kept with the run that read it. */
   timeText?: string;
+  /** Logs mode: the Split chip's label for the volume chart. */
+  split?: string | null;
 }
 
 const INITIAL: ExploreRunState = {
   status: "idle", data: null, lastGood: null, message: null, tookMs: null, runId: 0,
-  shown: "idle", expr: null, failure: null, range: null, step: null, kind: null, at: null,
+  shown: "idle", expr: null, failure: null, range: null, step: null, kind: null, panel: null, at: null,
   timeText: null, projectId: null, sourceId: null,
 };
 
@@ -91,6 +106,19 @@ export function explorePanel(id: string, expr: string, source: Pick<LinkOut, "so
   return panel;
 }
 
+/**
+ * The panel a run draws. Logs mode charts the log volume (`sum(count_over_time(…))`, split by the
+ * Split chip) and lists the lines under it; it throws `UnwritableQuery` for text it can't wrap.
+ */
+export function chartPanel(
+  id: string, expr: string, source: Pick<LinkOut, "source_id" | "source_type"> | null, kind: ExploreKind, split: string | null = null,
+): PanelSpec {
+  if (kind !== "logs") return explorePanel(id, expr, source, kind);
+  const panel = explorePanel(id, writeVolumeQuery(expr, split), source, "metrics");
+  panel.title = "Log volume";
+  return panel;
+}
+
 const isAbort = (err: unknown) => err instanceof DOMException && err.name === "AbortError";
 
 export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): void; state: ExploreRunState } {
@@ -105,7 +133,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
   const immediate = useRef(-1);
 
   const fire = useCallback(async () => {
-    const { project, source, expr, range, kind, panelId = "explore", timeText = null } = latest.current;
+    const { project, source, expr, range, kind, panelId = "explore", timeText = null, split = null } = latest.current;
     controller.current?.abort();
     controller.current = null;
     const runId = ++runIds.current;
@@ -124,7 +152,13 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
     const unreadable = quickCheck(expr);
     if (unreadable) { invalid(unreadable); return; }
 
-    const panel = explorePanel(panelId, expr, source, kind);
+    let panel: PanelSpec;
+    try {
+      panel = chartPanel(panelId, expr, source, kind, split);
+    } catch (err) {
+      if (err instanceof UnwritableQuery) { invalid(err.message); return; }
+      throw err;
+    }
     const run = buildPanelRun({ panel, owner: { kind: "project", project }, vars: {}, range, ownerName: project.name });
     // Without variables nothing is skipped; if something is, it is the text's fault.
     if (run.skipped.length > 0) { invalid(run.skipped[0].message); return; }
@@ -151,8 +185,8 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
       }
       const data = mergePanelResults(panel, run, results, "project");
       end({
-        status: "done", shown: "done", data, message: null, failure: null, tookMs: data.summary.tookMs,
-        lastGood: { expr, data, range: run.range, step: run.step, kind }, range: run.range, step: run.step,
+        status: "done", shown: "done", data, message: null, failure: null, tookMs: data.summary.tookMs, panel,
+        lastGood: { expr, data, range: run.range, step: run.step, kind, panel }, range: run.range, step: run.step,
       });
     } catch (err) {
       if (isAbort(err) || ctl.signal.aborted || runId !== runIds.current) return;
@@ -181,6 +215,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
   const key = JSON.stringify([
     input.project?.id ?? null, input.source?.source_id ?? null, input.source?.source_type ?? null,
     input.expr, input.range.start, input.range.end, input.kind, input.panelId ?? null,
+    input.kind === "logs" ? (input.split ?? null) : null,
   ]);
   // The input and request an immediate run already went out for (StrictMode runs effects twice).
   const firedFor = useRef<string | null>(null);
@@ -216,4 +251,176 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
   }, []);
 
   return { run, state };
+}
+
+// --- the log lines under the chart (X3) ---------------------------------------------------------
+
+export type LinesRunState = {
+  status: "idle" | "waiting" | "running" | "done" | "failed" | "invalid";
+  /** The lines of the last answered run, newest first; never another text's, window's or place's. */
+  lines: ChartLogLine[];
+  /** For `failed` and `invalid`: why, in words. */
+  message: string | null;
+  /** The window the shown lines are for; `null` is the whole range. */
+  window: Range | null;
+  /** The range in words the shown lines read. */
+  timeText: string | null;
+  /** The whole range's lines (the chart's ticks) and the run they answer (`linesKey`). */
+  marks: ChartLogLine[];
+  marksFor: string | null;
+  /** The text, place and range (`linesKey`) the shown state is about; `null` before any. */
+  key: string | null;
+  runId: number;
+};
+
+export interface LinesRunInput {
+  project: ProjectOut | null;
+  /** The Loki source the lines come from. */
+  source: LinkOut | null;
+  /** A LogQL log query (never a metric query); empty is "nothing to list". */
+  query: string;
+  range: Range;
+  /** A chosen window inside `range`: the lines are read for exactly it. */
+  window: Range | null;
+  timeText?: string;
+}
+
+const LINES_INITIAL: LinesRunState = {
+  status: "idle", lines: [], message: null, window: null, timeText: null, marks: [], marksFor: null, key: null, runId: 0,
+};
+const NO_LINES = "The log lines didn't answer. Try again.";
+
+/** What the ticks belong to: one text on one source of one project over one whole range. */
+export function linesKey(input: Pick<LinesRunInput, "project" | "source" | "query" | "range">): string {
+  return JSON.stringify([input.project?.id ?? null, input.source?.source_id ?? null, input.query, input.range.start, input.range.end]);
+}
+
+export function useLinesRun(input: LinesRunInput): { state: LinesRunState; retry(): void } {
+  const [state, setState] = useState<LinesRunState>(LINES_INITIAL);
+  const latest = useRef(input);
+  latest.current = input;
+  const runIds = useRef(0);
+  const controller = useRef<AbortController | null>(null);
+
+  const fire = useCallback(async () => {
+    const { project, source, query, range, window, timeText = null } = latest.current;
+    controller.current?.abort();
+    controller.current = null;
+    const runId = ++runIds.current;
+    const forKey = linesKey(latest.current);
+    if (!project || !source || query.trim() === "") {
+      setState((s) => ({ ...LINES_INITIAL, runId, key: forKey, marks: s.marksFor === forKey ? s.marks : [], marksFor: s.marksFor === forKey ? s.marksFor : null }));
+      return;
+    }
+    const unreadable = quickCheck(query);
+    if (unreadable) {
+      setState({ ...LINES_INITIAL, status: "invalid", message: unreadable, window, key: forKey, runId });
+      return;
+    }
+    const span = window ?? range;
+    const seconds = span.end - span.start;
+    const step = stepFor(seconds, GRID_COLUMNS);
+    let text: string;
+    try {
+      // No variables in Explore: only the builtins, so a batch never carries `$__interval` (F20).
+      text = interpolate(query, {}, { stepSeconds: step, rangeSeconds: seconds });
+    } catch (err) {
+      if (!(err instanceof VariableError)) throw err;
+      setState({ ...LINES_INITIAL, status: "invalid", message: err.message, window, key: forKey, runId });
+      return;
+    }
+    const request: QueryRequest = {
+      source_id: source.source_id, project_id: project.id, kind: "range", query: text,
+      start: span.start, end: span.end, step, limit: LINES_LIMIT, direction: "backward",
+    };
+    const panel = newPanel("logs", "explore:lines", { x: 0, y: 0, w: GRID_COLUMNS, h: 8 });
+    panel.title = "Log lines";
+    if (panel.type === "logs") panel.options = { ...panel.options, limit: LINES_LIMIT, order: "newest" };
+    const run: PanelRun = {
+      requests: [request], skipped: [], ownerKind: "project", range: { ...span }, step,
+      parts: [{ queryRef: "A", projectId: project.id, projectName: project.name, sourceName: source.source_name }],
+    };
+
+    const ctl = new AbortController();
+    controller.current = ctl;
+    setState((s) => ({ ...s, status: "running", runId }));
+    const failed = (message: string) => setState((s) => ({
+      ...LINES_INITIAL, status: "failed", message, window, timeText, key: forKey, runId,
+      // A failed window keeps the whole range's ticks; a failed whole range has none.
+      marks: window && s.marksFor === forKey ? s.marks : [], marksFor: window && s.marksFor === forKey ? forKey : null,
+    }));
+    try {
+      const results = await runRequests([request], ctl.signal);
+      if (runId !== runIds.current) return;
+      const first = results[0];
+      if (!first?.ok || !first.response) {
+        failed(first?.error?.message || NO_LINES);
+        return;
+      }
+      const lines = mergePanelResults(panel, run, results, "project").logs;
+      setState((s) => ({
+        status: "done", lines, message: null, window, timeText, key: forKey, runId,
+        marks: window ? (s.marksFor === forKey ? s.marks : []) : lines,
+        marksFor: window ? (s.marksFor === forKey ? forKey : null) : forKey,
+      }));
+    } catch (err) {
+      if (isAbort(err) || ctl.signal.aborted || runId !== runIds.current) return;
+      failed(failure(err, "try again") || NO_LINES);
+    } finally {
+      if (controller.current === ctl) controller.current = null;
+    }
+  }, []);
+
+  // Another project or source: nothing read before is about it. Reset while rendering, so no frame
+  // ever shows the old lines or ticks under the new names.
+  const scope = JSON.stringify([input.project?.id ?? null, input.source?.source_id ?? null]);
+  const [scopeSeen, setScopeSeen] = useState(scope);
+  if (scopeSeen !== scope) {
+    setScopeSeen(scope);
+    controller.current?.abort();
+    controller.current = null;
+    runIds.current++;
+    setState((s) => ({ ...LINES_INITIAL, runId: s.runId }));
+  }
+
+  const base = linesKey(input);
+  const key = JSON.stringify([base, input.window?.start ?? null, input.window?.end ?? null]);
+  const [nonce, setNonce] = useState(0);
+  // The text and range the last run went out for: a new window on them runs at once.
+  const firedBase = useRef<string | null>(null);
+  const firedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const at = `${nonce}|${key}`;
+    if (firedFor.current === at) return;
+    firedFor.current = null;
+    controller.current?.abort();
+    controller.current = null;
+    const nothing = !latest.current.project || !latest.current.source || latest.current.query.trim() === "";
+    if (nothing || firedBase.current === base) {
+      firedBase.current = base;
+      firedFor.current = at;
+      void fire();
+      return;
+    }
+    // A new text waits for the typing to rest; nothing old is shown meanwhile.
+    runIds.current++;
+    setState((s) => (s.status === "waiting" ? s : { ...s, status: "waiting" }));
+    const timer = setTimeout(() => {
+      firedBase.current = base;
+      firedFor.current = at;
+      void fire();
+    }, EXPLORE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [key, base, nonce, fire]);
+
+  useEffect(() => () => {
+    controller.current?.abort();
+    runIds.current++;
+  }, []);
+
+  const retry = useCallback(() => {
+    firedBase.current = linesKey(latest.current);
+    setNonce((n) => n + 1);
+  }, []);
+  return { state, retry };
 }

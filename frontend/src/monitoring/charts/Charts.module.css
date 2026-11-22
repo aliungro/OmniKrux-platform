@@ -33,6 +33,24 @@
   pointer-events: none;
 }
 
+/* Explore's window: lilac at 14 % between two 1 px lilac edges, over the full range. */
+.band {
+  position: absolute;
+  box-sizing: border-box;
+  border-right: 1px solid var(--focus);
+  border-left: 1px solid var(--focus);
+  background: color-mix(in srgb, var(--focus) 14%, transparent);
+  pointer-events: none;
+}
+
+/* The drag layer: exactly the plot area, only where a window can be chosen. */
+.brush {
+  position: absolute;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
 .tip {
   position: absolute;
   z-index: 2;
@@ -522,6 +540,44 @@
 
 .logText {
   min-width: 0;
+}
+
+/* Explore's level column: a narrow slot holding a 6 px dot in the line's tone. */
+.logLevel {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 22px;
+}
+
+.logDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--kind);
+}
+
+.logLevel[data-tone="warn"] .logDot {
+  background: var(--warn);
+}
+
+.logLevel[data-tone="error"] .logDot {
+  background: var(--bad);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 22%, transparent);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .logText {

@@ -25,12 +25,18 @@ function byTime(a: ChartLogLine, b: ChartLogLine): number {
   return a.ts.length - b.ts.length || (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0);
 }
 
+export type LineTone = "error" | "warn" | "info";
+
 export interface LogsChartProps {
   panel: LogsPanel;
   logs: ChartLogLine[];
+  /** Explore: each line's tone, shown as a level column (a dot, the tone as text for screen readers). */
+  lineTone?: (line: ChartLogLine) => LineTone;
+  /** Explore: the key that brings the keyboard to the list. */
+  listKeyshortcuts?: string;
 }
 
-export default function LogsChart({ panel, logs }: LogsChartProps) {
+export default function LogsChart({ panel, logs, lineTone, listKeyshortcuts }: LogsChartProps) {
   const order = panel.options.order;
   const lines = useMemo(() => {
     const sorted = [...logs].sort(byTime);
@@ -38,10 +44,10 @@ export default function LogsChart({ panel, logs }: LogsChartProps) {
   }, [logs, order]);
   if (lines.length === 0) return null;
   // Its own component, so the virtualizer binds to a fresh scroll box after an empty answer.
-  return <LogList panel={panel} lines={lines} />;
+  return <LogList panel={panel} lines={lines} lineTone={lineTone} listKeyshortcuts={listKeyshortcuts} />;
 }
 
-function LogList({ panel, lines }: { panel: LogsPanel; lines: ChartLogLine[] }) {
+function LogList({ panel, lines, lineTone, listKeyshortcuts }: { panel: LogsPanel; lines: ChartLogLine[] } & Pick<LogsChartProps, "lineTone" | "listKeyshortcuts">) {
   const { wrap } = panel.options;
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<string, HTMLElement>());
@@ -134,6 +140,7 @@ function LogList({ panel, lines }: { panel: LogsPanel; lines: ChartLogLine[] }) 
         className={styles.logScroll}
         role="list"
         aria-label={panel.title}
+        aria-keyshortcuts={listKeyshortcuts}
         onFocus={() => { focusWithin.current = true; }}
         onBlur={(e) => { if (e.target.isConnected) focusWithin.current = false; }}
       >
@@ -160,6 +167,7 @@ function LogList({ panel, lines }: { panel: LogsPanel; lines: ChartLogLine[] }) 
                 onFocus={() => setActiveKey(line.key)}
               >
                 <time className={styles.logTime}>{logTime(line.ts)}</time>
+                {lineTone ? <LevelCell tone={lineTone(line)} /> : null}
                 <span className={styles.logText}>
                   {line.projectName !== null ? <span className={styles.logProject}>{line.projectName} </span> : null}
                   {line.line}
@@ -182,5 +190,15 @@ function LogList({ panel, lines }: { panel: LogsPanel; lines: ChartLogLine[] }) 
           : null}
       </div>
     </div>
+  );
+}
+
+/** The level column: a 6 px dot in the tone's colour, and the tone in words for screen readers. */
+function LevelCell({ tone }: { tone: LineTone }) {
+  return (
+    <span className={styles.logLevel} data-tone={tone}>
+      <span className={styles.logDot} aria-hidden="true" />
+      <span className={styles.srOnly}>{tone}</span>
+    </span>
   );
 }

@@ -1,14 +1,18 @@
 // The time series panel: a canvas sized to its box at the device pixel ratio, a crosshair with a
 // tooltip (mouse, or the arrow keys on the focused chart), and the legend. Option and query edits
 // morph the lines; refreshes, resizes and reduced motion jump.
+//
+// With `onSelect` (Explore only) a window can be chosen: drag across the plot, or Shift+arrows from
+// the crosshair; the band stays drawn over the full range, and log line `marks` tick the bottom.
+// Without it no pointer handler is bound at all: dashboards get M2's chart unchanged.
 
 import {
   useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
-  type KeyboardEvent, type MouseEvent,
+  type KeyboardEvent, type MouseEvent, type PointerEvent,
 } from "react";
 import type { ChartSeries } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
-import { buildFrame, drawTimeSeries, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
+import { buildFrame, drawTimeSeries, type ChartMark, type ChartRange, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
 import { resolveToken, seriesColors } from "./colors";
 import Legend from "./Legend";
 import { easeOutCubic, MORPH_MS, mixColumns, tween, usePrefersReducedMotion } from "./motion";
@@ -26,6 +30,9 @@ export interface TimeSeriesChartProps {
   changeId: number;
   /** The edit count the data was fetched under (a newer one than the last frame is a query edit). */
   editId: number;
+  selection?: ChartRange | null;
+  onSelect?: (range: ChartRange | null, via?: "pointer" | "keyboard") => void;
+  marks?: ChartMark[];
 }
 
 interface Drawn {
@@ -33,10 +40,34 @@ interface Drawn {
   shown: TimeSeriesFrame;
   changeId: number;
   editId: number;
+  marks: readonly ChartMark[];
   cancel?: () => void;
 }
 
 const NO_HIDDEN: ReadonlySet<string> = new Set();
+const NO_MARKS: readonly ChartMark[] = [];
+/** A drag narrower than this is a click: nothing is selected. */
+const CLICK_PX = 4;
+/** Shift+arrows select once the keys rest this long. */
+const KEY_SELECT_MS = 300;
+
+/** The spacing of the samples (their median gap), so a window snaps to the data's own step. */
+function sampleStep(samples: number[]): number {
+  const gaps: number[] = [];
+  for (let i = 1; i < samples.length && gaps.length < 21; i++) {
+    const d = samples[i] - samples[i - 1];
+    if (d > 0) gaps.push(d);
+  }
+  if (gaps.length === 0) return 1;
+  gaps.sort((a, b) => a - b);
+  return gaps[gaps.length >> 1];
+}
+
+const two = (n: number) => String(n).padStart(2, "0");
+const clockTime = (s: number) => {
+  const d = new Date(s * 1000);
+  return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+};
 
 /** The same series in the same order (the axis may have changed width, so columns may differ). */
 function sameShape(a: TimeSeriesFrame, b: TimeSeriesFrame): boolean {
@@ -88,7 +119,9 @@ function nearestIndex(samples: number[], t: number): number {
   return lo > 0 && Math.abs(samples[lo - 1] - t) <= Math.abs(samples[lo] - t) ? lo - 1 : lo;
 }
 
-export default function TimeSeriesChart({ panel, series, range, animate, changeId, editId }: TimeSeriesChartProps) {
+export default function TimeSeriesChart({
+  panel, series, range, animate, changeId, editId, selection = null, onSelect, marks = NO_MARKS as ChartMark[],
+}: TimeSeriesChartProps) {
   const opts = panel.options;
   const plotRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -135,7 +168,7 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
     const canvas = canvasRef.current;
     if (!frame || !canvas) return;
     const prev = drawn.current;
-    if (prev && prev.target === frame) {
+    if (prev && prev.target === frame && prev.marks === marks) {
       prev.changeId = changeId;
       prev.editId = editId;
       return;
@@ -145,16 +178,16 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
     const h = Math.round(frame.size.height * frame.size.dpr);
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
-    const entry: Drawn = { target: frame, shown: frame, changeId, editId };
+    const entry: Drawn = { target: frame, shown: frame, changeId, editId, marks };
     drawn.current = entry;
     const ctx = canvas.getContext("2d");
     if (!ctx) return; // no canvas here: the text alternative still says what the chart shows
     const style = getComputedStyle(canvas);
     const colorOf = (token: string) => resolveToken(style, token);
 
-    const edited = prev !== null && (changeId > prev.changeId || editId > prev.editId);
+    const edited = prev !== null && prev.target !== frame && (changeId > prev.changeId || editId > prev.editId);
     if (!(animate && !reduced && edited && sameShape(prev.shown, frame))) {
-      drawTimeSeries(ctx, frame, colorOf);
+      drawTimeSeries(ctx, frame, colorOf, marks);
       return;
     }
     const from = new Map<string, FrameSeries>(prev.shown.series.map((s) => [s.key, s]));
@@ -178,9 +211,9 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
         })),
       };
       entry.shown = mixed;
-      drawTimeSeries(ctx, mixed, colorOf);
+      drawTimeSeries(ctx, mixed, colorOf, marks);
     });
-  }, [frame, changeId, editId, animate, reduced]);
+  }, [frame, changeId, editId, animate, reduced, marks]);
 
   useEffect(() => () => drawn.current?.cancel?.(), []);
 
@@ -203,7 +236,118 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
     setCursor(nearestIndex(samples, range.start + Math.min(1, Math.max(0, frac)) * span));
   }, [frame, samples, range.start, span]);
 
+  // --- choosing a window (Explore): a drag, or Shift+arrows from the crosshair ---------------------
+  const step = useMemo(() => sampleStep(samples), [samples]);
+  const toWindow = (a: number, b: number): ChartRange | null => {
+    const snap = (t: number) => Math.min(range.end, Math.max(range.start, range.start + Math.round((t - range.start) / step) * step));
+    const start = snap(Math.min(a, b));
+    let end = snap(Math.max(a, b));
+    if (end <= start) end = Math.min(range.end, start + step);
+    return end > start ? { start, end } : null;
+  };
+  // The drag, in the brush layer's pixels (the layer covers exactly the plot area).
+  const [drag, setDrag] = useState<{ from: number; to: number; width: number } | null>(null);
+  const dragRef = useRef(drag);
+  dragRef.current = drag;
+  // Shift+arrows: sample indexes, chosen once the keys rest.
+  const [keyBand, setKeyBand] = useState<{ anchor: number; head: number } | null>(null);
+  const keyBandRef = useRef(keyBand);
+  const keyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectRef = useRef(onSelect);
+  selectRef.current = onSelect;
+  const stopKeyBand = () => {
+    if (keyTimer.current !== null) clearTimeout(keyTimer.current);
+    keyTimer.current = null;
+    keyBandRef.current = null;
+    setKeyBand(null);
+  };
+  useEffect(() => () => { if (keyTimer.current !== null) clearTimeout(keyTimer.current); }, []);
+
+  // Esc while dragging cancels the drag, wherever the keyboard is.
+  const dragging = drag !== null;
+  useEffect(() => {
+    if (!dragging) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDrag(null);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [dragging]);
+
+  const layerX = (e: PointerEvent<HTMLDivElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    return { x: Math.min(box.width, Math.max(0, e.clientX - box.left)), width: box.width };
+  };
+  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !frame) return;
+    const { x, width } = layerX(e);
+    if (!(width > 0)) return;
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      // A pointer that can't be captured still drags while it stays over the plot.
+    }
+    stopKeyBand();
+    setDrag({ from: x, to: x, width });
+  };
+  const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    const { x } = layerX(e);
+    setDrag((d) => (d ? { ...d, to: x } : d));
+  };
+  const onPointerUp = (e: PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const to = layerX(e).x;
+    setDrag(null);
+    // A click, not a drag: nothing changes.
+    if (Math.abs(to - d.from) < CLICK_PX) return;
+    const timeAt = (x: number) => range.start + (x / d.width) * span;
+    const chosen = toWindow(timeAt(d.from), timeAt(to));
+    if (chosen) selectRef.current?.(chosen, "pointer");
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (onSelect && e.shiftKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+      if (samples.length === 0) return;
+      e.preventDefault();
+      const dir = e.key === "ArrowRight" ? 1 : -1;
+      const start = at ?? (dir > 0 ? 0 : samples.length - 1);
+      const from = keyBandRef.current ?? { anchor: start, head: start };
+      const next = { anchor: from.anchor, head: Math.max(0, Math.min(samples.length - 1, from.head + dir)) };
+      keyBandRef.current = next;
+      setKeyBand(next);
+      setCursor(next.head);
+      if (keyTimer.current !== null) clearTimeout(keyTimer.current);
+      const times = samples;
+      keyTimer.current = setTimeout(() => {
+        keyTimer.current = null;
+        const band = keyBandRef.current;
+        keyBandRef.current = null;
+        setKeyBand(null);
+        if (!band || band.anchor === band.head) return;
+        const a = times[Math.min(band.anchor, band.head)];
+        const b = times[Math.max(band.anchor, band.head)];
+        if (b > a) selectRef.current?.({ start: a, end: b }, "keyboard");
+      }, KEY_SELECT_MS);
+      return;
+    }
+    if (e.key === "Escape" && onSelect) {
+      if (keyBandRef.current) {
+        e.stopPropagation();
+        stopKeyBand();
+        return;
+      }
+      if (selection) {
+        // Shows all again; the crosshair's own Esc is for when nothing is selected.
+        e.stopPropagation();
+        onSelect(null, "keyboard");
+        return;
+      }
+    }
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
       if (samples.length === 0) return;
       e.preventDefault();
@@ -238,7 +382,22 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
   });
 
   const latest = series.slice(0, 3).map((s) => `${s.name} ${formatValue(lastValue(s), opts.unit, opts.decimals)}`);
-  const label = `${panel.title}: ${series.length} series.${latest.length > 0 ? ` Latest: ${latest.join(", ")}.` : ""}`;
+  const chosenText = selection ? ` Window ${clockTime(selection.start)} – ${clockTime(selection.end)} selected.` : "";
+  const label = `${panel.title}: ${series.length} series.${latest.length > 0 ? ` Latest: ${latest.join(", ")}.` : ""}${chosenText}`;
+
+  // The band: the drag in progress, else the keys' band, else the selection (over the full range).
+  let band: { left: number; width: number } | null = null;
+  if (frame && span > 0) {
+    const px = (t: number) => Math.min(frame.plot.w, Math.max(0, ((t - range.start) / span) * frame.plot.w));
+    if (drag) band = { left: Math.min(drag.from, drag.to), width: Math.abs(drag.to - drag.from) };
+    else if (keyBand && samples.length > 0) {
+      const a = px(samples[Math.min(keyBand.anchor, keyBand.head)]);
+      band = { left: a, width: px(samples[Math.max(keyBand.anchor, keyBand.head)]) - a };
+    } else if (selection) {
+      const a = px(selection.start);
+      band = { left: a, width: px(selection.end) - a };
+    }
+  }
 
   return (
     <div className={styles.chart}>
@@ -249,12 +408,28 @@ export default function TimeSeriesChart({ panel, series, range, animate, changeI
           role="img"
           tabIndex={0}
           aria-label={label}
-          aria-keyshortcuts="ArrowLeft ArrowRight Escape"
+          aria-keyshortcuts={onSelect ? "ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Escape" : "ArrowLeft ArrowRight Escape"}
           onKeyDown={onKeyDown}
           onMouseMove={onMouseMove}
           onMouseLeave={() => setCursor(null)}
         >
           <canvas ref={canvasRef} className={styles.canvas} aria-hidden="true" />
+          {band && frame ? (
+            <div className={styles.band} data-chart-band="" aria-hidden="true"
+              style={{ left: frame.plot.x + band.left, top: frame.plot.y, width: Math.max(1, band.width), height: frame.plot.h }} />
+          ) : null}
+          {onSelect && frame ? (
+            <div
+              className={styles.brush}
+              data-chart-brush=""
+              aria-hidden="true"
+              style={{ left: frame.plot.x, top: frame.plot.y, width: frame.plot.w, height: frame.plot.h }}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={() => setDrag(null)}
+            />
+          ) : null}
           {tip && frame ? (
             <div className={styles.crosshair} style={{ left: tip.x, top: frame.plot.y, height: frame.plot.h }} aria-hidden="true" />
           ) : null}

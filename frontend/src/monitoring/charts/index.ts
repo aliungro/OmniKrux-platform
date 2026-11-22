@@ -3,6 +3,6 @@
 
 import ChartView from "./ChartView";
 
-export type { ChartViewProps } from "./ChartView";
+export type { ChartMark, ChartRange, ChartViewProps } from "./ChartView";
 export { MiniChart } from "./MiniChart";
 export default ChartView;

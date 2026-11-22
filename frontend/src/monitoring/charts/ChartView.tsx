@@ -5,6 +5,7 @@
 import type { ChartLogLine, ChartSeries, PanelData } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
 import BarChart from "./BarChart";
+import type { ChartMark, ChartRange } from "./drawTimeSeries";
 import GaugeChart from "./GaugeChart";
 import LogsChart from "./LogsChart";
 import StatChart from "./StatChart";
@@ -19,18 +20,38 @@ export interface ChartViewProps {
   animate: boolean;
   /** Increments on each edit of this panel; with `animate`, a new value morphs from the last drawn frame. */
   changeId: number;
+  /** Time series only (Explore): the selected window, drawn as a band over the full range. */
+  selection?: ChartRange | null;
+  /**
+   * Time series only (Explore): a drag or Shift+arrows selected a window (`null`: Esc cleared it).
+   * Without it no pointer handler is bound and the chart is M2's. `via` says how it was chosen.
+   */
+  onSelect?: (range: ChartRange | null, via?: "pointer" | "keyboard") => void;
+  /** Time series only (Explore): log line ticks along the bottom. */
+  marks?: ChartMark[];
+  /** Logs only (Explore): each line's tone for a level column; dashboards pass none. */
+  lineTone?: (line: ChartLogLine) => ChartMark["tone"];
+  /** Logs only (Explore): the key that brings the keyboard to the list (`aria-keyshortcuts`). */
+  listKeyshortcuts?: string;
 }
+
+export type { ChartMark, ChartRange };
 
 const NO_SERIES: ChartSeries[] = [];
 const NO_LOGS: ChartLogLine[] = [];
 
-export default function ChartView({ panel, data, range, animate, changeId }: ChartViewProps) {
+export default function ChartView({
+  panel, data, range, animate, changeId, selection, onSelect, marks, lineTone, listKeyshortcuts,
+}: ChartViewProps) {
   // A panel that couldn't answer draws nothing, whatever its type: never the old answer.
   const answered = data.state !== "unreachable" && data.state !== "error" && data.state !== "noQuery";
   const series = answered ? data.series : NO_SERIES;
   switch (panel.type) {
     case "timeseries":
-      return <TimeSeriesChart panel={panel} series={series} range={range} animate={animate} changeId={changeId} editId={data.editId} />;
+      return (
+        <TimeSeriesChart panel={panel} series={series} range={range} animate={animate} changeId={changeId} editId={data.editId}
+          selection={selection} onSelect={onSelect} marks={marks} />
+      );
     case "stat":
       return <StatChart panel={panel} series={series} animate={animate} changeId={changeId} editId={data.editId} />;
     case "gauge":
@@ -40,6 +61,6 @@ export default function ChartView({ panel, data, range, animate, changeId }: Cha
     case "table":
       return <TableChart panel={panel} series={series} />;
     case "logs":
-      return <LogsChart panel={panel} logs={answered ? data.logs : NO_LOGS} />;
+      return <LogsChart panel={panel} logs={answered ? data.logs : NO_LOGS} lineTone={lineTone} listKeyshortcuts={listKeyshortcuts} />;
   }
 }

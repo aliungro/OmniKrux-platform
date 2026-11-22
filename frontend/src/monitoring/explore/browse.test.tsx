@@ -236,14 +236,20 @@ describe("Browse metrics and log streams", () => {
     await openExplore();
     const box = await list();
     await user.click(within(box).getByRole("option", { name: "app = api" }));
-    await waitFor(() => expect(batches(api)).toHaveLength(1));
+    // Logs mode charts the volume and lists the lines (Task 14): one read of the lines.
+    const lineReads = () => batches(api).filter((b) => b.queries[0].query === '{app="api"}');
+    await waitFor(() => expect(lineReads()).toHaveLength(1));
+    const before = batches(api).length;
     await user.click(await screen.findByRole("button", { name: "level" }));
     expect(screen.getByRole("button", { name: "level" }).getAttribute("aria-pressed")).toBe("true");
-    // The stream stays chosen, the text is the same, and nothing runs again.
+    // The stream stays chosen and the text is the same: the lines aren't read again; only the
+    // volume chart splits by the label.
     expect(query().value).toBe('{app="api"}');
     expect(screen.getByRole("button", { name: "app=api" }).getAttribute("aria-pressed")).toBe("true");
     await new Promise((r) => setTimeout(r, 450));
-    expect(batches(api)).toHaveLength(1);
+    expect(lineReads()).toHaveLength(1);
+    expect(batches(api)).toHaveLength(before + 1);
+    expect(batches(api).at(-1)?.queries[0].query).toMatch(/^sum by \(level\) \(count_over_time\(\{app="api"\}\[\d+[smh]\]\)\)$/);
     expect(api.requests.some((r) => r.url.startsWith("/api/monitoring/label-values"))).toBe(false);
     expect(warned.flatMap((w) => w.mock.calls).filter((c) => String(c[0]).includes("Duplicate"))).toEqual([]);
   });

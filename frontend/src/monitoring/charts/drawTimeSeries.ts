@@ -18,6 +18,18 @@ export type CanvasLike = Pick<
   | "fillStyle" | "strokeStyle" | "lineWidth" | "lineJoin" | "font" | "textAlign" | "textBaseline" | "globalAlpha"
 >;
 
+export type ChartRange = { start: number; end: number };
+/** A log line's tick on the time series (Explore): its time in seconds and its tone. */
+export type ChartMark = { t: number; tone: "error" | "warn" | "info" };
+
+/** Tick colours: rose means failing, so errors may use `--bad` (series colours never do). */
+const MARK_COLORS: Record<ChartMark["tone"], string> = { error: "--bad", warn: "--warn", info: "--kind" };
+/** Drawn quietest first, so an error tick is never hidden under an info one. */
+const MARK_ORDER: ChartMark["tone"][] = ["info", "warn", "error"];
+const MARK_W = 2;
+const MARK_H = 6;
+const MARK_ALPHA = 0.85;
+
 export interface FrameSize {
   width: number;
   height: number;
@@ -254,8 +266,17 @@ export function buildFrame(
 
 const AREA_ALPHA = 0.18;
 
-/** Paint a frame. `colorOf` turns a token name into the colour to paint with (read from the page at draw time). */
-export function drawTimeSeries(ctx: CanvasLike, frame: TimeSeriesFrame, colorOf: (token: string) => string = (t) => t): void {
+/**
+ * Paint a frame. `colorOf` turns a token name into the colour to paint with (read from the page at
+ * draw time). `marks` are log line ticks along the bottom of the plot, at most one per pixel column
+ * per tone.
+ */
+export function drawTimeSeries(
+  ctx: CanvasLike,
+  frame: TimeSeriesFrame,
+  colorOf: (token: string) => string = (t) => t,
+  marks: readonly ChartMark[] = [],
+): void {
   const { size, plot, columns, range } = frame;
   ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
   ctx.clearRect(0, 0, size.width, size.height);
@@ -346,6 +367,30 @@ export function drawTimeSeries(ctx: CanvasLike, frame: TimeSeriesFrame, colorOf:
       pen = true;
     }
     ctx.stroke();
+  }
+  ctx.restore();
+
+  if (marks.length > 0) drawMarks(ctx, frame, colorOf, marks);
+}
+
+function drawMarks(ctx: CanvasLike, frame: TimeSeriesFrame, colorOf: (token: string) => string, marks: readonly ChartMark[]): void {
+  const { plot, range } = frame;
+  const span = range.end - range.start;
+  if (!(span > 0)) return;
+  const columns = new Map<ChartMark["tone"], Set<number>>(MARK_ORDER.map((t) => [t, new Set<number>()]));
+  for (const m of marks) {
+    if (!(m.t >= range.start && m.t <= range.end)) continue;
+    const col = Math.min(Math.floor(plot.w) - 1, Math.floor(((m.t - range.start) / span) * plot.w));
+    columns.get(m.tone)?.add(Math.max(0, col));
+  }
+  ctx.save();
+  ctx.globalAlpha = MARK_ALPHA;
+  const y = plot.y + plot.h - MARK_H;
+  for (const tone of MARK_ORDER) {
+    const cols = columns.get(tone) as Set<number>;
+    if (cols.size === 0) continue;
+    ctx.fillStyle = colorOf(MARK_COLORS[tone]);
+    for (const c of cols) ctx.fillRect(plot.x + c - MARK_W / 2 + 0.5, y, MARK_W, MARK_H);
   }
   ctx.restore();
 }

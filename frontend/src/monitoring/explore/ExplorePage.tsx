@@ -2,6 +2,7 @@
 // sources, type a query, and the result redraws as you type; each query that held is kept in a
 // trail to jump back to. The page's state (project, source, query, time) lives in the tab's view,
 // written with `replace` after a pause, so a reload or another tab brings it back.
+// Under the chart, the log lines of the same time line (X3): a window dragged on the chart narrows them.
 
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -10,7 +11,7 @@ import { pressed } from "../../features/chrome/shortcuts";
 import { getProject } from "../api/client";
 import { projectKey, useMonitoringTree } from "../api/hooks";
 import { RecommendationBar } from "../build/RecommendationBar";
-import { isLogQlMetric, quickCheck } from "../build/promql";
+import { isLogQlMetric, logSelector, quickCheck } from "../build/promql";
 import { useOwnerCatalog } from "../catalog/merge";
 import { browseMetrics } from "../catalog/metrics";
 import { PANEL_COPY } from "../dashboards/grid/PanelState";
@@ -28,10 +29,12 @@ import { DEFAULT_EXPLORE_TIME, defaultExploreProject, defaultExploreSource, expl
 import { BrowseList } from "./BrowseList";
 import { builderActive, builderQuery, builderReducer, EMPTY_BUILDER, metricMatch, writableLabel, type BuilderAction, type ExploreBuilder } from "./builderState";
 import { LabelChips } from "./LabelChips";
+import { LinkedLogs } from "./LinkedLogs";
+import { linkedLogSelector, logMarks } from "./logLinks";
 import { FAILED_TITLE, MetaLine, QueryBar } from "./QueryBar";
 import { Trail, trailKey } from "./Trail";
 import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trailStore";
-import { EXPLORE_DEBOUNCE_MS, explorePanel, useExploreRun } from "./useExploreRun";
+import { EXPLORE_DEBOUNCE_MS, explorePanel, linesKey, useExploreRun, useLinesRun } from "./useExploreRun";
 import s from "./ExplorePage.module.css";
 
 const ChartView = lazy(() => import("../charts"));
@@ -83,6 +86,10 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
   const [builder, setBuilder] = useState<ExploreBuilder>(EMPTY_BUILDER);
   const [narrow, setNarrow] = useState(() => (typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false));
   const [browseOpen, setBrowseOpen] = useState(false);
+  // The Logs query field: `null` follows the Only chips; any edit makes it the user's own text.
+  const [logsText, setLogsText] = useState<string | null>(explore.logs ?? null);
+  // A window chosen on the chart, for the lines text, place and range it was chosen on.
+  const [windowSel, setWindowSel] = useState<{ key: string; range: { start: number; end: number } } | null>(null);
 
   const heading = useRef<HTMLHeadingElement>(null);
   const queryField = useRef<HTMLTextAreaElement>(null);
@@ -92,6 +99,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
   const listBox = useRef<HTMLDivElement>(null);
   // `b` asked for the list while it was folded away: it takes the keyboard once it exists.
   const wantList = useRef(false);
+  const linesBox = useRef<HTMLElement>(null);
+  const linesHeading = useRef<HTMLHeadingElement>(null);
+  const showAll = useRef<HTMLButtonElement>(null);
+  // A window chosen with the keys: Show all takes the keyboard once it shows.
+  const wantShowAll = useRef(false);
 
   // --- project and source ---------------------------------------------------------------------
   const project = tree.data ? defaultExploreProject({ project: projectId }, tree.data, recent) : null;
@@ -111,7 +123,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
     [time.from, time.to, expr, project, source?.source_id, tick],
   );
   const panelId = `explore:${tabId}`;
-  const { run, state } = useExploreRun({ project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time) });
+  const { run, state } = useExploreRun({ project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time), split: builder.split });
   const runNow = useCallback(() => { setTick((n) => n + 1); run(true); }, [run]);
 
   // --- the view: written a pause after a change; a replace keeps the keyboard where it is ---------
@@ -120,7 +132,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
   const pending = useRef<ExploreView | null>(null);
   const written = useRef<MonitoringView>(explore);
   const mountedTab = useRef(tabId);
-  const logs = explore.logs;
+  const logs = logsText ?? undefined;
   useEffect(() => {
     if (!ready) return;
     const next: ExploreView = { page: "explore", time };
@@ -188,6 +200,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
         e.preventDefault();
         if (listBox.current) listBox.current.focus();
         else if (!e.repeat) { wantList.current = true; setBrowseOpen(true); }
+      } else if (pressed("exploreLogs", e) && linesBox.current) {
+        e.preventDefault();
+        // The line the list keeps active, else the section's heading: never <body>.
+        const row = linesBox.current.querySelector<HTMLElement>('[role="listitem"][tabindex="0"]');
+        (row ?? linesHeading.current)?.focus();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -205,6 +222,10 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
     if (wantList.current && listBox.current) {
       wantList.current = false;
       listBox.current.focus({ preventScroll: true });
+    }
+    if (wantShowAll.current && showAll.current) {
+      wantShowAll.current = false;
+      showAll.current.focus({ preventScroll: true });
     }
   });
 
@@ -314,15 +335,60 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
     );
   };
 
+  // --- the log lines on the same time line (X3) ------------------------------------------------
+  const logsMode = source?.source_type === "loki";
+  const linesSource = logsMode ? source : (projectOut?.links.find((l) => l.source_type === "loki") ?? null);
+  const lokiLabels = useMemo(
+    () => (catalog && linesSource
+      ? catalog.streams.filter((st) => st.sourceId === null || st.sourceId === linesSource.source_id).map((st) => st.name)
+      : []),
+    [catalog, linesSource],
+  );
+  // The Only chips' labels that Loki has, written by the Task 5 writer (F16).
+  const linked = !logsMode && builder.metric !== null ? linkedLogSelector(builder.only, lokiLabels) : null;
+  const fieldText = logsText ?? linked ?? "";
+  const linesText = logsMode ? expr : fieldText;
+  const metricQuery = linesText.trim() !== "" && isLogQlMetric(linesText);
+  const linesQuery = metricQuery ? "" : linesText;
+  const selector = linesQuery.trim() === "" ? null : (logSelector(linesQuery) ?? linesQuery.trim());
+  // The lines' whole range stays put while the metric text changes; an explicit run reads "now" again.
+  const linesRange = useMemo(
+    () => resolveTime(time, Math.floor(Date.now() / 1000)) ?? (resolveTime(DEFAULT_EXPLORE_TIME, Math.floor(Date.now() / 1000)) as { start: number; end: number }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [time.from, time.to, tick, project, linesSource?.source_id],
+  );
+  const linesFor = linesKey({ project: projectOut, source: linesSource, query: linesQuery, range: linesRange });
+  // A window belongs to the text, place and range it was chosen on: any change shows all again.
+  const chosen = windowSel !== null && windowSel.key === linesFor ? windowSel.range : null;
+  const { state: lines, retry: retryLines } = useLinesRun({
+    project: projectOut, source: linesSource, query: linesQuery, range: linesRange, window: chosen, timeText: timeLabel(time),
+  });
+  const linesCurrent = lines.key === linesFor
+    && (lines.window === null ? chosen === null : chosen !== null && lines.window.start === chosen.start && lines.window.end === chosen.end);
+  // No Loki in the project: no section and no ticks.
+  const linesShown = projectOut !== null && linesSource !== null;
+  const linesOn = linesShown && selector !== null;
+  const marks = useMemo(
+    () => (linesShown && lines.marksFor === linesFor ? logMarks(lines.marks) : []),
+    [linesShown, lines.marksFor, lines.marks, linesFor],
+  );
+  const onSelectWindow = useCallback((range: { start: number; end: number } | null, via?: "pointer" | "keyboard") => {
+    if (range === null) { setWindowSel(null); return; }
+    setWindowSel({ key: linesFor, range });
+    if (via === "keyboard") wantShowAll.current = true;
+  }, [linesFor]);
+  const showAllLines = () => {
+    // Show all leaves with the click: the keyboard goes to the chart, never <body>.
+    (chartTarget() ?? linesHeading.current)?.focus({ preventScroll: true });
+    setWindowSel(null);
+  };
+
   // --- what is drawn -------------------------------------------------------------------------
   const drawPanel = useMemo(
-    () => explorePanel(panelId, state.expr ?? expr, source, state.kind ?? kind),
-    [panelId, state.expr, expr, source, state.kind, kind],
+    () => state.panel ?? explorePanel(panelId, state.expr ?? expr, source, state.kind ?? kind),
+    [state.panel, panelId, state.expr, expr, source, state.kind, kind],
   );
-  const lastGoodPanel = useMemo(
-    () => (state.lastGood ? explorePanel(panelId, state.lastGood.expr, source, state.lastGood.kind) : null),
-    [panelId, state.lastGood, source],
-  );
+  const lastGoodPanel = state.lastGood?.panel ?? null;
   let result: ReactNode = null;
   if (state.shown === "done" && state.data && state.range) {
     const empty = state.data.state === "empty";
@@ -333,7 +399,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
         {state.data.state === "partial" && state.data.problems[0] && <p className={s.partial}>{state.data.problems[0]}</p>}
         <div ref={chartBox} className={s.chartBox} data-explore-chart="" data-dim="false" tabIndex={-1}>
           <Suspense fallback={<p className={s.note}>{PANEL_COPY.loading}</p>}>
-            <ChartView panel={drawPanel} data={state.data} range={state.range} animate={!reduced} changeId={state.runId} />
+            <ChartView panel={drawPanel} data={state.data} range={state.range} animate={!reduced} changeId={state.runId}
+              selection={linesOn ? chosen : undefined} onSelect={linesOn ? onSelectWindow : undefined} marks={linesShown ? marks : undefined} />
           </Suspense>
         </div>
       </>
@@ -384,7 +451,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
             <label className={s.field}>
               <span className={s.fieldLabel}>Project</span>
               <select className={s.select} value={project ?? ""}
-                onChange={(e) => { setProjectId(e.target.value); setSourceId(undefined); setBuilder(EMPTY_BUILDER); }}>
+                onChange={(e) => { setProjectId(e.target.value); setSourceId(undefined); setBuilder(EMPTY_BUILDER); setLogsText(null); }}>
                 {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </label>
@@ -472,6 +539,13 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
             <RecommendationBar context={recContext} scope={`explore:${project}`} onApply={applyRec}
               onDone={() => queryField.current?.focus()} />
             <div className={s.result}>{result}</div>
+            {linesShown && linesSource && (
+              <LinkedLogs ref={linesBox} headingRef={linesHeading} showAllRef={showAll}
+                mode={logsMode ? "logs" : "metrics"} sourceName={linesSource.source_name}
+                field={logsMode ? undefined : { value: fieldText, onChange: setLogsText }}
+                selector={selector} metricQuery={metricQuery} state={lines} current={linesCurrent}
+                window={chosen} range={linesRange} onShowAll={showAllLines} onRetry={retryLines} />
+            )}
           </div>
           <Trail entries={shown} currentKey={current} onPick={pickTrail} onClear={clearAll} />
           </div>
