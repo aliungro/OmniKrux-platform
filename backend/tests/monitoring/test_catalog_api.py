@@ -11,6 +11,7 @@ import pytest
 from omnikrux.monitoring.explore.catalog import (
     CATALOG_TASK,
     CatalogCache,
+    CatalogCacheClosed,
     CatalogEntry,
 )
 from omnikrux.monitoring.sources.connector import NOTE_NO_SERIES, UnknownSourceType
@@ -405,6 +406,10 @@ def entry(state: str = "ok", built_at: float = 0.0) -> CatalogEntry:
     )
 
 
+def gave_up() -> CatalogEntry:
+    return entry("error")
+
+
 class Builds:
     """Build functions that count their runs and answer the states queued for them."""
 
@@ -422,19 +427,19 @@ async def test_errors_are_kept_only_briefly():
     clock = Clock()
     cache = CatalogCache(clock=clock)
     build = Builds("error", "ok")
-    first = await cache.get(KEY, build, refresh=False)
+    first = await cache.get(KEY, build, refresh=False, timed_out=gave_up)
     assert first.state == "error" and first.built_at == clock.now  # stamped by the cache
     clock.now += 29
-    assert (await cache.get(KEY, build, refresh=False)).state == "error"
+    assert (await cache.get(KEY, build, refresh=False, timed_out=gave_up)).state == "error"
     assert build.runs == 1
     clock.now += 2  # 31 s: an error is kept 30 s
-    assert (await cache.get(KEY, build, refresh=False)).state == "ok"
+    assert (await cache.get(KEY, build, refresh=False, timed_out=gave_up)).state == "ok"
     assert build.runs == 2
     clock.now += 299
-    assert (await cache.get(KEY, build, refresh=False)).state == "ok"
+    assert (await cache.get(KEY, build, refresh=False, timed_out=gave_up)).state == "ok"
     assert build.runs == 2
     clock.now += 2  # 301 s
-    await cache.get(KEY, build, refresh=False)
+    await cache.get(KEY, build, refresh=False, timed_out=gave_up)
     assert build.runs == 3
 
 
@@ -442,12 +447,12 @@ async def test_refresh_is_limited_to_once_per_gap():
     clock = Clock()
     cache = CatalogCache(clock=clock)
     build = Builds("ok")
-    await cache.get(KEY, build, refresh=False)
+    await cache.get(KEY, build, refresh=False, timed_out=gave_up)
     clock.now += 9
-    await cache.get(KEY, build, refresh=True)
+    await cache.get(KEY, build, refresh=True, timed_out=gave_up)
     assert build.runs == 1
     clock.now += 2
-    await cache.get(KEY, build, refresh=True)
+    await cache.get(KEY, build, refresh=True, timed_out=gave_up)
     assert build.runs == 2
 
 
@@ -457,12 +462,12 @@ async def test_cache_drops_the_least_recently_used():
     keys = [KEY[:1] + (f"source-{n}",) + KEY[2:] for n in range(3)]
     builds = [Builds("ok") for _ in keys]
     for key, build in zip(keys, builds, strict=True):
-        await cache.get(key, build, refresh=False)
-    await cache.get(keys[0], builds[0], refresh=False)  # the first was dropped
+        await cache.get(key, build, refresh=False, timed_out=gave_up)
+    await cache.get(keys[0], builds[0], refresh=False, timed_out=gave_up)  # the first was dropped
     assert builds[0].runs == 2
     # Now the second is the least recently used: reading the third keeps it.
-    await cache.get(keys[2], builds[2], refresh=False)
-    await cache.get(keys[1], builds[1], refresh=False)
+    await cache.get(keys[2], builds[2], refresh=False, timed_out=gave_up)
+    await cache.get(keys[1], builds[1], refresh=False, timed_out=gave_up)
     assert [b.runs for b in builds] == [2, 2, 1]
 
 
@@ -470,8 +475,8 @@ async def test_keys_keep_projects_apart():
     cache = CatalogCache(clock=Clock())
     a, b = Builds("ok"), Builds("error")
     other_project = ("project-b",) + KEY[1:]
-    assert (await cache.get(KEY, a, refresh=False)).state == "ok"
-    assert (await cache.get(other_project, b, refresh=False)).state == "error"
+    assert (await cache.get(KEY, a, refresh=False, timed_out=gave_up)).state == "ok"
+    assert (await cache.get(other_project, b, refresh=False, timed_out=gave_up)).state == "error"
     assert (a.runs, b.runs) == (1, 1)
 
 
@@ -479,11 +484,11 @@ async def test_forget_project_drops_only_its_entries():
     cache = CatalogCache(clock=Clock())
     a, b = Builds("ok"), Builds("ok")
     other_project = ("project-b",) + KEY[1:]
-    await cache.get(KEY, a, refresh=False)
-    await cache.get(other_project, b, refresh=False)
+    await cache.get(KEY, a, refresh=False, timed_out=gave_up)
+    await cache.get(other_project, b, refresh=False, timed_out=gave_up)
     cache.forget_project("project-a")
-    await cache.get(KEY, a, refresh=False)
-    await cache.get(other_project, b, refresh=False)
+    await cache.get(KEY, a, refresh=False, timed_out=gave_up)
+    await cache.get(other_project, b, refresh=False, timed_out=gave_up)
     assert (a.runs, b.runs) == (2, 1)
 
 
@@ -498,8 +503,8 @@ async def test_a_cancelled_request_never_cancels_the_shared_build():
         await gate.wait()
         return entry()
 
-    first = asyncio.create_task(cache.get(KEY, build, refresh=False))
-    second = asyncio.create_task(cache.get(KEY, build, refresh=False))
+    first = asyncio.create_task(cache.get(KEY, build, refresh=False, timed_out=gave_up))
+    second = asyncio.create_task(cache.get(KEY, build, refresh=False, timed_out=gave_up))
     await asyncio.sleep(0.01)
     first.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -507,7 +512,9 @@ async def test_a_cancelled_request_never_cancels_the_shared_build():
     gate.set()
     assert (await second).state == "ok"
     assert runs == 1
-    assert (await cache.get(KEY, build, refresh=False)).state == "ok" and runs == 1
+    assert (
+        await cache.get(KEY, build, refresh=False, timed_out=gave_up)
+    ).state == "ok" and runs == 1
 
 
 async def test_a_timed_out_build_is_cached_as_its_error():
@@ -539,7 +546,7 @@ async def test_close_cancels_builds_in_flight():
         await asyncio.Event().wait()
         raise AssertionError("never reached")
 
-    waiter = asyncio.create_task(cache.get(KEY, hang, refresh=False))
+    waiter = asyncio.create_task(cache.get(KEY, hang, refresh=False, timed_out=gave_up))
     await asyncio.sleep(0.01)
     await cache.close()
     with pytest.raises(asyncio.CancelledError):
@@ -547,23 +554,68 @@ async def test_close_cancels_builds_in_flight():
     assert not [t for t in asyncio.all_tasks() if t.get_name() == CATALOG_TASK and not t.done()]
 
 
-async def test_a_project_builds_at_most_four_sources_at_once(
-    monitoring_app, fake_prometheus, monkeypatch
-):
-    """Six Prometheus sources linked to one project: their catalogs are read four at a time."""
-    from omnikrux.monitoring.sources.connector import SourceCatalog
+async def test_a_refresh_joins_the_build_in_flight():
+    clock = Clock()
+    cache = CatalogCache(clock=clock)
+    build = Builds("ok")
+    await cache.get(KEY, build, refresh=False, timed_out=gave_up)
+    clock.now += 11  # past the refresh gap: a refresh builds again
+    gate = asyncio.Event()
 
-    http, app = monitoring_app
+    async def slow() -> CatalogEntry:
+        await gate.wait()
+        return await build()
+
+    first = asyncio.create_task(cache.get(KEY, slow, refresh=True, timed_out=gave_up))
+    await asyncio.sleep(0.01)
+    second = asyncio.create_task(cache.get(KEY, slow, refresh=True, timed_out=gave_up))
+    plain = asyncio.create_task(cache.get(KEY, slow, refresh=False, timed_out=gave_up))
+    await asyncio.sleep(0.01)
+    gate.set()
+    answers = await asyncio.gather(first, second, plain)
+    assert build.runs == 2  # the first build, then one refresh for all three
+    assert answers[0] is answers[1]
+
+
+async def test_a_closed_cache_starts_no_build():
+    cache = CatalogCache(clock=Clock())
+    build = Builds("ok")
+    await cache.close()
+    with pytest.raises(CatalogCacheClosed):
+        await cache.get(KEY, build, refresh=False, timed_out=gave_up)
+    assert build.runs == 0
+
+
+async def test_a_failed_build_nobody_awaits_is_not_reported(caplog):
+    """A build whose callers all went away and that then fails leaves no "Task exception was
+    never retrieved" behind."""
+    cache = CatalogCache(clock=Clock())
+    gate = asyncio.Event()
+
+    async def broken() -> CatalogEntry:
+        await gate.wait()
+        raise RuntimeError("broken")
+
+    waiter = asyncio.create_task(cache.get(KEY, broken, refresh=False, timed_out=gave_up))
+    await asyncio.sleep(0.01)
+    waiter.cancel()
+    gate.set()
+    await asyncio.sleep(0.01)
+    import gc
+
+    with caplog.at_level(logging.ERROR, logger="asyncio"):
+        gc.collect()
+        await asyncio.sleep(0)
+    assert "never retrieved" not in caplog.text
+
+
+async def wide_project(http, url: str, count: int = 6) -> tuple[str, list[str]]:
+    """A project linked to `count` Prometheus sources over `url`, in that order."""
     ids = []
-    for n in range(6):
+    for n in range(count):
         r = await http.post(
             "/api/monitoring/sources",
-            json={
-                "type": "prometheus",
-                "reach": "url",
-                "url": fake_prometheus.url,
-                "name": f"Shop {n}",
-            },
+            json={"type": "prometheus", "reach": "url", "url": url, "name": f"Shop {n}"},
         )
         assert r.status_code == 201, r.text
         ids.append(r.json()["id"])
@@ -576,6 +628,17 @@ async def test_a_project_builds_at_most_four_sources_at_once(
         },
     )
     assert project.status_code == 201, project.text
+    return project.json()["id"], ids
+
+
+async def test_a_project_builds_at_most_four_sources_at_once(
+    monitoring_app, fake_prometheus, monkeypatch
+):
+    """Six Prometheus sources linked to one project: their catalogs are read four at a time."""
+    from omnikrux.monitoring.sources.connector import SourceCatalog
+
+    http, app = monitoring_app
+    project_id, ids = await wide_project(http, fake_prometheus.url)
     connector = app.state.monitoring.connectors.get("prometheus")
     now = peak = 0
 
@@ -590,6 +653,37 @@ async def test_a_project_builds_at_most_four_sources_at_once(
             now -= 1
 
     monkeypatch.setattr(connector, "catalog", slow)
-    r = await http.get(catalog_url(project.json()["id"]))
+    r = await http.get(catalog_url(project_id))
     assert [s["source_id"] for s in r.json()["sources"]] == ids
     assert peak == 4
+
+
+async def test_many_hanging_sources_still_answer_within_the_time_limit(
+    monitoring_app, fake_prometheus
+):
+    """Six hanging sources, four built at once: the two waiting for a turn are answered at the
+    call's deadline too, not one timeout later."""
+    http, app = monitoring_app
+    cache = use_cache(app, timeout=0.3)
+    project_id, ids = await wide_project(http, fake_prometheus.url)
+    fake_prometheus.mode = "hang"
+    try:
+        began = time.monotonic()
+        r = await http.get(catalog_url(project_id))
+        took = time.monotonic() - began
+        assert r.status_code == 200
+        assert took < 0.55, took  # one 0.3 s bound, not two in a row (0.6 s)
+        sources = r.json()["sources"]
+        assert [s["source_id"] for s in sources] == ids
+        assert [(s["state"], s["message"]) for s in sources] == [
+            ("error", TIMED_OUT.replace("Shop", f"Shop {n}")) for n in range(6)
+        ]
+        # Only the four builds that ran stored their timeouts; the two answered at the deadline
+        # were never built, so the next request builds them.
+        sent = len(catalog_calls(fake_prometheus))
+        await http.get(catalog_url(project_id))
+        assert len(catalog_calls(fake_prometheus)) > sent
+    finally:
+        fake_prometheus.release.set()
+    await cache.close()
+    assert not [t for t in asyncio.all_tasks() if t.get_name() == CATALOG_TASK and not t.done()]

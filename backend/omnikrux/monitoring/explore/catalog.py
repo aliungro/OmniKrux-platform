@@ -92,6 +92,18 @@ def error_entry(source: SourceConfig, message: str, built_at: float) -> CatalogE
     )
 
 
+class CatalogCacheClosed(RuntimeError):
+    """The cache was closed (the app is stopping): it starts no build."""
+
+    def __init__(self) -> None:
+        super().__init__("The catalog cache is closed.")
+
+
+def _retrieve(task: asyncio.Task[CatalogEntry]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
 class CatalogCache:
     """Built catalogs by `CatalogKey`, and the builds in flight (see the module docstring)."""
 
@@ -113,6 +125,12 @@ class CatalogCache:
         self._timeout = timeout
         self._entries: OrderedDict[CatalogKey, CatalogEntry] = OrderedDict()
         self._building: dict[CatalogKey, asyncio.Task[CatalogEntry]] = {}
+        self._closed = False
+
+    @property
+    def timeout(self) -> float:
+        """How long one build may run, in seconds."""
+        return self._timeout
 
     def now(self) -> float:
         return self._clock()
@@ -123,13 +141,15 @@ class CatalogCache:
         build: Callable[[], Awaitable[CatalogEntry]],
         *,
         refresh: bool,
-        timed_out: Callable[[], CatalogEntry] | None = None,
+        timed_out: Callable[[], CatalogEntry],
     ) -> CatalogEntry:
         """The key's entry: the stored one while it is fresh (younger than `ttl`, or `error_ttl`
         for an error), or with `refresh` while it is younger than `refresh_gap`; otherwise the
-        build in flight for the key, or a new one. A build that runs past the timeout ends with
-        `timed_out()`'s entry, cached like any other; without `timed_out` its callers get
-        `TimeoutError` and nothing is kept."""
+        build in flight for the key (a refresh joins it too), or a new one. A build that runs
+        past the timeout ends with `timed_out()`'s entry, cached like any other.
+        `CatalogCacheClosed` once the cache is closed: no new build starts then."""
+        if self._closed:
+            raise CatalogCacheClosed()
         stored = self._entries.get(key)
         if stored is not None:
             if refresh:
@@ -142,6 +162,9 @@ class CatalogCache:
         task = self._building.get(key)
         if task is None:
             task = asyncio.create_task(self._build(key, build, timed_out), name=CATALOG_TASK)
+            # Every caller may have gone by the time a build fails: its failure is read here, so
+            # it is never reported as an exception nobody retrieved.
+            task.add_done_callback(_retrieve)
             self._building[key] = task
         # A caller that goes away (a closed request) cancels only its own wait.
         return await asyncio.shield(task)
@@ -150,14 +173,12 @@ class CatalogCache:
         self,
         key: CatalogKey,
         build: Callable[[], Awaitable[CatalogEntry]],
-        timed_out: Callable[[], CatalogEntry] | None,
+        timed_out: Callable[[], CatalogEntry],
     ) -> CatalogEntry:
         try:
             try:
                 entry = await asyncio.wait_for(build(), self._timeout)
             except TimeoutError:
-                if timed_out is None:
-                    raise
                 entry = timed_out()
             entry = replace(entry, built_at=self._clock())
             self._entries[key] = entry
@@ -175,7 +196,8 @@ class CatalogCache:
             del self._entries[key]
 
     async def close(self) -> None:
-        """Cancel the builds in flight and wait until they have ended."""
+        """Cancel the builds in flight and wait until they have ended; later reads are refused."""
+        self._closed = True
         tasks = list(self._building.values())
         for task in tasks:
             task.cancel()
@@ -190,10 +212,16 @@ async def project_catalog(
     """One entry per link, in link order, each through the cache: at most `CATALOG_CONCURRENCY`
     of this call's sources are read at once, each build bounded by the cache's timeout.
     `UnknownProject` when the project doesn't exist; a link whose source went meanwhile is left
-    out."""
+    out.
+
+    The whole call answers within the cache's timeout, however many sources hang: a link still
+    waiting for its turn, or for its build, at the call's deadline is answered with the timeout
+    error then. That answer isn't cached; the shared build keeps its own bound and stores its own
+    result."""
     project = await services.projects.get(project_id)
     cache = services.catalogs
     running = asyncio.Semaphore(CATALOG_CONCURRENCY)
+    deadline = asyncio.get_running_loop().time() + cache.timeout
 
     async def one(link: Link) -> CatalogEntry | None:
         try:
@@ -204,15 +232,22 @@ async def project_catalog(
             key = catalog_key(project_id, link, source)
         except FilterError as exc:
             return error_entry(source, str(exc), cache.now())
-        async with running:
-            return await cache.get(
-                key,
-                _builder(services, source, link.matchers),
-                refresh=refresh,
-                timed_out=lambda: error_entry(
-                    source, TIMED_OUT.format(name=source.name), cache.now()
-                ),
-            )
+
+        def timed_out() -> CatalogEntry:
+            return error_entry(source, TIMED_OUT.format(name=source.name), cache.now())
+
+        try:
+            async with asyncio.timeout_at(deadline):
+                async with running:
+                    return await cache.get(
+                        key,
+                        _builder(services, source, link.matchers),
+                        refresh=refresh,
+                        timed_out=timed_out,
+                    )
+        except TimeoutError:
+            # Only this wait ends: the shared build, behind its shield, runs on.
+            return timed_out()
 
     entries = await asyncio.gather(*(one(link) for link in project.links))
     return [entry for entry in entries if entry is not None]
