@@ -82,10 +82,14 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
   };
 
   // Apply is a draft edit, so it is refused while the JSON tab holds text that doesn't apply.
-  const applyRecommendation = (next: PanelSpec) => {
+  const applyRecommendation = (apply: (p: PanelSpec) => PanelSpec) => {
     if (state.jsonText !== null) return JSON_FIRST;
-    update(() => next);
+    update(apply);
   };
+  // The run's data is what the draft's queries answered: not while they are changing or running,
+  // and not when the panel has been edited since that answer began.
+  const fresh = live !== null && !live.pending && !live.fetching && panelData !== null
+    && panelData.editId >= (state.changes[panel.id] ?? 0);
 
   return (
     <aside className={s.side} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>
@@ -96,7 +100,7 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
         </button>
       </div>
       <RecommendationBar
-        context={{ panel, data: panelData, catalog, stepSeconds: live?.step ?? 0 }}
+        context={{ panel, data: fresh ? panelData : null, catalog, stepSeconds: live?.step ?? 0 }}
         scope={state.dashboardId} onApply={applyRecommendation} onDone={() => select("query")} />
       <div role="tablist" aria-label="Panel settings" className={s.tabs} onKeyDown={onTabKey}>
         {TABS.map(([t, label]) => (

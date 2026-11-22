@@ -3,7 +3,9 @@
 // data changes, and never returns once dismissed for this scope. Apply hands the rewritten panel to
 // `onApply`, which makes it a normal draft edit (or answers with why it was refused).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { sameJson } from "../dashboards/editor/editorState";
+import type { PanelSpec } from "../dashboards/schema";
 import { dismiss, readDismissed } from "./dismissals";
 import { recommendFor, type RecommendationContext, type RecText } from "./recommend";
 import s from "./RecommendationBar.module.css";
@@ -12,8 +14,12 @@ export interface RecommendationBarProps {
   context: RecommendationContext;
   /** A dashboard id, or `explore:{project id}`: where a dismissal is kept. */
   scope: string;
-  /** Takes the rewritten panel. A returned string is a refusal: it is said here and the bar stays. */
-  onApply(next: RecommendationContext["panel"]): string | void;
+  /**
+   * Makes the change: `apply` rewrites the panel it is given, so the owner runs it against the
+   * panel as it is then (an edit made since the last render isn't overwritten). A returned string
+   * is a refusal: it is said here and the bar stays.
+   */
+  onApply(apply: (panel: PanelSpec) => PanelSpec): string | void;
   /** After Apply or Dismiss: the keyboard goes somewhere that stays (never `<body>`). */
   onDone?(): void;
 }
@@ -23,6 +29,9 @@ const Text = ({ text }: { text: RecText }) => (
     {text.map((part, i) => (typeof part === "string" ? <span key={i}>{part}</span> : <strong key={i}>{part.strong}</strong>))}
   </>
 );
+
+/** Said when Apply would change nothing: the query is no longer the one the suggestion read. */
+export const QUERY_CHANGED = "That query changed. Review it and try again.";
 
 export function RecommendationBar({ context, scope, onApply, onDone }: RecommendationBarProps) {
   const [gone, setGone] = useState(0);
@@ -35,10 +44,17 @@ export function RecommendationBar({ context, scope, onApply, onDone }: Recommend
     [panel, data, catalog, stepSeconds, alert, scope, gone],
   );
 
-  if (!rec) return null;
+  // A refusal belongs to the suggestion and the panel it was made for.
+  const recKey = rec?.key ?? null;
+  useEffect(() => { setRefusal(null); }, [recKey, panel]);
 
   const apply = () => {
-    const refused = onApply(rec.apply(panel));
+    if (!rec) return;
+    if (sameJson(rec.apply(panel), panel)) {
+      setRefusal((was) => ({ text: QUERY_CHANGED, seq: (was?.seq ?? 0) + 1 }));
+      return;
+    }
+    const refused = onApply((p) => rec.apply(p));
     if (typeof refused === "string") {
       setRefusal((was) => ({ text: refused, seq: (was?.seq ?? 0) + 1 }));
       return;
@@ -47,25 +63,31 @@ export function RecommendationBar({ context, scope, onApply, onDone }: Recommend
     onDone?.();
   };
   const dismissIt = () => {
+    if (!rec) return;
     dismiss(scope, rec.key);
     setRefusal(null);
     setGone((n) => n + 1);
     onDone?.();
   };
 
+  // The section stays mounted while the text changes under typing; the rise replays only for a new suggestion.
   return (
-    <section className={s.wrap} aria-label="Recommendation">
-      <div className={s.rec}>
-        <span className={s.icon} aria-hidden="true">💡</span>
-        <p className={s.text}><Text text={rec.text} /></p>
-        <button type="button" className={s.apply} onClick={apply}>Apply</button>
-        <button type="button" className={s.x} aria-label="Dismiss this recommendation" onClick={dismissIt}>
-          <span aria-hidden="true">✕</span>
-        </button>
-      </div>
-      <p className={s.refused} role="status" aria-live="polite">
-        {refusal && <span key={refusal.seq}>{refusal.text}</span>}
-      </p>
+    <section className={s.wrap} aria-label="Recommendation" hidden={!rec}>
+      {rec && (
+        <>
+          <div key={rec.key} className={s.rec}>
+            <span className={s.icon} aria-hidden="true">💡</span>
+            <p className={s.text}><Text text={rec.text} /></p>
+            <button type="button" className={s.apply} onClick={apply}>Apply</button>
+            <button type="button" className={s.x} aria-label="Dismiss this recommendation" onClick={dismissIt}>
+              <span aria-hidden="true">✕</span>
+            </button>
+          </div>
+          <p className={s.refused} role="status" aria-live="polite">
+            {refusal && <span key={refusal.seq}>{refusal.text}</span>}
+          </p>
+        </>
+      )}
     </section>
   );
 }

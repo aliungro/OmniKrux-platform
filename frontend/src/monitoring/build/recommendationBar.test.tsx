@@ -8,10 +8,10 @@ import type { ChartSeries, PanelData } from "../dashboards/runPanel";
 import { newPanel, type PanelSpec } from "../dashboards/schema";
 import { durationText } from "../dashboards/time";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../test/dashboardSeeds";
+import { gate, intercept, linkedProject, panel, seedDashboard, spec } from "../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../test/renderMonitoringApp";
 import { DISMISSED_KEY } from "./dismissals";
-import { RecommendationBar } from "./RecommendationBar";
+import { QUERY_CHANGED, RecommendationBar } from "./RecommendationBar";
 import { registerRecommendationRule } from "./recommend";
 
 // The chart chunk as a stub.
@@ -35,7 +35,8 @@ vi.mock("../../features/actions/lazyCodeMirror", () => ({
   }),
 }));
 
-beforeEach(() => { localStorage.clear(); editSessions.clear(); });
+// An empty stored list, so dismissals kept in memory by an earlier test are not read back.
+beforeEach(() => { localStorage.clear(); localStorage.setItem(DISMISSED_KEY, "[]"); editSessions.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
@@ -148,6 +149,32 @@ describe("Recommendation bar", () => {
     expect(bar()).toBeNull();
   });
 
+  it("Apply from another tab lands on the Query tab", async () => {
+    const { user } = await openSettings(shop("http_requests_total"));
+    await waitFor(() => expect(bar()).not.toBeNull());
+    await user.click(tabNamed("Chart"));
+    await user.click(within(bar()!).getByRole("button", { name: "Apply" }));
+    expect(draftPanel().queries[0].expr).toBe("rate(http_requests_total[$__rate_interval])");
+    expect(document.activeElement).toBe(tabNamed("Query"));
+    expect(tabNamed("Query").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("no data-based recommendation while the old data is shown for a new query", async () => {
+    const api = shop("rate(http_requests_total[1m])", noisy);
+    const { user } = await openSettings(api);
+    await waitFor(() => expect(bar()?.textContent).toContain("is smoother"));
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
+    fireEvent.change(within(settings()).getByRole("textbox", { name: "Query A" }), { target: { value: "rate(http_requests_total[1m]) + 0" } });
+    await waitFor(() => expect(bar()).toBeNull());
+    // The debounce has ended and the new run is in flight: the old series still show, the bar stays away.
+    await new Promise((r) => setTimeout(r, 450));
+    expect(bar()).toBeNull();
+    held.open();
+    await waitFor(() => expect(bar()?.textContent).toContain("is smoother"));
+    expect(user).toBeTruthy();
+  });
+
   it("widerWindow appears in the side panel once the panel has run (it has a step)", async () => {
     await openSettings(shop("rate(http_requests_total[1m])", noisy));
     const region = await waitFor(() => bar()!);
@@ -189,6 +216,41 @@ describe("Recommendation bar on its own", () => {
       await user.click(screen.getByRole("button", { name: "Dismiss this recommendation" }));
       expect(screen.queryByText(/5 minutes/)).toBeNull();
       expect(screen.getByRole("region").textContent).toContain("Try the extra thing.");
+    } finally { off(); }
+  });
+
+  it("an edit made after render isn't lost when Apply runs", async () => {
+    const user = userEvent.setup();
+    const p = timeseries("rate(x[1m])");
+    let applied: PanelSpec | null = null;
+    render(<RecommendationBar context={{ panel: p, data, catalog: null, stepSeconds: 60 }} scope="late" onApply={(fn) => { applied = fn({ ...p, title: "Edited since" }); }} />);
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    expect(applied!.title).toBe("Edited since");
+    expect(applied!.queries[0].expr).toBe("rate(x[5m])");
+    // Against a panel whose query moved on, it changes nothing (and nothing is overwritten).
+    const moved = timeseries("rate(y[1m])");
+    let result: PanelSpec | null = null;
+    cleanup();
+    render(<RecommendationBar context={{ panel: p, data, catalog: null, stepSeconds: 60 }} scope="late2" onApply={(fn) => { result = fn(moved); }} />);
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    expect(result).toBe(moved);
+  });
+
+  it("the unchanged check refuses in the bar's live region and keeps the bar and focus", async () => {
+    const user = userEvent.setup();
+    const off = registerRecommendationRule({
+      id: "noop",
+      evaluate: (c) => (c.panel.queries[0].expr === "up" ? { id: "noop", key: "noop:p-1:A", text: ["Do nothing."], apply: (x) => x } : null),
+    });
+    try {
+      const onApply = vi.fn();
+      render(<RecommendationBar context={{ panel: timeseries("up"), data: null, catalog: null, stepSeconds: 0 }} scope="noop" onApply={onApply} />);
+      const apply = screen.getByRole("button", { name: "Apply" });
+      await user.click(apply);
+      expect(onApply).not.toHaveBeenCalled();
+      expect(within(screen.getByRole("region")).getByRole("status").textContent).toBe(QUERY_CHANGED);
+      expect(document.activeElement).toBe(apply);
+      expect(screen.getByRole("region").textContent).toContain("Do nothing.");
     } finally { off(); }
   });
 
