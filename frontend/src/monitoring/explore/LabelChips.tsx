@@ -32,11 +32,13 @@ type Values = { values: string[]; loading: boolean; error: string | null };
 
 export function LabelChips({ builder, labels, known, read, onSplit, onOnly }: LabelChipsProps) {
   const onlyLabels = labels.filter((l) => l !== builder.split).slice(0, MAX_ONLY_LABELS);
+  // In logs the label picked from the list is the stream: splitting by it is not offered.
+  const splitLabels = builder.stream ? labels.filter((l) => !(l in builder.only)) : labels;
+  // Logs know their values from the catalog and read nothing; a metric reads one label per query.
   const reads = useQueries({
-    queries: onlyLabels.map((label) => ({
-      queryKey: ["monitoring", "labelValues", read && { ...read, label }],
-      queryFn: ({ signal }: { signal: AbortSignal }) => labelValues({ ...(read as NonNullable<typeof read>), label }, signal),
-      enabled: known === null && read !== null,
+    queries: known !== null || read === null ? [] : onlyLabels.map((label) => ({
+      queryKey: ["monitoring", "labelValues", { ...read, label }],
+      queryFn: ({ signal }: { signal: AbortSignal }) => labelValues({ ...read, label }, signal),
       retry: false,
     })),
   });
@@ -48,6 +50,12 @@ export function LabelChips({ builder, labels, known, read, onSplit, onOnly }: La
       loading: read !== null && (r === undefined || r.isPending),
       error: r?.error ? failure(r.error, "try again") : null,
     };
+  };
+  const retry = (i: number) => { void reads[i]?.refetch(); };
+  // A chip that goes away with the keyboard on it hands it to its row's "more…", else its first chip.
+  const keepFocusIn = (label: string) => {
+    const mine = [...(root.current?.querySelectorAll<HTMLElement>("[data-label]") ?? [])].find((el) => el.dataset.label === label);
+    (chipOf(label) ?? mine?.querySelector<HTMLElement>("button"))?.focus();
   };
   const all = onlyLabels.map(valuesOf);
   const loadingAny = all.some((v) => v.loading);
@@ -71,7 +79,7 @@ export function LabelChips({ builder, labels, known, read, onSplit, onOnly }: La
     <div ref={root} className={s.chips}>
       <div className={s.row} role="group" aria-label="Split by">
         <span className={s.label} aria-hidden="true">Split by</span>
-        {labels.map((l) => (
+        {splitLabels.map((l) => (
           <button key={l} type="button" className={s.chip} aria-pressed={builder.split === l} onClick={() => onSplit(l)}>{l}</button>
         ))}
       </div>
@@ -87,7 +95,12 @@ export function LabelChips({ builder, labels, known, read, onSplit, onOnly }: La
             return (
               <span key={label} className={s.set} data-label={label}>
                 {shown.map((v) => (
-                  <button key={v} type="button" className={s.chip} aria-pressed={chosen === v} onClick={() => onOnly(label, v)}>{`${label}=${v}`}</button>
+                  <button key={v} type="button" className={s.chip} aria-pressed={chosen === v}
+                    onClick={() => {
+                      // A value picked from the popover has no chip once it is off.
+                      if (chosen === v && !first.includes(v)) keepFocusIn(label);
+                      onOnly(label, v);
+                    }}>{`${label}=${v}`}</button>
                 ))}
                 {values.length > SHOWN_VALUES && (
                   <button type="button" className={`${s.chip} ${s.more}`} data-more={label} aria-haspopup="listbox"
@@ -95,7 +108,12 @@ export function LabelChips({ builder, labels, known, read, onSplit, onOnly }: La
                     {`${label}: more…`}
                   </button>
                 )}
-                {error && <span className={s.muted}>{`${label}: couldn't read its values`}</span>}
+                {error && (
+                  <span className={s.muted}>
+                    {`${label}: couldn't read its values: ${error} `}
+                    <button type="button" className={s.chip} onClick={() => retry(i)}>Try again</button>
+                  </span>
+                )}
                 {open === label && (
                   <ValuesPopover label={label} values={values} chosen={chosen}
                     onPick={(v) => { onOnly(label, v); close(label); }} onClose={() => close(label)} />
@@ -127,7 +145,7 @@ function ValuesPopover({ label, values, chosen, onPick, onClose }: {
   }, [values, text]);
   const at = Math.min(active, Math.max(0, found.length - 1));
   const id = (i: number) => `${uid}-v${i}`;
-  useEffect(() => { document.getElementById(id(at))?.scrollIntoView?.({ block: "nearest" }); }); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { document.getElementById(`${uid}-v${at}`)?.scrollIntoView?.({ block: "nearest" }); });
 
   const onKey = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setActive(Math.min(found.length - 1, at + 1)); }

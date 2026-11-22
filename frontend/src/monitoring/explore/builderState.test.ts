@@ -42,6 +42,14 @@ describe("the builder state", () => {
     expect(builderReducer(s, { type: "reset" })).toEqual(EMPTY_BUILDER);
   });
 
+  it("in logs a split never changes the chosen stream", () => {
+    let s = builderReducer(EMPTY_BUILDER, { type: "pickStream", label: "app", value: "api" });
+    s = builderReducer(s, { type: "split", label: "app" });
+    expect(s).toMatchObject({ split: "app", only: { app: "api" } });
+    s = builderReducer(s, { type: "split", label: "level" });
+    expect(s).toMatchObject({ split: "level", only: { app: "api" } });
+  });
+
   it("writes metric and log queries through the writers and refuses what they refuse", () => {
     const s = builderReducer(EMPTY_BUILDER, { type: "pickMetric", metric: requests });
     expect(builderQuery(s, [requests], [])).toBe("sum by (route) (rate(http_requests_total[$__rate_interval]))");

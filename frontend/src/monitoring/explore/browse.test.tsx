@@ -5,7 +5,7 @@ import type { QueryResponse } from "../api/types";
 import type { CatalogOut } from "../catalog/api";
 import { catalogOf, metric, source, stream } from "../catalog/fixtures";
 import { fakeBox } from "../charts/panelFixtures";
-import { linkedProject, linkTo } from "../test/dashboardSeeds";
+import { intercept, linkedProject, linkTo, serverFailure } from "../test/dashboardSeeds";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import type { ExploreView } from "../shell/tabState";
@@ -157,6 +157,10 @@ describe("Browse metrics and log streams", () => {
     await user.click(screen.getByRole("option", { name: "v10" }));
     expect(query().value).toContain('status="v10"');
     expect(screen.getByRole("button", { name: "status=v10" }).getAttribute("aria-pressed")).toBe("true");
+    // Off again: its chip goes away, and the keyboard goes to the row's more….
+    await user.click(screen.getByRole("button", { name: "status=v10" }));
+    expect(screen.queryByRole("button", { name: "status=v10" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "status: more…" }));
   });
 
   it("editing by hand shows the detached line", async () => {
@@ -221,7 +225,47 @@ describe("Browse metrics and log streams", () => {
     expect(await screen.findByRole("button", { name: "level=error" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "level=error" }));
     expect(query().value).toBe('{app="api",level="error"}');
-    expect(screen.getByRole("button", { name: "app" }).getAttribute("aria-pressed")).toBe("false");
+    // The label picked from the list is the stream: it isn't offered as a split.
+    expect(screen.queryByRole("button", { name: "app" })).toBeNull();
+  });
+
+  it("log stream chips keep the chosen stream and read nothing twice", async () => {
+    const warned = [vi.spyOn(console, "warn").mockImplementation(() => {}), vi.spyOn(console, "error").mockImplementation(() => {})];
+    const api = loki();
+    const user = userEvent.setup();
+    await openExplore();
+    const box = await list();
+    await user.click(within(box).getByRole("option", { name: "app = api" }));
+    await waitFor(() => expect(batches(api)).toHaveLength(1));
+    await user.click(await screen.findByRole("button", { name: "level" }));
+    expect(screen.getByRole("button", { name: "level" }).getAttribute("aria-pressed")).toBe("true");
+    // The stream stays chosen, the text is the same, and nothing runs again.
+    expect(query().value).toBe('{app="api"}');
+    expect(screen.getByRole("button", { name: "app=api" }).getAttribute("aria-pressed")).toBe("true");
+    await new Promise((r) => setTimeout(r, 450));
+    expect(batches(api)).toHaveLength(1);
+    expect(api.requests.some((r) => r.url.startsWith("/api/monitoring/label-values"))).toBe(false);
+    expect(warned.flatMap((w) => w.mock.calls).filter((c) => String(c[0]).includes("Duplicate"))).toEqual([]);
+  });
+
+  it("chips leave out le and quantile for any metric", async () => {
+    prom(catalogOf("p1", source("s1", { built_at: BUILT, metrics: [metric("wait_total", { type: "counter", labels: ["le", "quantile", "route"] })] })));
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "wait_total");
+    await screen.findByRole("button", { name: "route" });
+    expect(screen.queryByRole("button", { name: "le" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "quantile" })).toBeNull();
+  });
+
+  it("values that can't be read say why and can be tried again", async () => {
+    prom();
+    intercept((url) => (url.includes("/label-values") ? serverFailure(502, "unreachable", "Prometheus didn't answer in time.") : null));
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "http_requests_total");
+    expect(await screen.findByText(/status: couldn't read its values: Prometheus didn't answer in time\./)).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(0);
   });
 
   it("b focuses the list", async () => {

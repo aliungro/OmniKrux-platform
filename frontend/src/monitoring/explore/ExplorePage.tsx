@@ -274,6 +274,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
       record({ expr, sourceId: source.source_id });
     }
     setBuilder(next);
+    // The same text again (a Split chip in logs) has nothing to run.
+    if (text === expr) return;
     setExpr(text);
     runNow();
   };
@@ -282,12 +284,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
     if (builderActive(builder)) setBuilder((b) => builderReducer(b, { type: "typed" }));
   };
   const pickedMetric = builder.metric === null ? null : (metrics.find((m) => m.name === builder.metric) ?? null);
-  const chipLabels = builder.stream ? streams.map((st) => st.name) : (pickedMetric?.labels ?? []);
+  const chipLabels = builder.stream ? streams.map((st) => st.name) : (pickedMetric?.labels.filter((l) => l !== "le" && l !== "quantile") ?? []);
   const chipsShown = builder.stream || pickedMetric !== null;
   // Label values are read for a range that stays put while the text changes.
   const labelRange = useMemo(
     () => resolveTime(time, Math.floor(Date.now() / 1000)) ?? (resolveTime(DEFAULT_EXPLORE_TIME, Math.floor(Date.now() / 1000)) as { start: number; end: number }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [time.from, time.to, builder.metric, project, source?.source_id],
   );
   const matchText = pickedMetric ? metricMatch(pickedMetric) : null;

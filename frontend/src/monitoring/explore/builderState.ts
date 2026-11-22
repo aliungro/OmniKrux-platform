@@ -41,6 +41,8 @@ export function builderReducer(state: ExploreBuilder, action: BuilderAction): Ex
       return { metric: null, stream: true, split: null, only: { [action.label]: action.value }, detached: false };
     case "split": {
       if (action.label === null || action.label === state.split) return { ...state, split: null, detached: false };
+      // Logs: the stream the list picked stays chosen, whatever the split.
+      if (state.stream) return { ...state, split: action.label, detached: false };
       const { [action.label]: _gone, ...only } = state.only;
       return { ...state, split: action.label, only, detached: false };
     }
