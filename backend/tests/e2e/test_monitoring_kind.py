@@ -159,3 +159,161 @@ def test_a_filtered_project_sees_only_its_part(client, cluster, tools):
 
         everything = query(client, wide, "prometheus", kind="instant", query="up")
         assert any(s["labels"]["job"] != "prometheus" for s in everything["series"])
+
+
+# --- Dashboards: the ready-made views and a dashboard's life ----------------------------------
+
+NO_NODE_EXPORTER = "node-exporter isn't installed in the monitoring namespace."
+HOUR = 3600
+STEP = 30
+# What the browser puts in for the built-in variables on a one-hour range at step 30.
+BUILTINS = {"__interval": "30s", "__rate_interval": "2m", "__range": "1h"}
+
+
+@pytest.fixture
+def prometheus_project(client, cluster, tools):
+    """A Kubernetes project over the found Prometheus with no filter, deleted afterwards."""
+    sources = [{"source": new_source(cluster, tools["prometheus"]), "filter": ""}]
+    with project_cleanup(client) as made:
+        project = set_up(client, cluster, "Kind dashboards", sources)
+        made.append(project["id"])
+        yield project
+
+
+def ready_views(client, project: dict) -> dict[str, dict]:
+    response = client.get(f"{API}/projects/{project['id']}/ready-made")
+    assert response.status_code == 200, response.text
+    return {view["key"]: view for view in response.json()}
+
+
+def dashboard(client, id: str) -> dict:
+    response = client.get(f"{API}/dashboards/{id}")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def fill_in(text: str, document: dict) -> str:
+    """The query as the browser sends it: variables stand for every value (`.+`), the built-in
+    ones for a one-hour range at step 30."""
+    values = {v["name"]: ".+" for v in document["variables"]} | BUILTINS
+    for name in sorted(values, key=len, reverse=True):
+        text = text.replace("${" + name + "}", values[name]).replace("$" + name, values[name])
+    return text
+
+
+def panel_requests(project: dict, document: dict, now: float) -> list[tuple[dict, dict]]:
+    """(panel, request) for every query of every panel, ready for `POST /query/batch`."""
+    source_id = link_of(project, "prometheus")["source_id"]
+    out = []
+    for panel in document["panels"]:
+        for q in panel["queries"]:
+            request = {
+                "source_id": source_id,
+                "project_id": project["id"],
+                "query": fill_in(q["expr"], document),
+            }
+            if panel["type"] in ("bar", "table"):
+                request |= {"kind": "instant", "time": now}
+            else:
+                request |= {"kind": "range", "start": now - HOUR, "end": now, "step": STEP}
+            out.append((panel, request))
+    return out
+
+
+def run_batch(client, requests: list[dict]) -> list[dict]:
+    results = []
+    for start in range(0, len(requests), 64):  # a batch takes at most 64 queries
+        response = client.post(f"{API}/query/batch", json={"queries": requests[start : start + 64]})
+        assert response.status_code == 200, response.text
+        results += response.json()["results"]
+    assert len(results) == len(requests)
+    return results
+
+
+def run_panel(client, project: dict, document: dict, title: str) -> list[dict]:
+    """The answers (one per query) of the panel with this title."""
+    now = time.time()
+    chosen = [(p, r) for p, r in panel_requests(project, document, now) if p["title"] == title]
+    assert chosen, f"{document['title']} has no panel {title!r}"
+    results = run_batch(client, [r for _, r in chosen])
+    assert all(r["ok"] for r in results), results
+    return [r["response"] for r in results]
+
+
+def test_ready_made_views_run_on_the_cluster(client, prometheus_project):
+    project = prometheus_project
+    views = ready_views(client, project)
+    assert views, "a Kubernetes project with Prometheus gets ready-made views"
+    cluster_view = views["cluster"]
+    assert cluster_view["checked"], cluster_view["check_message"]
+    assert not {"kube_state", "cadvisor"} & set(cluster_view["missing"]), cluster_view
+
+    documents = {key: dashboard(client, view["id"])["spec"] for key, view in views.items()}
+    now = time.time()
+    sent = [
+        (key, panel, request)
+        for key, document in documents.items()
+        for panel, request in panel_requests(project, document, now)
+    ]
+    results = run_batch(client, [request for _, _, request in sent])
+    for (key, panel, _), result in zip(sent, results, strict=True):
+        code = (result.get("error") or {}).get("code")
+        assert code != "bad_query", f"{key} / {panel['title']}: {result['error']}"
+
+    nodes_ready = run_panel(client, project, documents["cluster"], "Nodes ready")[0]
+    last = [p[1] for s in nodes_ready["series"] for p in s["points"] if p[1] is not None]
+    assert last and last[-1] >= 1
+
+    cpu = run_panel(client, project, documents["pods"], "CPU by Pod")[0]
+    assert len(cpu["series"]) >= 1
+
+
+def test_node_health_on_the_cluster(client, prometheus_project):
+    project = prometheus_project
+    views = ready_views(client, project)
+    if "node_exporter" in views["nodes"]["missing"]:
+        pytest.skip(NO_NODE_EXPORTER)
+    document = dashboard(client, views["nodes"]["id"])["spec"]
+    busy = run_panel(client, project, document, "CPU busy")[0]
+    nodes = query(client, project, "prometheus", kind="instant", query="count(kube_node_info)")
+    count = nodes["series"][0]["points"][0][1]
+    assert len(busy["series"]) == count
+
+
+def test_dashboard_lifecycle_on_the_cluster(client, prometheus_project):
+    project = prometheus_project
+    ready = ready_views(client, project)["cluster"]
+    copied = client.post(
+        f"{API}/dashboards/copy",
+        json={"from_id": ready["id"], "owner_kind": "project", "owner_id": project["id"]},
+    )
+    assert copied.status_code == 201, copied.text
+    saved_dashboard = copied.json()
+    url = f"{API}/dashboards/{saved_dashboard['id']}"
+    assert saved_dashboard["version"] == 1 and not saved_dashboard["ready_made"]
+
+    changed = saved_dashboard["spec"] | {"title": "Kind cluster health, changed"}
+    saved = client.put(url, json={"base_version": 1, "spec": changed})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["version"] == 2 and saved.json()["title"] == changed["title"]
+
+    restored = client.post(f"{url}/versions/1/restore", json={"base_version": 2})
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["version"] == 3
+    assert restored.json()["title"] == saved_dashboard["title"]
+
+    removed = client.delete(url, params={"version": 3})
+    assert removed.status_code == 204, removed.text
+    assert client.get(url).status_code == 404
+
+    records = [
+        r
+        for r in reversed(client.get("/api/audit").json()["records"])
+        if r["app"] == "monitoring" and r["kind"] == "dashboard"
+    ]
+    assert [(r["action"], r["outcome"]) for r in records] == [
+        ("dashboard_add", "succeeded"),
+        ("dashboard_save", "succeeded"),
+        ("dashboard_restore", "succeeded"),
+        ("dashboard_remove", "succeeded"),
+    ]
