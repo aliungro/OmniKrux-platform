@@ -32,3 +32,6 @@ export function secondsSince(iso: string, now: number): number {
   const t = Date.parse(iso);
   return Number.isFinite(t) ? Math.max(0, (now - t) / 1000) : 0;
 }
+
+/** A refresh that failed: what is shown is the last good read (`at`, ms), and says when that was. */
+export const staleWords = (at: number) => `Couldn't refresh: showing the list from ${clockTime(new Date(at).toISOString())}.`;

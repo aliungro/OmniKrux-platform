@@ -308,6 +308,9 @@ class TargetOut(BaseModel):
     tool_message: str | None
     leaving: bool
     instances: list[InstanceOut]
+    # The tool that holds (or may hold) a copy of the target's rule, whatever checks it now: a
+    # Loki group or PrometheusRule left behind after a move to OmniKrux stays visible.
+    tool_copy: ToolKind | None = None
 
 
 class PanelLinkOut(BaseModel):
@@ -577,6 +580,13 @@ def _instance_out(rule: RuleRecord, i: InstanceRecord) -> InstanceOut:
     )
 
 
+def _tool_copy(target: TargetRecord) -> ToolKind | None:
+    """The tool a copy of the target's rule is (or may be) in; None when nothing was put there."""
+    if target.tool_object is not None:
+        return target.tool_object.kind
+    return target.tool_kind if target.applied_version is not None else None
+
+
 def _target_out(
     rule: RuleRecord, target: TargetRecord, instances: list[InstanceRecord], names: _Names
 ) -> TargetOut:
@@ -598,6 +608,7 @@ def _target_out(
         tool_message=target.tool_message,
         leaving=target.leaving,
         instances=[_instance_out(rule, i) for i in instances],
+        tool_copy=_tool_copy(target),
     )
 
 

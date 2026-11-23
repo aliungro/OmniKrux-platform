@@ -15,10 +15,12 @@ import { keyboardIsFree } from "../../pages/Gone";
 import type { AlertsView, MonitoringView } from "../../shell/tabState";
 import { alertsKeys, listRules, useAlertOverview, type AlertChangeOut, type AlertRequestError, type OverviewOut, type RuleOut } from "../api";
 import { useToolReviews } from "../reviews/useToolReviews";
+import { escapeCloses } from "../../focus";
 import { EngineNote } from "./EngineNote";
 import { listRows } from "./listModel";
 import { RuleDetails, LATER } from "./RuleDetails";
 import { RuleList } from "./RuleList";
+import { clockTime, staleWords } from "./words";
 import s from "./AlertsPage.module.css";
 
 type Tab = NonNullable<AlertsView["tab"]>;
@@ -116,6 +118,8 @@ export default function AlertsPage({ view, nav }: MonitoringPageProps) {
   };
 
   const firing = overview.data?.counts.firing ?? 0;
+  // The overview's last good read, when a later one failed: kept, and said to be old.
+  const overviewStaleAt = overview.isError && overview.data ? overview.dataUpdatedAt : null;
   return (
     <div className={s.page}>
       <header className={s.bar}>
@@ -128,17 +132,23 @@ export default function AlertsPage({ view, nav }: MonitoringPageProps) {
                 aria-selected={on} aria-controls={on ? `${ids}-panel` : undefined} tabIndex={on ? 0 : -1} aria-keyshortcuts={String(i + 1)}
                 className={s.tab} onClick={() => showTab(t.id, false)}>
                 {t.label}
-                {t.id === "rules" && firing > 0 && <span className={s.tabCount} aria-label={`${firing} firing`}>{firing}</span>}
+                {t.id === "rules" && firing > 0 && (
+                  <span className={s.tabCount} data-stale={overviewStaleAt !== null || undefined}
+                    aria-label={overviewStaleAt === null ? `${firing} firing` : `${firing} firing at ${clockTime(new Date(overviewStaleAt).toISOString())}`}>
+                    {firing}
+                  </span>
+                )}
               </button>
             );
           })}
         </div>
         <button type="button" className={s.primary} aria-disabled="true" title={LATER}>New alert rule</button>
       </header>
-      <EngineNote overview={overview.data} error={overview.error} />
+      <EngineNote overview={overview.data} error={overview.error} staleAt={overviewStaleAt} />
       <div id={`${ids}-panel`} role="tabpanel" aria-labelledby={`${ids}-tab-${tab}`} className={s.panel}>
         {tab === "rules" ? (
-          <RulesView alerts={alerts} write={write} open={open} overview={overview.data}
+          <RulesView alerts={alerts} write={write} open={open} overview={overview.data} overviewStaleAt={overviewStaleAt}
+            refetchOverview={() => void overview.refetch()}
             overviewSettled={overview.data !== undefined || overview.isError} pageHeading={heading} />
         ) : (
           <p className={s.later}>{tab === "silences" ? "Silences" : "Contact points"}: {LATER}</p>
@@ -155,12 +165,15 @@ interface RulesViewProps {
   write(patch: { rule?: string | null }): void;
   open(view: MonitoringView): void;
   overview: OverviewOut | undefined;
+  /** When the overview shown was read, if a later read failed; else null. */
+  overviewStaleAt: number | null;
+  refetchOverview(): void;
   /** The overview answered (or failed): what fires is known, so the first row won't move. */
   overviewSettled: boolean;
   pageHeading: RefObject<HTMLHeadingElement | null>;
 }
 
-function RulesView({ alerts, write, open, overview, overviewSettled, pageHeading }: RulesViewProps) {
+function RulesView({ alerts, write, open, overview, overviewStaleAt, refetchOverview, overviewSettled, pageHeading }: RulesViewProps) {
   const client = useQueryClient();
   const reviews = useToolReviews();
   const detailsId = useId();
@@ -176,8 +189,15 @@ function RulesView({ alerts, write, open, overview, overviewSettled, pageHeading
   }, []);
   useEffect(() => { setNow(Date.now()); }, [rules.dataUpdatedAt, overview]);
 
-  // A failed read shows no rules: what was read before is no longer current.
-  const data = rules.isError ? undefined : rules.data;
+  // A failed refresh keeps the last good list (and the details, a dialog, a menu, the keyboard)
+  // and says how old it is, until a read works again. Only a first read that fails shows nothing.
+  const data = rules.data;
+  const rulesStaleAt = rules.isError && rules.data ? rules.dataUpdatedAt : null;
+  const staleAt = rulesStaleAt === null ? overviewStaleAt : overviewStaleAt === null ? rulesStaleAt : Math.min(rulesStaleAt, overviewStaleAt);
+  const refreshAll = () => {
+    if (rulesStaleAt !== null) void rules.refetch();
+    if (overviewStaleAt !== null) refetchOverview();
+  };
   const rows = useMemo(() => (data ? listRows(data, overview, now) : []), [data, overview, now]);
   const ruleRows = useMemo(() => rows.filter((r) => r.kind === "rule"), [rows]);
 
@@ -301,6 +321,16 @@ function RulesView({ alerts, write, open, overview, overviewSettled, pageHeading
 
   const stacked = narrow && data !== undefined && ruleRows.length > 0;
   return (
+    <>
+      {/* Always present, so the note is announced when it appears. */}
+      <div role="status" aria-live="polite" className={staleAt === null ? s.staleIdle : s.stale} data-tone="warn">
+        {staleAt !== null && (
+          <>
+            <p>{staleWords(staleAt)}</p>
+            <button type="button" className={s.barButton} onClick={refreshAll}>Try again</button>
+          </>
+        )}
+      </div>
     <div className={s.split} data-narrow={narrow || undefined} onFocus={onFocus}>
       <div className={s.left} data-alerts-list="" hidden={stacked && showDetails}>
         {list}
@@ -308,11 +338,12 @@ function RulesView({ alerts, write, open, overview, overviewSettled, pageHeading
       {details && (
         <div className={s.right} data-alerts-details="" hidden={stacked && !showDetails}>
           {stacked && (
-            <button type="button" className={s.back} onClick={escape}>Back to the rules</button>
+            <button type="button" className={s.back} onClick={escape} onKeyDown={escapeCloses(escape)}>Back to the rules</button>
           )}
           {details}
         </div>
       )}
     </div>
+    </>
   );
 }

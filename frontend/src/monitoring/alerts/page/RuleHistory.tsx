@@ -1,10 +1,10 @@
 // Recent: what happened to a rule, newest first (up to 20 entries). Read again every 15 seconds
-// while shown; a read that fails says so rather than passing the last list off as current.
+// while shown; a refresh that fails keeps the last list and says how old it is.
 
 import { useQuery } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { alertsKeys, ruleHistory, type AlertRequestError, type HistoryKind, type HistoryOut, type RuleOut } from "../api";
-import { hourMinute, labelsText } from "./words";
+import { hourMinute, labelsText, staleWords } from "./words";
 import s from "./AlertsPage.module.css";
 
 const SHOWN = 20;
@@ -34,7 +34,7 @@ export function RuleHistory({ rule }: { rule: RuleOut }) {
   });
   const group = rule.scope.kind === "group";
   let body;
-  if (history.isError) {
+  if (history.isError && !history.data) {
     body = (
       <p className={s.quiet} data-tone="warn">
         The rule's history couldn't be read. {failure(history.error, "try again")}{" "}
@@ -62,6 +62,7 @@ export function RuleHistory({ rule }: { rule: RuleOut }) {
   return (
     <section className={s.recent} aria-labelledby={`recent-${rule.id}`}>
       <h3 id={`recent-${rule.id}`} className={s.subhead}>Recent</h3>
+      {history.isError && history.data && <p className={s.quiet} data-tone="warn">{staleWords(history.dataUpdatedAt)}</p>}
       {body}
     </section>
   );

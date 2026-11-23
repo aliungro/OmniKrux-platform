@@ -123,6 +123,36 @@
   background: var(--warn);
 }
 
+/* The rules or the overview couldn't be read again: the last good read stays, said to be old. */
+.stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 7px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, var(--rule));
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.stale p {
+  margin: 0;
+}
+
+.staleIdle {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.tabCount[data-stale] {
+  color: var(--ink-3);
+}
+
 .panel {
   display: flex;
   flex: 1;
@@ -489,15 +519,11 @@
 .stateValue[data-tone="ok"] { color: var(--ok); }
 .stateValue[data-tone="muted"] { color: var(--ink-2); }
 
-.link {
-  color: var(--focus);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--focus) 40%, transparent);
-  text-underline-offset: 3px;
-}
-
 .linkButton {
   padding: 0;
+  text-align: left;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--focus) 40%, transparent);
   border: 0;
   background: transparent;
   color: var(--focus);
@@ -646,7 +672,6 @@
 .barButton:focus-visible,
 .iconButton:focus-visible,
 .back:focus-visible,
-.link:focus-visible,
 .linkButton:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;

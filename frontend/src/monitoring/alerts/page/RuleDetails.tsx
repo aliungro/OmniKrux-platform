@@ -14,6 +14,7 @@ import type { MonitoringView } from "../../shell/tabState";
 import {
   deleteRule, pauseRule, resumeRule, ruleDeleteReview, syncTarget,
   type AlertChangeOut, type AlertRequestError, type RuleDeleteReviewOut, type RuleOut, type Severity, type TargetOut, type TargetState,
+  type ToolKind,
 } from "../api";
 import { durationWords, STATE_LABEL, stateTone, whereLabel } from "../format";
 import { parseDuration } from "../limits";
@@ -30,17 +31,27 @@ const SEVERITY_WORDS: Record<Severity, string> = { critical: "Critical", warning
 
 const clusterOf = (t: Pick<TargetOut, "project_name">) => `${t.project_name}'s cluster`;
 
-/** A tool that isn't in step with a target, in words, and what fixes it; null when all is well. */
-export function toolProblem(t: TargetOut): { text: string; action: "review" | "retry" } | null {
+type ToolProblem = { text: string; action: "review" | "retry"; tool: ToolKind };
+
+/**
+ * A tool that isn't in step with a target, in words, what fixes it and which tool; null when all
+ * is well. `ruleTool` is the tool of the rule's source type: where a copy is when the answer
+ * doesn't say (a target now checked by OmniKrux has no `tool`).
+ */
+export function toolProblem(t: TargetOut, ruleTool: ToolKind): ToolProblem | null {
   const msg = t.tool_message ? ` ${t.tool_message}` : "";
+  const outOfStep = t.tool_state !== null && t.tool_state !== "in_sync";
   // Leaving (the rule moved, or is being deleted), or now checked by OmniKrux while its old copy
-  // stays in the tool: it is shown until it is gone. An OmniKrux check that leaves goes at once.
-  const stays = t.leaving || (t.engine !== "tool" && t.tool_state !== null && t.tool_state !== "in_sync");
-  if (stays && t.tool === "loki_ruler") return { text: `Still in Loki.${msg}`, action: "retry" };
-  if (stays && t.tool === "prometheus_rule") return { text: `Still in ${clusterOf(t)}: removing it needs a review.`, action: "review" };
-  if (t.leaving || t.engine !== "tool" || t.tool === null || t.tool_state === null || t.tool_state === "in_sync") return null;
+  // stays in the tool: shown until it is gone. A leaving OmniKrux check with no copy goes at once.
+  if (t.leaving || (t.engine !== "tool" && outOfStep)) {
+    const copy = t.tool ?? t.tool_copy ?? (outOfStep ? ruleTool : null);
+    if (copy === "loki_ruler") return { text: `Still in Loki.${msg}`, action: "retry", tool: copy };
+    if (copy === "prometheus_rule") return { text: `Still in ${clusterOf(t)}: removing it needs a review.`, action: "review", tool: copy };
+    return null;
+  }
+  if (t.engine !== "tool" || t.tool === null || !outOfStep) return null;
   const where = t.tool === "loki_ruler" ? "Loki" : clusterOf(t);
-  return { text: `Not applied in ${where}.${msg}`, action: t.tool_state === "needs_review" ? "review" : "retry" };
+  return { text: `Not applied in ${where}.${msg}`, action: t.tool_state === "needs_review" ? "review" : "retry", tool: t.tool };
 }
 
 /** The where chip(s): one per distinct place (a group rule may run in several). */
@@ -83,9 +94,10 @@ function checksWords(rule: RuleOut): string {
 
 function checkedWords(rule: RuleOut): string {
   // The oldest check of the places it runs: never a newer time than every place was read at.
-  const known = rule.targets.filter((t) => !t.leaving).flatMap((t) => (t.last_eval_at ? [t.last_eval_at] : []));
-  if (known.length === 0) return "Not checked yet";
-  return clockTime(known.sort((a, b) => Date.parse(a) - Date.parse(b))[0]);
+  // A place never checked makes the rule not checked yet: no other time hides it.
+  const times = rule.targets.filter((t) => !t.leaving).map((t) => t.last_eval_at);
+  if (times.length === 0 || times.some((t) => t === null)) return "Not checked yet";
+  return clockTime((times as string[]).sort((a, b) => Date.parse(a) - Date.parse(b))[0]);
 }
 
 // --- More actions ----------------------------------------------------------------------------
@@ -243,16 +255,17 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
   };
 
   /** Review (a cluster change, through the queue) or Retry (Loki is written at once, its own path). */
-  const fix = async (t: TargetOut) => {
+  const fix = async (t: TargetOut, tool: ToolKind) => {
     if (working) return;
     setProblem(null);
     setWorking(t.id);
     try {
-      if (t.tool === "loki_ruler") {
+      if (tool === "loki_ruler") {
         try {
           const out = await syncTarget(t.id);
           if (out.kind === "done" && out.target?.tool_state === "failed") setProblem(lokiFailedWords(rule.name, out.target.tool_message ?? TOOL_FAILED));
-          else if (out.kind === "review") await reviews.reviewTarget(t.id, rule.name, t.project_name);
+          // A cluster review after all (the rule moved there): this answer is its review, not synced again.
+          else if (out.kind === "review") await reviews.reviewTarget(t.id, rule.name, t.project_name, out);
         } catch (err) {
           setProblem(lokiFailedWords(rule.name, failure(err, "try again")));
         }
@@ -264,12 +277,13 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
       setWorking(null);
     }
   };
-  const fixButton = (t: TargetOut, action: "review" | "retry") => (
+  const fixButton = (t: TargetOut, p: ToolProblem) => (
     <button type="button" className={s.barButton} aria-disabled={working !== null || undefined}
-      onClick={() => void fix(t)}>
-      {action === "review" ? "Review" : "Retry"}
+      onClick={() => void fix(t, p.tool)}>
+      {p.action === "review" ? "Review" : "Retry"}
     </button>
   );
+  const ruleTool: ToolKind = rule.source_type === "loki" ? "loki_ruler" : "prometheus_rule";
 
   const items: MenuItem[] = [
     rule.paused
@@ -290,8 +304,8 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
   const shownTarget = active[0] ?? rule.targets[0];
   const notes = [...new Set(rule.targets.map((t) => t.engine_note).filter((n): n is string => !!n))];
   const bars = group ? [] : rule.targets.flatMap((t) => {
-    const p = toolProblem(t);
-    return p ? [{ t, ...p }] : [];
+    const p = toolProblem(t, ruleTool);
+    return p ? [{ t, p }] : [];
   });
   const fact = (term: string, value: ReactNode) => (
     <div className={s.fact} key={term}>
@@ -323,8 +337,8 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
       {problem && <p className={s.toolBar} data-tone="warn" role="alert">{problem}</p>}
       {bars.map((b) => (
         <div key={b.t.id} className={s.toolBar} data-tone="warn">
-          <p>{b.text}</p>
-          {fixButton(b.t, b.action)}
+          <p>{b.p.text}</p>
+          {fixButton(b.t, b.p)}
         </div>
       ))}
 
@@ -335,12 +349,10 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
         {fact("Checks", checksWords(rule))}
         {fact("Severity", SEVERITY_WORDS[rule.severity])}
         {rule.origin === "panel" && rule.panel && fact("From panel", (
-          <a href="#" className={s.link} onClick={(e) => {
-            e.preventDefault();
-            onOpen({ page: "dashboard", id: rule.panel!.dashboard_id, panel: rule.panel!.panel_id });
-          }}>
+          <button type="button" className={s.linkButton}
+            onClick={() => onOpen({ page: "dashboard", id: rule.panel!.dashboard_id, panel: rule.panel!.panel_id })}>
             {rule.panel.panel_title} on {rule.panel.dashboard_title}
-          </a>
+          </button>
         ))}
         {fact("Checked", checkedWords(rule))}
       </dl>
@@ -354,7 +366,7 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
           </thead>
           <tbody>
             {rule.targets.map((t) => {
-              const p = toolProblem(t);
+              const p = toolProblem(t, ruleTool);
               return (
                 <tr key={t.id}>
                   <td>{t.project_name}</td>
@@ -364,7 +376,7 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
                       {p ? p.text : `${STATE_LABEL[t.state]}${t.message && (t.state === "unreachable" || t.state === "waiting" || t.state === "error") ? ` · ${t.message}` : ""}`}
                     </span>
                   </td>
-                  <td>{p && fixButton(t, p.action)}</td>
+                  <td>{p && fixButton(t, p)}</td>
                 </tr>
               );
             })}

@@ -5,6 +5,7 @@
 
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { failure } from "../../../api/http";
 import { useProjects } from "../../api/hooks";
 import type { ProjectOut, QueryRequest } from "../../api/types";
 import type { BatchItemOut } from "../../dashboards/api";
@@ -91,8 +92,7 @@ export function RuleChart({ rule }: { rule: RuleOut }) {
   if (projects.isError && !projects.data) body = <p className={s.chartWords} data-tone="warn">{FAILED}</p>;
   else if (built && rule.targets.filter((t) => !t.leaving).length === 0) body = <p className={s.chartWords}>{NO_TARGET}</p>;
   else if (query.status === "error") {
-    const message = query.error instanceof Error && query.error.message ? query.error.message : FAILED;
-    body = <p className={s.chartWords} data-tone="warn" role="status">{message}</p>;
+    body = <p className={s.chartWords} data-tone="warn" role="status">{failure(query.error, "try again")}</p>;
   } else if (!shown) body = <p className={s.chartWords} role="status">Loading…</p>;
   else if (shown.data.state === "unreachable" || shown.data.state === "error" || shown.data.state === "noQuery") {
     body = <p className={s.chartWords} data-tone="warn" role="status">{shown.data.problems.join(" ") || FAILED}</p>;

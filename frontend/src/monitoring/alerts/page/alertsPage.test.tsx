@@ -7,7 +7,7 @@ import { allGroups } from "../../../features/chrome/shortcuts";
 import type { LinkOut } from "../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../../test/renderMonitoringApp";
-import type { FiringOut, OverviewOut, RuleOut, TargetOut } from "../api";
+import { alertsKeys, type FiringOut, type OverviewOut, type RuleOut, type TargetOut } from "../api";
 
 afterEach(() => {
   cleanup();
@@ -155,6 +155,10 @@ describe("the Alerts page", () => {
     await user.keyboard("{ArrowDown}{Enter}");
     await waitFor(() => expect(document.activeElement).toBe(details()));
     expect(details().textContent).toBe("PodCrashLooping");
+    // Esc on Back to the rules goes back too.
+    screen.getByRole("button", { name: "Back to the rules" }).focus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(document.activeElement).toBe(options()[2]));
   });
 
   it("1 2 3 switch the views", async () => {
@@ -184,7 +188,7 @@ describe("the Alerts page", () => {
     const { app } = open({ rules: [fromPanel], overview: overview([]) });
     await waitFor(() => expect(details().textContent).toBe("SlowCheckout"));
     expect(screen.queryByRole("button", { name: "Edit rule" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Latency on Shop" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Latency on Shop" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "More actions" }));
     expect(screen.queryByRole("menuitem", { name: "Attach to a panel…" })).toBeNull();
     await user.keyboard("{Escape}");
@@ -381,5 +385,143 @@ describe("the Alerts page", () => {
     expect(group.textContent).toContain("Rules, Silences or Contact points");
     expect(group.textContent).toContain("In the rule list: move and show the rule");
     expect(group.textContent).toContain("Silence the selected alert");
+  });
+
+  it("a failed refresh keeps the list, the details and the keyboard, and says so until a read works", async () => {
+    const user = userEvent.setup();
+    const { app } = open();
+    await waitFor(() => expect(options()).toHaveLength(4));
+    await user.click(options()[1]);
+    await waitFor(() => expect(details().textContent).toBe("NodeNotReady"));
+    // A menu open in the details stays open through it.
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const pause = screen.getByRole("menuitem", { name: "Pause" });
+    expect(document.activeElement).toBe(pause);
+
+    const fake = globalThis.fetch;
+    let down = true;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => (down && url.endsWith("/alerts/rules")
+      ? Promise.resolve(new Response(JSON.stringify({ detail: { code: "unreachable", message: "The server is restarting." } }), { status: 503 }))
+      : fake(url, init)));
+    await app.client.refetchQueries({ queryKey: alertsKeys.rules() });
+    const note = await screen.findByText(/^Couldn't refresh: showing the list from \d\d:\d\d:\d\d\.$/);
+    expect(note.closest('[role="status"]')!.getAttribute("aria-live")).toBe("polite");
+    expect(options()).toHaveLength(4);
+    expect(details().textContent).toBe("NodeNotReady");
+    expect(screen.getByRole("menu", { name: "More actions" })).toBeTruthy();
+    expect(document.activeElement).toBe(pause);
+
+    down = false;
+    await app.client.refetchQueries({ queryKey: alertsKeys.rules() });
+    await waitFor(() => expect(screen.queryByText(/^Couldn't refresh/)).toBeNull());
+    expect(document.activeElement).toBe(pause);
+  });
+
+  it("a failed overview refresh marks the pins, the count and the last check as old", async () => {
+    const { app } = open();
+    await waitFor(() => expect(options()).toHaveLength(4));
+    const fake = globalThis.fetch;
+    let down = true;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => (down && url.endsWith("/alerts/overview")
+      ? Promise.reject(new TypeError("Failed to fetch"))
+      : fake(url, init)));
+    await app.client.refetchQueries({ queryKey: alertsKeys.overview });
+    const notes = await screen.findAllByText(/Couldn't refresh: showing the list from \d\d:\d\d:\d\d\./);
+    // Under the list (for the pins) and in the engine note (for its last check).
+    expect(notes).toHaveLength(2);
+    const engine = screen.getByRole("note");
+    expect(engine.getAttribute("data-tone")).toBe("warn");
+    expect(engine.textContent).toMatch(/Last check 10:15:30\. Couldn't refresh: showing the list from/);
+    expect(screen.getByLabelText(/^1 firing at \d\d:\d\d:\d\d$/)).toBeTruthy();
+    // The pins stay shown.
+    expect(options()[0].getAttribute("aria-label")).toMatch(/^PodCrashLooping, 1\dm$/);
+
+    down = false;
+    await app.client.refetchQueries({ queryKey: alertsKeys.overview });
+    await waitFor(() => expect(screen.queryByText(/Couldn't refresh/)).toBeNull());
+    expect(screen.getByRole("note").getAttribute("data-tone")).toBe("muted");
+    expect(screen.getByLabelText("1 firing")).toBeTruthy();
+  });
+
+  it("a Loki copy left behind by a move to OmniKrux shows, with Retry", async () => {
+    const user = userEvent.setup();
+    const left = (over: Partial<TargetOut>) => target("t-l", east, {
+      engine: "omnikrux", tool: null, where: "checked by OmniKrux", tool_state: "failed",
+      tool_message: "Couldn't remove the rule from Shop logs: Shop logs answered HTTP 500. Try again, or check the tool.", ...over,
+    });
+    const moved = rule("r10", "LogErrors", east, { source_type: "loki", targets: [left({ tool_copy: "loki_ruler" })] });
+    const { api } = open({ rules: [moved], overview: overview([]), syncAnswers: { "t-l": { kind: "done", target: null } } });
+    await waitFor(() => expect(details().textContent).toBe("LogErrors"));
+    expect(screen.getByText(
+      "Still in Loki. Couldn't remove the rule from Shop logs: Shop logs answered HTTP 500. Try again, or check the tool.",
+    )).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(api.requests.filter((r) => r.url.endsWith("/targets/t-l/sync"))).toHaveLength(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+
+    // An answer without `tool_copy`: the rule's source type says where the copy is.
+    open({ rules: [{ ...moved, targets: [left({})] }], overview: overview([]) });
+    await waitFor(() => expect(details().textContent).toBe("LogErrors"));
+    expect(screen.getByText(/^Still in Loki\. Couldn't remove/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("a Loki retry that answers with a review opens it without syncing again", async () => {
+    const user = userEvent.setup();
+    const plan: Plan = {
+      plan_id: "plan-9", action: "create",
+      target: { cluster_id: "c1", kind_key: "prometheusrules.monitoring.coreos.com", namespace: "monitoring", name: "omnikrux-logs-9" },
+      kind: "PrometheusRule", cluster: { id: "c1", name: "kind-dev", provider: "kind", environment: "development" },
+      title: "Create PrometheusRule omnikrux-logs-9", summary: [], warnings: [], blocked: [], diff: null, confirm_text: null,
+      apply_label: "Create", expires_at: "2026-11-23T10:05:00Z",
+    };
+    const loki = rule("r11", "LogsMoved", east, {
+      engine: "tool", source_type: "loki", state: "not_applied",
+      targets: [target("t11", east, { engine: "tool", tool: "loki_ruler", where: "in Loki", state: "not_applied", tool_state: "failed", tool_message: "Loki said no." })],
+    });
+    const fallback = (url: string) => Promise.resolve(new Response(JSON.stringify({ detail: `Not found ${url}` }), { status: 404 }));
+    const { api } = open({ rules: [loki], overview: overview([]), syncAnswers: { t11: { kind: "review", plan } } }, fallback);
+    await waitFor(() => expect(details().textContent).toBe("LogsMoved"));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading").textContent).toBe("Create PrometheusRule omnikrux-logs-9");
+    expect(api.requests.filter((r) => r.url.endsWith("/targets/t11/sync"))).toHaveLength(1);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("Checked says Not checked yet while any place is unchecked", async () => {
+    const group = rule("r12", "Fleet", dev, {
+      scope: { kind: "group", id: "g1", name: "Production" },
+      targets: [target("t12a", dev, { last_eval_at: ago(1) }), target("t12b", east, { last_eval_at: null })],
+    });
+    open({ rules: [group], overview: overview([]) });
+    await waitFor(() => expect(details().textContent).toBe("Fleet"));
+    expect(document.querySelector("dl")!.textContent).toContain("CheckedNot checked yet");
+    expect(screen.getByRole("table", { name: "Per project" })).toBeTruthy();
+  });
+
+  it("From panel opens the dashboard with the panel", async () => {
+    const user = userEvent.setup();
+    const fromPanel = rule("r9", "SlowCheckout", dev, {
+      origin: "panel", panel: { dashboard_id: "d1", dashboard_title: "Shop", panel_id: "p-3", panel_title: "Latency" },
+    });
+    const { app } = open({ rules: [fromPanel], overview: overview([]) });
+    await waitFor(() => expect(details().textContent).toBe("SlowCheckout"));
+    await user.click(screen.getByRole("button", { name: "Latency on Shop" }));
+    await waitFor(() => expect(view(app)).toEqual({ page: "dashboard", id: "d1", panel: "p-3" }));
+    expect(app.current().tabs[0].back).toHaveLength(1);
+  });
+
+  it("a chart that can't reach the server says so in words", async () => {
+    open();
+    const fake = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => (url.endsWith("/query/batch")
+      ? Promise.reject(new TypeError("Failed to fetch"))
+      : fake(url, init)));
+    await waitFor(() => expect(details().textContent).toBe("PodCrashLooping"));
+    expect(await screen.findByText("OmniKrux didn't answer. Check that it's running, then try again.")).toBeTruthy();
+    expect(screen.queryByText("Failed to fetch")).toBeNull();
   });
 });

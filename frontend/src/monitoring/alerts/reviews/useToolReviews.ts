@@ -4,7 +4,7 @@
 // the queue. Outside it (a dashboard rendered on its own in a test) the queue is a no-op.
 
 import { createContext, useContext } from "react";
-import type { AlertChangeOut } from "../api";
+import type { AlertChangeOut, SyncOut } from "../api";
 
 /** One cluster review: the target to sync, and the names the status line says. */
 export type ToolReviewRequest = { targetId: string; ruleName: string; projectName: string };
@@ -19,8 +19,11 @@ export interface ToolReviews {
    * Monitoring workspace when that is gone.
    */
   enqueue(changes: AlertChangeOut[], after?: { focus?: HTMLElement | null }): void;
-  /** One target's review (a rule's Review or Retry); focus returns to where it was asked. */
-  reviewTarget(targetId: string, ruleName: string, projectName: string): Promise<ToolReviewResult>;
+  /**
+   * One target's review (a rule's Review or Retry); focus returns to where it was asked. `answer`:
+   * a sync of the target the caller already made (it isn't synced again).
+   */
+  reviewTarget(targetId: string, ruleName: string, projectName: string, answer?: SyncOut): Promise<ToolReviewResult>;
   /** Reviews waiting or open. */
   pending: number;
 }

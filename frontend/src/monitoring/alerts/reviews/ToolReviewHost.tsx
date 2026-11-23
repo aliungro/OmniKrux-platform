@@ -23,6 +23,8 @@ import s from "./ToolReviewHost.module.css";
 /** A queued review and whoever waits on how it ends (a rule's Review button). */
 interface Item extends ToolReviewRequest {
   waiting: ((result: ToolReviewResult) => void)[];
+  /** A sync the caller already made: its answer is used instead of syncing again. */
+  answer?: SyncOut;
 }
 
 /** One line of the status: applied (ok), not applied yet (wait), couldn't (failed). */
@@ -90,7 +92,7 @@ export function ToolReviewHost({ children }: { children: ReactNode }) {
   const reviewOne = useCallback(async (item: Item): Promise<ToolReviewResult> => {
     let answer: SyncOut;
     try {
-      answer = await syncTarget(item.targetId);
+      answer = item.answer ?? await syncTarget(item.targetId);
     } catch (err) {
       say("failed", failedWords(item.ruleName, item.projectName, failure(err)));
       return "failed";
@@ -127,13 +129,15 @@ export function ToolReviewHost({ children }: { children: ReactNode }) {
   }, [refresh, reviewOne]);
 
   /** Queues a review; one already queued (or open) for the same target is the same review. */
-  const add = useCallback((request: ToolReviewRequest, settle?: (result: ToolReviewResult) => void) => {
+  const add = useCallback((request: ToolReviewRequest, settle?: (result: ToolReviewResult) => void, answer?: SyncOut) => {
     const same = queue.current.find((i) => i.targetId === request.targetId);
     if (same) {
       if (settle) same.waiting.push(settle);
+      // The same review is already on its way: a second plan for it isn't needed.
+      if (answer?.kind === "review") discardPlans([answer.plan.plan_id]);
       return;
     }
-    queue.current.push({ ...request, waiting: settle ? [settle] : [] });
+    queue.current.push({ ...request, waiting: settle ? [settle] : [], ...(answer ? { answer } : {}) });
     setPending(queue.current.length);
   }, []);
 
@@ -157,12 +161,12 @@ export function ToolReviewHost({ children }: { children: ReactNode }) {
     void pump();
   }, [add, pump, say, startRun]);
 
-  const reviewTarget = useCallback<ToolReviews["reviewTarget"]>((targetId, ruleName, projectName) => {
+  const reviewTarget = useCallback<ToolReviews["reviewTarget"]>((targetId, ruleName, projectName, answer) => {
     startRun();
     const active = document.activeElement;
     if (active instanceof HTMLElement && active !== document.body) after.current = active;
     return new Promise<ToolReviewResult>((resolve) => {
-      add({ targetId, ruleName, projectName }, resolve);
+      add({ targetId, ruleName, projectName }, resolve, answer);
       void pump();
     });
   }, [add, pump, startRun]);

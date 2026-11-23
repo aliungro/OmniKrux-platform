@@ -4,10 +4,15 @@
 
 import { failure } from "../../../api/http";
 import type { AlertRequestError, OverviewOut } from "../api";
-import { clockTime } from "./words";
+import { clockTime, staleWords } from "./words";
 import s from "./AlertsPage.module.css";
 
-export function EngineNote({ overview, error }: { overview: OverviewOut | undefined; error: AlertRequestError | null }) {
+export function EngineNote({ overview, error, staleAt }: {
+  overview: OverviewOut | undefined;
+  error: AlertRequestError | null;
+  /** When the overview shown was read, if a later read failed: its "Last check" is that old. */
+  staleAt: number | null;
+}) {
   if (!overview) {
     return (
       <p role="note" className={s.engineNote} data-tone={error ? "warn" : "muted"}>
@@ -16,12 +21,13 @@ export function EngineNote({ overview, error }: { overview: OverviewOut | undefi
     );
   }
   const engine = overview.engine;
-  const warn = !engine.enabled || engine.behind > 0 || !engine.running;
+  const warn = !engine.enabled || engine.behind > 0 || !engine.running || staleAt !== null;
   const last = engine.last_tick_at ? ` Last check ${clockTime(engine.last_tick_at)}.` : "";
+  const stale = staleAt !== null ? ` ${staleWords(staleAt)}` : "";
   return (
     <p role="note" className={s.engineNote} data-tone={warn ? "warn" : "muted"}>
       <span className={s.engineMark} aria-hidden="true" />
-      <span>{engine.note}{last}</span>
+      <span>{engine.note}{last}{stale}</span>
     </p>
   );
 }

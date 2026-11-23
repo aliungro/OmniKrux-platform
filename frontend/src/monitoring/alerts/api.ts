@@ -86,6 +86,9 @@ export interface TargetOut {
   tool_message: string | null;
   leaving: boolean;
   instances: InstanceOut[];
+  /** The tool that holds (or may hold) a copy of the rule, whatever checks it now: a Loki group
+   * or PrometheusRule left behind after a move to OmniKrux. Absent from older answers. */
+  tool_copy?: ToolKind | null;
 }
 
 export interface PanelLinkOut {

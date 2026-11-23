@@ -484,3 +484,33 @@ async def test_a_save_during_a_loki_write_is_never_marked_in_sync(
     assert held.tool_state == "in_sync" and held.applied_version == record.version + 1
     [alert] = stored_group(fake_loki, target.id)["rules"]
     assert alert["alert"] == "Errors (saved meanwhile)"
+
+
+async def test_a_loki_copy_left_after_a_move_to_omnikrux_is_named(
+    monitoring_app, linked_project_with_loki, fake_loki
+):
+    http, _ = monitoring_app
+    shop = linked_project_with_loki
+    rule = (await add_rule(http, loki_body(shop.project_id)))["rule"]
+    written = await target_of(http, rule["id"])
+    assert written["tool"] == "loki_ruler" and written["tool_copy"] == "loki_ruler"
+
+    # Checked by OmniKrux from now on, but Loki refuses to let go of the old group.
+    fake_loki.ruler_fail = 500
+    moved = await http.put(
+        f"{RULES}/{rule['id']}",
+        json=loki_body(shop.project_id, base_version=rule["version"], engine="omnikrux"),
+    )
+    assert moved.status_code == 200, moved.text
+    target = await target_of(http, rule["id"])
+    assert target["engine"] == "omnikrux" and target["tool"] is None
+    assert target["tool_state"] == "failed" and target["tool_message"]
+    # The page can still say where the copy is.
+    assert target["tool_copy"] == "loki_ruler"
+    assert stored_group(fake_loki, written["id"]) is not None
+
+    fake_loki.ruler_fail = None
+    retried = await http.post(f"{TARGETS}/{target['id']}/sync")
+    assert retried.status_code == 200, retried.text
+    after = await target_of(http, rule["id"])
+    assert after["tool_copy"] is None and stored_group(fake_loki, written["id"]) is None
