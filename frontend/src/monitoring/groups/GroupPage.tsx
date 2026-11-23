@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure, HttpError } from "../../api/http";
+import { OwnerRuleLines, waitsForClusterRules } from "../alerts/reviews/OwnerRuleLines";
 import { deleteGroup, groupDeleteReview, updateGroup } from "../api/client";
 import { invalidateMonitoring, useGroups, useProjects } from "../api/hooks";
 import type { GroupDeleteReviewOut, GroupOut } from "../api/types";
@@ -101,6 +102,9 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
 
   const byId = new Map((projects.data ?? []).map((p) => [p.id, p]));
   const members = group.project_ids.flatMap((pid) => byId.get(pid) ?? []);
+  // Where the group's cluster rules run: its projects' clusters.
+  const clusterNames = [...new Set(members.flatMap((p) => (p.cluster_name ? [p.cluster_name] : [])))];
+  const clusterWords = clusterNames.length === 0 ? "a cluster" : clusterNames.length === 1 ? clusterNames[0] : `${clusterNames.slice(0, -1).join(", ")} and ${clusterNames[clusterNames.length - 1]}`;
 
   const open = (target: MonitoringView, e: { ctrlKey: boolean; metaKey: boolean }) =>
     e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push");
@@ -182,10 +186,12 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
       </footer>
 
       {review && (
-        <DeleteReviewDialog title={`Delete group ${group.name}?`} action="Delete group" busy={busy} error={error} restoreFocusTo={deleteButton}
+        <DeleteReviewDialog title={`Delete group ${group.name}?`} action="Delete group" busy={busy} blocked={waitsForClusterRules(review)} error={error} restoreFocusTo={deleteButton}
           onCancel={() => { if (!busy) { setReview(null); setError(null); } }} onConfirm={() => void confirmDelete()}>
           <p>Its projects stay as they are.</p>
           {review.dashboards.length > 0 && <p>Its dashboards go with it: {review.dashboards.map((d) => d.title).join(", ")}.</p>}
+          <OwnerRuleLines alertRules={review.alert_rules} clusterRules={review.cluster_rules} cluster={clusterWords}
+            onReviewed={() => void askDelete()} />
         </DeleteReviewDialog>
       )}
     </section>

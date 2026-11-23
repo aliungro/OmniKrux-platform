@@ -135,6 +135,14 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     const n = names();
     return [...ids].sort((a, b) => (n.get(a) ?? "").toLowerCase().localeCompare((n.get(b) ?? "").toLowerCase()) || a.localeCompare(b));
   };
+  /** The rule lists of an owner's delete review: an empty list is left out of the answer. */
+  const ownerRuleLists = (id: string) => {
+    const lists = state.ownerRules[id] ?? {};
+    return {
+      ...(lists.alert_rules?.length ? { alert_rules: lists.alert_rules } : {}),
+      ...(lists.cluster_rules?.length ? { cluster_rules: lists.cluster_rules } : {}),
+    };
+  };
   const usedBy = (sourceId: string) => state.projects.filter((p) => p.links.some((l) => l.source_id === sourceId)).map((p) => ({ id: p.id, name: p.name }));
   const refreshUsedBy = () => state.sources.forEach((s) => { s.used_by = usedBy(s.id); });
   const groupOut = (g: GroupOut): GroupOut => ({ ...g, project_ids: byName(g.project_ids) });
@@ -534,6 +542,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
           groups_left: state.groups.filter((g) => g.project_ids.includes(p.id)).map((g) => ({ id: g.id, name: g.name })),
           dashboards: refsOf("project", p.id),
           token: TOKEN,
+          ...ownerRuleLists(p.id),
         });
       }
       if (is("DELETE", "projects", b)) {
@@ -613,7 +622,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
         }
         return json(groupOut(g));
       }
-      if (is("GET", "groups", b, "delete-review")) return json({ group_id: g.id, name: g.name, dashboards: refsOf("group", g.id), token: TOKEN });
+      if (is("GET", "groups", b, "delete-review")) return json({ group_id: g.id, name: g.name, dashboards: refsOf("group", g.id), token: TOKEN, ...ownerRuleLists(g.id) });
       if (is("DELETE", "groups", b)) {
         // A group with dashboards needs its review's token; one without deletes as is.
         const token = query.get("token");

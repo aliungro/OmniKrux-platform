@@ -34,6 +34,17 @@ export const ACTION_LABELS: readonly (readonly [action: string, label: string])[
   ["dashboard_save", "Saved a dashboard"],
   ["dashboard_remove", "Removed a dashboard"],
   ["dashboard_restore", "Restored a dashboard version"],
+  ["alert_rule_add", "Added an alert rule"],
+  ["alert_rule_change", "Changed an alert rule"],
+  ["alert_rule_remove", "Removed an alert rule"],
+  ["contact_point_add", "Added a contact point"],
+  ["contact_point_change", "Changed a contact point"],
+  ["contact_point_remove", "Removed a contact point"],
+  ["contact_point_test", "Sent a test message"],
+  ["silence_add", "Added a silence"],
+  ["silence_remove", "Expired a silence"],
+  ["loki_rule_write", "Wrote a Loki rule"],
+  ["loki_rule_remove", "Removed a Loki rule"],
 ];
 
 const BY_ACTION = new Map(ACTION_LABELS);

@@ -33,6 +33,8 @@ export interface FakeAlertsState {
   alertChangesOnSave: AlertChangeOut[];
   /** What a rule create or save answers as `changes`. */
   ruleChanges: AlertChangeOut[];
+  /** By project or group id: the rules its delete review names (an empty list is left out, as the server does). */
+  ownerRules: Record<string, { alert_rules?: { id: string; name: string }[]; cluster_rules?: { id: string; name: string }[] }>;
 }
 
 const NOW = "2026-01-01T00:00:00Z";
@@ -69,6 +71,7 @@ export function emptyAlertsState(): FakeAlertsState {
     syncAnswers: {},
     alertChangesOnSave: [],
     ruleChanges: [],
+    ownerRules: {},
   };
 }
 

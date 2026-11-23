@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import k from "../../features/chrome/key.module.css";
+import { useFreshOverview } from "../home/FiringSection";
 import type { TreeColor, TreeOut } from "../api/types";
 import { ownerOfDashboard, type Owner } from "../dashboards/create/currentOwner";
 import type { SearchEntry } from "../search/search";
@@ -68,6 +69,7 @@ const ICONS: Record<"home" | "explore" | "alerts" | "sources", ReactNode> = {
 };
 
 export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeave, owner, onNewDashboard }: Props) {
+  const firing = useFreshOverview()?.counts.firing ?? 0;
   const [expanded, setExpanded] = useState(readExpanded);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const refs = useRef(new Map<string, HTMLElement>());
@@ -231,7 +233,9 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
       <div className={s.nav}>
         {navItem({ page: "home" }, "Home", "home")}
         {navItem(exploreFrom(view, tree), "Explore", "explore")}
-        {navItem({ page: "alerts" }, "Alerts", "alerts")}
+        {navItem({ page: "alerts" }, "Alerts", "alerts",
+          firing > 0 && <span className={s.firingCount} aria-hidden="true">{firing}</span>,
+          firing > 0 ? `Alerts, ${firing} firing` : undefined)}
         {navItem({ page: "sources" }, "Sources", "sources",
           tree && <span className={s.count}>{tree.source_count}</span>,
           tree ? `Sources (${tree.source_count})` : undefined)}

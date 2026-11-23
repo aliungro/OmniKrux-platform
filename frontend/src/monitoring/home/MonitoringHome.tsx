@@ -7,6 +7,7 @@ import type { MonitoringPageProps } from "../MonitoringApp";
 import { buildSearchIndex, searchMonitoring, type SearchEntry } from "../search/search";
 import type { MonitoringView } from "../shell/tabState";
 import { FirstUse } from "./FirstUse";
+import { FiringSection, useFreshOverview } from "./FiringSection";
 import { GroupCard } from "./GroupCard";
 import { ProjectCard, summarize } from "./ProjectCard";
 import { readRecent } from "./recent";
@@ -109,6 +110,7 @@ export default function MonitoringHome({ nav, openInNewTab, onOpenSettings }: Mo
   const healthQuery = useSourceHealth();
   const clusters = useClusters();
   const now = useNow();
+  const overview = useFreshOverview();
 
   const health = healthQuery.data ?? {};
   const clusterNames = useMemo(() => Object.fromEntries((clusters.data ?? []).map((c) => [c.id, c.name])), [clusters.data]);
@@ -169,7 +171,7 @@ export default function MonitoringHome({ nav, openInNewTab, onOpenSettings }: Mo
     <section className={s.home} aria-labelledby="monitoring-home-title">
       <h1 id="monitoring-home-title" className={s.title}>Monitoring</h1>
       <HomeSearch index={index} mayFocus={keyboardIsFree} onOpen={open} />
-      <p className={s.quiet}><i className={s.quietDot} aria-hidden="true" />All quiet · no alert rules yet</p>
+      <FiringSection projects={projects.data} onOpen={open} />
       {healthQuery.isError && !healthQuery.data && <p className={s.note} role="status">Source health couldn't be read, so it shows as not checked.</p>}
 
       {tree.data.groups.length > 0 && (
@@ -179,7 +181,7 @@ export default function MonitoringHome({ nav, openInNewTab, onOpenSettings }: Mo
             {tree.data.groups.map((g) => {
               const ids = [...new Set(g.project_ids.flatMap((pid) => projectById.get(pid)?.links.map((l) => l.source_id) ?? []))];
               return <GroupCard key={g.id} name={g.name} projectCount={g.project_ids.length} sourceIds={ids} health={health} now={now}
-                onOpen={(t) => open({ page: "group", id: g.id }, t)} />;
+                firing={overview?.by_group[g.id]} onOpen={(t) => open({ page: "group", id: g.id }, t)} />;
             })}
           </div>
         </section>
@@ -191,7 +193,7 @@ export default function MonitoringHome({ nav, openInNewTab, onOpenSettings }: Mo
           {projects.data.map((p) => {
             const gone = clusterLoaded && p.kind === "kubernetes" && p.cluster_id !== null && !clusters.data!.some((c) => c.id === p.cluster_id);
             const name = gone ? null : (p.cluster_name ?? (p.cluster_id ? (clusterNames[p.cluster_id] ?? null) : null));
-            return <ProjectCard key={p.id} project={p} health={health} now={now} clusterName={name} clusterGone={gone}
+            return <ProjectCard key={p.id} project={p} health={health} now={now} clusterName={name} clusterGone={gone} firing={overview?.by_project[p.id]}
               onOpen={(t) => open({ page: "project", id: p.id }, t)} />;
           })}
         </div>

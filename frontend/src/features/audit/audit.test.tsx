@@ -526,6 +526,23 @@ describe("monitoring entries", () => {
     for (const l of ["Added a dashboard", "Saved a dashboard", "Removed a dashboard", "Restored a dashboard version"]) expect(labels).toContain(l);
   });
 
+  it("audit shows alert actions in words", async () => {
+    const pairs: [string, string, string][] = [
+      ["alert_rule_add", "alert_rule", "Added an alert rule"], ["alert_rule_change", "alert_rule", "Changed an alert rule"],
+      ["alert_rule_remove", "alert_rule", "Removed an alert rule"], ["contact_point_add", "contact_point", "Added a contact point"],
+      ["contact_point_change", "contact_point", "Changed a contact point"], ["contact_point_remove", "contact_point", "Removed a contact point"],
+      ["contact_point_test", "contact_point", "Sent a test message"], ["silence_add", "silence", "Added a silence"],
+      ["silence_remove", "silence", "Expired a silence"], ["loki_rule_write", "loki_rule", "Wrote a Loki rule"],
+      ["loki_rule_remove", "loki_rule", "Removed a Loki rule"],
+    ];
+    serve(() => ({ records: pairs.map(([action, kind], i) => monitoring({ id: i + 1, action, kind, name: `Thing ${i + 1}` })), next_before: null }));
+    show();
+    for (const [, , label] of pairs) expect(await screen.findByRole("row", { name: new RegExp(label) })).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    for (const [, , label] of pairs) expect(labels).toContain(label);
+  });
+
   it("the action filter offers the monitoring actions", async () => {
     serve(() => ({ records: [record(1)], next_before: null }));
     show();

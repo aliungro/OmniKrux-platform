@@ -1,4 +1,5 @@
 import type { HealthOut, ProjectOut, SourceOut } from "../api/types";
+import { mayMixClusters } from "../alerts/rules/clusterWarning";
 import { DOT } from "../sidebar/Sidebar";
 import s from "./MonitoringHome.module.css";
 
@@ -16,6 +17,12 @@ export function ageNote(checkedAt: string | null, now: number): string | null {
   const minutes = Math.floor(age / 60_000);
   return minutes >= 120 ? `checked ${Math.floor(minutes / 60)} h ago` : `checked ${minutes} min ago`;
 }
+
+export const firingWords = (n: number) => `${n} firing`;
+
+/** The warning on a link whose source may include data from other clusters. */
+export const mixedLinkWords = (source: string) =>
+  `${source} may include data from other clusters: OmniKrux couldn't tell which label separates them. Add a filter so alerts and charts stay on this project.`;
 
 export const STATE_WORDS = { up: "Up", down: "Can't be reached", unknown: "Not checked yet" } as const;
 
@@ -47,15 +54,18 @@ interface Props {
   clusterName: string | null;
   /** The project's cluster is no longer in the console. */
   clusterGone: boolean;
+  /** Alerts firing for the project; none shown when not known or 0. */
+  firing?: number;
   onOpen(newTab: boolean): void;
 }
 
-export function ProjectCard({ project, health, now, clusterName, clusterGone, onOpen }: Props) {
+export function ProjectCard({ project, health, now, clusterName, clusterGone, firing, onOpen }: Props) {
   return (
     <button type="button" className={s.card} onClick={(e) => onOpen(e.ctrlKey || e.metaKey)}>
       <span className={s.cardHead}>
         <i className={s.dot} style={{ background: projectDot(project) }} aria-hidden="true" />
         <span className={s.cardName}>{project.name}</span>
+        {firing !== undefined && firing > 0 && <span className={s.firingCount}>{firingWords(firing)}</span>}
       </span>
       <span className={s.cardSub}>{kindLine(project, clusterName)}</span>
       {clusterGone && <span className={s.cardWarn}>Cluster no longer connected</span>}
@@ -71,6 +81,7 @@ export function ProjectCard({ project, health, now, clusterName, clusterGone, on
               <i className={s.pip} aria-hidden="true" />
               <span className={s.rowText} title={why}>{`${l.source_name} · ${STATE_WORDS[state]}`}</span>
               {age && <span className={s.age}>{age}</span>}
+              {mayMixClusters(project, l) && <span className={s.cardWarn}>{mixedLinkWords(l.source_name)}</span>}
             </span>
           );
         })}

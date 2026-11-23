@@ -131,6 +131,23 @@ describe("Groups", () => {
   });
 });
 
+describe("Group delete review and alert rules", () => {
+  it("group delete lists its rules and waits for cluster rules", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1", "p2"])] }, fallback);
+    api.state.ownerRules.g1 = { alert_rules: [{ id: "r1", name: "Slow checkout" }], cluster_rules: [{ id: "r1", name: "Slow checkout" }] };
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    await user.click(await screen.findByRole("button", { name: "Delete group…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Alert rules that go with it: Slow checkout.")).toBeTruthy();
+    expect(within(dialog).getByText("Remove its rules that run in a cluster first: Slow checkout. Each opens its own review.")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Delete group" }).getAttribute("aria-disabled")).toBe("true");
+    expect(within(dialog).getByRole("button", { name: "Review Slow checkout" })).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
+    expect(api.requests.some((r) => r.method === "DELETE" && r.url.startsWith("/api/monitoring/groups/"))).toBe(false);
+  });
+});
+
 describe("Group focus and arrival", () => {
   const onMain = () => document.activeElement?.tagName === "MAIN";
 

@@ -1,5 +1,5 @@
 import type { HealthOut } from "../api/types";
-import { ageNote, stateOf, summarize, type Health } from "./ProjectCard";
+import { ageNote, firingWords, stateOf, summarize, type Health } from "./ProjectCard";
 import s from "./MonitoringHome.module.css";
 
 interface Props {
@@ -9,10 +9,12 @@ interface Props {
   sourceIds: string[];
   health: Health;
   now: number;
+  /** Alerts firing for the group; none shown when not known or 0. */
+  firing?: number;
   onOpen(newTab: boolean): void;
 }
 
-export function GroupCard({ name, projectCount, sourceIds, health, now, onOpen }: Props) {
+export function GroupCard({ name, projectCount, sourceIds, health, now, firing, onOpen }: Props) {
   const { up, down, unknown } = summarize(sourceIds.map((id) => ({ id })), health);
   const total = sourceIds.length;
   let line: string;
@@ -32,6 +34,7 @@ export function GroupCard({ name, projectCount, sourceIds, health, now, onOpen }
       <span className={s.cardHead}>
         <i className={s.folder} aria-hidden="true" />
         <span className={s.cardName}>{name}</span>
+        {firing !== undefined && firing > 0 && <span className={s.firingCount}>{firingWords(firing)}</span>}
       </span>
       <span className={s.cardSub}>{`${projectCount} ${projectCount === 1 ? "project" : "projects"}`}</span>
       <span className={s.rows}>

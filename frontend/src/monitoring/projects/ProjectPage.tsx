@@ -9,7 +9,8 @@ import { takeHeadingFocus } from "../dashboards/create/arrival";
 import { OwnerDashboards } from "../dashboards/OwnerDashboards";
 import { EditableName } from "../EditableName";
 import { escapeCloses } from "../focus";
-import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
+import { mayMixClusters } from "../alerts/rules/clusterWarning";
+import { ageNote, kindLine, mixedLinkWords, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
 import { SourceForm } from "../sources/SourceForm";
@@ -127,6 +128,7 @@ function LinkRow({ project, link, health, onUnlinked }: {
             {saving ? "Saving…" : "Save filter"}
           </button>
         </div>
+        {mayMixClusters(project, link) && <p className={s.warn}>{mixedLinkWords(link.source_name)}</p>}
         <div className={s.rowActions}>
           {isQueryable(link.source_type) && (
             <button type="button" className={s.quiet} aria-label={`Check data for ${link.source_name}`}
@@ -410,7 +412,8 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
       </footer>
 
       {review && (
-        <ProjectDeleteReview review={review} busy={reviewBusy} error={reviewError} restoreFocusTo={deleteButton}
+        <ProjectDeleteReview review={review} busy={reviewBusy} error={reviewError} clusterName={clusterName} restoreFocusTo={deleteButton}
+          onReviewed={() => void askDelete()}
           onCancel={() => { if (!reviewBusy) { setReview(null); setReviewError(null); } }} onConfirm={() => void confirmDelete()} />
       )}
     </section>

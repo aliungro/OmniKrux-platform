@@ -268,6 +268,10 @@ export interface ProjectDeleteReviewOut {
   /** Deleted with the project, by title; [] when it has none. */
   dashboards: DashboardRefOut[];
   token: string;
+  /** Rules that go with the project; left out of the answer when none (read with `ruleRefs`). */
+  alert_rules?: { id: string; name: string }[];
+  /** Rules still applied in a cluster, removed first; left out when none. */
+  cluster_rules?: { id: string; name: string }[];
 }
 
 /** A dashboard an owner's deletion takes with it. */
@@ -284,6 +288,8 @@ export interface GroupDeleteReviewOut {
   name: string;
   dashboards: DashboardRefOut[];
   token: string;
+  alert_rules?: { id: string; name: string }[];
+  cluster_rules?: { id: string; name: string }[];
 }
 
 /** Exactly one of `source_id` (a saved source) and `source` (a new one). */

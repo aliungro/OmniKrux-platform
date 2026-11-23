@@ -533,3 +533,9 @@
     transition: transform 0.14s ease;
   }
 }
+
+.firingCount {
+  margin-left: auto;
+  font: 11px "Geist Mono", ui-monospace, monospace;
+  color: var(--bad);
+}

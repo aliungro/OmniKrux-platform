@@ -259,4 +259,32 @@ describe("Monitoring sidebar", () => {
       ["Node health", { page: "dashboard", id: "ready:p1:nodes" }, true],
     ]);
   });
+
+  it("the sidebar Alerts item counts firing alerts", async () => {
+    const api = seedTwo();
+    api.state.overview = { ...api.state.overview, counts: { ...api.state.overview.counts, rules: 4, firing: 3 } };
+    renderMonitoringApp();
+    const item = await screen.findByRole("button", { name: "Alerts, 3 firing" });
+    expect(item.textContent).toContain("3");
+  });
+
+  it("the sidebar Alerts item has no count when nothing fires", async () => {
+    seedTwo();
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Both" });
+    const item = screen.getByRole("button", { name: "Alerts" });
+    expect(item.textContent).toBe("Alerts");
+  });
+
+  it("the sidebar shows no count when the overview can't be read", async () => {
+    const api = seedTwo();
+    api.state.overview = { ...api.state.overview, counts: { ...api.state.overview.counts, firing: 3 } };
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      String(url).includes("/alerts/overview") ? Promise.resolve(new Response("{}", { status: 500 })) : real(url, init));
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Both" });
+    expect(screen.getByRole("button", { name: "Alerts" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /firing/ })).toBeNull();
+  });
 });

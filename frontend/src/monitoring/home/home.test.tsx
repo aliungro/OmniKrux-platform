@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { FiringOut, OverviewOut } from "../alerts/api";
 import type { GroupOut, HealthOut, LinkOut, ProjectOut, SourceOut } from "../api/types";
 import { healthSummary } from "./MonitoringHome";
 import { recordRecent } from "./recent";
@@ -40,6 +41,16 @@ function seedHealthy(extra: Partial<FakeMonitoringState> = {}, clusters: unknown
     ...extra,
   }, clustersFallback(clusters));
 }
+
+
+const firingRow = (over: Partial<FiringOut> = {}): FiringOut => ({
+  rule_id: "r1", rule_name: "PodCrashLooping", target_id: "t1", project_id: "p1", project_name: "Dev cluster", severity: "critical",
+  since: T, instances: 2, summary: "2 pods are restarting", where: "checked by OmniKrux", ...over,
+});
+const overviewOf = (over: Partial<OverviewOut> = {}, counts: Partial<OverviewOut["counts"]> = {}): OverviewOut => ({
+  counts: { rules: 3, firing: 0, pending: 0, cant_check: 0, not_applied: 0, ...counts }, firing: [], by_project: {}, by_group: {},
+  engine: { enabled: true, running: true, last_tick_at: T, rules: 3, behind: 0, note: "" }, ...over,
+});
 
 const selectedTab = () => screen.getByRole("tab", { selected: true });
 
@@ -110,6 +121,88 @@ describe("Monitoring Home", () => {
     seedHealthy();
     renderMonitoringApp();
     expect(await screen.findByText("All quiet · no alert rules yet")).toBeTruthy();
+  });
+
+  it("Home shows firing alerts first and opens them", async () => {
+    seedHealthy({ overview: overviewOf({ firing: [firingRow(), firingRow({ rule_id: "r2", target_id: "t2", rule_name: "DiskFull", severity: "warning" })] }, { firing: 2 }) });
+    renderMonitoringApp();
+    const section = await screen.findByRole("region", { name: "Firing" });
+    const rows = within(section).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].dataset.severity).toBe("critical");
+    expect(rows[1].dataset.severity).toBe("warning");
+    expect(within(rows[0]).getByText("PodCrashLooping")).toBeTruthy();
+    expect(within(rows[0]).getByText("Dev cluster")).toBeTruthy();
+    expect(within(rows[0]).getByText("2 pods are restarting")).toBeTruthy();
+    expect(within(rows[0]).getByText("checked by OmniKrux")).toBeTruthy();
+    expect(screen.queryByText(/All quiet/)).toBeNull();
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Open DiskFull" }));
+    expect(await screen.findByRole("button", { name: "New alert rule" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Alerts, 2 firing" })).toBeTruthy();
+  });
+
+  it("Silence on a firing row opens the Silences view", async () => {
+    seedHealthy({ overview: overviewOf({ firing: [firingRow()] }, { firing: 1 }) });
+    renderMonitoringApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Silence PodCrashLooping" }));
+    expect(await screen.findByRole("tab", { name: /Silences/, selected: true })).toBeTruthy();
+  });
+
+  it("All quiet counts rules", async () => {
+    const api = seedHealthy({ overview: overviewOf({}, { rules: 3 }) });
+    const view = renderMonitoringApp();
+    expect(await screen.findByText("All quiet · 3 rules, none firing")).toBeTruthy();
+    view.unmount();
+    api.state.overview = overviewOf({}, { rules: 1 });
+    renderMonitoringApp();
+    expect(await screen.findByText("All quiet · 1 rule, not firing")).toBeTruthy();
+  });
+
+  it("cant-check line appears and opens Alerts", async () => {
+    seedHealthy({ overview: overviewOf({}, { cant_check: 2 }) });
+    renderMonitoringApp();
+    fireEvent.click(await screen.findByRole("button", { name: "2 rules can't be checked right now." }));
+    expect(await screen.findByRole("button", { name: "New alert rule" })).toBeTruthy();
+  });
+
+  it("one rule that can't be checked reads in the singular", async () => {
+    seedHealthy({ overview: overviewOf({}, { cant_check: 1 }) });
+    renderMonitoringApp();
+    expect(await screen.findByRole("button", { name: "1 rule can't be checked right now." })).toBeTruthy();
+  });
+
+  it("says when the alert checks are behind", async () => {
+    seedHealthy({ overview: overviewOf({ engine: { enabled: true, running: true, last_tick_at: T, rules: 3, behind: 2, note: "OmniKrux is 2 checks behind." } }) });
+    renderMonitoringApp();
+    expect(await screen.findByText("OmniKrux is 2 checks behind.")).toBeTruthy();
+  });
+
+  it("cards show firing counts", async () => {
+    seedHealthy({ overview: overviewOf({ firing: [firingRow()], by_project: { p1: 2 }, by_group: { g1: 3 } }, { firing: 2 }) });
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Dev cluster/ });
+    expect(await within(card).findByText("2 firing")).toBeTruthy();
+    expect(within(screen.getByRole("button", { name: /Everything/ })).getByText("3 firing")).toBeTruthy();
+  });
+
+  it("no counts and no quiet line when the overview can't be read", async () => {
+    seedHealthy({ overview: overviewOf({ by_project: { p1: 2 } }, { firing: 2 }) });
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      String(url).includes("/alerts/overview") ? Promise.resolve(new Response("{}", { status: 500 })) : real(url, init));
+    renderMonitoringApp();
+    expect(await screen.findByText(/Alerts couldn't be read, so what is firing isn't shown\./)).toBeTruthy();
+    expect(screen.queryByText(/All quiet/)).toBeNull();
+    expect(screen.queryByText("2 firing")).toBeNull();
+  });
+
+  it("a link with no cluster filter warns that it may include other clusters", async () => {
+    seedHealthy();
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Dev cluster/ });
+    expect(within(card).getAllByText(
+      /may include data from other clusters: OmniKrux couldn't tell which label separates them\. Add a filter so alerts and charts stay on this project\.$/,
+    ).length).toBeGreaterThan(0);
   });
 
   it("recently opened lists existing items only", async () => {
