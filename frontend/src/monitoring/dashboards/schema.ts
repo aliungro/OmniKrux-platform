@@ -8,7 +8,21 @@
 //
 // Only dashboard code imports this module; it must stay out of the startup bundle.
 
-import { VariableError, interpolate, type ResolvedVars } from "./interpolate";
+import {
+  ALERT_PANEL_TYPES,
+  CONTACT_ID,
+  EVERY_SECONDS,
+  LOG_QUERY_COPY,
+  MAX_CHANNEL_LABELS,
+  MAX_FOR_SECONDS,
+  MAX_NOTIFY,
+  SEVERITIES,
+  defaultsExpr,
+  isLogQuery,
+  parseDuration,
+} from "../alerts/limits";
+
+export { ALERT_PANEL_TYPES };
 
 export type OwnerKind = "project" | "group";
 export type PanelType = "timeseries" | "stat" | "gauge" | "bar" | "table" | "logs";
@@ -140,13 +154,13 @@ interface PanelBase {
   description: string;
   layout: Layout;
   queries: QuerySpec[];
-  alert: AlertSpec | null;
+  alert: PanelAlert | null;
 }
 export interface AlertChannel {
   receiver: string;
   labels: Record<string, string>;
 }
-export interface AlertSpec {
+export interface PanelAlert {
   name: string;
   query: string;
   of: "each" | "total";
@@ -820,66 +834,10 @@ function queries(
 
 // --- the alert on a panel -----------------------------------------------------------------
 
-const ALERT_PANEL_TYPES: readonly PanelType[] = ["timeseries", "stat", "gauge", "bar"];
-const SEVERITIES = ["critical", "warning", "info"] as const;
-const EVERY_SECONDS: Record<string, number> = { "30s": 30, "1m": 60, "5m": 300 };
-const MAX_FOR_SECONDS = 86400;
-const MAX_NOTIFY = 10;
-const MAX_CHANNEL_LABELS = 10;
-const CONTACT_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const DURATION = /^(0|[1-9][0-9]*)(s|m|h)$/;
-const DURATION_UNIT: Record<string, number> = { s: 1, m: 60, h: 3600 };
-// Python's str.strip(): every character str.isspace() accepts.
-const PY_SPACE = String.fromCharCode(
-  0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a,
-  0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0x85, 0xa0,
-);
-const LOG_QUERY = new RegExp(String.raw`^[\t\n\v\f\r\x1c-\x20${PY_SPACE}]*\{`);
-
-const ALERT_RANGE_COPY = "An alert can't use $__range; write the window into the query, like [5m].";
-const alertNoDefaultCopy = (name: string) =>
-  `Uses $${name}, which has no default value. Alerts use each variable's default, so give it one.`;
-
-class AlertQueryRefused extends Error {}
-
-/**
- * Why an alert can't run this query text, or null. Runs the dashboard's own `interpolate` with
- * each variable's default; a single-value variable without one and `$__range` stop the scan at
- * the place they are read, so the first refusal is the same one the server gives.
- */
+/** Why an alert can't run this query text, or null. */
 function alertQueryProblem(expr: string, variables: unknown[], everySeconds: number): string | null {
-  const vars: ResolvedVars = Object.create(null);
-  for (const v of variables) {
-    if (!isObject(v) || typeof v.name !== "string" || Object.hasOwn(vars, v.name)) continue;
-    const name = v.name;
-    const multi = v.multi === true;
-    const def = v.default;
-    const value =
-      def === "all" ? "all" : Array.isArray(def) ? def.filter((d): d is string => typeof d === "string") : [];
-    if (!multi && value !== "all" && value.length === 0) {
-      Object.defineProperty(vars, name, {
-        enumerable: true,
-        get() {
-          throw new AlertQueryRefused(alertNoDefaultCopy(name));
-        },
-      });
-    } else {
-      Object.defineProperty(vars, name, { enumerable: true, value: { multi, value } });
-    }
-  }
-  const builtins = {
-    stepSeconds: everySeconds,
-    get rangeSeconds(): number {
-      throw new AlertQueryRefused(ALERT_RANGE_COPY);
-    },
-  };
-  try {
-    interpolate(expr, vars, builtins);
-  } catch (err) {
-    if (err instanceof AlertQueryRefused || err instanceof VariableError) return err.message;
-    throw err;
-  }
-  return null;
+  const out = defaultsExpr(expr, variables, everySeconds);
+  return "problem" in out ? out.problem : null;
 }
 
 function alertQuery(
@@ -900,11 +858,8 @@ function alertQuery(
   const expr = q.expr;
   if (typeof expr !== "string") return ref;
   const src = q.source;
-  if (isObject(src) && src.type === "loki" && LOG_QUERY.test(expr)) {
-    w.add(
-      path,
-      'A Loki alert needs a metric query, like sum(count_over_time({app="api"} |= "error" [5m])).',
-    );
+  if (isObject(src) && src.type === "loki" && isLogQuery(expr)) {
+    w.add(path, LOG_QUERY_COPY);
     return ref;
   }
   const problem = alertQueryProblem(expr, variables, every);
@@ -967,8 +922,7 @@ function alertNotify(w: Walk, raw: unknown, path: string): string[] {
 function alertDuration(w: Walk, raw: unknown, path: string): string | null {
   const t = text(w, raw, path);
   if (t === null) return null;
-  const m = DURATION.exec(t);
-  const seconds = m === null ? -1 : Number(m[1]) * DURATION_UNIT[m[2]];
+  const seconds = parseDuration(t) ?? -1;
   if (!(seconds >= 0 && seconds <= MAX_FOR_SECONDS)) {
     w.add(path, "Use a duration from 0s to 24h, like 5m.");
     return null;
@@ -1270,6 +1224,25 @@ export function defaultOptions(type: PanelType): PanelSpec["options"] {
     case "logs":
       return { limit: 100, wrap: true, order: "newest" };
   }
+}
+
+/** A new alert for a panel: named for the panel, on its first visible query, above `threshold`. */
+export function newAlert(panel: PanelSpec, threshold: number): PanelAlert {
+  const query = panel.queries.find((q) => !q.hidden) ?? panel.queries[0];
+  return {
+    name: panel.title.trim() === "" ? "New alert" : panel.title,
+    query: query?.ref ?? "A",
+    of: "each",
+    op: "above",
+    threshold,
+    for: "5m",
+    every: "1m",
+    severity: "warning",
+    message: "",
+    notify: [],
+    engine: "omnikrux",
+    channel: null,
+  };
 }
 
 /** A new panel is a draft: its empty `expr` is reported by `validateDashboard` until filled. */

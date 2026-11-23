@@ -91,5 +91,12 @@
     "labels": {},
     "value": 2.0,
     "expected": "a {{ b }} c"
+  },
+  {
+    "name": "triple_braces_stay_as_typed",
+    "message": "{{{value}}}",
+    "labels": {},
+    "value": 2.0,
+    "expected": "{{{value}}}"
   }
 ]

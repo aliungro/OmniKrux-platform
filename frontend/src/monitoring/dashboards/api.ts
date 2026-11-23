@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-query";
 import { NETWORK_MESSAGE, UNREADABLE_ANSWER } from "../api/query";
 import type { QueryErrorCode, QueryRequest, QueryResponse } from "../api/types";
+import type { AlertChangeOut } from "../alerts/api";
 import type { DashboardSpec, OwnerKind, Problem } from "./schema";
 
 const BASE = "/api/monitoring";
@@ -35,6 +36,8 @@ export interface DashboardOut {
   /** Null for a ready-made view (generated on request, never stored). */
   created_at: string | null;
   updated_at: string | null;
+  /** What a save did to the rules of its panels in their tools (empty when nothing changed there). */
+  alert_changes: AlertChangeOut[];
 }
 
 export interface DashboardSummaryOut {

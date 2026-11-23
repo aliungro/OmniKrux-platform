@@ -2,7 +2,6 @@
 // way to hold or fail chosen requests in front of the fake.
 import { vi } from "vitest";
 import type { LinkOut, ProjectOut } from "../api/types";
-import type { DashboardOut } from "../dashboards/api";
 import { emptyDashboard, newPanel, type DashboardSpec, type Layout, type OwnerKind, type PanelSpec, type PanelType, type VariableSpec } from "../dashboards/schema";
 import type { FakeDashboard } from "./fakeMonitoringApi";
 import { seedProject } from "./renderMonitoringApp";
@@ -43,7 +42,7 @@ export function spec(title: string, panels: PanelSpec[], variables: VariableSpec
 export function seedDashboard(
   id: string, owner: { kind: OwnerKind; id: string; name: string }, doc: DashboardSpec, readyMade = false,
 ): FakeDashboard {
-  const out: DashboardOut = {
+  const out: FakeDashboard["out"] = {
     id, owner_kind: owner.kind, owner_id: owner.id, owner_name: owner.name, title: doc.title, version: readyMade ? 0 : 1,
     spec: doc, ready_made: readyMade, created_at: readyMade ? null : T, updated_at: readyMade ? null : T,
   };

@@ -5,7 +5,7 @@ import type { AppTabs, Tab } from "../../features/shell/workspace";
 export type MonitoringView =
   | { page: "home" }
   | ExploreView
-  | { page: "alerts" }
+  | AlertsView
   | { page: "sources" }
   | { page: "source"; id: string }
   | { page: "setup"; clusterId?: string }
@@ -25,6 +25,17 @@ export interface DashboardView {
   vars?: Record<string, string[] | "all">;
   time?: { from: string; to: string };
   refresh?: string | null;
+  /** The panel to highlight and scroll to on open. */
+  panel?: string;
+  /** Open edit mode on that panel's Alert tab; the page acts on it and replaces the view without it. */
+  editAlert?: true;
+}
+
+/** Alerts, its tab and the rule shown beside the list. */
+export interface AlertsView {
+  page: "alerts";
+  tab?: "rules" | "silences" | "contacts";
+  rule?: string;
 }
 
 /** Explore and its state: the project, the source, the query, the logs query and the time range. */
@@ -81,6 +92,7 @@ export function sameMonitoringView(a: MonitoringView, b: MonitoringView): boolea
   if ("id" in a && "id" in b) return a.id === b.id;
   if (a.page === "explore" && b.page === "explore") return a.project === b.project;
   if (a.page === "setup" && b.page === "setup") return a.clusterId === b.clusterId;
+  // Alerts: the tab and the selected rule are view state, not another place.
   return true;
 }
 
@@ -191,6 +203,18 @@ function parseDashboard(x: Record<string, unknown>): DashboardView | null {
   if (vars) view.vars = vars;
   if (record(x.time) && shortText(x.time.from, 40) && shortText(x.time.to, 40)) view.time = { from: x.time.from, to: x.time.to };
   if (x.refresh === null || shortText(x.refresh, 10)) view.refresh = x.refresh;
+  if (validId(x.panel)) view.panel = x.panel;
+  if (x.editAlert === true) view.editAlert = true;
+  return view;
+}
+
+const ALERTS_TABS: readonly unknown[] = ["rules", "silences", "contacts"];
+
+/** Alerts: an unknown tab or a rule that isn't a short string is dropped, the view kept. */
+function parseAlerts(x: Record<string, unknown>): AlertsView {
+  const view: AlertsView = { page: "alerts" };
+  if (ALERTS_TABS.includes(x.tab)) view.tab = x.tab as AlertsView["tab"];
+  if (validId(x.rule)) view.rule = x.rule;
   return view;
 }
 
@@ -213,7 +237,9 @@ function parseView(x: unknown): MonitoringView | null {
   switch (x.page) {
     case "explore":
       return parseExplore(x);
-    case "home": case "alerts": case "sources": case "newGroup":
+    case "alerts":
+      return parseAlerts(x);
+    case "home": case "sources": case "newGroup":
       return { page: x.page };
     case "source": case "project": case "group":
       return validId(x.id) ? { page: x.page, id: x.id } : null;

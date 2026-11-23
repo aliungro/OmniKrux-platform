@@ -9,6 +9,7 @@ import type {
 } from "../api/types";
 import type { CatalogOut } from "../catalog/api";
 import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut } from "../dashboards/api";
+import { alertsRoute, emptyAlertsState, type FakeAlertsState } from "./fakeAlertsApi";
 import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem } from "../dashboards/schema";
 import { autoTypeName } from "../sources/sourceLabels";
 
@@ -18,11 +19,11 @@ export type FakeQueryAnswer = Partial<QueryResponse> | { error: { code: QueryErr
 /** A dashboard the fake holds. A ready-made view (`out.ready_made`, id `ready:<project>:<key>`) is
  * served read-only and has no versions. `versions` is oldest first. */
 export interface FakeDashboard {
-  out: DashboardOut;
+  out: Omit<DashboardOut, "alert_changes">;
   versions: { out: VersionOut; spec: DashboardSpec }[];
 }
 
-export interface FakeMonitoringState {
+export interface FakeMonitoringState extends FakeAlertsState {
   sources: SourceOut[];
   projects: ProjectOut[];
   groups: GroupOut[];
@@ -121,6 +122,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     sources: [], projects: [], groups: [], health: {}, discovery: {}, fields: {}, queries: {},
     suggestion: { filter: "", origin: "none", reason: null },
     queryAnswers: {}, dashboards: {}, readyMade: {}, labelValues: {}, catalogs: {},
+    ...emptyAlertsState(),
     ...seed,
   };
   const requests: FakeMonitoringApi["requests"] = [];
@@ -180,8 +182,11 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     }
     return null;
   }
-  const dashboardOut = (d: FakeDashboard): DashboardOut =>
-    d.out.ready_made ? d.out : { ...d.out, owner_name: ownerOf(d.out.owner_kind, d.out.owner_id)?.name ?? "" };
+  const dashboardOut = (d: FakeDashboard, alertChanges: DashboardOut["alert_changes"] = []): DashboardOut => ({
+    ...d.out,
+    ...(d.out.ready_made ? {} : { owner_name: ownerOf(d.out.owner_kind, d.out.owner_id)?.name ?? "" }),
+    alert_changes: alertChanges,
+  });
 
   /** The validated document for the owner, or the backend's 422. */
   function checked(spec: unknown, owner: Owner): DashboardSpec | Response {
@@ -310,7 +315,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
         if (base !== d.out.version) return versionConflict(d);
         if (titleTaken(owner.kind, owner.id, spec.title, d.out.id)) return takenTitle(spec.title);
         addVersion(d, spec, "saved");
-        return json(dashboardOut(d));
+        return json(dashboardOut(d, state.alertChangesOnSave));
       }
       if (method === "DELETE") {
         const raw = query.get("version") ?? "";
@@ -388,6 +393,10 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
 
     // --- dashboards, ready-made views, batches and label values
     if (a === "dashboards") return dashboardRoute(method, seg, query, body);
+    if (a === "alerts") {
+      const found = (id: string) => (state.dashboards[id] ? { version: state.dashboards[id].out.version, out: dashboardOut(state.dashboards[id]) } : undefined);
+      return alertsRoute({ state, nextId, project, group: (id) => state.groups.find((g) => g.id === id) }, method, seg.slice(1), query, body, found);
+    }
     if (is("GET", "projects", null, "ready-made")) {
       return project(b) ? json(state.readyMade[b] ?? []) : dashboardError(404, "not_found", DASHBOARD_GONE);
     }

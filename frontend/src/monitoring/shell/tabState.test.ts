@@ -147,6 +147,42 @@ describe("monitoring tab state", () => {
     expect(dropped).toBe(2);
   });
 
+  it("an alerts view keeps its tab and selected rule through storage", () => {
+    const view: MonitoringView = { page: "alerts", tab: "silences", rule: "r1" };
+    const saved = JSON.parse(JSON.stringify({ tabs: [{ id: "a", view, back: [{ page: "alerts", tab: "contacts" }], forward: [], scrollTop: 0 }], active: "a", closed: [] }));
+    const { tabs, dropped } = parseMonitoringTabs(saved);
+    expect(dropped).toBe(0);
+    expect(tabs.tabs[0].view).toEqual(view);
+    expect(tabs.tabs[0].back).toEqual([{ page: "alerts", tab: "contacts" }]);
+    const parse = (v: unknown) => parseMonitoringTabs({ tabs: [{ id: "a", view: v }], active: "a" }).tabs.tabs[0].view;
+    // Each bad part is dropped on its own; the view stays.
+    expect(parse({ page: "alerts", tab: "history", rule: "r1" })).toEqual({ page: "alerts", rule: "r1" });
+    expect(parse({ page: "alerts", tab: "rules", rule: 5 })).toEqual({ page: "alerts", tab: "rules" });
+    expect(parse({ page: "alerts", rule: "r".repeat(201) })).toEqual({ page: "alerts" });
+    expect(parse({ page: "alerts" })).toEqual({ page: "alerts" });
+  });
+
+  it("alerts views are the same place whatever their tab or rule", () => {
+    expect(sameMonitoringView({ page: "alerts", tab: "rules" }, { page: "alerts", rule: "r1" })).toBe(true);
+    expect(equalMonitoringView({ page: "alerts", tab: "rules" }, { page: "alerts", rule: "r1" })).toBe(false);
+    let tabs = defaultMonitoringTabs();
+    const id = tabs.active;
+    tabs = monitoringTabsReducer(tabs, { type: "navigate", id, view: { page: "alerts" }, mode: "push" });
+    tabs = monitoringTabsReducer(tabs, { type: "navigate", id, view: { page: "alerts", rule: "r1" }, mode: "replace" });
+    expect(tabs.tabs[0].view).toEqual({ page: "alerts", rule: "r1" });
+    expect(tabs.tabs[0].back).toEqual([MONITORING_HOME]);
+  });
+
+  it("a dashboard view keeps the panel to show and the alert to edit", () => {
+    const view: MonitoringView = { page: "dashboard", id: "d1", panel: "p-2", editAlert: true };
+    const parse = (v: unknown) => parseMonitoringTabs({ tabs: [{ id: "a", view: v }], active: "a" }).tabs.tabs[0].view;
+    expect(parse(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    const bare = { page: "dashboard", id: "d1" };
+    expect(parse({ ...bare, panel: 5, editAlert: "yes" })).toEqual(bare);
+    expect(parse({ ...bare, panel: "p".repeat(201), editAlert: false })).toEqual(bare);
+    expect(sameMonitoringView(view, bare as MonitoringView)).toBe(true);
+  });
+
   it("dashboard tabs are labelled by title", () => {
     const names = { dashboard: (id: string) => (id === "d1" ? "API latency" : undefined) };
     expect(monitoringTabLabel({ page: "dashboard", id: "d1" }, names)).toBe("API latency");

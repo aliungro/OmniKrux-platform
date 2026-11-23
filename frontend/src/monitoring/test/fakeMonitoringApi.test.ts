@@ -174,4 +174,58 @@ describe("fake Monitoring API", () => {
     expect(values.status).toBe(400);
     expect(await values.json()).toEqual({ detail: { code: "bad_request", message: "Choose the project whose label values to read." } });
   });
+
+  it("fake API answers an empty overview, no firing and empty lists by default", async () => {
+    installFakeMonitoringApi();
+    expect(await getJson("/api/monitoring/alerts/overview")).toEqual({
+      counts: { rules: 0, firing: 0, pending: 0, cant_check: 0, not_applied: 0 }, firing: [], by_project: {}, by_group: {},
+      engine: { enabled: true, running: true, last_tick_at: expect.any(String), rules: 0, behind: 0, note: "" },
+    });
+    for (const path of ["rules", "contact-points"]) expect(await getJson(`/api/monitoring/alerts/${path}`)).toEqual([]);
+    expect(await getJson("/api/monitoring/alerts/silences")).toEqual({ silences: [], problems: [] });
+    expect(await getJson("/api/monitoring/alerts/panel-states?dashboard_id=d1")).toEqual({});
+    expect(await getJson("/api/monitoring/alerts/channels?project_id=p1")).toEqual({ alertmanager: null, channels: [], message: null });
+    expect(await postJson("/api/monitoring/alerts/dry-run", {})).toMatchObject({ fired: 0, periods: [] });
+  });
+
+  it("fake API answers rule conflicts with the current version", async () => {
+    const api = installFakeMonitoringApi({ projects: [{ id: "p1", name: "Shop", kind: "custom", cluster_id: null, cluster_name: null, cluster_provider: null, links: [], group_ids: [], created_at: "", updated_at: "" }] });
+    const body = { name: "Slow", scope: { kind: "project", id: "p1" }, source: { type: "prometheus", id: null }, expr: "up",
+      condition: { of: "each", op: "above", threshold: 1, for: "5m", every: "1m" }, severity: "warning", message: "", contact_point_ids: [], engine: "omnikrux", channel: null };
+    const made = await postJson<{ rule: { id: string; version: number } }>("/api/monitoring/alerts/rules", body);
+    const res = await fetch(`/api/monitoring/alerts/rules/${made.rule.id}`, { method: "PUT", body: JSON.stringify({ ...body, base_version: 9 }) });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ detail: {
+      code: "rule_changed", current_version: 1,
+      message: "This rule was changed somewhere else since you opened it (version 1). Open it again.",
+    } });
+    const gone = await fetch("/api/monitoring/alerts/rules/nope");
+    expect(gone.status).toBe(404);
+    expect(api.requests.map((r) => r.method + " " + r.url).slice(-2)).toEqual([
+      "PUT /api/monitoring/alerts/rules/" + made.rule.id, "GET /api/monitoring/alerts/rules/nope",
+    ]);
+  });
+
+  it("answers a dashboard save with the seeded alert changes", async () => {
+    const change = { target_id: "t1", rule_id: "r1", rule_name: "Slow", project_id: "p1", project_name: "Shop", kind: "review" as const, message: null };
+    installFakeMonitoringApi({
+      projects: [{ id: "p1", name: "Shop", kind: "custom", cluster_id: null, cluster_name: null, cluster_provider: null, links: [], group_ids: [], created_at: "", updated_at: "" }],
+      alertChangesOnSave: [change],
+    });
+    const spec = { schemaVersion: 1, title: "D", time: { from: "now-1h", to: "now" }, panels: [] };
+    const created = await postJson<{ id: string; alert_changes: unknown[] }>("/api/monitoring/dashboards", { owner_kind: "project", owner_id: "p1", spec });
+    expect(created.alert_changes).toEqual([]);
+    const saved = await putJson<{ alert_changes: unknown[] }>(`/api/monitoring/dashboards/${created.id}`, { base_version: 1, spec: { ...spec, title: "D2" } });
+    expect(saved.alert_changes).toEqual([change]);
+  });
+
+  it("answers syncs and silences from its seed and its rules", async () => {
+    installFakeMonitoringApi({ syncAnswers: { t1: { kind: "done", target: null }, t2: { status: 409, error: { message: "Another change is in progress." } } } });
+    expect(await postJson("/api/monitoring/alerts/targets/t1/sync")).toEqual({ kind: "done", target: null });
+    await expect(postJson("/api/monitoring/alerts/targets/t2/sync")).rejects.toThrow();
+    expect((await fetch("/api/monitoring/alerts/targets/t9/sync", { method: "POST" })).status).toBe(404);
+    const made = await postJson<{ id: string }>("/api/monitoring/alerts/silences", { where: { kind: "omnikrux" }, matchers: "a=b", ends_at: "2026-01-02T00:00:00Z", comment: "x" });
+    expect((await getJson<{ silences: unknown[] }>("/api/monitoring/alerts/silences")).silences).toHaveLength(1);
+    expect((await fetch(`/api/monitoring/alerts/silences/omnikrux/${made.id}`, { method: "DELETE" })).status).toBe(204);
+  });
 });

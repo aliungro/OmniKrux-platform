@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   BUILTIN_VARIABLES,
   DEFAULT_SIZES,
+  ALERT_PANEL_TYPES,
   GRID_COLUMNS,
   MAX_DOCUMENT_BYTES,
   MAX_PANELS,
@@ -18,6 +19,7 @@ import {
   dashboardJson,
   defaultOptions,
   emptyDashboard,
+  newAlert,
   newPanel,
   nextPanelId,
   parseDashboardJson,
@@ -306,5 +308,27 @@ describe("speed", () => {
     const ms = performance.now() - t0;
     expect(v.ok).toBe(true);
     expect(ms).toBeLessThan(200);
+  });
+});
+
+describe("alert helpers", () => {
+  it("a new alert is named for the panel, on its first visible query, above the threshold", () => {
+    const p = newPanel("timeseries", "p-1", { x: 0, y: 0, w: 12, h: 8 });
+    p.title = "Latency";
+    p.queries = [
+      { ...p.queries[0], ref: "A", expr: "up", hidden: true },
+      { ...p.queries[0], ref: "B", expr: "up", hidden: false },
+    ];
+    expect(newAlert(p, 0.3)).toMatchObject({ name: "Latency", query: "B", op: "above", threshold: 0.3, of: "each", for: "5m", every: "1m", engine: "omnikrux", channel: null, notify: [] });
+    p.title = "  ";
+    expect(newAlert(p, 1).name).toBe("New alert");
+    expect(ALERT_PANEL_TYPES).toEqual(["timeseries", "stat", "gauge", "bar"]);
+  });
+
+  it("a new alert on a valid panel passes the validator", () => {
+    const p = newPanel("stat", "p-1", { x: 0, y: 0, w: 12, h: 8 });
+    p.queries[0].expr = "up";
+    p.alert = newAlert(p, 1);
+    expect(validateDashboard({ ...emptyDashboard("D"), panels: [p] }, "project").ok).toBe(true);
   });
 });
