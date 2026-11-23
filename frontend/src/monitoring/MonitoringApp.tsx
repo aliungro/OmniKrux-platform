@@ -20,7 +20,6 @@ import { openMade, settleHeadingFocus } from "./dashboards/create/arrival";
 import { currentOwner, type Owner } from "./dashboards/create/currentOwner";
 import { NewDashboardDialog } from "./dashboards/create/NewDashboardDialog";
 import { pageLetter } from "./dashboards/page/keys";
-import { ALERTS_LATER, ComingLater } from "./pages/ComingLater";
 import { ToolReviewHost } from "./alerts/reviews/ToolReviewHost";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
@@ -63,18 +62,12 @@ export interface MonitoringPageProps {
 
 type Page = MonitoringView["page"];
 
-const later = (name: string, text?: string): ComponentType<MonitoringPageProps> => {
-  const Later = () => <ComingLater name={name} text={text} />;
-  Later.displayName = `ComingLater(${name})`;
-  return Later;
-};
-
-/** Explore is its own chunk: it loads when a tab first shows it. */
+/** Explore and Alerts are their own chunks: each loads when a tab first shows it. */
 const ExplorePage = lazy(() => import("./explore/ExplorePage"));
+const AlertsPage = lazy(() => import("./alerts/page/AlertsPage"));
 
 /**
- * Every page by `view.page`. A page that hasn't been built yet renders `ComingLater` with its name;
- * each later task replaces its entry (M2 adds `dashboard`).
+ * Every page by `view.page`.
  */
 const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   home: MonitoringHome,
@@ -85,7 +78,7 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   group: GroupPage,
   newGroup: GroupForm,
   explore: ExplorePage,
-  alerts: later("Alerts", ALERTS_LATER),
+  alerts: AlertsPage,
   dashboard: DashboardPage,
 };
 
@@ -96,10 +89,11 @@ function recordOpened(view: MonitoringView) {
 
 /**
  * The same page about the same item: a replace that only changes its view state (time, variables,
- * tab). Explore has no item: every replace on it is its own view write (project, source, query, time).
+ * tab). Explore and Alerts have no item: every replace on them is their own view write (Explore's
+ * project, source, query and time; the Alerts tab and the selected rule).
  */
 function samePageAndItem(a: MonitoringView, b: MonitoringView): boolean {
-  return a.page === b.page && (a.page === "explore" || ("id" in a && "id" in b && a.id === b.id));
+  return a.page === b.page && (a.page === "explore" || a.page === "alerts" || ("id" in a && "id" in b && a.id === b.id));
 }
 
 /** Whether a dashboard is listed in the tree, under its project (saved or ready-made) or its group. */

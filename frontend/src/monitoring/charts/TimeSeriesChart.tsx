@@ -12,7 +12,7 @@ import {
 } from "react";
 import type { ChartSeries } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
-import { buildFrame, drawTimeSeries, type ChartMark, type ChartRange, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
+import { buildFrame, drawTimeSeries, type AlertBand, type ChartMark, type ChartRange, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
 import { resolveToken, seriesColors } from "./colors";
 import Legend from "./Legend";
 import { easeOutCubic, MORPH_MS, mixColumns, tween, usePrefersReducedMotion } from "./motion";
@@ -35,6 +35,8 @@ export interface TimeSeriesChartProps {
   marks?: ChartMark[];
   /** Explore: the run's step in seconds; a chosen window snaps to it (else to the samples' spacing). */
   step?: number;
+  /** An alert rule's threshold band, drawn under the series. */
+  alert?: AlertBand | null;
 }
 
 interface Drawn {
@@ -122,7 +124,7 @@ function nearestIndex(samples: number[], t: number): number {
 }
 
 export default function TimeSeriesChart({
-  panel, series, range, animate, changeId, editId, selection = null, onSelect, marks = NO_MARKS as ChartMark[], step: runStep,
+  panel, series, range, animate, changeId, editId, selection = null, onSelect, marks = NO_MARKS as ChartMark[], step: runStep, alert = null,
 }: TimeSeriesChartProps) {
   const opts = panel.options;
   const plotRef = useRef<HTMLDivElement>(null);
@@ -160,9 +162,9 @@ export default function TimeSeriesChart({
   const colors = useMemo(() => seriesColors(series), [series]);
   const frame = useMemo(
     () => (size.width > 0 && size.height > 0
-      ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden)
+      ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden, alert)
       : null),
-    [series, opts, size, dpr, range.start, range.end, hidden],
+    [series, opts, size, dpr, range.start, range.end, hidden, alert],
   );
 
   // Paint. An edit morphs from what is on the canvas; anything else jumps.

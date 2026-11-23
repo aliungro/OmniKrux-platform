@@ -23,12 +23,13 @@ describe("Monitoring app shell", () => {
     expect(tabs()).toHaveLength(1);
   });
 
-  it("Alerts says it comes later", async () => {
+  it("Alerts opens the Alerts page", async () => {
     installFakeMonitoringApi();
     renderMonitoringApp();
     fireEvent.click(screen.getByRole("button", { name: "Alerts" }));
-    expect(await screen.findByRole("heading", { name: "Alerts" })).toBeTruthy();
-    expect(screen.getByText("Alerts aren't here yet. They come in a later update of Monitoring. Until then, nothing here evaluates rules or sends notifications.")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Alerts", level: 1 })).toBeTruthy();
+    expect(await screen.findByRole("note")).toBeTruthy();
+    expect(screen.getByRole("tablist", { name: "Alerts views" })).toBeTruthy();
     expect(tabs()[0].textContent).toContain("Alerts");
   });
 

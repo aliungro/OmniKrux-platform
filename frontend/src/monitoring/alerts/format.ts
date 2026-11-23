@@ -27,7 +27,8 @@ const TONE: Record<TargetState, Tone> = {
   firing: "bad",
   no_data: "muted",
   unreachable: "warn",
-  error: "bad",
+  // A query that fails isn't an alert firing: warn, never Firing's rose.
+  error: "warn",
   paused: "muted",
   waiting: "muted",
   not_applied: "warn",

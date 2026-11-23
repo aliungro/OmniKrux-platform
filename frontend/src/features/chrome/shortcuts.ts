@@ -48,7 +48,8 @@ export type ShortcutId =
   | "dashboardEdit" | "dashboardViews" | "dashboardTime" | "dashboardRefresh" | "dashboardSave"
   | "panelFocus" | "panelMove" | "panelResize" | "panelSettings" | "panelAdd" | "panelRemove" | "panelLeave"
   | "queryRun" | "chartCrosshair" | "tableSort" | "logLabels" | "addPanelPick" | "suggestionsFocus"
-  | "exploreQuery" | "exploreBrowse" | "exploreLogs" | "exploreTime" | "exploreRun" | "exploreAdd" | "exploreWindow" | "exploreShowAll";
+  | "exploreQuery" | "exploreBrowse" | "exploreLogs" | "exploreTime" | "exploreRun" | "exploreAdd" | "exploreWindow" | "exploreShowAll"
+  | "alertsViews" | "alertsMove" | "alertSilence";
 
 export interface Shortcut {
   id: ShortcutId;
@@ -60,9 +61,10 @@ export interface Shortcut {
   label: string;
   /**
    * Where it works: on a table row (and in its open details), anywhere on the page, in a log pane,
-   * in the dock, in the Monitoring app, on a Monitoring dashboard or in Explore. Also the "?" sheet's group.
+   * in the dock, in the Monitoring app, on a Monitoring dashboard, in Explore or on the Alerts page.
+   * Also the "?" sheet's group.
    */
-  scope: "row" | "global" | "logs" | "dock" | "shell" | "monitoring" | "dashboard" | "explore";
+  scope: "row" | "global" | "logs" | "dock" | "shell" | "monitoring" | "dashboard" | "explore" | "alerts";
   /** The kinds it acts on; absent: every kind (a row key still needs the row to offer it). */
   kinds?: string[];
   /** `KeyboardEvent.key` values that trigger it, where something reads them from here. */
@@ -171,6 +173,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "exploreAdd", scope: "explore", keys: ["a"], match: ["a"], label: "Add the query to a dashboard" },
   { id: "exploreWindow", scope: "explore", keys: ["Shift ← →"], match: ["ArrowLeft", "ArrowRight"], shift: true, label: "On the chart: select a time window for the log lines" },
   { id: "exploreShowAll", scope: "explore", keys: ["Esc"], match: ["Escape"], label: "On the chart: show all log lines again" },
+  { id: "alertsViews", scope: "alerts", keys: ["1–3"], match: ["1", "2", "3"], label: "Rules, Silences or Contact points" },
+  { id: "alertsMove", scope: "alerts", keys: ["↑ ↓"], match: ["ArrowUp", "ArrowDown"], label: "In the rule list: move and show the rule" },
+  { id: "alertSilence", scope: "alerts", keys: ["s"], match: ["s"], label: "Silence the selected alert" },
 ];
 
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));
@@ -238,16 +243,16 @@ export function barFor(kindKey: string | undefined, zone: KeyboardZone, mac: boo
 
 export type ShortcutGroup = readonly [title: string, rows: readonly Shortcut[]];
 
-const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs", row: "Table", global: "Anywhere", logs: "Logs", dock: "Dock", monitoring: "Monitoring", dashboard: "Dashboards", explore: "Explore" };
+const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs", row: "Table", global: "Anywhere", logs: "Logs", dock: "Dock", monitoring: "Monitoring", dashboard: "Dashboards", explore: "Explore", alerts: "Alerts" };
 
 /**
  * The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's.
- * The Monitoring, Dashboards and Explore groups are there only while Monitoring is shown (`app`); there "/"
+ * The Monitoring, Dashboards, Explore and Alerts groups are there only while Monitoring is shown (`app`); there "/"
  * is Find, so the Anywhere group leaves out Filter rows.
  */
 export function allGroups(kindKey?: string, app?: AppId): ShortcutGroup[] {
   const monitoring = app === "monitoring";
-  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "dashboard", "explore", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
+  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "dashboard", "explore", "alerts", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
   return scopes.map((scope) => [
     GROUP_TITLES[scope],
     SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey)) && !(monitoring && s.id === "filter")),

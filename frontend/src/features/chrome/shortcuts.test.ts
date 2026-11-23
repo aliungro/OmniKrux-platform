@@ -161,6 +161,23 @@ describe("shortcut registry", () => {
     expect(keysFor("queryRun", true)).toEqual(["⌘ Enter"]);
   });
 
+  it("the Alerts group appears after Explore", () => {
+    const titles = allGroups(undefined, "monitoring").map(([t]) => t);
+    const at = titles.indexOf("Monitoring");
+    expect(titles.slice(at, at + 4)).toEqual(["Monitoring", "Dashboards", "Explore", "Alerts"]);
+    expect(titles.filter((t) => t === "Alerts")).toHaveLength(1);
+    expect(allGroups().map(([t]) => t)).not.toContain("Alerts");
+    expect(allGroups("pods", "kubernetes").map(([t]) => t)).not.toContain("Alerts");
+    const alerts = allGroups(undefined, "monitoring").find(([t]) => t === "Alerts")![1];
+    expect(alerts.map((s) => [s.id, s.keys, s.label])).toEqual([
+      ["alertsViews", ["1–3"], "Rules, Silences or Contact points"],
+      ["alertsMove", ["↑ ↓"], "In the rule list: move and show the rule"],
+      ["alertSilence", ["s"], "Silence the selected alert"],
+    ]);
+    expect(pressed("alertSilence", { key: "s", ctrlKey: false, metaKey: false, altKey: false })).toBe(true);
+    expect(pressed("alertsViews", { key: "2", ctrlKey: false, metaKey: false, altKey: false })).toBe(true);
+  });
+
   it("the Explore group appears only in Monitoring, after Dashboards", () => {
     const titles = allGroups(undefined, "monitoring").map(([t]) => t);
     const at = titles.indexOf("Dashboards");

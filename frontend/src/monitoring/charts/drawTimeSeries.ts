@@ -21,6 +21,11 @@ export type CanvasLike = Pick<
 export type ChartRange = { start: number; end: number };
 /** A log line's tick on the time series (Explore): its time in seconds and its tone. */
 export type ChartMark = { t: number; tone: "error" | "warn" | "info" };
+/**
+ * An alert rule's threshold on the chart: a dashed `--bad` line at `threshold` and a faint `--bad`
+ * fill on the side where the rule fires. `queryRef` names the query the rule watches.
+ */
+export type AlertBand = { op: "above" | "below"; threshold: number; queryRef: string };
 
 /** Tick colours: rose means failing, so errors may use `--bad` (series colours never do). */
 const MARK_COLORS: Record<ChartMark["tone"], string> = { error: "--bad", warn: "--warn", info: "--kind" };
@@ -29,6 +34,9 @@ const MARK_ORDER: ChartMark["tone"][] = ["info", "warn", "error"];
 const MARK_W = 2;
 const MARK_H = 6;
 const MARK_ALPHA = 0.85;
+/** The firing side of an alert band: rose, barely there, so the series stay readable over it. */
+const BAND_ALPHA = 0.07;
+const BAND_LINE = 1.2;
 
 export interface FrameSize {
   width: number;
@@ -56,6 +64,15 @@ export interface FrameThreshold {
   y: number;
 }
 
+/** An alert band in the frame: its line's y in pixels from the plot's top. */
+export interface FrameAlert {
+  op: AlertBand["op"];
+  threshold: number;
+  y: number;
+  /** Always `--bad`: the side where the rule fires. */
+  color: string;
+}
+
 export interface TimeSeriesFrame {
   size: FrameSize;
   plot: { x: number; y: number; w: number; h: number };
@@ -68,6 +85,8 @@ export interface TimeSeriesFrame {
   yPositions: number[];
   xTicks: number[];
   thresholds: FrameThreshold[];
+  /** An alert rule's threshold band, or null. */
+  alert: FrameAlert | null;
   /** Y of the zero line (or the nearest edge): where a filled area starts. */
   baseline: number;
 }
@@ -149,7 +168,12 @@ export function buildFrame(
   size: FrameSize,
   range: { start: number; end: number },
   hidden: ReadonlySet<string>,
+  alert: AlertBand | null = null,
 ): TimeSeriesFrame {
+  // An alert's threshold is always on the chart: the y range (explicit bounds too) grows to hold it.
+  const limit = alert && Number.isFinite(alert.threshold) ? alert.threshold : null;
+  const minOpt = opts.min !== null && limit !== null ? Math.min(opts.min, limit) : opts.min;
+  const maxOpt = opts.max !== null && limit !== null ? Math.max(opts.max, limit) : opts.max;
   const visible = series.filter((s) => !hidden.has(s.key));
   const colors = seriesColors(series);
   const filled = opts.style !== "lines";
@@ -159,15 +183,19 @@ export function buildFrame(
   /** The y domain, its ticks and labels for a data extent. */
   const domainFor = (extMin: number, extMax: number) => {
     if (extMin === Infinity) {
-      extMin = 0;
-      extMax = 1;
+      extMin = limit ?? 0;
+      extMax = limit === null ? 1 : limit + Math.max(1, Math.abs(limit));
     }
-    if (filled && opts.min === null) extMin = Math.min(0, extMin);
-    const eMin = opts.min ?? extMin;
-    const eMax = opts.max ?? Math.max(extMax, eMin);
+    if (limit !== null) {
+      extMin = Math.min(extMin, limit);
+      extMax = Math.max(extMax, limit);
+    }
+    if (filled && minOpt === null) extMin = Math.min(0, extMin);
+    const eMin = minOpt ?? extMin;
+    const eMax = maxOpt ?? Math.max(extMax, eMin);
     const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4);
-    const lo = opts.min ?? ticks[0];
-    let hi = opts.max ?? ticks[ticks.length - 1];
+    const lo = minOpt ?? ticks[0];
+    let hi = maxOpt ?? ticks[ticks.length - 1];
     if (!(hi > lo)) hi = lo + 1;
     const yTicks = ticks.filter((t) => t >= lo - 1e-9 && t <= hi + 1e-9);
     const yLabels = yTicks.map((t) => formatValue(t, opts.unit, opts.decimals));
@@ -260,6 +288,7 @@ export function buildFrame(
     yPositions: yTicks.map(yOf),
     xTicks: timeTicks(range.start, range.end, Math.max(2, Math.floor(plot.w / 90))),
     thresholds,
+    alert: limit !== null && alert ? { op: alert.op, threshold: limit, y: yOf(limit), color: "--bad" } : null,
     baseline: yOf(Math.min(hi, Math.max(lo, 0))),
   };
 }
@@ -330,6 +359,9 @@ export function drawTimeSeries(
     ctx.globalAlpha = 1;
   }
 
+  // An alert's band: the firing side filled faintly, then its dashed line at the threshold.
+  if (frame.alert) drawAlertBand(ctx, frame, frame.alert, colorOf);
+
   // Thresholds: dashed, in their colour.
   const inside = frame.thresholds.filter((t) => t.y >= 0 && t.y <= plot.h);
   if (inside.length > 0) {
@@ -371,6 +403,28 @@ export function drawTimeSeries(
   ctx.restore();
 
   if (marks.length > 0) drawMarks(ctx, frame, colorOf, marks);
+}
+
+function drawAlertBand(ctx: CanvasLike, frame: TimeSeriesFrame, alert: FrameAlert, colorOf: (token: string) => string): void {
+  const { plot } = frame;
+  const y = Math.min(plot.h, Math.max(0, alert.y));
+  const color = colorOf(alert.color);
+  ctx.save();
+  ctx.globalAlpha = BAND_ALPHA;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  if (alert.op === "above") ctx.rect(plot.x, plot.y, plot.w, y);
+  else ctx.rect(plot.x, plot.y + y, plot.w, plot.h - y);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([5, 4]);
+  ctx.lineWidth = BAND_LINE;
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(plot.x, plot.y + y);
+  ctx.lineTo(plot.x + plot.w, plot.y + y);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawMarks(ctx: CanvasLike, frame: TimeSeriesFrame, colorOf: (token: string) => string, marks: readonly ChartMark[]): void {

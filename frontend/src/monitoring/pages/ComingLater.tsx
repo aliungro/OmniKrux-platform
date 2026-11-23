@@ -1,8 +1,5 @@
 import s from "../MonitoringApp.module.css";
 
-export const ALERTS_LATER =
-  "Alerts aren't here yet. They come in a later update of Monitoring. Until then, nothing here evaluates rules or sends notifications.";
-
 /** A page that arrives in a later update: its name and what to expect. */
 export function ComingLater({ name, text }: { name: string; text?: string }) {
   return (

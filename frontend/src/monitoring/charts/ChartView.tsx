@@ -5,7 +5,7 @@
 import type { ChartLogLine, ChartSeries, PanelData } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
 import BarChart from "./BarChart";
-import type { ChartMark, ChartRange } from "./drawTimeSeries";
+import type { AlertBand, ChartMark, ChartRange } from "./drawTimeSeries";
 import GaugeChart from "./GaugeChart";
 import LogsChart from "./LogsChart";
 import StatChart from "./StatChart";
@@ -35,15 +35,20 @@ export interface ChartViewProps {
   lineTone?: (line: ChartLogLine) => ChartMark["tone"];
   /** Logs only (Explore): the key that brings the keyboard to the list (`aria-keyshortcuts`). */
   listKeyshortcuts?: string;
+  /**
+   * Time series only: an alert rule's threshold band (the Alerts page, the rule form). Given, it
+   * wins over the panel's own alert; absent or null, the chart draws none.
+   */
+  alert?: AlertBand | null;
 }
 
-export type { ChartMark, ChartRange };
+export type { AlertBand, ChartMark, ChartRange };
 
 const NO_SERIES: ChartSeries[] = [];
 const NO_LOGS: ChartLogLine[] = [];
 
 export default function ChartView({
-  panel, data, range, animate, changeId, selection, onSelect, marks, step, lineTone, listKeyshortcuts,
+  panel, data, range, animate, changeId, selection, onSelect, marks, step, lineTone, listKeyshortcuts, alert,
 }: ChartViewProps) {
   // A panel that couldn't answer draws nothing, whatever its type: never the old answer.
   const answered = data.state !== "unreachable" && data.state !== "error" && data.state !== "noQuery";
@@ -52,7 +57,7 @@ export default function ChartView({
     case "timeseries":
       return (
         <TimeSeriesChart panel={panel} series={series} range={range} animate={animate} changeId={changeId} editId={data.editId}
-          selection={selection} onSelect={onSelect} marks={marks} step={step} />
+          selection={selection} onSelect={onSelect} marks={marks} step={step} alert={alert ?? null} />
       );
     case "stat":
       return <StatChart panel={panel} series={series} animate={animate} changeId={changeId} editId={data.editId} />;

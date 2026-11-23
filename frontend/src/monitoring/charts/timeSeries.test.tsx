@@ -55,6 +55,64 @@ describe("buildFrame and drawTimeSeries", () => {
     expect(calls.filter((c) => c.name === "setLineDash" && (c.args[0] as number[]).length > 0)).toHaveLength(1);
   });
 
+  it("the threshold band is drawn on the firing side", () => {
+    // A recorder that keeps the paint state at each call.
+    const record = () => {
+      const calls: { name: string; args: unknown[]; strokeStyle: unknown; fillStyle: unknown; globalAlpha: unknown; dash: number[] }[] = [];
+      const state: Record<string, unknown> = { lineWidth: 1, globalAlpha: 1, strokeStyle: "", fillStyle: "" };
+      let dash: number[] = [];
+      const saved: { dash: number[]; values: Record<string, unknown> }[] = [];
+      const ctx = new Proxy(state, {
+        get(target, prop: string) {
+          if (prop in target) return target[prop];
+          return (...args: unknown[]) => {
+            if (prop === "setLineDash") dash = args[0] as number[];
+            // save and restore keep the dash and paint state, as a canvas does.
+            if (prop === "save") saved.push({ dash, values: { ...target } });
+            if (prop === "restore") {
+              const back = saved.pop();
+              if (back) { dash = back.dash; Object.assign(target, back.values); }
+            }
+            calls.push({ name: prop, args, strokeStyle: target.strokeStyle, fillStyle: target.fillStyle, globalAlpha: target.globalAlpha, dash });
+          };
+        },
+        set(target, prop: string, value) { target[prop] = value; return true; },
+      });
+      return { ctx: ctx as unknown as CanvasLike, calls };
+    };
+    const lines = { ...options, thresholds: [], style: "lines" as const };
+    const data = [series("a", [1, 2, 3])];
+    for (const op of ["above", "below"] as const) {
+      const frame = buildFrame(data, lines, SIZE, RANGE, new Set(), { op, threshold: 2, queryRef: "A" });
+      const { ctx, calls } = record();
+      drawTimeSeries(ctx, frame, (token) => `color(${token})`);
+      const dashed = calls.filter((c) => c.name === "stroke" && c.dash.length > 0);
+      expect(dashed).toHaveLength(1);
+      expect(dashed[0].strokeStyle).toBe("color(--bad)");
+      const fills = calls.filter((c) => c.name === "fill");
+      expect(fills).toHaveLength(1);
+      expect(fills[0]).toMatchObject({ fillStyle: "color(--bad)", globalAlpha: 0.07 });
+      // The rect filled is the one just before the fill: above the line for "above", below it for "below".
+      const at = calls.indexOf(fills[0]);
+      const rect = calls.slice(0, at).reverse().find((c) => c.name === "rect")!.args as number[];
+      const lineY = frame.plot.y + frame.alert!.y;
+      if (op === "above") {
+        expect(rect[1]).toBe(frame.plot.y);
+        expect(rect[1] + rect[3]).toBeCloseTo(lineY);
+      } else {
+        expect(rect[1]).toBeCloseTo(lineY);
+        expect(rect[1] + rect[3]).toBeCloseTo(frame.plot.y + frame.plot.h);
+      }
+    }
+    // A threshold above every value widens the y range to hold it.
+    const plain = buildFrame(data, lines, SIZE, RANGE, new Set());
+    const high = buildFrame(data, lines, SIZE, RANGE, new Set(), { op: "above", threshold: 40, queryRef: "A" });
+    expect(plain.yTicks[plain.yTicks.length - 1]).toBeLessThan(40);
+    expect(high.yTicks[high.yTicks.length - 1]).toBeGreaterThanOrEqual(40);
+    expect(high.alert!.y).toBeGreaterThanOrEqual(0);
+    expect(plain.alert).toBeNull();
+  });
+
   it("has one y value per pixel column", () => {
     const frame = buildFrame(three, options, SIZE, RANGE, new Set());
     for (const s of frame.series) expect(s.ys.length).toBe(frame.columns);
