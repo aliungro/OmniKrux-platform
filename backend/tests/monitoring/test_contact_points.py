@@ -68,7 +68,7 @@ def rule(name: str, *contact_point_ids: str) -> RuleSpec:
 
 
 async def test_contact_point_secrets_are_write_only(monitoring_app, fake_webhook, caplog):
-    caplog.set_level(logging.DEBUG, logger="omnikrux")
+    caplog.set_level(logging.DEBUG)
     http, app = monitoring_app
     url = f"{fake_webhook.url}/T000/B000/XXXX-SECRET-1"
     out = (
@@ -152,7 +152,7 @@ async def test_send_a_test_of_an_unsaved_contact_point(monitoring_app, fake_webh
 async def test_delivery_errors_never_carry_secrets(
     monitoring_app, fake_webhook, fake_smtp_tls, fake_tls, caplog
 ):
-    caplog.set_level(logging.DEBUG, logger="omnikrux")
+    caplog.set_level(logging.DEBUG)
     http, app = monitoring_app
     services = app.state.monitoring
     # Trust the fake server's CA, so the login is reached (a password only goes encrypted).
@@ -600,3 +600,136 @@ async def test_export_refuses_tools_omnikrux_did_not_install(stores):
         await export_receivers(
             unreadable, alertmanager_source_id=manager.id, contact_point_ids=[saved.id]
         )
+
+
+# --- fix round 1: a secret never follows a contact point to a new address ----------------------
+
+
+def secret_again(name: str, field: str) -> dict:
+    return {
+        "detail": [
+            {
+                "type": "secret_needed",
+                "loc": ["body", "secrets", field],
+                "msg": f"{name} sends to a new address now. Enter its secret again.",
+            }
+        ]
+    }
+
+
+async def test_pagerduty_address_change_needs_the_routing_key(monitoring_app, fake_webhook):
+    http, app = monitoring_app
+    created = await add(
+        http,
+        {
+            "name": "Pager",
+            "type": "pagerduty",
+            "settings": {"events_url": f"{fake_webhook.url}/v2/enqueue"},
+            "secrets": {"routing_key": ROUTING_KEY},
+        },
+    )
+    path = f"{BASE}/{created['id']}"
+    moved = {"settings": {"events_url": "https://elsewhere.example.test/v2/enqueue"}}
+    refused = await http.patch(path, json=moved)
+    assert refused.status_code == 422 and refused.json() == secret_again("Pager", "routing_key")
+    stored = await app.state.monitoring.contact_points.get(created["id"])
+    assert stored.settings["events_url"] == f"{fake_webhook.url}/v2/enqueue"
+    # The same address again, or another setting, keeps the key.
+    same = await http.patch(path, json={"settings": {"events_url": stored.settings["events_url"]}})
+    assert same.status_code == 200
+    renamed = await http.patch(path, json={"name": "Pager 2"})
+    assert renamed.status_code == 200
+    other_key = "OtherKey0123456789abcdefghijklmn"
+    accepted = await http.patch(path, json={**moved, "secrets": {"routing_key": other_key}})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["settings"]["events_url"] == moved["settings"]["events_url"]
+    stored = await app.state.monitoring.contact_points.get(created["id"])
+    assert stored.secrets["routing_key"] == other_key
+
+
+async def test_email_server_change_needs_the_password(monitoring_app):
+    http, app = monitoring_app
+    created = await add(
+        http,
+        {
+            "name": "Mail",
+            "type": "email",
+            "settings": {
+                "host": "mail.example.test",
+                "username": "ops",
+                "from_address": "omnikrux@example.test",
+                "to": ["ops@example.test"],
+            },
+            "secrets": {"password": "pw-KEEP"},
+        },
+    )
+    path = f"{BASE}/{created['id']}"
+    for change in ({"host": "other.example.test"}, {"port": 2525}):
+        refused = await http.patch(path, json={"settings": change})
+        assert refused.status_code == 422, change
+        assert refused.json() == secret_again("Mail", "password")
+    # Other settings keep the password; a new server with the password given, or cleared, works.
+    to = await http.patch(path, json={"settings": {"to": ["oncall@example.test"]}})
+    assert to.status_code == 200 and to.json()["secrets_set"] == ["password"]
+    moved = await http.patch(
+        path, json={"settings": {"host": "other.example.test"}, "secrets": {"password": "pw-NEW"}}
+    )
+    assert moved.status_code == 200
+    assert (await app.state.monitoring.contact_points.get(created["id"])).secrets == {
+        "password": "pw-NEW"
+    }
+    cleared = await http.patch(
+        path,
+        json={
+            "settings": {"host": "third.example.test", "username": None},
+            "secrets": {"password": ""},
+        },
+    )
+    assert cleared.status_code == 200 and cleared.json()["secrets_set"] == []
+    # Without a stored password nothing follows: the server can change freely.
+    free = await http.patch(path, json={"settings": {"host": "fourth.example.test"}})
+    assert free.status_code == 200
+
+
+async def test_webhook_address_change_needs_the_bearer_token(monitoring_app, fake_webhook):
+    http, app = monitoring_app
+    created = await add(
+        http,
+        {
+            "name": "Hook",
+            "type": "webhook",
+            "secrets": {"url": f"{fake_webhook.url}/in", "bearer_token": "tok-KEEP"},
+        },
+    )
+    path = f"{BASE}/{created['id']}"
+    moved = {"url": "https://elsewhere.example.test/in"}
+    refused = await http.patch(path, json={"secrets": moved})
+    assert refused.status_code == 422 and refused.json() == secret_again("Hook", "bearer_token")
+    assert "tok-KEEP" not in refused.text
+    same = await http.patch(path, json={"secrets": {"url": f"{fake_webhook.url}/in"}})
+    assert same.status_code == 200 and same.json()["secrets_set"] == ["bearer_token", "url"]
+    path_only = await http.patch(path, json={"secrets": {"url": f"{fake_webhook.url}/other"}})
+    assert path_only.status_code == 422
+    accepted = await http.patch(path, json={"secrets": {**moved, "bearer_token": "tok-NEW"}})
+    assert accepted.status_code == 200
+    assert accepted.json()["summary"] == "https://elsewhere.example.test"
+    stored = await app.state.monitoring.contact_points.get(created["id"])
+    assert stored.secrets == {"url": moved["url"], "bearer_token": "tok-NEW"}
+    # Without a token the address is the whole secret: it changes freely, like Slack's and Teams'.
+    await http.patch(path, json={"secrets": {"bearer_token": ""}})
+    free = await http.patch(path, json={"secrets": {"url": f"{fake_webhook.url}/in"}})
+    assert free.status_code == 200
+
+
+async def test_slack_and_teams_addresses_change_freely(monitoring_app, fake_webhook):
+    http, _ = monitoring_app
+    for type in ("slack", "teams"):
+        created = await add(
+            http,
+            {"name": type, "type": type, "secrets": {"webhook_url": f"{fake_webhook.url}/a"}},
+        )
+        changed = await http.patch(
+            f"{BASE}/{created['id']}",
+            json={"secrets": {"webhook_url": "https://elsewhere.example.test/b"}},
+        )
+        assert changed.status_code == 200, type

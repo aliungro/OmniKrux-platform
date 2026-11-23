@@ -16,6 +16,8 @@ import math
 import smtplib
 import socket
 import ssl
+import time
+import unicodedata
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
@@ -64,6 +66,13 @@ TLS = "Couldn't open a secure connection to {name}: {reason}."
 SMTP_AUTH = "The mail server rejected the user name or password."
 SMTP_REFUSED = "The mail server refused the message: {code} {text}."
 SMTP_UNREACHABLE = "The mail server at {host} can't be reached. Check the host and port."
+SMTP_REFUSED_ALL = (
+    "The mail server refused every address to send to (SMTP {code}). Check the To addresses."
+)
+SMTP_REFUSED_SOME = (
+    "The mail server refused {count} of {total} addresses (SMTP {code}); the others got the "
+    "message. Check the To addresses."
+)
 SENT = "Sent. Check that the test message arrived."
 # Not in the plan's copy list; needed for failures none of the above describes.
 DROPPED = "Couldn't send to {name}: the connection broke before it answered. Check the address."
@@ -112,6 +121,13 @@ def scrub(text: str, secrets: Iterable[str]) -> str:
     """`text` with every secret value (and, for addresses, their path and query parts of at
     least 8 characters, also as they look percent-encoded, decoded or JSON-escaped) replaced
     with `•••`."""
+    for value in sorted(_scrub_values(secrets), key=len, reverse=True):
+        text = text.replace(value, MASK)
+    return text
+
+
+def _scrub_values(secrets: Iterable[str]) -> set[str]:
+    """Every text `scrub` replaces for these secrets."""
     values: set[str] = set()
     for secret in secrets:
         if not secret:
@@ -129,18 +145,23 @@ def scrub(text: str, secrets: Iterable[str]) -> str:
             ):
                 if len(variant) >= URL_PART_MIN or variant == secret:
                     values.add(variant)
-    for value in sorted(values, key=len, reverse=True):
-        text = text.replace(value, MASK)
-    return text
+    return values
 
 
 def _one_line(text: str) -> str:
     return " ".join("".join(c if c.isprintable() else " " for c in text).split())
 
 
-def _detail(text: str, secrets: Iterable[str]) -> str:
-    """A receiver's answer as shown: scrubbed first (secret values, then anything that looks like
-    an Authorization header), one line, then cut to 200 characters."""
+def _detail(text: str, secrets: Iterable[str], *, cut: bool = False) -> str:
+    """A receiver's answer as shown: control characters dropped (an echo can't split a secret
+    with them), scrubbed (secret values, then anything that looks like an Authorization header),
+    one line, then cut to 200 characters. `cut`: the answer was longer than what was read, so
+    its tail, which could hold the start of a secret, is dropped before scrubbing."""
+    secrets = list(secrets)
+    text = "".join(c for c in text if c in "\t\n\r" or unicodedata.category(c) != "Cc")
+    if cut:
+        longest = max((len(v) for v in _scrub_values(secrets)), default=0)
+        text = text[: max(len(text) - longest, 0)]
     return _one_line(scrub_text(scrub(text, secrets)))[:DETAIL_CHARS]
 
 
@@ -413,22 +434,62 @@ class _NoLogin(Exception):
     pass
 
 
+class _Bounded:
+    """An SMTP client whose every step shares one deadline: before each command and each reply
+    the socket's timeout is set to the time left, so the thread never outlives the attempt (a
+    late send would otherwise go out after the attempt was reported failed, and be repeated by
+    the retry)."""
+
+    deadline: float
+    sock: socket.socket | None
+
+    def _arm(self) -> None:
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError
+        if self.sock is not None:
+            self.sock.settimeout(left)
+
+    def send(self, s):  # type: ignore[no-untyped-def]
+        self._arm()
+        return super().send(s)  # type: ignore[misc]
+
+    def getreply(self):  # type: ignore[no-untyped-def]
+        self._arm()
+        return super().getreply()  # type: ignore[misc]
+
+
+class _BoundedSMTP(_Bounded, smtplib.SMTP):
+    def __init__(self, host: str, port: int, *, deadline: float) -> None:
+        self.deadline = deadline
+        # A fixed EHLO name: the machine's own name stays private (and its lookup can be slow).
+        super().__init__(host, port, local_hostname="localhost", timeout=SEND_SECONDS)
+
+
+class _BoundedSMTPSSL(_Bounded, smtplib.SMTP_SSL):
+    def __init__(self, host: str, port: int, *, deadline: float, context: ssl.SSLContext) -> None:
+        self.deadline = deadline
+        super().__init__(
+            host, port, local_hostname="localhost", timeout=SEND_SECONDS, context=context
+        )
+
+
 def _smtp_send(
     settings: Mapping[str, object],
     password: str | None,
     message: EmailMessage,
     context: ssl.SSLContext,
-) -> None:
-    """In a thread: connect, secure, log in when there is a user name, send, quit."""
+) -> dict[str, tuple[int, bytes]]:
+    """In a thread, within SEND_SECONDS in all: connect, secure, log in when there is a user
+    name, send, quit. Returns the recipients the server refused (when it took the others)."""
     host, port = str(settings["host"]), int(settings["port"])  # type: ignore[call-overload]
     security, username = settings.get("security"), settings.get("username")
-    # A fixed EHLO name: the machine's own name stays private (and its lookup can be slow).
+    deadline = time.monotonic() + SEND_SECONDS
+    client: smtplib.SMTP
     if security == "tls":
-        client: smtplib.SMTP = smtplib.SMTP_SSL(
-            host, port, local_hostname="localhost", timeout=SEND_SECONDS, context=context
-        )
+        client = _BoundedSMTPSSL(host, port, deadline=deadline, context=context)
     else:
-        client = smtplib.SMTP(host, port, local_hostname="localhost", timeout=SEND_SECONDS)
+        client = _BoundedSMTP(host, port, deadline=deadline)
     try:
         if security == "starttls":
             client.ehlo()
@@ -441,7 +502,8 @@ def _smtp_send(
                 client.login(str(username), password or "")
             except smtplib.SMTPNotSupportedError:
                 raise _NoLogin from None
-        client.send_message(message, str(settings["from_address"]), list(settings["to"]))  # type: ignore[call-overload]
+        to = [str(a) for a in settings["to"]]  # type: ignore[attr-defined]
+        return client.send_message(message, str(settings["from_address"]), to)
     finally:
         try:
             client.quit()
@@ -457,7 +519,9 @@ def _smtp_text(raw: bytes | str, secrets: Iterable[str]) -> str:
 def _smtp_failure(exc: BaseException, cp: ContactPoint) -> DeliveryFailed:
     """Map an `smtplib` error by its type to the copy; a server's own words only scrubbed."""
     name, host = cp.name, str(cp.settings.get("host") or "")
-    secrets = list(cp.secrets.values())
+    # The server's words can repeat the addresses, which may be personal: hidden too.
+    to = [str(a) for a in cp.settings.get("to") or []]  # type: ignore[attr-defined]
+    secrets = [*cp.secrets.values(), str(cp.settings.get("from_address") or ""), *to]
     if isinstance(exc, smtplib.SMTPAuthenticationError):
         return DeliveryFailed(SMTP_AUTH)
     if isinstance(exc, _NoStartTls):
@@ -465,8 +529,12 @@ def _smtp_failure(exc: BaseException, cp: ContactPoint) -> DeliveryFailed:
     if isinstance(exc, _NoLogin):
         return DeliveryFailed(NO_LOGIN.format(host=host))
     if isinstance(exc, smtplib.SMTPRecipientsRefused):
-        code, text = next(iter(exc.recipients.values()), (0, b""))
-        return DeliveryFailed(SMTP_REFUSED.format(code=code, text=_smtp_text(text, secrets)))
+        code, _ = next(iter(exc.recipients.values()), (0, b""))
+        return DeliveryFailed(SMTP_REFUSED_ALL.format(code=code))
+    if isinstance(exc, smtplib.SMTPServerDisconnected) and isinstance(
+        exc.__context__, TimeoutError
+    ):
+        return DeliveryFailed(TIMEOUT.format(name=name, seconds=_seconds()))
     if isinstance(exc, smtplib.SMTPConnectError | smtplib.SMTPServerDisconnected):
         return DeliveryFailed(SMTP_UNREACHABLE.format(host=host))
     if isinstance(exc, smtplib.SMTPResponseException):
@@ -489,11 +557,18 @@ class EmailSender:
         message = email_message(cp, notice)
         context = self._senders.ssl_context()
         password = cp.secrets.get("password")
+        # Not abandoned on a timer: the thread keeps its own deadline (`_Bounded`), so no
+        # attempt is still running when this one is reported and the next one starts.
         try:
-            async with asyncio.timeout(SEND_SECONDS):
-                await asyncio.to_thread(_smtp_send, cp.settings, password, message, context)
+            refused = await asyncio.to_thread(_smtp_send, cp.settings, password, message, context)
         except (smtplib.SMTPException, OSError, TimeoutError, _NoStartTls, _NoLogin) as exc:
             raise _smtp_failure(exc, cp) from None
+        if refused:
+            code, _ = next(iter(refused.values()))
+            total = len(cp.settings.get("to") or [])  # type: ignore[arg-type]
+            raise DeliveryFailed(
+                SMTP_REFUSED_SOME.format(count=len(refused), total=total, code=code), retry=False
+            )
 
 
 # -- the set -----------------------------------------------------------------------------------
@@ -542,7 +617,7 @@ class SenderSet:
         name = cp.name
         sent = {"Content-Type": "application/json", **(headers or {})}
         secrets = [*cp.secrets.values(), *sent.values()]
-        status, raw = 0, b""
+        status, raw, cut = 0, b"", False
         try:
             async with (
                 asyncio.timeout(SEND_SECONDS),
@@ -563,14 +638,15 @@ class SenderSet:
                 body = bytearray()
                 async for chunk in response.content.iter_any():
                     body += chunk
-                    if len(body) >= READ_BYTES:
+                    if len(body) > READ_BYTES:
+                        cut = True
                         break
                 raw = bytes(body[:READ_BYTES])
         except DeliveryFailed:
             raise
         except (aiohttp.ClientError, HttpProcessingError, OSError, TimeoutError, ValueError) as exc:
             raise _http_failure(exc, name) from None
-        detail = _detail(raw.decode("utf-8", "replace"), secrets)
+        detail = _detail(raw.decode("utf-8", "replace"), secrets, cut=cut)
         if detail:
             raise DeliveryFailed(HTTP_STATUS_DETAIL.format(name=name, status=status, detail=detail))
         raise DeliveryFailed(HTTP_STATUS.format(name=name, status=status))
@@ -579,7 +655,7 @@ class SenderSet:
         """One attempt through the contact point's sender. DeliveryFailed with the copy; an
         error no sender expected still reads as copy, never as its own text."""
         if cp.secrets_unreadable or not _has_required(cp):
-            raise DeliveryFailed(SECRET_UNREADABLE.format(name=cp.name))
+            raise DeliveryFailed(SECRET_UNREADABLE.format(name=cp.name), retry=False)
         try:
             await self.senders[cp.type].send(cp, notice)
         except DeliveryFailed:
@@ -606,8 +682,10 @@ async def deliver(
     sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
 ) -> None:
     """Send with retries: an attempt after each of RETRY_DELAYS (0, 5 and 30 s), each bounded
-    by SEND_SECONDS. DeliveryFailed with the last attempt's copy when none arrived (at once when
-    the secrets can't be read: no attempt can work). Logs only id, type and copy."""
+    by SEND_SECONDS. DeliveryFailed with the last attempt's copy when none arrived; at once for a
+    failure that says not to retry (unreadable secrets: no attempt can work; a message some
+    recipients already got: another attempt would send it to them again). Logs only id, type and
+    copy."""
     failure: DeliveryFailed | None = None
     for delay in RETRY_DELAYS:
         if delay:
@@ -617,7 +695,7 @@ async def deliver(
             return
         except DeliveryFailed as exc:
             failure = exc
-            if cp.secrets_unreadable:
+            if not exc.retry:
                 break
     assert failure is not None
     log.warning("Contact point %s (%s) wasn't reached: %s", cp.id, cp.type, failure.message)

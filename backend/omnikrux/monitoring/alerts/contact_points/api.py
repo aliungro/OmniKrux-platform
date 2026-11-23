@@ -24,6 +24,7 @@ from omnikrux.monitoring.alerts.contact_points.types import (
     ContactPointInvalid,
     ContactPointType,
     Resolved,
+    SecretNeeded,
     UnknownContactPoint,
     resolve,
     summary_of,
@@ -132,11 +133,22 @@ def _plain(secrets: dict[str, SecretStr | None] | None) -> dict[str, str | None]
     }
 
 
+def _invalid(exc: ContactPointInvalid) -> HTTPException:
+    """422 with the copy; a secret that must be entered again is named as the field (in the
+    shape of a request-validation answer, so the form can mark that field)."""
+    if isinstance(exc, SecretNeeded):
+        loc = ["body", "secrets", exc.field]
+        return HTTPException(
+            status_code=422, detail=[{"type": "secret_needed", "loc": loc, "msg": exc.message}]
+        )
+    return refuse(exc.message)
+
+
 def _checked(type: ContactPointType, **values: Any) -> Resolved:
     try:
         return resolve(type, **values)
     except ContactPointInvalid as exc:
-        raise refuse(exc.message) from None
+        raise _invalid(exc) from None
 
 
 def _refs(refs: list[RuleRef] | tuple[RuleRef, ...]) -> list[RuleRefOut]:
@@ -205,7 +217,7 @@ async def add_contact_point(body: ContactPointIn, request: Request) -> ContactPo
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ContactPointInvalid as exc:
         await finish_change(request, record, False, exc.message)
-        raise refuse(exc.message) from None
+        raise _invalid(exc) from None
     except Exception:
         await finish_change(request, record, False, NOT_SAVED)
         raise
@@ -278,7 +290,7 @@ async def change_contact_point(
         raise HTTPException(status_code=404, detail=GONE) from None
     except ContactPointInvalid as exc:
         await finish_change(request, record, False, exc.message)
-        raise refuse(exc.message) from None
+        raise _invalid(exc) from None
     except Exception:
         await finish_change(request, record, False, NOT_SAVED)
         raise

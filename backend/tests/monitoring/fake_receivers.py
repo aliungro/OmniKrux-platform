@@ -11,7 +11,9 @@ then offered only once the connection is encrypted), AUTH PLAIN and LOGIN agains
 `password`, MAIL, RCPT, DATA, RSET, NOOP and QUIT. Accepted mail lands in `messages`.
 `reject_auth` refuses every login (535); `echo_password_on_auth_failure` makes that 535 line repeat
 the password it was given, for leak tests; `reject_rcpt` answers every RCPT with
-`550 5.1.1 <addr>: {reject_rcpt}`; `require_auth` refuses MAIL until a login succeeded.
+`550 5.1.1 <addr>: {reject_rcpt}`; `refuse_addresses` refuses only those recipients;
+`stall_rcpt_seconds` waits that long before answering each RCPT (a slow server);
+`require_auth` refuses MAIL until a login succeeded.
 """
 
 import asyncio
@@ -82,6 +84,8 @@ class FakeSmtp:
         self.reject_rcpt: str | None = None
         self.echo_password_on_auth_failure = False
         self.require_auth = False
+        self.refuse_addresses: set[str] = set()
+        self.stall_rcpt_seconds = 0.0
         self._tls = tls
         self._context: ssl.SSLContext | None = None
         self._writers: set[asyncio.StreamWriter] = set()
@@ -135,8 +139,12 @@ class FakeSmtp:
                     await say("250 2.1.0 OK")
                 elif verb == "RCPT":
                     address = _address(rest)
+                    if self.stall_rcpt_seconds:
+                        await asyncio.sleep(self.stall_rcpt_seconds)
                     if sender is None:
                         await say("503 5.5.1 need MAIL first")
+                    elif address in self.refuse_addresses:
+                        await say(f"550 5.1.1 <{address}>: no such user")
                     elif self.reject_rcpt is not None:
                         await say(f"550 5.1.1 <{address}>: {self.reject_rcpt}")
                     else:

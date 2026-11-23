@@ -1,14 +1,17 @@
 """The senders against the fake webhook receiver and the fake SMTP server: payload shapes, TLS,
 retries, and the copy of every failure (never carrying a secret)."""
 
+import asyncio
 import email
 import email.policy
 import logging
+import smtplib
 import socket
 import ssl
 from datetime import UTC, datetime
 
 import pytest
+from aiohttp import web
 
 from omnikrux.monitoring.alerts.contact_points import senders as senders_module
 from omnikrux.monitoring.alerts.contact_points.senders import (
@@ -25,6 +28,7 @@ from omnikrux.monitoring.alerts.contact_points.types import (
     NoticeInstance,
 )
 from tests.monitoring.fake_receivers import serve_fake_webhook
+from tests.monitoring.fakes import _serve
 
 ROUTING_KEY = "R0utingKeySECRET8abcdefghijklmno"
 STARTS = datetime(2026, 11, 23, 9, 30, tzinfo=UTC)
@@ -279,8 +283,9 @@ async def test_email_failures_are_copy(fake_smtp, fake_smtp_tls, fake_tls, sende
         )
         with pytest.raises(DeliveryFailed) as failed:
             await senders.send(plain_with_secret, notice_for_test("Ops"))
-        assert failed.value.message.startswith("The mail server refused the message: 550 ")
-        assert "pw-SECRET-5" not in failed.value.message and "•••" in failed.value.message
+        assert failed.value.message == (
+            "The mail server refused every address to send to (SMTP 550). Check the To addresses."
+        )
 
         # A plain server asked for STARTTLS.
         fake_smtp.reject_rcpt = None
@@ -372,7 +377,7 @@ async def test_unreadable_or_missing_secrets_never_send(fake_webhook, senders):
 
 
 async def test_failed_delivery_is_retried_and_recorded(fake_webhook, senders, stores, caplog):
-    caplog.set_level(logging.DEBUG, logger="omnikrux")
+    caplog.set_level(logging.DEBUG)
     assert RETRY_DELAYS == (0, 5, 30)
     url = f"{fake_webhook.url}/hook/SECRET-PATH-9"
     saved = await stores.contact_points.create("Hook", "webhook", {}, {"url": url})
@@ -427,3 +432,96 @@ def test_contact_point_repr_leaves_secrets_out():
     point = cp("webhook", secrets={"url": "http://x.test/SECRET-R", "bearer_token": "tok-R"})
     assert "SECRET-R" not in repr(point) and "tok-R" not in repr(point)
     assert "SECRET" not in repr(DeliveryFailed("Hook answered HTTP 500."))
+
+
+# --- fix round 1 -------------------------------------------------------------------------------
+
+
+async def test_a_slow_mail_server_never_gets_the_message_twice(fake_smtp, senders, monkeypatch):
+    """The attempt's deadline holds inside the SMTP thread: once an attempt is reported as timed
+    out it has stopped, so a retry can't add a second copy of the message."""
+    monkeypatch.setattr(senders_module, "SEND_SECONDS", 0.5)
+    # Every step answers within the limit; the three RCPTs together don't.
+    fake_smtp.stall_rcpt_seconds = 0.3
+    settings = {
+        **mail_settings(fake_smtp, "none", username=None),
+        "to": ["a@example.test", "b@example.test", "c@example.test"],
+    }
+    mail = cp("email", settings=settings)
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(DeliveryFailed) as failed:
+        await deliver(senders, mail, notice_for_test("Ops"), sleep=no_sleep)
+    assert failed.value.message == "Ops didn't answer within 0.5 seconds."
+    assert asyncio.get_running_loop().time() - started < 3 * 0.5 + 1.5
+    await asyncio.sleep(2)  # long enough for an abandoned attempt to have finished sending
+    assert fake_smtp.messages == []
+
+
+async def test_some_refused_recipients_are_not_sent(fake_smtp, senders):
+    fake_smtp.refuse_addresses = {"gone@example.test"}
+    settings = {
+        **mail_settings(fake_smtp, "none", username=None),
+        "to": ["ops@example.test", "gone@example.test", "oncall@example.test"],
+    }
+    mail = cp("email", settings=settings)
+    with pytest.raises(DeliveryFailed) as failed:
+        await deliver(senders, mail, notice_for_test("Ops"), sleep=no_sleep)
+    assert failed.value.message == (
+        "The mail server refused 1 of 3 addresses (SMTP 550); the others got the message. "
+        "Check the To addresses."
+    )
+    assert failed.value.retry is False
+    assert "example.test" not in failed.value.message
+    # Delivered once to the others; not retried (that would send it to them again).
+    [received] = fake_smtp.messages
+    assert received.recipients == ["ops@example.test", "oncall@example.test"]
+
+
+def test_mail_server_words_are_scrubbed_of_secrets_and_addresses():
+    mail = cp(
+        "email",
+        settings={
+            "host": "mail.example.test",
+            "from_address": "a@example.test",
+            "to": ["b@x.test"],
+        },
+        secrets={"password": "pw-SECRET-5"},
+    )
+    exc = smtplib.SMTPDataError(554, b"rejected for b@x.test from a@example.test (pw-SECRET-5)")
+    message = senders_module._smtp_failure(exc, mail).message
+    assert message.startswith("The mail server refused the message: 554 rejected for ")
+    for hidden in ("b@x.test", "a@example.test", "pw-SECRET-5"):
+        assert hidden not in message
+
+
+class _Answer:
+    """A receiver that answers every request with `status` and `body`."""
+
+    def __init__(self, status: int, body: bytes) -> None:
+        self.url = ""
+        self.status, self.body = status, body
+
+    async def handle(self, request: web.Request) -> web.Response:
+        await request.read()
+        return web.Response(status=self.status, body=self.body)
+
+
+async def test_no_part_of_a_secret_survives_the_read_limit(senders):
+    secret = "SECRETPADDEDPATH0123456789"
+    # Whitespace, which the one-line detail collapses, puts the secret across the 64 KB cut.
+    padded = b" " * (senders_module.READ_BYTES - 6) + secret.encode() + b" tail"
+    async with _serve(_Answer(400, padded), None) as server:
+        hook = cp("webhook", name="Hook", secrets={"url": f"{server.url}/in/{secret}"})
+        with pytest.raises(DeliveryFailed) as failed:
+            await senders.send(hook, notice_for_test("Hook"))
+    assert "SECRET" not in failed.value.message
+    assert failed.value.message == "Hook answered HTTP 400."
+
+    # A control character inside an echoed secret doesn't defeat the scrub.
+    split = f"seen /in/{secret[:6]}\x00{secret[6:]} here".encode()
+    async with _serve(_Answer(400, split), None) as server:
+        hook = cp("webhook", name="Hook", secrets={"url": f"{server.url}/in/{secret}"})
+        with pytest.raises(DeliveryFailed) as failed:
+            await senders.send(hook, notice_for_test("Hook"))
+    assert "SECRET" not in failed.value.message and "PADDED" not in failed.value.message
+    assert failed.value.message.startswith("Hook answered HTTP 400: seen ")

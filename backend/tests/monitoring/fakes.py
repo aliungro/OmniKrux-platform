@@ -531,7 +531,9 @@ def _server_ssl(tls: TlsMaterial, *, require_client_cert: bool):
 async def _serve(server, tls: TlsMaterial | None, *, mtls: bool = False):
     app = web.Application()
     app.router.add_route("*", "/{tail:.*}", server.handle)
-    runner = web.AppRunner(app, shutdown_timeout=1)
+    # No access log: it would record the paths a test sends to (the secrets of leak tests),
+    # and those are the receiving tool's logs, not OmniKrux's.
+    runner = web.AppRunner(app, shutdown_timeout=1, access_log=None)
     await runner.setup()
     try:
         with ExitStack() as stack:

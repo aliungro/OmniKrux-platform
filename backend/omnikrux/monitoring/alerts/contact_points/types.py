@@ -59,6 +59,13 @@ REQUIRED_SECRET: dict[str, str] = {
     "webhook": "url",
 }
 URL_SECRETS = frozenset({"webhook_url", "url"})
+# The secret sent to an address that is a setting or another secret: it is never kept when
+# that address changes (Slack and Teams hold their whole address as the secret).
+DEPENDENT_SECRET: dict[str, str] = {
+    "pagerduty": "routing_key",
+    "email": "password",
+    "webhook": "bearer_token",
+}
 
 # -- copy --------------------------------------------------------------------------------------
 
@@ -75,6 +82,7 @@ ADDRESS_RULE = "Use addresses like ops@example.test."
 PORT_RULE = "Use a port from 1 to 65535."
 TYPE_FIXED = "A contact point's type can't change. Add a new one instead."
 SECRET_UNREADABLE = "The saved secret of {name} can't be read. Enter it again."
+SECRET_AGAIN = "{name} sends to a new address now. Enter its secret again."
 UNKNOWN_FIELD = "Remove the unrecognized field and try again."
 # Not in the plan's copy list; needed for values none of the above describes.
 URL_CREDENTIALS = "Use an address without a user name or password in it."
@@ -108,6 +116,15 @@ class ContactPointInvalid(ValueError):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class SecretNeeded(ContactPointInvalid):
+    """A change moves the contact point to a new address while keeping a secret that would go
+    there: the secret has to be entered again. `field` is the secret's key."""
+
+    def __init__(self, name: str, field: str) -> None:
+        super().__init__(SECRET_AGAIN.format(name=name))
+        self.field = field
 
 
 class UnknownContactPoint(KeyError):
@@ -172,11 +189,13 @@ class Notice:
 
 class DeliveryFailed(Exception):
     """A sender couldn't deliver. `message` is the copy: it names the contact point and never
-    carries an address, a path, a token or a password."""
+    carries an address, a path, a token or a password. `retry` False: another attempt can't
+    help, or would send a message some recipients already got."""
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, retry: bool = True) -> None:
         super().__init__(message)
         self.message = message
+        self.retry = retry
 
     def __repr__(self) -> str:
         return f"DeliveryFailed({self.message!r})"
@@ -318,7 +337,7 @@ def _checked_secret(type: ContactPointType, key: str, value: str) -> str:
             raise ContactPointInvalid(TOKEN_RULE)
         return value
     if key == "password":
-        if len(value) > MAX_PASSWORD or any(c in "\r\n\0" for c in value):
+        if len(value) > MAX_PASSWORD or any(_has_control(c) and c != "\t" for c in value):
             raise ContactPointInvalid(PASSWORD_RULE)
         return value
     raise ContactPointInvalid(UNKNOWN_FIELD)  # pragma: no cover - keys are checked first
@@ -397,7 +416,40 @@ def resolve(
         elif stored_settings and stored_settings.get("url_host"):
             checked["url_host"] = stored_settings["url_host"]
     check_together(type, checked, merged)
+    if stored_settings is not None and stored:
+        _secret_follows(type, clean, base, checked, stored, secrets)
     return Resolved(name=clean, settings=checked, secrets=merged)
+
+
+def _destination(type: ContactPointType, settings: Mapping[str, object], secrets: Mapping) -> tuple:
+    """Where the contact point's dependent secret is sent."""
+    if type == "pagerduty":
+        return (settings.get("events_url"),)
+    if type == "email":
+        return (settings.get("host"), settings.get("port"))
+    if type == "webhook":
+        return (secrets.get("url"),)
+    return ()
+
+
+def _secret_follows(
+    type: ContactPointType,
+    name: str,
+    stored_settings: Mapping[str, object],
+    settings: Mapping[str, object],
+    stored: Mapping[str, str],
+    given: Mapping[str, str | None],
+) -> None:
+    """A stored secret never follows a contact point to a new address: when the address it is
+    sent to changes, the change must carry that secret too (a value, or `""` to clear it).
+    SecretNeeded otherwise."""
+    key = DEPENDENT_SECRET.get(type)
+    if key is None or not stored.get(key) or given.get(key) is not None:
+        return
+    new_secrets = {**stored, **{k: v for k, v in given.items() if v is not None}}
+    before = _destination(type, stored_settings, stored)
+    if before != _destination(type, settings, new_secrets):
+        raise SecretNeeded(name, key)
 
 
 def summary_of(cp: ContactPoint) -> str:
