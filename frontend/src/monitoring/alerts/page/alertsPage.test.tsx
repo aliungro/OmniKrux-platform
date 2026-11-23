@@ -533,6 +533,19 @@ describe("the Alerts page", () => {
     expect(screen.getByRole("table", { name: "Per project" })).toBeTruthy();
   });
 
+  it("a new rule reads Not checked yet until its first check, never OK", async () => {
+    const fresh = rule("r13", "Fresh", dev, {
+      state: "waiting",
+      targets: [target("t13", dev, { state: "waiting", last_eval_at: null, message: "Not checked yet: the first check runs within 1 min." })],
+    });
+    open({ rules: [fresh], overview: overview([]) });
+    await waitFor(() => expect(details().textContent).toBe("Fresh"));
+    expect(options().map((o) => o.getAttribute("aria-label"))).toEqual(["Fresh, not checked yet"]);
+    const facts = document.querySelector("dl")!.textContent!;
+    expect(facts).toContain("StateNot checked yet: the first check runs within 1 min.");
+    expect(facts).not.toMatch(/OK/);
+  });
+
   it("From panel opens the dashboard with the panel", async () => {
     const user = userEvent.setup();
     const fromPanel = rule("r9", "SlowCheckout", dev, {

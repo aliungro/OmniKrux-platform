@@ -15,9 +15,21 @@ export const STATE_LABEL: Record<TargetState, string> = {
   unreachable: "Can't check",
   error: "Query error",
   paused: "Paused",
-  waiting: "Loading",
+  // Never checked yet (OmniKrux's first check is due, or a tool hasn't loaded the rule): no state
+  // has been read, so none is shown as current.
+  waiting: "Not checked yet",
   not_applied: "Not applied",
 };
+
+/** A badge whose state is still being read from the server (nothing is known yet). */
+export const STATE_READING = "Loading";
+
+/** A state with what it says: `{label} · {message}`, or the message alone when it already
+ * starts with the label ("Not checked yet: the first check runs within 1 min."). */
+export function stateWithMessage(label: string, message: string | null | undefined): string {
+  if (!message) return label;
+  return message.startsWith(label) ? message : `${label} · ${message}`;
+}
 
 export type Tone = "ok" | "warn" | "bad" | "muted";
 

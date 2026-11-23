@@ -6,7 +6,7 @@
 // the corner (the worst of its targets); in edit mode a changed alert says it isn't saved yet.
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { usePanelStates } from "../../alerts/api";
-import { notRefreshedWords, STATE_LABEL, STATE_UNKNOWN, stateTone } from "../../alerts/format";
+import { notRefreshedWords, STATE_LABEL, STATE_READING, STATE_UNKNOWN, stateTone } from "../../alerts/format";
 import type { ResolvedVars } from "../interpolate";
 import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun } from "../runPanel";
 import { sameJson } from "../sameJson";
@@ -62,7 +62,7 @@ function AlertBadge({ dashboardId, panelId, alert, changed, openRule }: {
   // Never shown as OK while it isn't known: waiting while it is read; unknown when the last read
   // failed, even with an earlier answer kept (its state and time are said, never shown as current).
   if (!state || states.isError) {
-    const label = states.isError ? STATE_UNKNOWN : STATE_LABEL.waiting;
+    const label = states.isError ? STATE_UNKNOWN : STATE_READING;
     const stale = state && states.isError ? notRefreshedWords(STATE_LABEL[state.state], states.dataUpdatedAt) : null;
     return (
       <span className={s.badge} data-tone="muted" role="img" title={stale ?? undefined}

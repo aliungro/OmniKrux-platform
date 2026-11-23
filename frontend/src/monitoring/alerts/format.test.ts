@@ -48,7 +48,7 @@ describe("alert words", () => {
   it("states have words and tones", () => {
     expect(STATE_LABEL).toEqual({
       ok: "OK", pending: "Pending", firing: "Firing", no_data: "No data", unreachable: "Can't check", error: "Query error",
-      paused: "Paused", waiting: "Loading", not_applied: "Not applied",
+      paused: "Paused", waiting: "Not checked yet", not_applied: "Not applied",
     });
     expect(stateTone("firing")).toBe("bad");
     expect(stateTone("ok")).toBe("ok");

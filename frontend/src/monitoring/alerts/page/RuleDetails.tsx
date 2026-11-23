@@ -16,7 +16,7 @@ import {
   type AlertChangeOut, type AttachOut, type AlertRequestError, type RuleDeleteReviewOut, type RuleOut, type Severity, type TargetOut, type TargetState,
   type ToolKind,
 } from "../api";
-import { durationWords, STATE_LABEL, stateTone, whereLabel } from "../format";
+import { durationWords, STATE_LABEL, stateTone, stateWithMessage, whereLabel } from "../format";
 import { parseDuration } from "../limits";
 import { lokiFailedWords, TOOL_FAILED, useToolReviews } from "../reviews/useToolReviews";
 import { AttachDialog, attachedWords } from "../rules/AttachDialog";
@@ -73,6 +73,9 @@ function stateWords(rule: RuleOut, now: number): string {
   const holder = active.find((t) => t.state === state);
   const since = state === "firing" && rule.firing_since ? rule.firing_since : (holder?.state_since ?? null);
   let text = STATE_LABEL[state];
+  // "Not checked yet: the first check runs within 1 min." says it all: no "for", no label twice.
+  const message = holder?.message ?? null;
+  if (state === "waiting" && message?.startsWith(text)) return message;
   if (since) text += ` for ${durationWords(secondsSince(since, now))}`;
   if (state === "firing") {
     const instance = active.flatMap((t) => t.instances).find((i) => i.state === "firing");
@@ -81,14 +84,14 @@ function stateWords(rule: RuleOut, now: number): string {
     const muted = silencedWords(active.flatMap((t) => t.instances));
     if (muted) text += ` · ${muted}`;
   }
-  if ((state === "unreachable" || state === "waiting" || state === "error") && holder?.message) text += ` · ${holder.message}`;
+  if ((state === "unreachable" || state === "waiting" || state === "error") && message) text += ` · ${message}`;
   return text;
 }
 
 /** One place's state: its label, why it can't be checked or is waiting, and what is silenced. */
 function targetStateWords(t: TargetOut): string {
   let text = STATE_LABEL[t.state];
-  if (t.message && (t.state === "unreachable" || t.state === "waiting" || t.state === "error")) text += ` · ${t.message}`;
+  if (t.state === "unreachable" || t.state === "waiting" || t.state === "error") text = stateWithMessage(text, t.message);
   if (t.state === "firing") {
     const muted = silencedWords(t.instances);
     if (muted) text += ` · ${muted}`;

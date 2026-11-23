@@ -61,7 +61,7 @@ describe("listRows", () => {
     const rules = states.map((st, i) => rule(`r${i}`, `Rule ${i}`, dev, st));
     const rows = listRows(rules, overviewOf([]), NOW);
     expect(rows[0]).toMatchObject({ kind: "heading", label: "kind-omnikrux-dev" });
-    expect(rows.slice(1).map((r) => r.right)).toEqual(["ok", "pending", "can't check", "not applied", "paused", "no data", "error", "loading"]);
+    expect(rows.slice(1).map((r) => r.right)).toEqual(["ok", "pending", "can't check", "not applied", "paused", "no data", "error", "not checked yet"]);
     // A query error isn't an alert firing: warn, not rose.
     expect(rows.find((r) => r.state === "error")?.tone).toBe("warn");
   });

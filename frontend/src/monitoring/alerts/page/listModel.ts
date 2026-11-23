@@ -32,7 +32,7 @@ export const LIST_STATE: Record<TargetState, string> = {
   unreachable: "can't check",
   error: "error",
   paused: "paused",
-  waiting: "loading",
+  waiting: "not checked yet",
   not_applied: "not applied",
 };
 

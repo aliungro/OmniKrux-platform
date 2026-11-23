@@ -3,6 +3,7 @@ deleted source), a project or group delete takes its alert rules with it (one au
 each, Loki ruler rules removed first), and a rule still applied in a cluster blocks the delete
 until it is removed there."""
 
+from omnikrux.monitoring.alerts.api import NOT_CHECKED_OFF
 from omnikrux.monitoring.alerts.engine import no_source_copy
 from omnikrux.monitoring.alerts.store import ToolObject
 from omnikrux.monitoring.alerts.sync import AlertChange
@@ -338,7 +339,7 @@ async def test_unlinked_source_turns_targets_into_errors(monitoring_app, linked_
     http, _ = monitoring_app
     pid, sid = linked_project.project_id, linked_project.source_id
     rule = (await add_rule(http, rule_body(pid)))["rule"]
-    assert rule["targets"][0]["state"] == "ok"
+    assert rule["targets"][0]["state"] == "waiting"  # not checked yet
 
     unlinked = await http.delete(f"{API}/projects/{pid}/sources/{sid}")
     assert unlinked.status_code == 204
@@ -350,7 +351,7 @@ async def test_unlinked_source_turns_targets_into_errors(monitoring_app, linked_
     linked = await http.put(f"{API}/projects/{pid}/sources/{sid}", json={"filter": 'cluster="z"'})
     assert linked.status_code == 200, linked.text
     [target] = (await http.get(f"{RULES}/{rule['id']}")).json()["targets"]
-    assert target["state"] == "ok" and target["message"] is None
+    assert target["state"] == "waiting" and target["message"] == NOT_CHECKED_OFF
     assert target["rule_text"] == '(rate(x{cluster="z"}[5m])\n) > 0.3'
 
 

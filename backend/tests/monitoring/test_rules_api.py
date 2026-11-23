@@ -4,6 +4,7 @@ filter, conflicts in words, every change audited first, and the overview."""
 from datetime import UTC, datetime, timedelta
 
 from omnikrux.audit.store import AuditUnavailable
+from omnikrux.monitoring.alerts.api import NOT_CHECKED_OFF
 from omnikrux.monitoring.alerts.engine import no_source_copy
 from omnikrux.monitoring.alerts.store import InstanceRecord, RuleSpec, ToolObject
 from omnikrux.monitoring.alerts.types import Condition
@@ -85,7 +86,8 @@ async def test_create_a_project_rule_and_read_it_back(monitoring_app, linked_pro
         "every": "1m",
     }
     assert rule["contact_points"] == [{"id": cp_id, "name": "Ops hook", "type": "webhook"}]
-    assert rule["state"] == "ok" and rule["removing"] is False and rule["origin"] == "page"
+    # Not checked yet (never "OK" before a first check).
+    assert rule["state"] == "waiting" and rule["removing"] is False and rule["origin"] == "page"
     [target] = rule["targets"]
     assert target["project_id"] == pid and target["project_name"] == "Shop"
     assert target["engine"] == "omnikrux" and target["tool"] is None
@@ -93,7 +95,8 @@ async def test_create_a_project_rule_and_read_it_back(monitoring_app, linked_pro
     assert target["eval_expr"] == "rate(x[5m])"
     # The condition is wrapped first, then the project's filter goes into every selector.
     assert target["rule_text"] == '(rate(x{cluster="a"}[5m])\n) > 0.3'
-    assert target["state"] == "ok" and target["leaving"] is False
+    assert target["state"] == "waiting" and target["leaving"] is False
+    assert target["message"] == NOT_CHECKED_OFF  # this app's checks are off
 
     read = await http.get(f"{RULES}/{rule['id']}")
     assert read.status_code == 200 and read.json() == rule
@@ -162,6 +165,33 @@ async def test_rule_validation_copy(monitoring_app, linked_project):
     assert [r for r in await monitoring_records(http) if r["action"] == "alert_rule_add"] == []
 
 
+async def test_a_rule_is_not_checked_yet_until_its_first_check(monitoring_app, linked_project):
+    """A new OmniKrux target reads "waiting" with when its first check runs, never "ok"; its
+    first check's answer is what it shows after that."""
+    http, app = monitoring_app
+    services = app.state.monitoring
+    services.engine.enabled = True  # the words with checks on (nothing runs: no loop started)
+    rule = (await add_rule(http, rule_body(linked_project.project_id)))["rule"]
+    [target] = rule["targets"]
+    assert (rule["state"], target["state"]) == ("waiting", "waiting")
+    assert target["message"] == "Not checked yet: the first check runs within 1 min."
+    overview = (await http.get(f"{ALERTS}/overview")).json()
+    assert overview["counts"]["firing"] == 0 and overview["counts"]["cant_check"] == 0
+
+    await services.alerts.set_eval(
+        target["id"], state="ok", message=None, at=datetime.now(UTC), next_eval_at=None, failures=0
+    )
+    [target] = (await http.get(f"{RULES}/{rule['id']}")).json()["targets"]
+    assert (target["state"], target["message"]) == ("ok", None)
+
+    # A paused rule says paused, not "not checked yet".
+    paused = (await add_rule(http, rule_body(linked_project.project_id, name="Other")))["rule"]
+    r = await http.post(f"{RULES}/{paused['id']}/pause")
+    assert r.status_code == 200, r.text
+    [target] = r.json()["targets"]
+    assert (target["state"], target["message"]) == ("paused", None)
+
+
 async def test_group_rule_fans_out_per_project(monitoring_app, linked_project):
     http, app = monitoring_app
     services = app.state.monitoring
@@ -173,7 +203,7 @@ async def test_group_rule_fans_out_per_project(monitoring_app, linked_project):
     assert rule["scope"] == {"kind": "group", "id": group, "name": "Ops"}
     b, a = rule["targets"]
     assert (b["project_name"], a["project_name"]) == ("Billing", "Shop")
-    assert a["state"] == "ok" and a["rule_text"] == '(rate(x{cluster="a"}[5m])\n) > 0.3'
+    assert a["state"] == "waiting" and a["rule_text"] == '(rate(x{cluster="a"}[5m])\n) > 0.3'
     # Billing has no Prometheus: an error in words, never OK, and no other project's filter.
     assert b["state"] == "error" and b["message"] == no_source_copy("Billing", "prometheus")
     assert b["rule_text"] == "" and "cluster" not in b["eval_expr"]

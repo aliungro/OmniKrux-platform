@@ -174,6 +174,7 @@ NO_ALERTMANAGER = (
 NOT_SAVED = "The rule couldn't be saved. Try again."
 NOT_REMOVED = "The rule couldn't be removed. Try again."
 NOT_CHECKED_OFF = "Not checked yet: OmniKrux's checks are off."
+NOT_CHECKED_YET = "Not checked yet: the first check runs within {every}."
 NOT_SAVED_SILENCE = "The silence couldn't be saved. Try again."
 NOT_REMOVED_SILENCE = "The silence couldn't be ended. Try again."
 TARGETS_BEHIND = (
@@ -533,10 +534,17 @@ def never_read(target: TargetRecord) -> bool:
     return target.engine == "tool" and target.last_eval_at is None
 
 
+def never_checked(target: TargetRecord) -> bool:
+    """A target OmniKrux checks that hasn't had its first check yet (its stored "ok" is only
+    where a new target starts, never something a check found)."""
+    return target.engine == "omnikrux" and target.last_eval_at is None and target.state == "ok"
+
+
 def shown_state(target: TargetRecord, rule: RuleRecord) -> TargetState:
     """The state a target shows. A target in a tool that isn't in sync there is "not applied"
-    unless what the tool reports is worse; one whose state was never read from the tool is at
-    least "waiting", never "OK"; a paused rule's OmniKrux targets are "paused"."""
+    unless what the tool reports is worse; one whose state was never read (from the tool) or
+    never checked (by OmniKrux) is "waiting", never "OK"; a paused rule's OmniKrux targets are
+    "paused"."""
     if target.engine == "tool":
         state = target.state
         if never_read(target) and state == "ok":
@@ -546,17 +554,33 @@ def shown_state(target: TargetRecord, rule: RuleRecord) -> TargetState:
         return state
     if rule.paused:
         return "paused"
+    if never_checked(target):
+        return "waiting"
     return target.state
 
 
-def shown_message(target: TargetRecord, checks_on: bool) -> str | None:
-    """What a target says: a never-read tool target in sync says it is loading, or, with
-    OmniKrux's checks off (nothing reads the tools then), that it isn't checked yet. One that
-    isn't in sync in its tool says why (its tool's words): nothing is loading there."""
+def every_words(seconds: int) -> str:
+    """A check interval in words: `30 s`, `1 min`, `2 h`."""
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds // 3600} h"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds // 60} min"
+    return f"{seconds} s"
+
+
+def shown_message(target: TargetRecord, rule: RuleRecord, checks_on: bool) -> str | None:
+    """What a target says: a never-read tool target in sync says it is loading, and a
+    never-checked OmniKrux target when its first check runs; with OmniKrux's checks off (nothing
+    checks or reads then), both say they aren't checked yet. One that isn't in sync in its tool
+    says why (its tool's words): nothing is loading there."""
     if never_read(target):
         if target.tool_state != "in_sync":
             return target.tool_message
         return loading_copy(target.tool_kind) if checks_on else NOT_CHECKED_OFF
+    if never_checked(target) and not rule.paused:
+        if not checks_on:
+            return NOT_CHECKED_OFF
+        return NOT_CHECKED_YET.format(every=every_words(rule.condition.every_seconds))
     return target.message
 
 
@@ -603,7 +627,7 @@ def _target_out(
         state=shown_state(target, rule),
         state_since=target.state_since,
         last_eval_at=target.last_eval_at,
-        message=shown_message(target, names.checks_on),
+        message=shown_message(target, rule, names.checks_on),
         eval_expr=target.eval_expr,
         rule_text=target.rule_text,
         tool_state=target.tool_state,
