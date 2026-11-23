@@ -16,6 +16,22 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+from omnikrux.monitoring.alerts.rule_expr import (
+    RuleExprError,
+    is_log_query,
+    parse_duration,
+    substitute,
+    variable_defaults,
+)
+from omnikrux.monitoring.alerts.types import (
+    ALERT_PANEL_TYPES,
+    EVERY_CHOICES,
+    MAX_CHANNEL_LABELS,
+    MAX_FOR_SECONDS,
+    MAX_NOTIFY,
+    SEVERITIES,
+)
+
 OwnerKind = Literal["project", "group"]
 
 SCHEMA_VERSION = 1
@@ -51,6 +67,7 @@ _REF = re.compile(r"[A-Z]")
 _REL_TIME = re.compile(r"now-([0-9]+)([smhdw])")
 _ABS_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _USED = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+_CONTACT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 _TIME_COPY = 'Use "now", "now-<number><s|m|h|d|w>", or a UTC time like 2026-11-19T10:00:00Z.'
@@ -623,6 +640,180 @@ def _queries(w: _Walk, raw: object, path: str, kind: str | None, defined: dict[s
     return [_query(w, item, _at(path, i), refs, defined) for i, item in enumerate(items)]
 
 
+def _alert_query(w: _Walk, raw: object, path: str, queries: list, variables: list, every: int):
+    """The ref of one of this panel's queries, whose text an alert can run."""
+    ref = _text(w, raw, path)
+    if ref is None:
+        return None
+    query = next((q for q in queries if q and q["ref"] == ref), None)
+    if query is None:
+        w.add(path, "Use the ref of one of this panel's queries, like A.")
+        return None
+    expr = query["expr"]
+    if expr is None:
+        return ref
+    if (query["source"] or {}).get("type") == "loki" and is_log_query(expr):
+        w.add(
+            path,
+            "A Loki alert needs a metric query, like "
+            'sum(count_over_time({app="api"} |= "error" [5m])).',
+        )
+        return ref
+    try:
+        substitute(expr, variable_defaults(variables), every)
+    except RuleExprError as err:
+        w.add(path, str(err))
+    return ref
+
+
+def _channel(w: _Walk, raw: object, path: str, engine: str | None):
+    if raw is None:
+        return None
+    obj = _object(w, raw, path)
+    if obj is None:
+        return None
+    if engine is not None and engine != "tool":
+        w.add(path, "A channel is only for alerts that run in the tool.")
+    receiver_raw = _required(w, obj, path, "receiver")
+    receiver = None
+    if receiver_raw is not _MISSING:
+        receiver = _text(w, receiver_raw, _at(path, "receiver"))
+        if receiver is not None and not 1 <= len(receiver) <= 200:
+            w.add(_at(path, "receiver"), "Use 1 to 200 characters.")
+            receiver = None
+    labels: dict = {}
+    if "labels" in obj:
+        lp = _at(path, "labels")
+        items = _object(w, obj["labels"], lp)
+        if items is not None:
+            if len(items) > MAX_CHANNEL_LABELS:
+                w.add(lp, "At most 10 labels.")
+            for key, value in items.items():
+                if not _LABEL.fullmatch(key):
+                    w.add(
+                        _at(lp, key),
+                        "Use a label name: letters, digits and _, not starting with a digit.",
+                    )
+                    continue
+                labels[key] = _long_text(w, value, _at(lp, key), 200, "Use at most 200 characters.")
+    _unknown(w, obj, path, ("receiver", "labels"))
+    return {"receiver": receiver, "labels": labels}
+
+
+def _notify(w: _Walk, raw: object, path: str) -> list:
+    items = _list(w, raw, path)
+    if items is None:
+        return []
+    if len(items) > MAX_NOTIFY:
+        w.add(path, "At most 10 contact points.")
+    out: list = []
+    for i, item in enumerate(items):
+        p = _at(path, i)
+        text = _text(w, item, p)
+        if text is None:
+            continue
+        if not _CONTACT_ID.fullmatch(text):
+            w.add(p, "Use a contact point id.")
+        elif text in out:
+            w.add(p, "Each contact point only once.")
+        else:
+            out.append(text)
+    return out
+
+
+def _duration(w: _Walk, raw: object, path: str) -> str | None:
+    text = _text(w, raw, path)
+    if text is None:
+        return None
+    try:
+        seconds = parse_duration(text)
+    except ValueError:
+        seconds = -1
+    if not 0 <= seconds <= MAX_FOR_SECONDS:
+        w.add(path, "Use a duration from 0s to 24h, like 5m.")
+        return None
+    return text
+
+
+_ALERT_KEYS = (
+    "name",
+    "query",
+    "of",
+    "op",
+    "threshold",
+    "for",
+    "every",
+    "severity",
+    "message",
+    "notify",
+    "engine",
+    "channel",
+)
+
+
+def _alert(w: _Walk, raw: object, path: str, kind: str | None, queries: list, variables: list):
+    if kind is not None and kind not in ALERT_PANEL_TYPES:
+        w.add(
+            path,
+            f"A {kind} panel can't have an alert. Use a time series, stat, gauge or bar panel.",
+        )
+        return None
+    obj = _object(w, raw, path)
+    if obj is None:
+        return None
+    out: dict = {}
+    name_raw = _required(w, obj, path, "name")
+    out["name"] = (
+        None
+        if name_raw is _MISSING
+        else _short_text(
+            w, name_raw, _at(path, "name"), 1, "Use 1 to 120 characters, without line breaks."
+        )
+    )
+    every_raw = obj.get("every", "1m")
+    every = EVERY_CHOICES.get(every_raw, 60) if isinstance(every_raw, str) else 60
+    query_raw = _required(w, obj, path, "query")
+    out["query"] = (
+        None
+        if query_raw is _MISSING
+        else _alert_query(w, query_raw, _at(path, "query"), queries, variables, every)
+    )
+    out["of"] = _opt_enum(w, obj, path, "of", ("each", "total"))
+    op_raw = _required(w, obj, path, "op")
+    out["op"] = (
+        None if op_raw is _MISSING else _enum(w, op_raw, _at(path, "op"), ("above", "below"))
+    )
+    threshold_raw = _required(w, obj, path, "threshold")
+    out["threshold"] = (
+        None if threshold_raw is _MISSING else _number(w, threshold_raw, _at(path, "threshold"))
+    )
+    out["for"] = _duration(w, obj["for"], _at(path, "for")) if "for" in obj else "5m"
+    out["every"] = (
+        _enum(w, obj["every"], _at(path, "every"), tuple(EVERY_CHOICES), "Use 30s, 1m or 5m.")
+        if "every" in obj
+        else "1m"
+    )
+    out["severity"] = (
+        _enum(w, obj["severity"], _at(path, "severity"), SEVERITIES)
+        if "severity" in obj
+        else "warning"
+    )
+    out["message"] = (
+        _long_text(w, obj["message"], _at(path, "message"), 500, "Use at most 500 characters.")
+        if "message" in obj
+        else ""
+    )
+    out["notify"] = _notify(w, obj["notify"], _at(path, "notify")) if "notify" in obj else []
+    out["engine"] = _opt_enum(w, obj, path, "engine", ("omnikrux", "tool"))
+    out["channel"] = (
+        _channel(w, obj["channel"], _at(path, "channel"), out["engine"])
+        if "channel" in obj
+        else None
+    )
+    _unknown(w, obj, path, _ALERT_KEYS)
+    return out
+
+
 def _panel(
     w: _Walk,
     raw: object,
@@ -630,6 +821,7 @@ def _panel(
     ids: set[str],
     placed: list[tuple[str, dict]],
     defined: dict[str, int],
+    variables: list,
 ):
     obj = _object(w, raw, path)
     if obj is None:
@@ -693,9 +885,11 @@ def _panel(
         out["options"] = _options(w, obj["options"], _at(path, "options"), kind)
     else:
         out["options"] = _options(w, {}, _at(path, "options"), kind)
-    if "alert" in obj and obj["alert"] is not None:
-        w.add(_at(path, "alert"), 'Panel alerts arrive in a later update; leave "alert" as null.')
-    out["alert"] = None
+    out["alert"] = (
+        _alert(w, obj["alert"], _at(path, "alert"), kind, out["queries"], variables)
+        if "alert" in obj and obj["alert"] is not None
+        else None
+    )
     _unknown(
         w,
         obj,
@@ -779,7 +973,7 @@ def _document(w: _Walk, raw: object) -> dict:
     ids: set[str] = set()
     placed: list[tuple[str, dict]] = []
     out["panels"] = [
-        _panel(w, item, _at("panels", i), ids, placed, defined)
+        _panel(w, item, _at("panels", i), ids, placed, defined, out["variables"])
         for i, item in enumerate(panel_items)
     ]
     _unknown(

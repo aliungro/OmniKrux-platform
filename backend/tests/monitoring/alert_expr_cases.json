@@ -1,0 +1,866 @@
+[
+  {
+    "name": "plain",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "sum(rate(http_requests_total[5m]))",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "sum(rate(http_requests_total[5m]))",
+    "problem": null
+  },
+  {
+    "name": "multi_default_all",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [
+        {
+          "name": "job",
+          "label": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "match": "",
+          "multi": true,
+          "includeAll": true,
+          "default": "all"
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=~\"$job\"}",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "up{job=~\".+\"}",
+    "problem": null
+  },
+  {
+    "name": "multi_default_values",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [
+        {
+          "name": "job",
+          "label": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "match": "",
+          "multi": true,
+          "includeAll": true,
+          "default": [
+            "a.b",
+            "c"
+          ]
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=~\"$job\"}",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "up{job=~\"a\\\\.b|c\"}",
+    "problem": null
+  },
+  {
+    "name": "single_default_value",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [
+        {
+          "name": "job",
+          "label": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "match": "",
+          "multi": false,
+          "includeAll": true,
+          "default": [
+            "api"
+          ]
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=\"$job\"}",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "up{job=\"api\"}",
+    "problem": null
+  },
+  {
+    "name": "single_without_default",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [
+        {
+          "name": "job",
+          "label": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "match": "",
+          "multi": false,
+          "includeAll": true,
+          "default": []
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=\"$job\"}",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": null,
+    "problem": "Uses $job, which has no default value. Alerts use each variable's default, so give it one."
+  },
+  {
+    "name": "rate_interval_30s",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "rate(x[$__rate_interval])",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "30s",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "rate(x[4m])",
+    "problem": null
+  },
+  {
+    "name": "rate_interval_1m",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "rate(x[$__rate_interval])",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "rate(x[4m])",
+    "problem": null
+  },
+  {
+    "name": "rate_interval_5m",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "rate(x[$__rate_interval])",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "5m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "rate(x[20m])",
+    "problem": null
+  },
+  {
+    "name": "interval",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "avg_over_time(x[$__interval])",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "30s",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "avg_over_time(x[30s])",
+    "problem": null
+  },
+  {
+    "name": "range_refused",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "rate(x[$__range])",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": null,
+    "problem": "An alert can't use $__range; write the window into the query, like [5m]."
+  },
+  {
+    "name": "unquoted_multi_refused",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [
+        {
+          "name": "job",
+          "label": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "match": "",
+          "multi": true,
+          "includeAll": true,
+          "default": "all"
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=~$job}",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": null,
+    "problem": "The value of $job can't be used here. Put $job inside double quotes in the query."
+  },
+  {
+    "name": "multi_default_all_in_quotes",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [
+        {
+          "name": "job",
+          "label": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "match": "",
+          "multi": true,
+          "includeAll": true,
+          "default": "all"
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "sum by (job) (rate(x{job=~\"${job}\"}[$__rate_interval]))",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "sum by (job) (rate(x{job=~\".+\"}[4m]))",
+    "problem": null
+  },
+  {
+    "name": "variable_in_comment_untouched",
+    "doc": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [
+        {
+          "name": "job",
+          "label": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "match": "",
+          "multi": false,
+          "includeAll": true,
+          "default": []
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up # $job\n",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {},
+          "alert": {
+            "name": "A rule",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 1,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "panel_id": "p-1",
+    "expected": "up # $job\n",
+    "problem": null
+  }
+]

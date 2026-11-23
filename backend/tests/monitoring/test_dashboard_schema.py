@@ -38,7 +38,16 @@ REQUIRED_CASES = {
     "variable_order",
     "all_without_include_all",
     "group_with_source_id",
-    "alert_not_null",
+    "alert_not_an_object",
+    "alert_full",
+    "alert_defaults",
+    "alert_on_logs_panel",
+    "alert_on_table_panel",
+    "alert_unknown_query_ref",
+    "alert_channel_without_tool",
+    "alert_bad_fields",
+    "alert_loki_log_query",
+    "alert_uses_range",
     "bad_time",
     "time_backwards",
     "wrong_types_everywhere",
@@ -252,3 +261,32 @@ def test_a_lone_surrogate_does_not_break_the_size_check():
     lone = chr(0xD800)
     doc = validate_dashboard(_doc(description=lone), owner_kind="project")
     assert doc["description"] == lone
+
+
+def test_alert_object_is_normalised():
+    alert = {"name": " API latency high ", "query": "A", "op": "above", "threshold": 0.3}
+    doc = validate_dashboard(_doc(_stat_panel(alert=alert)), owner_kind="project")
+    assert json.dumps(doc["panels"][0]["alert"]) == json.dumps(
+        {
+            "name": "API latency high",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 0.3,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": None,
+        }
+    )
+
+
+def test_documents_without_alerts_are_unchanged():
+    for case in OK_CASES:
+        if "alert" in json.dumps(case["input"]):
+            continue
+        out = validate_dashboard(case["input"], owner_kind=case["owner"])
+        assert all(p["alert"] is None for p in out["panels"])

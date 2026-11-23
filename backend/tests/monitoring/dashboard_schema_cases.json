@@ -2458,47 +2458,6 @@
     "problems": []
   },
   {
-    "name": "alert_not_null",
-    "owner": "project",
-    "input": {
-      "schemaVersion": 1,
-      "title": "Doc",
-      "panels": [
-        {
-          "id": "p-1",
-          "type": "stat",
-          "title": "",
-          "layout": {
-            "x": 0,
-            "y": 0,
-            "w": 6,
-            "h": 4
-          },
-          "queries": [
-            {
-              "ref": "A",
-              "source": {
-                "type": "prometheus",
-                "id": null
-              },
-              "expr": "up"
-            }
-          ],
-          "alert": {
-            "rule": 1
-          }
-        }
-      ]
-    },
-    "normalized": null,
-    "problems": [
-      {
-        "path": "panels[0].alert",
-        "message": "Panel alerts arrive in a later update; leave \"alert\" as null."
-      }
-    ]
-  },
-  {
     "name": "bad_time",
     "owner": "project",
     "input": {
@@ -2737,7 +2696,7 @@
       },
       {
         "path": "panels[0].alert",
-        "message": "Panel alerts arrive in a later update; leave \"alert\" as null."
+        "message": "Expected an object."
       }
     ]
   },
@@ -6040,6 +5999,995 @@
       {
         "path": "panels[0].options.min",
         "message": "Expected a finite number."
+      }
+    ]
+  },
+  {
+    "name": "alert_full",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "of": "total",
+            "op": "below",
+            "threshold": 2,
+            "for": "10m",
+            "every": "30s",
+            "severity": "critical",
+            "message": "p95 for {{route}} is {{value}}",
+            "notify": [
+              "abc123",
+              "ops-team"
+            ],
+            "engine": "tool",
+            "channel": {
+              "receiver": "ops",
+              "labels": {
+                "team": "platform"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "min": null,
+            "max": null,
+            "legend": "bottom",
+            "style": "lines"
+          },
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "of": "total",
+            "op": "below",
+            "threshold": 2,
+            "for": "10m",
+            "every": "30s",
+            "severity": "critical",
+            "message": "p95 for {{route}} is {{value}}",
+            "notify": [
+              "abc123",
+              "ops-team"
+            ],
+            "engine": "tool",
+            "channel": {
+              "receiver": "ops",
+              "labels": {
+                "team": "platform"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "alert_defaults",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 0.3,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "alert_on_logs_panel",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "logs",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "{app=\"api\"}"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert",
+        "message": "A logs panel can't have an alert. Use a time series, stat, gauge or bar panel."
+      }
+    ]
+  },
+  {
+    "name": "alert_on_table_panel",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "table",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert",
+        "message": "A table panel can't have an alert. Use a time series, stat, gauge or bar panel."
+      }
+    ]
+  },
+  {
+    "name": "alert_unknown_query_ref",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "gauge",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "B",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "Use the ref of one of this panel's queries, like A."
+      }
+    ]
+  },
+  {
+    "name": "alert_channel_without_tool",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "bar",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3,
+            "channel": {
+              "receiver": "ops",
+              "labels": {}
+            }
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.channel",
+        "message": "A channel is only for alerts that run in the tool."
+      }
+    ]
+  },
+  {
+    "name": "alert_bad_fields",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "  ",
+            "query": "a",
+            "of": "sum",
+            "op": "over",
+            "threshold": "high",
+            "for": "25h",
+            "every": "10s",
+            "severity": "urgent",
+            "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "notify": [
+              "ok",
+              "ok",
+              "bad id",
+              5
+            ],
+            "engine": "cloud",
+            "channel": {
+              "receiver": "",
+              "labels": {
+                "1x": "a"
+              },
+              "extra": 1
+            },
+            "colour": "red"
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.name",
+        "message": "Use 1 to 120 characters, without line breaks."
+      },
+      {
+        "path": "panels[0].alert.query",
+        "message": "Use the ref of one of this panel's queries, like A."
+      },
+      {
+        "path": "panels[0].alert.of",
+        "message": "Use one of: each, total."
+      },
+      {
+        "path": "panels[0].alert.op",
+        "message": "Use one of: above, below."
+      },
+      {
+        "path": "panels[0].alert.threshold",
+        "message": "Expected a number."
+      },
+      {
+        "path": "panels[0].alert.for",
+        "message": "Use a duration from 0s to 24h, like 5m."
+      },
+      {
+        "path": "panels[0].alert.every",
+        "message": "Use 30s, 1m or 5m."
+      },
+      {
+        "path": "panels[0].alert.severity",
+        "message": "Use one of: critical, warning, info."
+      },
+      {
+        "path": "panels[0].alert.message",
+        "message": "Use at most 500 characters."
+      },
+      {
+        "path": "panels[0].alert.notify[1]",
+        "message": "Each contact point only once."
+      },
+      {
+        "path": "panels[0].alert.notify[2]",
+        "message": "Use a contact point id."
+      },
+      {
+        "path": "panels[0].alert.notify[3]",
+        "message": "Expected text."
+      },
+      {
+        "path": "panels[0].alert.engine",
+        "message": "Use one of: omnikrux, tool."
+      },
+      {
+        "path": "panels[0].alert.channel.receiver",
+        "message": "Use 1 to 200 characters."
+      },
+      {
+        "path": "panels[0].alert.channel.labels.1x",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "panels[0].alert.channel.extra",
+        "message": "Unknown field \"extra\"."
+      },
+      {
+        "path": "panels[0].alert.colour",
+        "message": "Unknown field \"colour\"."
+      }
+    ]
+  },
+  {
+    "name": "alert_loki_log_query",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "  {app=\"api\"} |= \"error\""
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "A Loki alert needs a metric query, like sum(count_over_time({app=\"api\"} |= \"error\" [5m]))."
+      }
+    ]
+  },
+  {
+    "name": "alert_uses_range",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "rate(x[$__range])"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "An alert can't use $__range; write the window into the query, like [5m]."
+      }
+    ]
+  },
+  {
+    "name": "alert_not_an_object",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": 5
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert",
+        "message": "Expected an object."
+      }
+    ]
+  },
+  {
+    "name": "alert_single_variable_without_default",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=\"$job\"}"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ],
+      "variables": [
+        {
+          "name": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "multi": false,
+          "includeAll": true,
+          "default": []
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "Uses $job, which has no default value. Alerts use each variable's default, so give it one."
+      }
+    ]
+  },
+  {
+    "name": "alert_unquoted_multi_variable",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=~$job}"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ],
+      "variables": [
+        {
+          "name": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "multi": true,
+          "includeAll": true,
+          "default": "all"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "The value of $job can't be used here. Put $job inside double quotes in the query."
+      }
+    ]
+  },
+  {
+    "name": "alert_loki_metric_query",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "sum(count_over_time({app=\"api\"} |= \"error\" [5m]))"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "sum(count_over_time({app=\"api\"} |= \"error\" [5m]))",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "min": null,
+            "max": null,
+            "legend": "bottom",
+            "style": "lines"
+          },
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 0.3,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "alert_channel_bad_labels",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3,
+            "engine": "tool",
+            "channel": {
+              "receiver": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+              "labels": {
+                "l0": "v",
+                "l1": "v",
+                "l2": "v",
+                "l3": "v",
+                "l4": "v",
+                "l5": "v",
+                "l6": "v",
+                "l7": "v",
+                "l8": "v",
+                "l9": "v",
+                "l10": "v"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.channel.receiver",
+        "message": "Use 1 to 200 characters."
+      },
+      {
+        "path": "panels[0].alert.channel.labels",
+        "message": "At most 10 labels."
+      }
+    ]
+  },
+  {
+    "name": "alert_too_many_notify",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3,
+            "notify": [
+              "c0",
+              "c1",
+              "c2",
+              "c3",
+              "c4",
+              "c5",
+              "c6",
+              "c7",
+              "c8",
+              "c9",
+              "c10"
+            ]
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.notify",
+        "message": "At most 10 contact points."
       }
     ]
   }
