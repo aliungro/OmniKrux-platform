@@ -278,6 +278,13 @@ class FakeLoki(_FakeTool):
                 return web.Response(status=400, text="rule group needs a name")
             self.ruler_groups.setdefault(namespace, {})[name] = request[BODY].decode()
             return web.json_response({"status": "success"}, status=202)
+        if group is None and request.method == "GET":
+            if namespace not in self.ruler_groups:
+                return web.Response(status=404, text="namespace does not exist")
+            groups = [yaml.safe_load(text) for text in stored.values()]
+            return web.Response(
+                text=yaml.safe_dump({namespace: groups}), content_type="application/yaml"
+            )
         if group is None:
             return web.Response(status=405, text="method not allowed")
         if request.method == "GET" and group in stored:
@@ -314,9 +321,7 @@ class FakeAlertmanager(_FakeTool):
                 }
             )
         if path == "/api/v2/alerts" and method == "GET":
-            matchers = [_parse_matcher(text) for text in params.get("filter", [])]
-            found = [a for a in self.alerts if all(m(a.get("labels", {})) for m in matchers)]
-            return web.json_response(found)
+            return web.json_response(self._alerts(params))
         if path == "/api/v2/silences" and method == "GET":
             return web.json_response(list(self.silences.values()))
         if path == "/api/v2/silences" and method == "POST":
@@ -329,13 +334,45 @@ class FakeAlertmanager(_FakeTool):
             return web.Response()
         return web.Response(status=404, text="404 page not found")
 
+    def _alerts(self, params: dict[str, list[str]]) -> list[dict]:
+        matchers = [_parse_matcher(text) for text in params.get("filter", [])]
+        hide_silenced = (params.get("silenced") or ["true"])[0].lower() == "false"
+        hide_inhibited = (params.get("inhibited") or ["true"])[0].lower() == "false"
+        receiver = (params.get("receiver") or [""])[0]
+        found = []
+        for alert in self.alerts:
+            status = alert.get("status", {})
+            if not all(m(alert.get("labels", {})) for m in matchers):
+                continue
+            if (hide_silenced and status.get("silencedBy")) or (
+                hide_inhibited and status.get("inhibitedBy")
+            ):
+                continue
+            names = [r.get("name", "") for r in alert.get("receivers", [])]
+            if receiver and not any(re.fullmatch(receiver, name) for name in names):
+                continue
+            found.append(alert)
+        return found
+
     def _silence(self, raw: bytes) -> web.Response:
         try:
             body = json.loads(raw)
         except ValueError:
             return web.json_response("bad silence", status=400)
         matchers = body.get("matchers") or []
-        if not matchers or all(_matches_empty(m) for m in matchers):
+        if not matchers:
+            return web.json_response("silence invalid: at least one matcher required", status=400)
+        starts, ends = _moment(body.get("startsAt")), _moment(body.get("endsAt"))
+        now = datetime.datetime.now(datetime.UTC)
+        if ends is not None and ends <= now:
+            return web.json_response(
+                "silence invalid: end time must not be in the past", status=400
+            )
+        if starts is not None and ends is not None and ends <= starts:
+            return web.json_response(
+                "silence invalid: end time must be after start time", status=400
+            )
+        if all(_matches_empty(m) for m in matchers):
             refusal = "silence invalid: at least one matcher must not match the empty string"
             return web.json_response(refusal, status=400)
         silence_id = body.get("id") or str(uuid.uuid4())
@@ -346,6 +383,13 @@ class FakeAlertmanager(_FakeTool):
             "updatedAt": datetime.datetime.now(datetime.UTC).isoformat(),
         }
         return web.json_response({"silenceID": silence_id})
+
+
+def _moment(text: object) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.fromisoformat(str(text)) if text else None
+    except ValueError:
+        return None
 
 
 def _matches_empty(matcher: dict) -> bool:

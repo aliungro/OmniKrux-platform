@@ -3,8 +3,9 @@
     python -m tests.monitoring.webhook_receiver --port 9911
 
 Prints one line per request, `<time> <path> <first 200 characters of the body>`, and answers 200.
-Nothing else: no headers, no query string (either may carry a token) and no other behaviour. It
-binds to 127.0.0.1 only; any other `--host` is refused.
+Nothing else: no headers, no query string and no other behaviour. It does print the request path,
+so never point a real secret URL (a Slack-style webhook, say) at it. It listens on 127.0.0.1 unless
+`--host` says otherwise (then it prints a note: it is for local fakes only).
 """
 
 import argparse
@@ -18,10 +19,14 @@ LOOPBACK = "127.0.0.1"
 PREVIEW = 200
 
 
-def check_host(host: str) -> str:
-    if host != LOOPBACK:
-        raise SystemExit(f"The receiver binds to {LOOPBACK} only, not {host!r}.")
-    return host
+def exposure_note(host: str) -> str | None:
+    """A one-line warning when `host` listens beyond this machine, else None."""
+    if host in (LOOPBACK, "localhost", "::1"):
+        return None
+    return (
+        f"Listening on {host}: reachable beyond this machine. "
+        "For local fakes only; never send it real secrets or URLs."
+    )
 
 
 def make_app(emit: Callable[[str], object] = print) -> web.Application:
@@ -42,7 +47,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default=LOOPBACK)
     parser.add_argument("--port", type=int, default=9911)
     args = parser.parse_args(argv)
-    host = check_host(args.host)
+    host = args.host
+    if note := exposure_note(host):
+        print(note, flush=True)
     web.run_app(
         make_app(lambda line: print(line, flush=True)),
         host=host,

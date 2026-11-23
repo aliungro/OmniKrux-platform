@@ -2,6 +2,7 @@
 receiver, an SMTP server and fakekube's generic create. Each is a real server on 127.0.0.1."""
 
 import asyncio
+import datetime
 import smtplib
 import ssl
 
@@ -10,7 +11,8 @@ import yaml
 
 from tests.fakekube import prometheus_operator
 from tests.monitoring.fake_receivers import ReceivedMail
-from tests.monitoring.webhook_receiver import check_host, make_app
+from tests.monitoring.fakes import Bearer
+from tests.monitoring.webhook_receiver import exposure_note, make_app
 
 ALERTING = {"name": "Down", "type": "alerting", "query": "up == 0", "state": "firing"}
 RECORDING = {"name": "job:up", "type": "recording", "query": "sum(up)"}
@@ -89,12 +91,17 @@ async def test_alertmanager_status_and_alerts_with_filters(fake_alertmanager):
         assert names(both) == ["Slow"]
 
 
+def _in(hours: float) -> str:
+    moment = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=hours)
+    return moment.isoformat()
+
+
 async def test_alertmanager_silences_and_filtered_alerts(fake_alertmanager):
     am = fake_alertmanager
     body = {
         "matchers": [{"name": "alertname", "value": "Down", "isRegex": False, "isEqual": True}],
-        "startsAt": "2026-01-01T00:00:00Z",
-        "endsAt": "2026-01-01T01:00:00Z",
+        "startsAt": _in(0),
+        "endsAt": _in(1),
         "createdBy": "tester",
         "comment": "maintenance",
     }
@@ -129,9 +136,80 @@ async def test_alertmanager_refuses_an_empty_matching_silence(fake_alertmanager)
 
 async def test_alertmanager_honours_mode_and_require(fake_alertmanager):
     am = fake_alertmanager
-    am.mode = "error500"
+    am.require = Bearer("tok")
     async with httpx.AsyncClient(base_url=am.url) as http:
-        assert (await http.get("/api/v2/status")).status_code == 500
+        assert (await http.get("/api/v2/status")).status_code == 401
+        wrong = await http.get("/api/v2/status", headers={"Authorization": "Bearer no"})
+        assert wrong.status_code == 401
+        right = await http.get("/api/v2/status", headers={"Authorization": "Bearer tok"})
+        assert right.status_code == 200
+        am.mode = "error500"
+        assert (
+            await http.get("/api/v2/status", headers={"Authorization": "Bearer tok"})
+        ).status_code == 500
+
+
+async def test_alertmanager_refuses_bad_silences(fake_alertmanager):
+    am = fake_alertmanager
+    good = [{"name": "a", "value": "b", "isRegex": False, "isEqual": True}]
+    cases = {
+        "no matchers": {"matchers": [], "endsAt": _in(1)},
+        "ended already": {"matchers": good, "endsAt": _in(-1)},
+        "ends before start": {"matchers": good, "startsAt": _in(2), "endsAt": _in(1)},
+    }
+    async with httpx.AsyncClient(base_url=am.url) as http:
+        for name, body in cases.items():
+            refused = await http.post("/api/v2/silences", json=body)
+            assert refused.status_code == 400, name
+            assert refused.json().startswith("silence invalid: "), name
+    assert am.silences == {}
+
+
+async def test_alertmanager_alert_params_silenced_inhibited_receiver(fake_alertmanager):
+    am = fake_alertmanager
+    am.alerts = [
+        {"labels": {"alertname": "A"}, "status": {"silencedBy": []}, "receivers": [{"name": "x"}]},
+        {
+            "labels": {"alertname": "B"},
+            "status": {"silencedBy": ["s1"]},
+            "receivers": [{"name": "x"}],
+        },
+        {
+            "labels": {"alertname": "C"},
+            "status": {"inhibitedBy": ["a"]},
+            "receivers": [{"name": "y"}],
+        },
+    ]
+
+    async def names(**params):
+        async with httpx.AsyncClient(base_url=am.url) as http:
+            found = await http.get("/api/v2/alerts", params=params)
+        return [a["labels"]["alertname"] for a in found.json()]
+
+    assert await names() == ["A", "B", "C"]
+    assert await names(silenced="false") == ["A", "C"]
+    assert await names(inhibited="false") == ["A", "B"]
+    assert await names(receiver="x") == ["A", "B"]
+    assert await names(receiver="y", silenced="false") == ["C"]
+
+
+async def test_loki_ruler_lists_a_namespace(fake_loki):
+    async with httpx.AsyncClient(base_url=fake_loki.url) as http:
+        assert (await http.get("/loki/api/v1/rules/ns")).status_code == 404
+        await http.post("/loki/api/v1/rules/ns", content=LOKI_GROUP)
+        listed = await http.get("/loki/api/v1/rules/ns")
+    assert listed.status_code == 200
+    assert [g["name"] for g in yaml.safe_load(listed.text)["ns"]] == ["omnikrux-abc"]
+
+
+async def test_fakekube_refuses_a_nameless_object(fake_api):
+    prometheus_operator(fake_api)
+    path = "/apis/monitoring.coreos.com/v1/namespaces/monitoring/prometheusrules"
+    async with httpx.AsyncClient(base_url=fake_api.url) as http:
+        refused = await http.post(path, json={"spec": {}})
+    assert refused.status_code == 422
+    assert refused.json()["reason"] == "Invalid"
+    assert fake_api.created_objects == []
 
 
 async def test_webhook_receiver_records_and_echoes(fake_webhook):
@@ -353,11 +431,9 @@ async def test_runnable_receiver_prints_one_line_per_request_and_never_the_heade
     assert "topsecret" not in line and "zzz" not in line
 
 
-def test_runnable_receiver_binds_to_loopback_only():
-    check_host("127.0.0.1")
-    for host in ("0.0.0.0", "", "192.168.1.5", "::"):
-        try:
-            check_host(host)
-        except SystemExit:
-            continue
-        raise AssertionError(f"{host!r} was accepted")
+def test_runnable_receiver_defaults_to_loopback_and_says_when_it_does_not():
+    for host in ("127.0.0.1", "localhost", "::1"):
+        assert exposure_note(host) is None
+    for host in ("0.0.0.0", "", "192.168.1.5"):
+        note = exposure_note(host)
+        assert note and "beyond this machine" in note and "local fakes only" in note

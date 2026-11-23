@@ -661,6 +661,12 @@ class FakeKubeApi:
         body = await _body(request)
         metadata = body.setdefault("metadata", {})
         name = metadata.get("name") or ""
+        if not name:
+            message = (
+                f'{res.plural} "" is invalid: metadata.name: Required value: '
+                "name or generateName is required"
+            )
+            return invalid(message)
         key = (ns or "", name)
         if key in self.objects[res.key]:
             label = f"{res.plural}.{res.group}" if res.group else res.plural
