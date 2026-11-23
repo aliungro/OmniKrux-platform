@@ -1,6 +1,6 @@
 # Monitoring
 
-Monitoring is the second app in OmniKrux. It is in development. So far you can describe what you run, connect the tools that hold its metrics and logs, have OmniKrux check that it can reach them and query them safely, build dashboards on top of that, and ask one-off questions of your metrics and logs in Explore. Alerts come in a later update.
+Monitoring is the second app in OmniKrux. It is in development. So far you can describe what you run, connect the tools that hold its metrics and logs, have OmniKrux check that it can reach them and query them safely, build dashboards on top of that, ask one-off questions of your metrics and logs in Explore, and get alerts when something crosses a line.
 
 Open it from the left rail, or press `Alt 2`.
 
@@ -10,6 +10,7 @@ Open it from the left rail, or press `Alt 2`.
 - A **project** is one thing you run, such as a cluster, a Docker host, some servers or anything of your own. It links to the sources that hold its data, and it only ever sees its own part of them.
 - A **label filter** is how a project sees only its part of a source. It is a list of label matchers, for example `cluster="prod-east"` or `namespace="shop", team!="infra"`. OmniKrux adds the filter to every query a project makes, so one shared Prometheus or Loki can serve several projects without any of them seeing another's data. Two projects can use the same source with different filters.
 - A **group** combines projects you pick, so you can look at them together. The projects stay where they are, and a project can be in several groups.
+- An **alert rule** watches a query and tells you when it crosses a line. See [Alerts](#alerts).
 - A **dashboard** is a page of panels that run queries against a project's sources (or, for a group, against each of its projects). Every dashboard belongs to one project or one group, and its title is unique among that owner's dashboards. Dashboards are described in [Dashboards](#dashboards) below.
 
 ## Set up a project
@@ -25,7 +26,7 @@ Use **+** next to Projects in the sidebar, or **Set up a project** on Home. When
 
 Use **Add a source by hand** in the setup, or **Add a source** on the **Sources** page. Fill in:
 
-- **Type**: Prometheus-compatible or Loki.
+- **Type**: Prometheus-compatible, Loki or Alertmanager (see [Alertmanager sources and channels](#alertmanager-sources-and-channels)).
 - **Address**: the tool's URL, for example `http://prometheus.example:9090`. Use `https://` for a tool with TLS. If the tool is served under a path prefix, include it.
 - **Name**: optional. Left empty, OmniKrux names the source after its type and host.
 - **Authentication**: how OmniKrux signs in.
@@ -58,7 +59,7 @@ Use **+** next to Groups in the sidebar to make a **New group**: give it a name 
 
 In the sidebar a group lists its projects as shortcuts (**Go to project …**), so a project that is in a group is one click away from either place. Home lists **Recently opened** projects and groups, and its search finds projects, groups and sources.
 
-**Explore** in the sidebar opens [Explore](#explore). **Alerts** tells you it arrives in a later update; nothing in Monitoring evaluates rules or sends notifications yet.
+**Explore** in the sidebar opens [Explore](#explore). **Alerts** opens the [Alerts](#alerts) page.
 
 ## Dashboards
 
@@ -116,7 +117,7 @@ At the top of the settings a one-line recommendation can appear (see [Recommenda
 - **Query.** **Source** says where the queries run: on a project dashboard the project's first Prometheus-compatible or Loki source, or one specific linked source; on a group dashboard each project's own. Each query is code with a **Legend** (for example `{{pod}}`) and a **Hide** checkbox; **+ Add query** adds up to ten, and a logs panel has exactly one. A run follows 300 ms after you stop typing, or at once with Ctrl Enter. The line under the queries says what the last run returned: series, points and how long it took.
 - **Chart.** The **Chart type** tiles, and what the type offers: **Style** for a time series, **Show** (last, mean, max, min or sum) and **Sparkline** for a stat, **Show** for a gauge, **Direction** for a bar, **Columns** for a table, and **Lines**, **Wrap long lines** and **Order** for logs. Changing the type keeps the queries, the title and the size.
 - **Options.** **Title**, **Description**, **Unit**, **Decimals**, **Min** and **Max**, **Thresholds** (each a value and **Good**, **Warning** or **Bad**) and **Legend**, as each type offers them.
-- **Alert.** Says alerts arrive in a later update, together with the Alerts page.
+- **Alert.** The panel's alert, if it has one; see [An alert on a panel](#an-alert-on-a-panel).
 
 Charts redraw as you edit. A panel whose query you change morphs to the new data, a stat counts to its new number, and an edited panel's frame is highlighted briefly. If your system asks for reduced motion, none of that animates: charts jump, numbers change at once and nothing is highlighted.
 
@@ -150,7 +151,7 @@ In a panel's settings, and in Explore under the query, one recommendation at a t
 - **A noisy line.** When a line is jagged at its window, it suggests a wider window (at least five minutes, or four steps). **Apply** widens it.
 - **Several rates.** Two to ten rates read better stacked. **Apply** changes the style to stacked area.
 
-**Apply** is a normal edit of the draft, and **Discard** undoes it. If you changed the query since the suggestion was made, it says "That query changed. Review it and try again." and changes nothing. A dismissed recommendation does not come back for that dashboard (or, in Explore, for that project). Dismissals are kept in this browser only. The recommendation that suggests an alert threshold arrives with alerts.
+**Apply** is a normal edit of the draft, and **Discard** undoes it. If you changed the query since the suggestion was made, it says "That query changed. Review it and try again." and changes nothing. A dismissed recommendation does not come back for that dashboard (or, in Explore, for that project). Dismissals are kept in this browser only. On the Alert tab, a recommendation suggests a calmer threshold when the alert would have fired often.
 
 ### Drafts
 
@@ -286,6 +287,146 @@ Keys in Explore, as in the `?` sheet (letters work only when you aren't typing i
 | `Shift ← →` | On the chart: select a time window for the log lines |
 | `Esc` | On the chart: show all log lines again |
 
+## Alerts
+
+An alert tells you when a number you care about crosses a line: errors above 5%, a pod that keeps restarting, free disk below 10 GB. **Alerts** in the sidebar opens the Alerts page, and a panel's **Alert** tab makes the same kind of rule from a chart.
+
+### What a rule is
+
+A **rule** says "alert when any series of this query is above (or below) a number, for this long, checked this often".
+
+- A rule belongs to a **project** or to a **group**. A group's rule runs once in each of the group's projects, so it holds one rule per project, each reading that project's own source through that project's label filter. A rule never reads another project's data.
+- A rule has a name, a severity (**Critical**, **Warning** or **Info**), a message, and the contact points to notify.
+- A rule's state is its **worst state**: the badge on a rule that runs in several projects shows the most serious one, in this order: **Firing**, **Query error**, **Can't check**, **Not applied**, **Pending**, **Loading**, **No data**, **OK**, **Paused**.
+
+### Where a rule runs
+
+When you make a rule you choose **Where it runs**.
+
+- **Checked by OmniKrux.** OmniKrux asks the source the rule's query on the interval you picked, and tells the contact points itself. It works with any source, but only while OmniKrux is running. The Alerts page says so under its title.
+- **In the tool.** The tool that holds the data checks the rule and keeps doing so when OmniKrux is off. For Prometheus this is a `PrometheusRule` in the cluster, which the Prometheus Operator loads; for Loki it is a rule in Loki's ruler. Each project says what it can do: the choice is greyed out when no project of the rule has a tool that can run it, and a project whose tool can't take the rule is checked by OmniKrux instead, with the reason shown.
+  - A `PrometheusRule` is a change to the cluster, so it is **reviewed like any cluster change**: the review shows what will be created, changed or removed, and nothing happens until you confirm it. The rule reads **Not applied** until you do.
+  - A Loki ruler rule is written (and removed) at once, and **Audit** records each change before it is made.
+  - The notifications of a rule that runs in the tool come from that tool's Alertmanager, not from OmniKrux. Pick its **Channel** (an Alertmanager route, with the labels the rule must carry to reach it), or leave **Wherever its Alertmanager sends it**.
+
+A rule that runs in the tool and one OmniKrux checks look the same on the Alerts page, apart from the **Where** line (**checked by OmniKrux**, **in Prometheus** or **in Loki**).
+
+### What the states mean
+
+Every rule and every project it runs in shows one state word.
+
+| State | What it means and what to do |
+| --- | --- |
+| **OK** | The query was checked and nothing crosses the line. |
+| **Pending** | Something crosses the line, but not for the **For** time yet. |
+| **Firing** | It has crossed the line for the whole **For** time. Contact points were told (once per series; see [Notifications](#notifications)). |
+| **No data** | The query answered, but with no value to compare, for example because nothing matches its labels. Check the query in Explore. If a missing series should itself be an alert, alert on `absent(...)` or on a count instead. |
+| **Can't check** | OmniKrux couldn't reach the source, so it doesn't know. Nothing is resolved and nothing new is claimed. Open the source on the **Sources** page and press **Test**, or see the reason on the rule. After three failed checks in a row OmniKrux sends one "can't check" message to the contact points. |
+| **Query error** | The query can't run as written (a wrong query, no source of the right type in the project, or more series than OmniKrux can follow). The rule says why; fix the query or link the source on the project page. |
+| **Not applied** | The rule should run in the tool but isn't there yet. **Review** opens the cluster change to confirm; **Retry** writes a Loki rule again. A rule that stays **Not applied** after the review is applied says why under its name. |
+| **Loading** | The tool has the rule but hasn't run it yet (Prometheus reloads its rules on a schedule). It reads **Loading** for up to ten minutes, and turns into a **Query error** with the reason if the tool never loaded it. |
+| **Paused** | You paused the rule. OmniKrux doesn't check it and tells nobody. Only a rule checked by OmniKrux can be paused; a rule in the tool keeps being checked there, so **Silence** it instead. |
+
+If the page can't read the states for a moment, it keeps what it showed, says how old that is ("Couldn't refresh. Last known: Firing at 14:02:11.") and never shows an old state as current.
+
+### The Alerts page
+
+**Alerts** opens the page. Its header has the views **Rules**, **Silences** and **Contact points**, and **New alert rule**. Press `1`, `2` or `3` to change view. A note under the title says whether OmniKrux's own checks are on time ("Last check 14:02:11"), running late or turned off.
+
+In **Rules**:
+
+- The list on the left has what is firing pinned on top, then every rule under its project or group. `↑` and `↓` move through it and show the rule; `Enter` opens it on a narrow window.
+- The details on the right show the rule's **State**, **Where** it runs, how often it is **Checked**, what it **Notifies**, its **Severity**, and its project or group. A rule made from a panel says **From panel** and has **Edit on its panel**; any other rule has **Edit rule**.
+- A chart draws the rule's query with the threshold, and **Recent** lists what happened lately: **Started firing**, **Resolved**, **Can't check**, **Checking again**, **Query error**, **Applied**, **Couldn't apply** and **Removed**. OmniKrux keeps seven days of it.
+- **Silence** (or `s`) opens a silence for the selected rule. **More actions** has **Pause** and **Resume**, **Attach to a panel…** (for a rule made on this page) and **Delete rule…**.
+
+Rules are read again every 15 seconds.
+
+### Make a rule on the page
+
+**New alert rule** opens the form.
+
+1. **Name**, and whether it is for a project or a group, and the source it reads (**Prometheus-compatible** or **Loki**; by default the project's first source of that type).
+2. **Query.** Write the query as you would in Explore. Variables aren't available here, but the built-ins are: `$__interval` is the check interval, and `$__rate_interval` is four times the check interval but never under four minutes. A query that returns log lines can't be an alert; count them (`sum(count_over_time({...}[5m]))`).
+3. **The sentence.** **Alert when** *any series* or *the total* is **above** or **below** a **threshold**, **For** how long (right away, or a time such as 5 min), **Checked every** 30 seconds, 1 minute or 5 minutes. "The total" adds the series up before comparing.
+4. **Details.** **Severity**, **Message** (it can use `{{value}}` and `{{label}}`) and **Notify**, the contact points to tell. With none yet, **Add one on the Contact points tab**.
+5. **Where it runs**, as above.
+
+While you write, a line under the sentence says how often the rule would have fired over the last 6 hours on the real data (a dry run: nothing is stored and nobody is told). When it would have fired often, it offers a calmer threshold: "That's often. At 0.5 it would have fired once." with a button **Use 0.5**. **Save rule** (or `Ctrl Enter`) saves it. If someone else changed the rule meanwhile you are told to open it again.
+
+For a group rule the dry run counts across the projects, and a project whose query fails says so on its own line instead of counting as "would not have fired".
+
+### An alert on a panel
+
+A time series, stat, gauge or bar panel has an **Alert** tab in the dashboard editor; other types say "A table panel can't have an alert. Use a time series, stat, gauge or bar panel." **Add an alert** starts one on the panel's own query.
+
+- It uses the same sentence, the same dry run (its advice shows in the recommendation bar above the tabs) and the same **Where it runs** and **Notify** choices. On the chart, a dashed line and a shaded area show where the alert would fire. When the rule has a state, the tab says **Now: Firing for 4 min**.
+- **Variables use their defaults.** An alert has nobody to choose values, so each variable takes its default (the tab says "Alerts use each variable's default: ..."), and the built-ins come from the alert's own interval.
+- **The alert is part of the dashboard.** It is saved with the dashboard (the dashboard's new version holds it), its rule appears on the Alerts page marked **From panel**, with a link back to the panel. Edit it on the panel, not on the page.
+- **Removing it.** **Remove alert** deletes the rule when you save the dashboard. Removing the panel does the same. If the dashboard is **deleted**, its rules stay on the Alerts page as ordinary rules without a panel (the delete dialog says so); **Attach to a panel…** on a rule's menu (for a rule made on the page) puts it on a panel of one of that project's or group's dashboards.
+- **Copies drop alerts.** Copying a dashboard doesn't copy its alerts ("Alerts aren't copied; add them on the copy's panels.").
+- Deleting a contact point removes it from the panels that name it, with a new version of each of those dashboards.
+
+### Contact points
+
+A **contact point** is where a message goes. Open **Contact points** (or `3`) and press **Add a contact point**. The type is chosen once and can't change after saving.
+
+| Type | Fields |
+| --- | --- |
+| **Slack** | **Webhook address** (an incoming webhook). |
+| **Teams** | **Webhook address** (a Microsoft Teams workflow or connector webhook). |
+| **Email** | **Mail server**, **Port** (587 by default), **Security** (**STARTTLS**, TLS or **None**), **User name** and **Password** (optional), **From** and **To** (up to 20 addresses, separated by commas). A password is only sent over an encrypted connection. |
+| **PagerDuty** | **Routing key** (32 letters and digits) and the **Events address** (the PagerDuty events API by default). |
+| **Webhook** | **Webhook address**, and an optional **Bearer token**. OmniKrux posts JSON to it. |
+
+Secrets (webhook addresses, tokens, passwords and routing keys) are stored encrypted and are never shown again: a saved one says "Saved. Leave empty to keep it." and a **Remove the saved ...** box takes an optional one away. Changing where a contact point sends to asks for its secret again.
+
+**Send a test** sends a message that says "OmniKrux test message" to a saved contact point, and says what happened ("Sent. Check that the test message arrived." or the receiver's own refusal, without any address). Each contact point shows its last send, who uses it ("Used by 2 rules" or "Not used yet"), and deleting it first lists the rules that lose it.
+
+### Notifications
+
+OmniKrux tells the contact points of a rule it checks:
+
+- **When a series starts firing**, one message per check and rule, listing the series that started (up to ten lines, then "And N more."). Series that fire together are in one message.
+- **While it keeps firing**, again every 4 hours, so a long incident isn't forgotten and isn't repeated every minute.
+- **When it resolves**, a **Resolved** message for each series somebody was told about.
+- **When it can't check**, after three failed checks in a row, one **Can't check** message, repeated every 4 hours while it lasts, and **Checking again** when the first check works.
+
+A failed send is tried again (right away, after 5 and after 30 seconds) and recorded; the contact point shows its last result. A rule that runs in the tool is not sent by OmniKrux at all: that tool's Alertmanager sends it, so the contact points of such a rule only matter to the rule that OmniKrux checks.
+
+### Silences
+
+A **silence** mutes the notifications of what it matches; it never changes what the checks find (a silenced alert is still Firing, and its row says silenced). Open **Silences** (or `2`) and press **New silence**.
+
+- **Where.** **OmniKrux** silences the rules OmniKrux checks. Each linked Alertmanager is a choice of its own (listed under its name) and silences what it sends, which is how you silence a rule that runs in the tool. A rule's **Silence** button picks the right one and fills in the matchers. The list shows them as **In OmniKrux** and **In Alertmanager**.
+- **Matchers.** Written like `alertname="API latency high"` or `project="shop", team=~"web|api"`. Use `=`, `!=`, `=~` and `!~`; regular expressions must match the whole value. At least one matcher must name something. While you type, a line says how many alerts it silences now and names the first rules.
+- **Lasts.** **1 h**, **2 h**, **4 h**, **1 day** or **Until…** (a date and time; a silence lasts at most 90 days), and a **Comment** so others know why.
+- Ended silences stay listed for a day. **Expire silence** ends one now ("Its alerts notify again at their next check.").
+
+An Alertmanager that can't be read is listed under **Problems**; it never hides the others.
+
+### Alertmanager sources and channels
+
+Link a Prometheus you run to its Alertmanager by adding an **Alertmanager** source (for example `http://alertmanager.example:9093`) to the project, the same way as any other source. An Alertmanager holds alerts, not metrics, so queries can't run on it. OmniKrux uses it for the channels of a rule in the tool, to mark which alerts it has silenced, and to list and create silences. Only routes matched by equality can be a channel, because those are the labels OmniKrux can add to a rule.
+
+### Home and the sidebar
+
+Home shows a **Firing** section above the projects: a row for each rule that fires, with its project, how long and a summary, which opens the rule, plus **Silence**. With nothing firing it says "All quiet" and how many rules there are; a rule that can't be checked adds a line that opens the Alerts page. Project and group cards say "2 firing", and **Alerts** in the sidebar carries the count. If the alerts can't be read, Home says so rather than "All quiet".
+
+### A rule that may read another cluster
+
+If a Kubernetes project's source link has no label filter, because OmniKrux couldn't tell which label separates your clusters in a shared Prometheus or Loki, a rule there may fire on another cluster's data. The rule form and the rule's details then warn: "may include other clusters: OmniKrux couldn't tell which label separates them, so this rule may fire on another cluster's data. Add a filter on the project page." To fix it, open the project, add a [label filter](#label-filters) such as `cluster="prod-east"` to that link, and save; the rule's query then carries the filter and the warning goes.
+
+### Deleting things that have rules
+
+- **Delete rule…** says what goes with it. A rule that runs in a cluster needs its own review to remove its `PrometheusRule`, and stays in the list, "being removed", until that is done. A Loki rule is removed from the ruler first, and nothing is deleted if the ruler refuses.
+- **Delete project…** and **Delete group…** list "Alert rules that go with it". When some of a project's rules still run in its cluster, the review says "Remove its rules that run in ... first" and gives each a **Review** button that removes the rule and then opens its removal in the cluster for you to confirm. The project is deleted after that.
+- Deleting a contact point first lists the rules that lose it.
+
+### Audit
+
+The Audit log records **Added an alert rule**, **Changed an alert rule**, **Removed an alert rule**, **Added a contact point**, **Changed a contact point**, **Removed a contact point**, **Sent a test message**, **Added a silence**, **Expired a silence**, and for rules in a Loki ruler **Wrote a Loki rule** and **Removed a Loki rule**. A `PrometheusRule` goes through the normal cluster change record. An entry names the rule, contact point or silence and what changed, never a webhook address, token, password or routing key.
+
 ## Rename, unlink and delete
 
 - Use **Rename** beside a project's or group's name to change it.
@@ -306,6 +447,5 @@ Every change in Monitoring is written to the Audit log, marked as coming from Mo
 
 ## What comes in later updates
 
-- Importing existing Grafana dashboards, and alerts on a panel (the **Alert** tab says so).
-- Alerts: rules, evaluation and notifications.
+- Importing existing Grafana dashboards.
 - Installing monitoring tools from OmniKrux, and discovery for Docker hosts and servers.

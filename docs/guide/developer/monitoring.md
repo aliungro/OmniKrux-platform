@@ -1,6 +1,6 @@
 # Monitoring: developer guide
 
-Monitoring reads metrics and logs from tools you already run (a Prometheus-compatible service, Loki) and shows them per project. It has sources, projects, groups, label filters, discovery in known clusters, the query proxy, dashboards, the catalog that the building tools and Explore read, the faster ways to build a panel, and Explore. Alerts are not here yet. For what the app does for its users, see the [user guide](../user/monitoring.md).
+Monitoring reads metrics and logs from tools you already run (a Prometheus-compatible service, Loki) and shows them per project. It has sources, projects, groups, label filters, discovery in known clusters, the query proxy, dashboards, the catalog that the building tools and Explore read, the faster ways to build a panel, Explore, and alerts (rules, the alert engine, contact points, silences and rules that run in Prometheus or Loki). For what the app does for its users, see the [user guide](../user/monitoring.md).
 
 ## Code layout
 
@@ -16,13 +16,14 @@ Backend, under `backend/omnikrux/monitoring/`:
 | `query/` | `api.py` (`POST /query`, `POST /query/batch`, `GET /label-values`), `run.py` (the pipeline behind them), `filters.py` (label filters and their injection), `series.py` (the one result format), `suggest.py` (filter suggestions for Kubernetes projects). |
 | `dashboards/` | `schema.py` (the dashboard document and its checks), `store.py` (dashboards and their versions), `api.py` (the routes), `ready_made.py` (the generated views). See [Dashboards](#dashboards). |
 | `explore/` | `catalog.py` (the catalog cache and `project_catalog`) and `api.py` (`GET /projects/{id}/catalog`). See [The catalog](#the-catalog). |
+| `alerts/` | Rules, the alert engine, contact points, silences and the tool handlers. See [Alerts](#alerts). |
 | `audit.py` | Writes Monitoring's entries to the shared audit log. |
 
-Frontend, under `frontend/src/monitoring/`: `MonitoringApp.tsx` (the app and its pages), `shell/` (tab state), `sidebar/`, `home/`, `sources/`, `setup/`, `projects/`, `groups/`, `search/`, `api/` (client, hooks, types, query helper), `dashboards/` and `charts/` (see [Dashboards](#dashboards)), `catalog/` (the catalog's client and merge, see [The catalog](#the-catalog)), `build/` (the finder, suggestions, recommendations and Add panel's search and rail, see [Building faster](#building-faster-the-finder-and-the-suggestions)), `explore/` (see [Explore](#explore)) and `test/` (a fake API for tests).
+Frontend, under `frontend/src/monitoring/`: `MonitoringApp.tsx` (the app and its pages), `shell/` (tab state), `sidebar/`, `home/`, `sources/`, `setup/`, `projects/`, `groups/`, `search/`, `api/` (client, hooks, types, query helper), `dashboards/` and `charts/` (see [Dashboards](#dashboards)), `catalog/` (the catalog's client and merge, see [The catalog](#the-catalog)), `build/` (the finder, suggestions, recommendations and Add panel's search and rail, see [Building faster](#building-faster-the-finder-and-the-suggestions)), `explore/` (see [Explore](#explore)), `alerts/` (see [Alerts](#alerts)) and `test/` (a fake API for tests).
 
 ### Tables and migrations
 
-Migration `0006` adds an `app` column to the audit log, so each entry records which app made it. Migration `0007` creates the Monitoring tables, and `0008` the dashboard tables (see [Dashboards](#dashboards)). `0007` holds:
+Migration `0006` adds an `app` column to the audit log, so each entry records which app made it. Migration `0007` creates the Monitoring tables, `0008` the dashboard tables (see [Dashboards](#dashboards)) and `0009` the alert tables (see [Alerts](#alerts)). `0007` holds:
 
 - `monitoring_sources`: one row per source. Secrets are stored encrypted; the API never returns them, only whether one is set.
 - `monitoring_projects`: one row per project (kind, optional cluster).
@@ -108,7 +109,7 @@ Panel:
 | `layout` | `{x, y, w, h}` | required | Whole numbers in grid cells: `x` 0 to 22, `y` 0 to 999, `w` 2 to 24, `h` 2 to 40; `x + w` at most 24 (the grid is 24 columns); panels may not overlap ("Panel "a" overlaps panel "b". Move one of them."). |
 | `queries` | list | required | 1 to 10; a logs panel has exactly one, and it is a Loki query. |
 | `options` | object | the type's defaults | See below. |
-| `alert` | null | `null` | Anything else is refused: "Panel alerts arrive in a later update; leave "alert" as null." |
+| `alert` | object or null | `null` | A panel's alert, only on a `timeseries`, `stat`, `gauge` or `bar` panel. See [The alert object of the dashboard document](#the-alert-object-of-the-dashboard-document). |
 
 Query: `ref` (a capital letter A to Z, different in each query; required), `source` (required), `expr` (1 to 10000 characters; required; its `$name` and `${name}` must be variables of the document or built-ins), `legend` (`""`, at most 200 characters; `{{label}}` is replaced by the series' label), `hidden` (`false`).
 
@@ -125,7 +126,7 @@ Options by type (a `thresholds` entry is `{value: number, color: "ok" | "warn" |
 
 The same rules are written as cases in `backend/tests/monitoring/dashboard_schema_cases.json`: each has a name, the owner kind, the `input`, the `normalized` document it must produce, and the exact `problems` (path and message, in order). `test_dashboard_schema.py` runs every case against the Python walker and `schema.test.ts` runs the same file against the TypeScript one, so the two can't drift. A change to a rule starts with a case.
 
-**Compatibility.** Stored documents are read back by later versions, and later features (importing dashboards, alerts on a panel) read them too. A change that isn't backward compatible needs `schemaVersion` 2 and a migration; never redefine version 1 in place.
+**Compatibility.** Stored documents are read back by later versions, and later features (importing dashboards) read them too. A panel's `alert` was reserved in version 1 as `null`, so adding it didn't change the version. A change that isn't backward compatible needs `schemaVersion` 2 and a migration; never redefine version 1 in place.
 
 ### Routes and tables
 
@@ -308,7 +309,7 @@ To add a suggestion:
 
 `recommend.ts` holds `RULES` (`perSecond`, `widerWindow`, `stackedArea`), each a `RecommendationRule` whose `evaluate(context)` returns a `Recommendation` (`id`, `key`, `text`, `apply(panel)`) or `null`. `recommendFor` returns the first whose key was not dismissed. The key names the rule, the panel and the query, so a dismissal holds for that one case. `RecommendationBar` shows it: **Apply** passes `onApply` a function that rewrites the panel as it is at that moment, and says "That query changed. Review it and try again." when the rewrite changes nothing. Dismissals live in `localStorage` under `omnikrux.monitoring.recommendations.dismissed` (at most 500, with an in-memory fallback), scoped by dashboard id or `explore:{project id}` (`dismissals.ts`).
 
-To add a rule, write a `RecommendationRule` and add it to `RULES`, or call `registerRecommendationRule(rule)`, which returns an unregister function. `RecommendationContext` has a reserved `alert` field: the alerts work will set it from its dry run and register the rule that suggests a threshold, so the context never needs another shape. Nothing sets it yet.
+To add a rule, write a `RecommendationRule` and add it to `RULES`, or call `registerRecommendationRule(rule)`, which returns an unregister function. `RecommendationContext` has an `alert` field, which the panel's Alert tab sets from the alert dry run; it also registers the rule that suggests a calmer threshold (see [The dry run](#the-dry-run)).
 
 ## Explore
 
@@ -324,6 +325,228 @@ Code is in `frontend/src/monitoring/explore/`; the page is lazy like the rest of
 
 `TimeSeriesChart` binds pointer and key handlers for a window only when `onSelect` is given, which only Explore does, so dashboards get the same chart as before. A drag across the plot, or `Shift ←` and `Shift →` from the crosshair (chosen once the keys rest), selects a window that snaps to the run's step (or the samples' spacing); the band stays drawn over the whole range. `marks` (`logMarks`) draws one tick per log line at its time, toned by level (`lineTone`), along the bottom. The chosen window goes to `useLinesRun`, and **Show all** (or Esc) clears it.
 
+## Alerts
+
+Alerts are rules over a project's sources, checked by OmniKrux or by the tool that holds the data, with contact points to tell and silences to mute. The routes are under `/api/monitoring/alerts`. For what they do for users, see [Alerts](../user/monitoring.md#alerts).
+
+### Code layout
+
+Backend, under `backend/omnikrux/monitoring/alerts/`:
+
+| Path | What it holds |
+| --- | --- |
+| `router.py` | Collects the alerts routes and adopts them into the Monitoring router (`adopt()`, never `include_router`). |
+| `api.py` | Rules (`/rules`, history, pause, resume, delete reviews, attach to a panel), tool sync (`/targets/{id}/sync`), `panel-states`, `overview`, `capabilities`, `channels`, `dry-run` and silences. |
+| `types.py` | The shared words: `Condition`, `TargetState` and `STATE_ORDER`, `worst`, `ToolKind`, `Engine`, `ALERT_PANEL_TYPES`, `EVERY_CHOICES`. |
+| `store.py` | `AlertStore`: rules, targets, instances, history and delivery rows, and what gets pruned. |
+| `rule_expr.py` | The query text an alert runs, and the message templates. |
+| `evaluate.py` | One check, pure: the state machine of a target's series. |
+| `engine.py` | `AlertEngine`: the loop that checks the targets OmniKrux runs. |
+| `notify.py` | `Notifier`: who is told what after a check. |
+| `sync.py` | `AlertSync`: the targets of a rule, kept in line with projects, links and tools; the `ToolSync` protocol. |
+| `dry_run.py` | The dry run: how often a condition would have fired, on real data. |
+| `silences.py` | OmniKrux's own silences, the matchers' parser and the Alertmanager silence client. |
+| `contact_points/` | `types.py` (types, settings, secrets, copy), `store.py`, `senders.py`, `api.py` (`/alerts/contact-points`) and `export.py`. |
+| `tool/` | `prometheus_rule.py` (the `PrometheusRule` handler), `loki_ruler.py`, `channels.py` (Alertmanager routes as channels) and `state_reader.py` (the state of rules that run in a tool). |
+
+`sources/alertmanager.py` is the Alertmanager connector (`alertmanager` is a source type; it can't run queries). `dashboards/schema.py` validates a panel's `alert`.
+
+Frontend, under `frontend/src/monitoring/alerts/`: `api.ts` (client, hooks and types), `format.ts` (state words, durations, the one-line sentence, the dry run's sentence), `limits.ts`, `ruleExpr.ts` (the TypeScript twin of `rule_expr.py`), `leave.tsx` (the unsaved-work question), `page/` (the Alerts page: list, details, chart, history, engine note), `rules/` (the rule form, its sentence, **Where it runs**, the dry run line, attach), `contacts/`, `silences/` and `reviews/` (the cluster review a rule's removal opens, and the rule lines of delete reviews). The panel's **Alert** tab is `dashboards/editor/AlertTab.tsx`, and Home's firing section is `home/FiringSection.tsx`.
+
+Tables (migration `0009`): `monitoring_alert_rules`, `monitoring_alert_targets`, `monitoring_alert_instances`, `monitoring_alert_history`, `monitoring_contact_points`, `monitoring_silences` and `monitoring_alert_deliveries`.
+
+### The rule, its targets and the reconciler
+
+A **rule** is what the user wrote: scope (a project or a group), source type and optional source, query, condition, severity, message, contact points, engine (`omnikrux` or `tool`), an optional channel, and its origin (`page`, or `panel` with a dashboard and panel id). It has a `version`; a save names the version it started from and a later one is refused with "This rule was changed somewhere else since you opened it".
+
+A **target** is one rule in one project: the project's source, the engine it really runs in, `eval_expr` (what OmniKrux queries; the project's filter is added by `run_query`), `rule_text` (what a tool runs, with the project's filter injected into every selector) and, for a tool, its `tool_object` and `applied_version`. A group rule has one target per member project and never reads another project's source. `desired(rule)` in `sync.py` says what the targets should be; `reconcile_rule` writes that (`AlertStore.put_targets`) and then:
+
+- gives a target with no source of the type `error` with the engine's copy, never OK;
+- removes a leaving target that holds nothing in a tool at once, and hands a leaving or changed tool target to `ToolSync`;
+- purges a deleted rule when its last target is gone.
+
+Reconciles of one rule never overlap (a lock per rule). `reconcile_dashboard` keeps the rules of a dashboard's panels in step with its document, and runs again at every start (`reconcile_all`), so a crash between the dashboard write and the rule writes converges. Contact points, links and projects changing also reconcile what they affect.
+
+### The alert object of the dashboard document
+
+A panel's `alert` (`null` by default) is part of the document, so the document stays at `schemaVersion: 1`: it was reserved and refused before, and every older document has `null`. Only `timeseries`, `stat`, `gauge` and `bar` panels may have one.
+
+| Field | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `name` | text | required | 1 to 120 characters, no line breaks. |
+| `query` | text | required | The `ref` of one of the panel's queries. A Loki query must be a metric query. Its variables must have defaults (see below). |
+| `of` | `each` or `total` | `each` | `total` adds the series up before comparing. |
+| `op` | `above` or `below` | required | |
+| `threshold` | number | required | Finite. |
+| `for` | duration | `5m` | `0s` to `24h`, like `5m`. |
+| `every` | `30s`, `1m` or `5m` | `1m` | |
+| `severity` | `critical`, `warning` or `info` | `warning` | |
+| `message` | text | `""` | At most 500 characters; `{{label}}` and `{{value}}`. |
+| `notify` | list of contact point ids | `[]` | At most 10, each once. |
+| `engine` | `omnikrux` or `tool` | `omnikrux` | |
+| `channel` | `{receiver, labels}` or `null` | `null` | Only with `engine: "tool"`; at most 10 labels. |
+
+Unknown keys are refused. The problems' copy is in `dashboards/schema.py` and the same words in `schema.ts`; both walkers are checked by shared case files in `backend/tests/monitoring/`: `dashboard_schema_cases.json` (the alert cases join the existing ones), `alert_expr_cases.json` (the query text) and `alert_message_cases.json` (message templates). A change to a rule starts with a case. A dashboard save, create or restore reconciles the panel rules and answers with `alert_changes` (what that did in the tools); a delete leaves the rules as page rules (`origin: page`); a copy never copies an alert. Deleting a contact point saves each dashboard that names it again without it.
+
+### The rule expression rules
+
+`rule_expr.py` is a port of the browser's `interpolate` (`frontend/src/monitoring/dashboards/interpolate.ts`), with the same quote-context scan (comments, `"`, `'` and backtick contexts, a lone `\r`), the same refusals and the same words, so the browser and the server refuse the same documents. An alert has nobody to choose values, so:
+
+- each variable takes its **default** (a variable with none is refused, naming it); a multi-value default is placed as `a|b` inside double quotes only, and an unquoted multi-value is refused with "Put $x inside double quotes in the query.";
+- `$__interval` is the alert's `every`;
+- `$__rate_interval` is `max(4 × every, 240 s)`, the same rule as a chart's (`RATE_INTERVAL_FLOOR = 240` in `rule_expr.py` and in `interpolate.ts`; the TypeScript side imports it), so a panel's chart and its alert read the same query, and a rate keeps enough samples at a one-minute scrape;
+- `$__range` is refused for an alert;
+- a page rule and a dry run take raw text through the same step without a document: any other `$name` is refused ("Uses $name, which isn't a variable here. Write the value into the query."), and the stored `expr` is the substituted text.
+
+A rule's check is `eval_expr(expr, of)` (the query, or `sum(query)` for `total`). A tool's rule text is `condition_expr`: the same wrapped in the comparison (a line feed ends the operand so a trailing `#` comment can't swallow it). A Loki query that returns log lines (it starts with `{`) is refused with an example of a metric query.
+
+### The engine
+
+`AlertEngine.start()` runs a loop that ticks once a second (`TICK_SECONDS`). A tick starts a check of every due target, at most eight at once (never the same target twice at once), and returns without waiting, so a slow source never holds up the others. A target's first check is spread by a hash of its id over its interval (`first_offset`), so targets made together don't all run in the same second. A check is bounded at 45 s (`CHECK_SECONDS`).
+
+One check is an instant query of `eval_expr` through `run_query` with the target's project, so the project's filter is on every selector. The samples, labelled with the series' labels plus `alertname`, `severity`, `project` and `omnikrux_rule`, go to `evaluate.step`, which holds the state machine per series:
+
+- a breaching new series is **pending** from now, or **firing** at once when `for` is 0; a pending one fires when it has been pending for `for`; one that stops breaching, or is gone, drops, and a firing one is **resolved**;
+- the target is firing when any series fires, else pending when any is pending, else **no data** when no sample carries a value, else OK;
+- `above` and `below` never breach on a missing or NaN value; infinities breach but are stored as no value.
+
+Then the instances, the history, the target's state and its next check are written in one transaction, and the notifier is asked to tell. **A failed query is never OK:** the target becomes `unreachable` (the source can't be read) or `error` (the rule can't run as written) with the failure's words, and its instances stay as they were: nothing resolves. After three failures in a row (`CANT_CHECK_AFTER`) one "can't check" notice goes out, repeated every four hours while it lasts, and the first check that works sends "checking again". An answer cut at `MAX_SERIES` series is an `error` too.
+
+**Restarts.** The instances are stored, so a restart picks up where it left off. A pending timer never counts time nobody checked: after a failure, or when the first check after a restart or a change of the rule (a pause and resume) comes more than two intervals after the last one, pending instances start over; a check that is merely late keeps them.
+
+**Retention.** Once an hour (first one a minute after the start) the loop prunes history and delivery rows: history older than seven days, more than 500 rows per target or 20,000 in all, and more than 5,000 deliveries.
+
+**The state of rules that run in a tool** is read by `ToolStateReader.refresh` every 30 s in the same loop: Prometheus at `/api/v1/rules?type=alert`, Loki at `/prometheus/api/v1/rules`, each source once per refresh, all at once and bounded. Each target's own group (`omnikrux-<target id>`) carries its state; only the rule and alerts labelled with the target's rule and project are taken. A group the tool doesn't hold is `waiting` for ten minutes after the rule was applied, then `error`; a source that can't be read is `unreachable` and leaves the instances as they were; a linked Alertmanager marks the instances it silences. History records `firing` and `resolved` for what it sees; **nothing is notified from here: the tool's Alertmanager does that.**
+
+**`OMNIKRUX_ALERT_ENGINE`** (`Settings.alert_engine`, default true): when false, the engine is built but never starts, and neither does anything else that would run in its loop, the tool state reader included. Rules that run in a tool keep running in the tool, and the Alerts page says so in its engine note. Tests drive `tick(now)` and `ToolStateReader.refresh(now)` directly and run no loop; `monitoring_app` turns the engine off.
+
+### The notifier
+
+`Notifier.notify` builds at most one `Notice` per check of a target and sends it to each contact point of the rule (grouped per rule and check). A notice holds the instances that are newly firing (or firing and never told: a delivery that failed everywhere, or a silence that ended), those still firing whose last notice is older than `REPEAT_SECONDS` (4 h), and the resolved ones somebody was told about. Instances an active silence matches are left out and marked `silenced` (which forgets when they were told, so they are told again when the silence ends while they still fire); nothing is sent when nothing is left. An instance's `last_notified_at` moves only once its notice reached at least one contact point.
+
+Deliveries run in the background, at most four at once, through `senders.deliver`: three attempts after 0, 5 and 30 seconds (`RETRY_DELAYS`), each bounded at 10 seconds. A delivery that failed is recorded with copy that carries no secret. Each sender builds its own payload from the `Notice`:
+
+| Type | Payload |
+| --- | --- |
+| Webhook | JSON `{version: "1", status, rule, project, severity, summary, alerts: [{labels, value, starts_at, ends_at, message}], sent_at}`; `status` is `firing`, `resolved`, `cant_check`, `checking_again` or `test`. An optional `Authorization: Bearer` header. |
+| Slack | `{text, blocks}`: a title section (`*[Firing] Rule*` and the summary), a section of up to ten instance lines, and a context line. Text is escaped for `&`, `<` and `>`. |
+| Teams | An Adaptive Card message (`attachments` with `application/vnd.microsoft.card.adaptive`, version 1.4): a bold title and a text block per line. |
+| PagerDuty | Events API v2: `routing_key`, `event_action` (`trigger`; `resolve` for resolved and checking-again; a test sends a trigger then a resolve), `dedup_key` (per target and kind) and a `payload` with `summary`, `source`, `severity` and `custom_details`. |
+| Email | A plain-text message through `smtplib` in a thread. Subject `[Firing] Rule` (and so on), a body with the summary, up to ten instance lines and "Sent by OmniKrux." |
+
+Every HTTP contact point uses one `aiohttp` session without cookies or environment proxies, never follows redirects and verifies TLS with the default trust store.
+
+### Secrets, and `export_receivers`
+
+A contact point's settings are plain JSON; its secrets (a webhook address, bearer token, password, routing key) are one `SecretBox`-encrypted object, decrypted only inside the backend. The API never returns a secret: it returns `secrets_set`, the names of the ones that are set. A webhook address keeps its host in `settings.url_host`, for display. Every failure is mapped by its type to copy that names the contact point and never carries an address, a path, a token or a password; a receiver's own words reach that copy only after `scrub`, which replaces every secret value (and long path and query pieces of an address, as they look encoded or decoded) with `•••`. Nothing logs a secret: logs carry the contact point's id, its type and the copy. A saved secret is dropped when what it belongs to changes (a PagerDuty routing key when its events address changes, a webhook token when its address does).
+
+`contact_points/export.py` is the **one** place a secret leaves OmniKrux: `export_receivers(services, alertmanager_source_id=..., contact_point_ids=...)` returns the contact points with their secrets for an Alertmanager that OmniKrux installed itself (`installed_by_omnikrux`), so the installer can write them into its receivers. Any other source raises `SecretRuleRefused`, checked before a contact point is read. No route calls it yet.
+
+### Rules that run in a tool
+
+**`PrometheusRule`** (`tool/prometheus_rule.py`). The server builds every object itself (`desired_object`); nothing the browser sends reaches the cluster. A review is a server-built plan made by `make_plan` in `omnikrux/actions/pipeline.py`, the function `plan_action` was split into. It takes the app state, the actor, the action, a handler, the target and the parameters, and still calls `_authorize`, so the pipeline's rules hold: a delete on a production cluster asks for the name, and the production warning shows. The action is `create` (no object yet), `edit` or `delete`; the handler, `PrometheusRuleAction`, is **not in `ACTIONS`**, so the browser can never ask for it (`ActionName`, what `POST /api/actions/plan` takes, is unchanged). The plan applies through the same `POST /api/actions/{plan_id}/apply`, audit first.
+
+- **Placement and name.** The object is named once, when the target has none (`omnikrux-<slug>-<hash of the target id>`); afterwards `tool_object` names it, so renaming a rule never makes a second object. It goes into the namespace of the Prometheus custom resource that serves the source (found by the Service's selector labels), and is labelled to meet that resource's `ruleSelector` (`kube-prometheus-stack` uses `release: <name>`), plus `app.kubernetes.io/managed-by: omnikrux` and `omnikrux.io/target: <target id>`. Its one group is `omnikrux-<target id>`, at the rule's interval, with one alert whose labels are the channel's labels, then `severity`, `omnikrux_rule` and `omnikrux_project` (OmniKrux's own labels win).
+- **Blocked copy.** When the selector can't be met (an empty `ruleSelector`, an expression OmniKrux can't satisfy, a namespace the Prometheus doesn't read) or the source isn't reached through a cluster, the plan says why in `blocked` and the rule runs in OmniKrux instead ("Run this rule in OmniKrux instead."). An object that exists but wasn't made by OmniKrux for this rule is never changed or deleted.
+- **Stale review.** An apply reads the rule again first: when what OmniKrux would write now differs from what was reviewed, it is refused with "This rule changed since you reviewed it. Review it again." A write whose outcome isn't known (the cluster didn't answer) still records the object on the target, so it is never forgotten.
+
+**Loki ruler** (`tool/loki_ruler.py`). OmniKrux writes and removes rules itself, at once, with no review step (a Loki ruler is an outside tool, not a cluster), and writes an audit record before each change ("no audit, no change": if the record can't be written, nothing is sent and the target reads failed). Each target is one group in the ruler's namespace `omnikrux`, named `omnikrux-<target id>`. The ruler's API is Loki's `/loki/api/v1/rules`. A write is "in sync" only while the rule and target are still what was written; a write whose outcome isn't known is recorded as possibly written, so a later removal never forgets it; a removal answered with 404 counts as done. **The ruler needs a writable rule store.** Loki's `local` store is read-only through the API (a write answers 500, a delete "unsupported in rule local store"), so on a Loki without a writable store the write is refused, and the target reads "Not applied" with why.
+
+### The dry run
+
+`POST /alerts/dry-run` takes the scope, the source, the query, the condition (`of`, `op`, `threshold`, `for`, `every`), a `window_seconds` and optionally `candidates` and `suggest`. It reads one range query per project of the scope through `run_query` with the project's id (so the filter is on every selector), replays the condition on what came back and answers how many times it would have fired, when, whether it is firing now, and per project. It stores nothing, tells nobody and writes no audit record. A project whose query fails says so in its own `error` and counts nothing. It is also the API for the recommendation: the frontend's `calmerThreshold` rule (registered in `AlertTab.tsx` with `registerRecommendationRule`) asks for `suggest` and shows "That's often. At X it would have fired ..." when the replay fired three times or more over complete data; `RecommendationContext.alert` is set from it.
+
+### Tests and fakes
+
+The fakes are in `backend/tests/monitoring/fakes.py` (`FakePrometheus` with a rules API, `FakeLoki` with a ruler store, `FakeAlertmanager` with silences and alerts), `fake_receivers.py` (`FakeWebhookReceiver`, `FakeSmtp`), `tests/fakekube.py` (a generic POST, and a `PrometheusRule` kind with the Operator's `Prometheus` custom resource) and `alert_env.py` (a project on the fake Prometheus, a contact point on the fake receiver and an engine driven by `tick(now)`; times are fixed and the notifier waits nothing between retries). Frontend tests use `frontend/src/monitoring/test/`.
+
+**To add a contact point type:** add it to `ContactPointType`, `SETTING_KEYS`, `SECRET_KEYS`, `REQUIRED_SECRET`, `TYPE_LABELS` and its checks in `contact_points/types.py`; build its payload and add a sender in `senders.py` (map every failure to copy that names the contact point and carries no secret); add it to the frontend's type in `alerts/api.ts` and its fields in `contacts/ContactPointForm.tsx`; and add a case to `test_senders.py` and `test_contact_points.py`.
+
+**To add a tool engine** (another place a rule can run): add its kind to `ToolKind`, implement `ToolSync.after_change` in `tool/<name>.py` (writing or reviewing at once, auditing before each change), teach `ToolEngines` and `CapabilityCache` when a source can run rules (and the reason when it can't), add its state to `ToolStateReader`, give its target a place in the delete review (`cluster_removals` or `loki_removals`) and the frontend's `whereLabel`.
+
+### Alerts on a kind cluster
+
+`backend/tests/e2e/test_monitoring_kind.py` also checks alerts against the tools below, and `backend/tests/monitoring/test_mailpit.py` checks real mail. They use the marker `kind` and `mailpit` (see [Testing](testing.md#markers)).
+
+- `test_tool_rule_round_trip_on_kind` makes a project over the operator's Prometheus and Alertmanager, a rule `vector(1)` above 0 that runs in the tool (channel `live-check`, labels `team="omnikrux-live"`), syncs and applies its review, finds the `PrometheusRule` with the label `release=kps`, waits for the target to read `firing` (from Prometheus's rules API) and for Alertmanager's webhook to reach the test's receiver, then deletes the rule through its reviews and finds the object gone.
+- `test_omnikrux_engine_on_kind` runs `count(up)` above 0 every 30 s in OmniKrux with a webhook contact point to the test's receiver, waits for one `firing`, silences it (nothing more is sent), expires the silence (it is told again), changes the threshold to resolve and waits for one `resolved`.
+- `test_alertmanager_silence_on_kind` creates a silence in the cluster's Alertmanager through the API, finds it in `/api/v2/silences` and expires it.
+- `test_loki_ruler_on_kind` makes a rule on `sum(count_over_time({job="omnikrux-live-check"}[5m]))` that runs in the tool, finds its group in the ruler, waits for the target to read `ok` or `firing` (never `error`) and removes it. It skips when the ruler isn't on.
+- `test_email_reaches_mailpit` adds an email contact point for `127.0.0.1:1025` (security `none`), presses **Send a test** and finds one message with the subject "OmniKrux test message" in Mailpit's API (it empties that inbox first).
+
+The tests that need OmniKrux's engine build their own app with `alert_engine=True`. The kind tests skip with "The Prometheus Operator and Alertmanager aren't installed in the monitoring namespace (see docs/guide/developer/monitoring.md)." when the Services below are missing, and the Mailpit test with "Mailpit isn't running on 127.0.0.1:1025 (see docs/guide/developer/monitoring.md)." Each test removes what it made through the API, reviews included.
+
+**The receiver.** Alertmanager runs inside the kind cluster, which on Docker Desktop is inside a VM: it reaches this machine as `host.docker.internal`, and a socket bound to `127.0.0.1` on the host is not reachable from there. The tests start their own webhook receiver on **`0.0.0.0:9911`** for the length of a test and stop it afterwards (anything on your network can post to it meanwhile; it keeps only what it was sent). Port 9911 must be free, or the tests skip. To watch deliveries by hand, `python -m tests.monitoring.webhook_receiver --port 9911` prints one line per request (it listens on 127.0.0.1 unless you pass `--host`, and prints a note when you do).
+
+**The tools.** Install them any way you like (Helm or Argo CD) in the namespace `monitoring`, next to the Prometheus and Loki described under [The kind tests](#the-kind-tests):
+
+| Tool | Chart | Pinned version | Service |
+| --- | --- | --- | --- |
+| Prometheus Operator, Prometheus and Alertmanager | `prometheus-community/kube-prometheus-stack` | 93.1.1 (operator v0.95.1), release name `kps` | `kps-kube-prometheus-stack-prometheus` (9090) and `kps-kube-prometheus-stack-alertmanager` (9093) |
+| Mailpit | the `axllent/mailpit` image | v1.33.1 | `127.0.0.1:1025` (SMTP) and `127.0.0.1:8025` (API), on the host |
+
+The release must be named `kps`: the Prometheus Operator's rule selector is `release=kps`, and the test looks for that label. Values (small; no Grafana, kube-state-metrics or node-exporter, which the Prometheus of [The kind tests](#the-kind-tests) already runs, so there is no clash on the node-exporter's host port; no default rules; Alertmanager routes `team="omnikrux-live"` to the test's receiver):
+
+```yaml
+grafana: {enabled: false}
+kubeStateMetrics: {enabled: false}
+nodeExporter: {enabled: false}
+defaultRules: {create: false}
+kubeControllerManager: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeEtcd: {enabled: false}
+kubeProxy: {enabled: false}
+prometheus:
+  prometheusSpec:
+    retention: 6h
+    evaluationInterval: 30s
+    resources: {requests: {cpu: 50m, memory: 256Mi}, limits: {memory: 512Mi}}
+alertmanager:
+  alertmanagerSpec:
+    resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 128Mi}}
+  config:
+    route:
+      receiver: "null"
+      routes:
+        - {receiver: live-check, matchers: ['team="omnikrux-live"']}
+    receivers:
+      - name: "null"
+      - name: live-check
+        webhook_configs: [{url: "http://host.docker.internal:9911/alertmanager"}]
+```
+
+With Helm: `helm upgrade --install kps prometheus-community/kube-prometheus-stack -n monitoring --version 93.1.1 -f kps-values.yaml --wait`.
+
+**The Loki ruler.** Turn the ruler on in the Loki values of [The kind tests](#the-kind-tests), with a **writable rule store**. Loki's `local` rule store is read-only through the API (a write answers 500 and a delete "unsupported in rule local store"), so use the object-store backend on the scratch volume:
+
+```yaml
+loki:
+  rulerConfig:
+    rule_path: /tmp/rules
+    alertmanager_url: "http://kps-kube-prometheus-stack-alertmanager.monitoring:9093"
+    enable_api: true
+  structuredConfig:
+    storage_config:
+      use_thanos_objstore: true
+      object_store: {filesystem: {dir: /var/loki/chunks}}
+    ruler_storage: {backend: filesystem, filesystem: {dir: /var/loki/rules}}
+```
+
+Add these to the `loki:` block of those values and upgrade the release (or sync its Application). Loki restarts, and its pushed log lines go with it, so [push them again](#pushing-the-log-lines). Without the ruler the Loki test skips. A ruler that holds no rule yet answers a list of rules with 404 "no rule groups found"; OmniKrux counts that as on.
+
+**Mailpit.** `docker run -d --name omnikrux-mailpit -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 axllent/mailpit:v1.33.1`. The gate's `-m "not kind and not cloud_live"` doesn't exclude `mailpit`, so while Mailpit runs on your machine the Mailpit test runs in the gate too (it mails only 127.0.0.1); without Mailpit it skips.
+
+**Log lines.** The Loki ruler test reads `{job="omnikrux-live-check"}`; the three `omnikrux-live-check` lines the kind tests already need fit. Either state it ends in (`ok` or `firing`) passes; only `error` fails it.
+
+Run them from `backend`:
+
+```bash
+python -m uv run --frozen pytest -q -m kind tests/e2e/test_monitoring_kind.py
+python -m uv run --frozen pytest -q tests/monitoring/test_mailpit.py
+```
+
+The first takes about four minutes (Prometheus loads rules on a schedule, and Alertmanager waits before it sends).
+
 ## Running the tests
 
 Backend, from `backend`:
@@ -334,7 +557,7 @@ python -m uv run --frozen ruff check .
 python -m uv run --frozen ruff format --check .
 ```
 
-Monitoring's tests are in `backend/tests/monitoring/`. They run against local fake tools (`tests/monitoring/fakes.py`: a Prometheus, a Loki and a Grafana, with every authentication type) and the fake cluster in `tests/fakekube.py`, so they need no cluster and no network. A watchdog in `tests/monitoring/conftest.py` bounds each of them: a test still running after five minutes prints every thread's stack and ends the run, so a hang names itself.
+Monitoring's tests are in `backend/tests/monitoring/`. They run against local fake tools (`tests/monitoring/fakes.py`: a Prometheus, a Loki, an Alertmanager and a Grafana, with every authentication type) and the fake cluster in `tests/fakekube.py`, so they need no cluster and no network. A watchdog in `tests/monitoring/conftest.py` bounds each of them: a test still running after five minutes prints every thread's stack and ends the run, so a hang names itself.
 
 Frontend, from `frontend`:
 
@@ -349,14 +572,14 @@ The Monitoring app is a lazy chunk: the shell loads it only when you open Monito
 
 ### The kind tests
 
-`backend/tests/e2e/test_monitoring_kind.py` checks discovery, setup, queries, filters, dashboards, the catalog and the suggestion templates against a real Prometheus and Loki in the `omnikrux-dev` kind cluster (see [Setup](setup.md) for the cluster). They run with the other kind tests:
+`backend/tests/e2e/test_monitoring_kind.py` checks discovery, setup, queries, filters, dashboards, the catalog, the suggestion templates and alerts against a real Prometheus and Loki in the `omnikrux-dev` kind cluster (see [Setup](setup.md) for the cluster). They run with the other kind tests:
 
 ```bash
 cd backend
 python -m uv run --frozen pytest -q -m kind tests/e2e/test_monitoring_kind.py
 ```
 
-They need Prometheus and Loki in the namespace `monitoring`, with Services named `prometheus-server` and `loki`, and log lines to read (below). Without the Services the tests skip and say so. They create their projects, sources and dashboards through the API and delete them again, leaving the tools installed.
+They need Prometheus and Loki in the namespace `monitoring` (the alert checks need more: see [Alerts on a kind cluster](#alerts-on-a-kind-cluster)), with Services named `prometheus-server` and `loki`, and log lines to read (below). Without the Services the tests skip and say so. They create their projects, sources and dashboards through the API and delete them again, leaving the tools installed.
 
 The catalog and suggestion tests use both tools, and need log lines labelled `job="omnikrux-m3-check"`, `namespace="demo"` and a `level` of `info`, `warn` or `error`, from the last hour (push them again when the tests find the `job` value missing or the Loki volume empty; see below):
 

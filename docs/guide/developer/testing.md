@@ -40,7 +40,7 @@ npm run build
 
 ## Markers
 
-Two pytest markers are excluded from the default run. Both are registered in `backend/pyproject.toml`.
+Three pytest markers are registered in `backend/pyproject.toml`. `kind` and `cloud_live` are excluded from the default run; `mailpit` is not, but its test skips itself when there is no Mailpit.
 
 ### `kind`
 
@@ -51,6 +51,14 @@ Use them when you change how OmniKrux talks to a real API server: watches, actio
 ```bash
 bash ../scripts/dev-kind.sh
 python -m uv run --frozen pytest -q -m kind
+```
+
+### `mailpit`
+
+Tests that need [Mailpit](https://mailpit.axllent.org) on the machine: SMTP on `127.0.0.1:1025` and its API on `127.0.0.1:8025` (`backend/tests/monitoring/test_mailpit.py`). They skip when Mailpit isn't there, with "Mailpit isn't running on 127.0.0.1:1025 (see docs/guide/developer/monitoring.md)." The gate's `-m "not kind and not cloud_live"` does not exclude them, so while Mailpit runs locally they run in the gate too; they mail only 127.0.0.1 and empty Mailpit's inbox first. Start it with `docker run -d --name omnikrux-mailpit -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 axllent/mailpit:v1.33.1` and run them alone with:
+
+```bash
+python -m uv run --frozen pytest -q tests/monitoring/test_mailpit.py
 ```
 
 ### `cloud_live`

@@ -1,10 +1,21 @@
 """Monitoring against the Prometheus and Loki installed in kind's `monitoring` namespace."""
 
+import asyncio
+import json
 import re
+import threading
 import time
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 
 import pytest
+import yaml
+from aiohttp import web
+from fastapi.testclient import TestClient
+
+from omnikrux.config import Settings
+from omnikrux.main import create_app
+from tests.e2e.support import kubectl, wait_for
 
 pytestmark = pytest.mark.kind
 
@@ -451,3 +462,468 @@ def test_catalog_follows_a_filter_on_the_cluster(client, cluster, tools):
         assert narrow_section["state"] in ("ok", "partial"), narrow_section["message"]
         assert narrow_section["metrics"]
         assert restarts not in metrics_by_name(narrow_section)
+
+
+# --- Alerts: the Prometheus Operator, Alertmanager, the Loki ruler and OmniKrux's own engine ---
+#
+# These need the tools of `docs/guide/developer/monitoring.md` ("Alerts on a kind cluster"):
+# kube-prometheus-stack (release `kps`, Alertmanager routing `team="omnikrux-live"` to
+# http://host.docker.internal:9911/alertmanager) and, for the Loki test, a Loki ruler with a
+# writable rule store.
+
+NO_ALERT_TOOLS = (
+    "The Prometheus Operator and Alertmanager aren't installed in the monitoring namespace "
+    "(see docs/guide/developer/monitoring.md)."
+)
+NO_RULER = "The Loki ruler isn't turned on in the monitoring namespace."
+ALERTS = f"{API}/alerts"
+OPERATOR_PROMETHEUS = "kps-kube-prometheus-stack-prometheus"
+OPERATOR_ALERTMANAGER = "kps-kube-prometheus-stack-alertmanager"
+LIVE_TEAM = {"team": "omnikrux-live"}
+RECEIVER_PORT = 9911
+THREE_MINUTES = 180.0
+EVERY_30S = {"of": "each", "op": "above", "threshold": 0, "for": "0s", "every": "30s"}
+
+
+class Receiver:
+    """The test's own webhook server, for as long as the test runs.
+
+    It binds 0.0.0.0, not 127.0.0.1: Alertmanager runs in kind (inside Docker Desktop's VM) and
+    reaches this machine as `host.docker.internal`, which a socket bound to loopback only never
+    sees. Anything on the local network could post to it meanwhile, so it keeps nothing but what
+    it was sent, answers 200 and stops with the test."""
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, dict]] = []
+        self._lock = threading.Lock()
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._failure: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        runner = web.AppRunner(self._app())
+        try:
+            self._loop.run_until_complete(runner.setup())
+            site = web.TCPSite(runner, "0.0.0.0", RECEIVER_PORT)  # all interfaces: see the class
+            self._loop.run_until_complete(site.start())
+        except OSError as exc:
+            self._failure = exc
+            self._ready.set()
+            return
+        self._ready.set()
+        try:
+            self._loop.run_forever()
+        finally:
+            self._loop.run_until_complete(runner.cleanup())
+            self._loop.close()
+
+    def _app(self) -> web.Application:
+        async def take(request: web.Request) -> web.Response:
+            try:
+                body = await request.json()
+            except ValueError:
+                body = {}
+            with self._lock:
+                self.requests.append((request.path, body if isinstance(body, dict) else {}))
+            return web.Response(text="ok")
+
+        app = web.Application()
+        app.router.add_route("*", "/{tail:.*}", take)
+        return app
+
+    def start(self) -> None:
+        self._thread.start()
+        assert self._ready.wait(10), "the receiver didn't start"
+        if self._failure is not None:
+            pytest.skip(f"Port {RECEIVER_PORT} on this machine isn't free ({self._failure}).")
+
+    def stop(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(10)
+
+    def taken(self, path: str) -> list[dict]:
+        with self._lock:
+            return [body for p, body in self.requests if p == path]
+
+
+@pytest.fixture
+def receiver():
+    server = Receiver()
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+def alert_client(tmp_path, kind_kubeconfig):
+    """The real app with OmniKrux's alert engine turned on (the tests that need it say so)."""
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            kubeconfig=str(kind_kubeconfig),
+            in_container=False,
+            port_forward_ports="30120-30139",
+            alert_engine=True,
+        )
+    )
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def alert_cluster(alert_client):
+    clusters = alert_client.get("/api/clusters").json()
+    assert len(clusters) == 1, clusters
+    return clusters[0]["id"]
+
+
+@pytest.fixture
+def alert_tools(alert_client, alert_cluster) -> dict[str, dict]:
+    """The operator's Prometheus and Alertmanager, and Loki when it is there; else a skip."""
+    response = alert_client.get(f"{API}/discovery/{alert_cluster}")
+    assert response.status_code == 200, response.text
+    found = response.json()["found"]
+    prometheus = reachable(found, "prometheus", OPERATOR_PROMETHEUS)
+    alertmanager = reachable(found, "alertmanager", OPERATOR_ALERTMANAGER)
+    if prometheus is None or alertmanager is None:
+        pytest.skip(NO_ALERT_TOOLS)
+    out = {"prometheus": prometheus, "alertmanager": alertmanager}
+    if loki := reachable(found, "loki", "loki"):
+        out["loki"] = loki
+    return out
+
+
+def proxied(service: str, path: str) -> dict | list:
+    """A read of a Service in `monitoring` through the API server (JSON)."""
+    return json.loads(
+        kubectl("get", "--raw", f"/api/v1/namespaces/monitoring/services/{service}/proxy/{path}")
+    )
+
+
+def alert_project(client, cluster: str, tools: dict[str, dict], name: str, types: list[str]):
+    sources = [{"source": new_source(cluster, tools[t]), "filter": ""} for t in types]
+    return set_up(client, cluster, name, sources)
+
+
+def rule_body(project: dict, name: str, expr: str, **over) -> dict:
+    body = {
+        "name": name,
+        "scope": {"kind": "project", "id": project["id"]},
+        "source": {"type": "prometheus", "id": None},
+        "expr": expr,
+        "condition": EVERY_30S,
+        "engine": "tool",
+    }
+    return body | over
+
+
+def add_alert_rule(client, body: dict) -> dict:
+    response = client.post(f"{ALERTS}/rules", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()["rule"]
+
+
+def rule_now(client, rule_id: str) -> dict | None:
+    response = client.get(f"{ALERTS}/rules/{rule_id}")
+    return None if response.status_code == 404 else response.json()
+
+
+def apply_plan(client, plan: dict) -> None:
+    response = client.post(
+        f"/api/actions/{plan['plan_id']}/apply", json={"confirm_text": plan["confirm_text"]}
+    )
+    assert response.status_code == 200, response.text
+
+
+def sync_and_apply(client, target_id: str) -> None:
+    """Bring the tool in line with the target: the review is applied like any cluster change."""
+    response = client.post(f"{ALERTS}/targets/{target_id}/sync")
+    assert response.status_code == 200, response.text
+    answer = response.json()
+    if answer["kind"] == "review":
+        assert not answer["plan"]["blocked"], answer["plan"]["blocked"]
+        apply_plan(client, answer["plan"])
+
+
+def remove_rule(client, rule_id: str) -> None:
+    """Delete a rule through its review; what it left in a cluster goes through its own review."""
+    rule = rule_now(client, rule_id)
+    if rule is None:
+        return
+    review = client.get(f"{ALERTS}/rules/{rule_id}/delete-review")
+    assert review.status_code == 200, review.text
+    done = client.delete(f"{ALERTS}/rules/{rule_id}", params={"token": review.json()["token"]})
+    assert done.status_code == 200, done.text
+    left = done.json()["rule"]
+    for target in (left or {}).get("targets", []):
+        sync_and_apply(client, target["id"])
+    wait_for(lambda: rule_now(client, rule_id) is None, "the rule to be gone", timeout=60)
+
+
+def remove_contact_point(client, cp_id: str) -> None:
+    review = client.get(f"{ALERTS}/contact-points/{cp_id}/delete-review")
+    if review.status_code == 404:
+        return
+    assert review.status_code == 200, review.text
+    done = client.delete(
+        f"{ALERTS}/contact-points/{cp_id}", params={"token": review.json()["token"]}
+    )
+    assert done.status_code == 204, done.text
+
+
+@contextmanager
+def alert_cleanup(client):
+    """Collects what a test makes (rules, contact points, silences, projects) and removes it,
+    through the API with its reviews, whatever the test did (newest first)."""
+    made: dict[str, list] = {"rules": [], "contact_points": [], "silences": [], "projects": []}
+    try:
+        yield made
+    finally:
+        problems: list[str] = []
+
+        def attempt(what: str, action) -> None:
+            try:
+                action()
+            except BaseException as exc:  # noqa: BLE001 (every cleanup runs; failures are reported)
+                problems.append(f"{what}: {exc}")
+
+        for kind, ident, source_id in reversed(made["silences"]):
+            params = {"source_id": source_id} if source_id else None
+            attempt(
+                "silence",
+                lambda k=kind, i=ident, p=params: client.delete(
+                    f"{ALERTS}/silences/{k}/{i}", params=p
+                ),
+            )
+        for rule_id in reversed(made["rules"]):
+            attempt("rule", lambda r=rule_id: remove_rule(client, r))
+        for cp_id in reversed(made["contact_points"]):
+            attempt("contact point", lambda c=cp_id: remove_contact_point(client, c))
+        for project_id in reversed(made["projects"]):
+            attempt("project", lambda p=project_id: delete_project(client, p))
+        assert not problems, problems
+
+
+def add_webhook(client, name: str, url: str) -> dict:
+    response = client.post(
+        f"{ALERTS}/contact-points", json={"name": name, "type": "webhook", "secrets": {"url": url}}
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def tool_rules_for(target_id: str) -> list[dict]:
+    """The `PrometheusRule` objects (label `release=kps`) that hold this target's group."""
+    items = json.loads(
+        kubectl("get", "prometheusrule", "-n", "monitoring", "-l", "release=kps", "-o", "json")
+    )["items"]
+    return [
+        item
+        for item in items
+        if any(g["name"] == f"omnikrux-{target_id}" for g in item["spec"]["groups"])
+    ]
+
+
+def test_tool_rule_round_trip_on_kind(alert_client, alert_cluster, alert_tools, receiver):
+    client = alert_client
+    with alert_cleanup(client) as made:
+        project = alert_project(
+            client, alert_cluster, alert_tools, "Kind alerts tool", ["prometheus", "alertmanager"]
+        )
+        made["projects"].append(project["id"])
+        rule = add_alert_rule(
+            client,
+            rule_body(
+                project,
+                "Live tool rule",
+                "vector(1)",
+                channel={"receiver": "live-check", "labels": LIVE_TEAM},
+            ),
+        )
+        made["rules"].append(rule["id"])
+        [target] = rule["targets"]
+
+        sync_and_apply(client, target["id"])
+        [held] = tool_rules_for(target["id"])
+        assert held["metadata"]["labels"]["release"] == "kps"
+
+        def firing():
+            current = rule_now(client, rule["id"])
+            return current is not None and current["targets"][0]["state"] == "firing"
+
+        wait_for(firing, "the target to read firing", timeout=THREE_MINUTES, interval=5)
+        reading = proxied(f"{OPERATOR_PROMETHEUS}:9090", "api/v1/rules?type=alert")
+        names = [r["name"] for g in reading["data"]["groups"] for r in g["rules"]]
+        assert "Live tool rule" in names
+
+        def posted():
+            return any(
+                a["labels"].get("alertname") == "Live tool rule" and a["status"] == "firing"
+                for body in receiver.taken("/alertmanager")
+                for a in body.get("alerts", [])
+            )
+
+        wait_for(posted, "Alertmanager's webhook", timeout=THREE_MINUTES, interval=5)
+
+        remove_rule(client, rule["id"])
+        assert tool_rules_for(target["id"]) == []
+
+
+def test_omnikrux_engine_on_kind(alert_client, alert_cluster, alert_tools, receiver):
+    client = alert_client
+    path = "/omnikrux"
+    name = "Live engine rule"
+    with alert_cleanup(client) as made:
+        project = alert_project(
+            client, alert_cluster, alert_tools, "Kind alerts engine", ["prometheus"]
+        )
+        made["projects"].append(project["id"])
+        hook = add_webhook(client, "Live receiver", f"http://127.0.0.1:{RECEIVER_PORT}{path}")
+        made["contact_points"].append(hook["id"])
+        body = rule_body(
+            project, name, "count(up)", engine="omnikrux", contact_point_ids=[hook["id"]]
+        )
+        rule = add_alert_rule(client, body)
+        made["rules"].append(rule["id"])
+
+        def statuses() -> list[str]:
+            return [b["status"] for b in receiver.taken(path) if b.get("rule") == name]
+
+        wait_for(lambda: statuses() == ["firing"], "one firing webhook", timeout=90, interval=2)
+
+        # A silence on the rule: the instance reads silenced, and nothing more is sent.
+        silence = client.post(
+            f"{ALERTS}/silences",
+            json={
+                "where": {"kind": "omnikrux"},
+                "matchers": f'alertname="{name}"',
+                "ends_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
+                "comment": "live check",
+            },
+        )
+        assert silence.status_code == 201, silence.text
+        silence_id = silence.json()["id"]
+        made["silences"].append(("omnikrux", silence_id, None))
+
+        def silenced() -> bool:
+            instances = rule_now(client, rule["id"])["targets"][0]["instances"]
+            return bool(instances) and all(i["silenced"] for i in instances)
+
+        wait_for(silenced, "the instance to read silenced", timeout=90, interval=2)
+        assert statuses() == ["firing"]
+
+        # The silence ends: still firing, so it is told again. Then the condition goes.
+        ended = client.delete(f"{ALERTS}/silences/omnikrux/{silence_id}")
+        assert ended.status_code == 204, ended.text
+        wait_for(lambda: statuses() == ["firing", "firing"], "told again", timeout=90, interval=2)
+        current = rule_now(client, rule["id"])
+        calm = body | {
+            "condition": EVERY_30S | {"threshold": 100000},
+            "base_version": current["version"],
+        }
+        changed = client.put(f"{ALERTS}/rules/{rule['id']}", json=calm)
+        assert changed.status_code == 200, changed.text
+        wait_for(
+            lambda: statuses() == ["firing", "firing", "resolved"],
+            "one resolved webhook",
+            timeout=90,
+            interval=2,
+        )
+
+
+def test_alertmanager_silence_on_kind(alert_client, alert_cluster, alert_tools):
+    client = alert_client
+    with alert_cleanup(client) as made:
+        project = alert_project(
+            client,
+            alert_cluster,
+            alert_tools,
+            "Kind alerts silence",
+            ["prometheus", "alertmanager"],
+        )
+        made["projects"].append(project["id"])
+        source_id = link_of(project, "alertmanager")["source_id"]
+        created = client.post(
+            f"{ALERTS}/silences",
+            json={
+                "where": {"kind": "alertmanager", "source_id": source_id},
+                "matchers": 'alertname="omnikrux-live-silence-check"',
+                "ends_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
+                "comment": "live check",
+            },
+        )
+        assert created.status_code == 201, created.text
+        silence_id = created.json()["id"]
+        made["silences"].append(("alertmanager", silence_id, source_id))
+
+        held = {s["id"]: s for s in proxied(f"{OPERATOR_ALERTMANAGER}:9093", "api/v2/silences")}
+        assert held[silence_id]["status"]["state"] == "active"
+        assert held[silence_id]["matchers"][0]["name"] == "alertname"
+        listed = client.get(f"{ALERTS}/silences").json()
+        assert silence_id in [s["id"] for s in listed["silences"]]
+
+        ended = client.delete(
+            f"{ALERTS}/silences/alertmanager/{silence_id}", params={"source_id": source_id}
+        )
+        assert ended.status_code == 204, ended.text
+        held = {s["id"]: s for s in proxied(f"{OPERATOR_ALERTMANAGER}:9093", "api/v2/silences")}
+        assert held[silence_id]["status"]["state"] == "expired"
+
+
+def ruler_groups() -> list[str]:
+    """The names of the groups the ruler holds. An empty ruler answers 404 ("no rule groups
+    found"), which kubectl reports as NotFound: that is none."""
+    try:  # the ruler lists in YAML
+        path = "/api/v1/namespaces/monitoring/services/loki:3100/proxy/loki/api/v1/rules"
+        rules = yaml.safe_load(kubectl("get", "--raw", path)) or {}
+    except AssertionError as exc:
+        if "NotFound" in str(exc):
+            return []
+        raise
+    return [g["name"] for groups in rules.values() for g in groups]
+
+
+def test_loki_ruler_on_kind(alert_client, alert_cluster, alert_tools):
+    client = alert_client
+    if "loki" not in alert_tools:
+        pytest.skip(NO_RULER)
+    with alert_cleanup(client) as made:
+        project = alert_project(
+            client, alert_cluster, alert_tools, "Kind alerts loki", ["loki", "alertmanager"]
+        )
+        made["projects"].append(project["id"])
+        capability = client.get(
+            f"{ALERTS}/capabilities",
+            params={"scope_kind": "project", "scope_id": project["id"], "source_type": "loki"},
+        ).json()
+        if capability[0]["tool"] != "loki_ruler":
+            pytest.skip(NO_RULER)
+        rule = add_alert_rule(
+            client,
+            rule_body(
+                project,
+                "Live loki rule",
+                'sum(count_over_time({job="omnikrux-live-check"}[5m]))',
+                source={"type": "loki", "id": None},
+                condition=EVERY_30S | {"every": "1m"},
+            ),
+        )
+        made["rules"].append(rule["id"])
+        [target] = rule["targets"]
+        group = f"omnikrux-{target['id']}"
+
+        wait_for(lambda: group in ruler_groups(), "the ruler to hold the group", timeout=60)
+
+        def settled() -> bool:
+            state = rule_now(client, rule["id"])["targets"][0]
+            assert state["state"] != "error", state["message"]
+            return state["state"] in ("ok", "firing")
+
+        wait_for(settled, "the target to read ok or firing", timeout=THREE_MINUTES, interval=5)
+
+        remove_rule(client, rule["id"])
+        assert group not in ruler_groups()
