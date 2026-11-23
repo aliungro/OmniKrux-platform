@@ -538,6 +538,9 @@ async def save_dashboard(id: str, request: Request) -> DashboardOut:
         "panels": panel_count(doc),
     }
     if body.origin == "explore":
+        if current.version != body.base_version:
+            # The save would be refused: no audit record may name panels against another document.
+            raise _conflict(VersionConflict(current.version))
         # Versions never change: a save that goes through was made over exactly `current`'s
         # document (the store refuses it under its lock otherwise), so its panel ids are the old ones.
         stored = {p.get("id") for p in current.spec.get("panels", [])}

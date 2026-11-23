@@ -7,7 +7,7 @@ import {
   createDashboard, DashboardRequestError, getDashboard, saveDashboard, type DashboardOut, type DashboardSummaryOut,
 } from "../dashboards/api";
 import { appendPanel, type NewPanel } from "../dashboards/layout";
-import { DEFAULT_SIZES, emptyDashboard, newPanel, type DashboardSpec, type OwnerKind, type PanelType, type Unit } from "../dashboards/schema";
+import { DEFAULT_SIZES, emptyDashboard, newPanel, type DashboardSpec, type OwnerKind, type PanelSpec, type PanelType, type Unit } from "../dashboards/schema";
 
 export const CHANGED_TWICE = "That dashboard changed twice while adding. Try again.";
 
@@ -52,12 +52,8 @@ export function explorePanel(
   ownerKind: OwnerKind,
 ): NewPanel {
   const base = newPanel(input.panelType, id, { x: 0, y: 0, ...DEFAULT_SIZES[input.panelType] });
-  const options: Record<string, unknown> = { ...base.options };
-  if ("unit" in options) options.unit = input.unit; // logs options have no unit (the schema refuses it)
-  const { layout: _layout, ...rest } = base;
-  void _layout;
-  return {
-    ...rest,
+  const panel: PanelSpec = {
+    ...base,
     title: input.title,
     queries: [{
       ref: "A",
@@ -66,8 +62,23 @@ export function explorePanel(
       legend: "",
       hidden: false,
     }],
-    options,
-  } as unknown as NewPanel;
+  };
+  // The layout is left out so `appendPanel` finds the free spot. Logs options have no unit (the
+  // schema refuses it); every other type's options take it, checked per type.
+  switch (panel.type) {
+    case "logs": return withoutLayout(panel);
+    case "timeseries": return withoutLayout({ ...panel, options: { ...panel.options, unit: input.unit } });
+    case "stat": return withoutLayout({ ...panel, options: { ...panel.options, unit: input.unit } });
+    case "gauge": return withoutLayout({ ...panel, options: { ...panel.options, unit: input.unit } });
+    case "bar": return withoutLayout({ ...panel, options: { ...panel.options, unit: input.unit } });
+    case "table": return withoutLayout({ ...panel, options: { ...panel.options, unit: input.unit } });
+  }
+}
+
+function withoutLayout(panel: PanelSpec): NewPanel {
+  const { layout: _layout, ...rest } = panel;
+  void _layout;
+  return rest;
 }
 
 const isConflict = (err: unknown): err is DashboardRequestError => err instanceof DashboardRequestError && err.code === "version_conflict";

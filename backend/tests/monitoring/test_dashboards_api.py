@@ -491,3 +491,19 @@ async def test_editor_save_details_are_unchanged(monitoring_app, linked_project)
         }
         for v in (2, 3)
     ]
+
+
+async def test_explore_save_over_a_guessed_version_is_refused_without_added_panels(
+    monitoring_app, linked_project
+):
+    http, _ = monitoring_app
+    d = await create(http, linked_project.project_id, doc("API latency"))
+    spec = doc("API latency", panels=2)
+    refused = await http.put(
+        f"{DASHBOARDS}/{d['id']}", json={"base_version": 7, "spec": spec, "origin": "explore"}
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["current_version"] == 1
+    saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
+    assert saves == []
+    assert (await http.get(f"{DASHBOARDS}/{d['id']}")).json()["version"] == 1

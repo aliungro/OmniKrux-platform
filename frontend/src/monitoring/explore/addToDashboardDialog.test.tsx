@@ -3,6 +3,8 @@ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import type { QueryResponse } from "../api/types";
 import { writeDraft } from "../dashboards/drafts/draftStore";
+import { editSessions } from "../dashboards/editor/useDashboardEditor";
+import { editorReducer, VIEW } from "../dashboards/editor/editorState";
 import type { DashboardSpec } from "../dashboards/schema";
 import { linkedProject, linkTo, panel, seedDashboard, spec } from "../test/dashboardSeeds";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
@@ -132,6 +134,84 @@ describe("Add to dashboard", () => {
     shop();
     await openExplore({ page: "explore", project: "p1" });
     const button = await screen.findByRole("button", { name: "Add to dashboard" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("title")).toBe("Run a query first.");
+    fireEvent.click(button);
+    await userEvent.setup().keyboard("a");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a live edit session with unsaved work on the target is mentioned", async () => {
+    shop({ d1: seedDashboard("d1", owner, latency()) });
+    const started = editorReducer(VIEW, { type: "start", dashboardId: "d1", version: 1, spec: latency() });
+    expect(started.mode).toBe("edit");
+    const edited = { ...started, draft: spec("API latency", [panel("p-1", "Latency", "up"), panel("p-2", "Mine", "x")]) } as typeof started;
+    editSessions.set("start1", edited);
+    try {
+      // The session belongs to a second tab (a tab that is gone takes its session with it).
+      renderMonitoringApp({ tabs: tabsWith({ page: "explore", project: "p1", expr: "up" }, { page: "home" }) });
+      await screen.findByRole("heading", { level: 1, name: "Explore" });
+      await screen.findByText("chart 1");
+      const user = userEvent.setup();
+      fireEvent.click(addButton());
+      const box = await screen.findByRole("dialog");
+      const select = within(box).getByRole("combobox", { name: "Dashboard" }) as HTMLSelectElement;
+      await waitFor(() => expect(within(select).getByRole("option", { name: "API latency" })).toBeTruthy());
+      await user.selectOptions(select, "d1");
+      expect(within(box).getByText(/You have unsaved changes to this dashboard in this browser\./)).toBeTruthy();
+      // The session itself is never touched.
+      expect(editSessions.get("start1")).toBe(edited);
+    } finally {
+      editSessions.delete("start1");
+    }
+  });
+
+  it("a successful add makes the app read Monitoring again", async () => {
+    const api = shop({ d1: seedDashboard("d1", owner, latency()) });
+    await openExplore();
+    await screen.findByText("chart 1");
+    const user = userEvent.setup();
+    fireEvent.click(addButton());
+    const box = await screen.findByRole("dialog");
+    const select = within(box).getByRole("combobox", { name: "Dashboard" }) as HTMLSelectElement;
+    await waitFor(() => expect(within(select).getByRole("option", { name: "API latency" })).toBeTruthy());
+    await user.selectOptions(select, "d1");
+    const trees = () => api.requests.filter((r) => r.method === "GET" && r.url === "/api/monitoring/tree").length;
+    const before = trees();
+    await user.click(within(box).getByRole("button", { name: "Add panel" }));
+    await waitFor(() => expect(puts(api)).toHaveLength(1));
+    await waitFor(() => expect(trees()).toBeGreaterThan(before));
+  });
+
+  it("a new dashboard is made in one POST and avoids a taken title", async () => {
+    const taken = seedDashboard("d1", owner, spec("Explore", [panel("p-1", "Latency", "up")]));
+    const api = shop({ d1: taken });
+    await openExplore();
+    await screen.findByText("chart 1");
+    const user = userEvent.setup();
+    fireEvent.click(addButton());
+    const box = await screen.findByRole("dialog");
+    const title = within(box).getByRole("textbox", { name: "Title" }) as HTMLInputElement;
+    await waitFor(() => expect(title.value).toBe("Explore (2)"));
+    await user.click(within(box).getByRole("button", { name: "Add panel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const posts = api.requests.filter((r) => r.method === "POST" && r.url === "/api/monitoring/dashboards");
+    expect(posts).toHaveLength(1);
+    expect(puts(api)).toHaveLength(0);
+    const body = posts[0].body as { spec: DashboardSpec };
+    expect(body.spec.title).toBe("Explore (2)");
+    expect(body.spec.panels.map((p) => p.title)).toEqual(["Targets up"]);
+    expect(screen.getByText('Added to "Explore (2)".')).toBeTruthy();
+  });
+
+  it("a query Explore marked invalid keeps the button disabled", async () => {
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      queryAnswers: { up: { error: { code: "bad_query", message: "parse error at 1:3" }, status: 400 } },
+    }, async () => json([]));
+    await openExplore();
+    await waitFor(() => expect(document.querySelector("[data-explore-meta]")?.textContent).toContain("✗"));
+    const button = addButton();
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.getAttribute("title")).toBe("Run a query first.");
     fireEvent.click(button);

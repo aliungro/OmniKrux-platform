@@ -38,7 +38,6 @@ import { Trail, trailKey } from "./Trail";
 import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trailStore";
 import { EXPLORE_DEBOUNCE_MS, explorePanel, linesKey, useExploreRun, useLinesRun } from "./useExploreRun";
 import s from "./ExplorePage.module.css";
-import a from "./AddToDashboardDialog.module.css";
 
 const ChartView = lazy(() => import("../charts"));
 
@@ -401,7 +400,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
 
   // --- add to dashboard -------------------------------------------------------------------------
   // Only a text that reads as a query can be added. What the builder wrote names the panel.
-  const canAdd = source !== null && expr.trim() !== "" && quickCheck(expr) === null;
+  const canAdd = source !== null && expr.trim() !== "" && quickCheck(expr) === null && !(state.shown === "invalid" && state.expr === expr);
   const builderWrote = builderActive(builder) && !builder.detached;
   const panelKind = kind;
   const defaultPanelTitle = (() => {
@@ -509,11 +508,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
               </button>
             )}
             {working && (
-              <span className={a.status} role="status">
+              <span className={s.addStatus} role="status">
                 {added && (
                   <>
                     <span>{`Added to "${added.title}".`}</span>
-                    <button type="button" className={a.open} onClick={() => openInNewTab({ page: "dashboard", id: added.id })}>Open dashboard</button>
+                    <button type="button" className={s.addOpen} onClick={() => openInNewTab({ page: "dashboard", id: added.id })}>Open dashboard</button>
                   </>
                 )}
               </span>
