@@ -11,7 +11,8 @@ import { pressed } from "../../features/chrome/shortcuts";
 import { getProject } from "../api/client";
 import { projectKey, useMonitoringTree } from "../api/hooks";
 import { RecommendationBar } from "../build/RecommendationBar";
-import { isLogQlMetric, logSelector, quickCheck } from "../build/promql";
+import { firstMetric, isLogQlMetric, logSelector, quickCheck } from "../build/promql";
+import { guessUnit, humanTitle } from "../build/writeQuery";
 import { useOwnerCatalog } from "../catalog/merge";
 import { browseMetrics } from "../catalog/metrics";
 import { PANEL_COPY } from "../dashboards/grid/PanelState";
@@ -26,6 +27,7 @@ import type { MonitoringPageProps } from "../MonitoringApp";
 import { keyboardIsFree } from "../pages/Gone";
 import { equalMonitoringView, type ExploreView, type MonitoringView } from "../shell/tabState";
 import { DEFAULT_EXPLORE_TIME, defaultExploreProject, defaultExploreSource, exploreTime } from "./exploreDefaults";
+import { AddToDashboard, type Added } from "./AddToDashboardDialog";
 import { BrowseList } from "./BrowseList";
 import { builderActive, builderQuery, builderReducer, EMPTY_BUILDER, metricMatch, writableLabel, type BuilderAction, type ExploreBuilder } from "./builderState";
 import { LabelChips } from "./LabelChips";
@@ -36,6 +38,7 @@ import { Trail, trailKey } from "./Trail";
 import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trailStore";
 import { EXPLORE_DEBOUNCE_MS, explorePanel, linesKey, useExploreRun, useLinesRun } from "./useExploreRun";
 import s from "./ExplorePage.module.css";
+import a from "./AddToDashboardDialog.module.css";
 
 const ChartView = lazy(() => import("../charts"));
 
@@ -44,7 +47,8 @@ const TRAIL_SETTLE_MS = 2000;
 const SOURCE_WORDS = { prometheus: "Prometheus-compatible", loki: "Loki" } as const;
 /** Under this width the list folds away behind a button. */
 const NARROW_QUERY = "(max-width: 959px)";
-const ADD_LATER = "Adding a query to a dashboard arrives in a later update.";
+const ADD_FIRST = "Run a query first.";
+const DEFAULT_PANEL_TITLE = "Explore query";
 
 /**
  * The page. A view that changes under it (Back, Forward, the sidebar opening Explore on another
@@ -71,7 +75,7 @@ interface ExploreProps extends MonitoringPageProps {
   write(next: ExploreView): void;
 }
 
-function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
+function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: ExploreProps) {
   const tree = useMonitoringTree();
   const recent = useMemo(() => readRecent(), []);
   const reduced = usePrefersReducedMotion();
@@ -90,6 +94,12 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
   const [logsText, setLogsText] = useState<string | null>(explore.logs ?? null);
   // A window chosen on the chart, for the lines text, place and range it was chosen on.
   const [windowSel, setWindowSel] = useState<{ key: string; range: { start: number; end: number } } | null>(null);
+
+  // Add to dashboard (X5): the dialog, and what the last add said.
+  const [addOpen, setAddOpen] = useState(false);
+  const [added, setAdded] = useState<Added | null>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const openAdd = useRef<() => void>(() => {});
 
   const heading = useRef<HTMLHeadingElement>(null);
   const queryField = useRef<HTMLTextAreaElement>(null);
@@ -200,6 +210,9 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
         e.preventDefault();
         if (listBox.current) listBox.current.focus();
         else if (!e.repeat) { wantList.current = true; setBrowseOpen(true); }
+      } else if (pressed("exploreAdd", e)) {
+        e.preventDefault();
+        if (!e.repeat) openAdd.current();
       } else if (pressed("exploreLogs", e) && linesBox.current) {
         e.preventDefault();
         // The line the list keeps active, else the section's heading: never <body>.
@@ -386,6 +399,20 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
     setWindowSel(null);
   };
 
+  // --- add to dashboard -------------------------------------------------------------------------
+  // Only a text that reads as a query can be added. What the builder wrote names the panel.
+  const canAdd = source !== null && expr.trim() !== "" && quickCheck(expr) === null;
+  const builderWrote = builderActive(builder) && !builder.detached;
+  const panelKind = kind;
+  const defaultPanelTitle = (() => {
+    if (panelKind === "logs") return `Logs from ${logSelector(expr) ?? expr.trim()}`.slice(0, 120);
+    const metric = builderWrote && pickedMetric ? pickedMetric.name : firstMetric(expr);
+    return metric ? humanTitle(metric) : DEFAULT_PANEL_TITLE;
+  })();
+  openAdd.current = () => { if (canAdd && !addOpen) setAddOpen(true); };
+  // A new text is another question: what was said about the last add no longer fits.
+  useEffect(() => { setAdded(null); }, [expr]);
+
   // --- what is drawn -------------------------------------------------------------------------
   const drawPanel = useMemo(
     () => state.panel ?? explorePanel(panelId, state.expr ?? expr, source, state.kind ?? kind),
@@ -476,13 +503,36 @@ function Explore({ explore, write, nav, tabId, replaceTabView }: ExploreProps) {
                 onPick={(t) => { setTime(t); setTimeOpen(false); timeButton.current?.focus(); }} />
             )}
             {working && (
-              <button type="button" className={s.add} aria-keyshortcuts="a" aria-disabled="true" aria-description={ADD_LATER} title={ADD_LATER}>
+              <button ref={addButton} type="button" className={s.add} aria-keyshortcuts="a" aria-disabled={canAdd ? undefined : "true"}
+                title={canAdd ? undefined : ADD_FIRST} onClick={() => openAdd.current()}>
                 Add to dashboard
               </button>
+            )}
+            {working && (
+              <span className={a.status} role="status">
+                {added && (
+                  <>
+                    <span>{`Added to "${added.title}".`}</span>
+                    <button type="button" className={a.open} onClick={() => openInNewTab({ page: "dashboard", id: added.id })}>Open dashboard</button>
+                  </>
+                )}
+              </span>
             )}
           </div>
         )}
       </header>
+
+      {addOpen && projectOut && source && (
+        <AddToDashboard project={projectOut} source={source} expr={expr} kind={panelKind} defaultTitle={defaultPanelTitle}
+          unit={builderWrote && pickedMetric ? guessUnit(pickedMetric) : "none"} restoreFocusTo={addButton}
+          onCancel={() => setAddOpen(false)}
+          onAdded={(done) => {
+            // The query that was added is worth keeping in the trail.
+            record({ expr, sourceId: source.source_id });
+            setAdded(done);
+            setAddOpen(false);
+          }} />
+      )}
 
       {tree.data === undefined && <p className={s.note} role="status">{tree.isError ? "Couldn't load your projects. Try again from the sidebar." : "Loading projects…"}</p>}
 

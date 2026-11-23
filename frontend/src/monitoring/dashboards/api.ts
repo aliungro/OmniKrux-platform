@@ -197,8 +197,8 @@ export const createDashboard = (body: { owner_kind: OwnerKind; owner_id: string;
   request<DashboardOut>("POST", "/dashboards", body);
 
 /** 409 `version_conflict` (with `currentVersion`) when another save landed since `baseVersion`. */
-export const saveDashboard = (id: string, baseVersion: number, spec: DashboardSpec) =>
-  request<DashboardOut>("PUT", `/dashboards/${enc(id)}`, { base_version: baseVersion, spec });
+export const saveDashboard = (id: string, baseVersion: number, spec: DashboardSpec, origin: "editor" | "explore" = "editor") =>
+  request<DashboardOut>("PUT", `/dashboards/${enc(id)}`, { base_version: baseVersion, spec, origin });
 
 export const deleteDashboard = (id: string, version: number) =>
   request<void>("DELETE", `/dashboards/${enc(id)}?version=${enc(String(version))}`);

@@ -170,6 +170,8 @@ class DashboardCreateIn(_Body):
 class DashboardSaveIn(_Body):
     base_version: int
     spec: dict
+    # "explore": the panel came from Explore; the audit record says so and names what was added.
+    origin: Literal["editor", "explore"] = "editor"
 
 
 class RestoreIn(_Body):
@@ -535,6 +537,14 @@ async def save_dashboard(id: str, request: Request) -> DashboardOut:
         "previous_version": body.base_version,
         "panels": panel_count(doc),
     }
+    if body.origin == "explore":
+        # Versions never change: a save that goes through was made over exactly `current`'s
+        # document (the store refuses it under its lock otherwise), so its panel ids are the old ones.
+        stored = {p.get("id") for p in current.spec.get("panels", [])}
+        details |= {
+            "from": "explore",
+            "added_panels": [p["title"] for p in doc["panels"] if p["id"] not in stored],
+        }
     record = await begin_change(request, "dashboard_save", "dashboard", doc["title"], details)
     try:
         saved = await services.dashboards.save(id, body.base_version, doc)

@@ -427,3 +427,67 @@ async def test_dashboard_routes_refuse_cross_origin(monitoring_app, linked_proje
         assert r.json() == {"detail": "Cross-origin request refused"}
     assert (await http.get(url)).json()["version"] == 1
     assert len((await http.get(DASHBOARDS)).json()) == 1
+
+
+async def test_explore_save_is_noted_in_audit(monitoring_app, linked_project):
+    http, _ = monitoring_app
+    d = await create(http, linked_project.project_id, doc("API latency"))
+    spec = doc("API latency", panels=2)
+    spec["panels"][1]["title"] = "CPU"
+    saved = await http.put(
+        f"{DASHBOARDS}/{d['id']}", json={"base_version": 1, "spec": spec, "origin": "explore"}
+    )
+    assert saved.status_code == 200, saved.text
+    # A save that adds nothing new lists no panels.
+    again = await http.put(
+        f"{DASHBOARDS}/{d['id']}", json={"base_version": 2, "spec": spec, "origin": "explore"}
+    )
+    assert again.status_code == 200, again.text
+    saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
+    assert [r["details"] for r in saves] == [
+        {
+            "owner": "project",
+            "owner_name": "Shop",
+            "version": 2,
+            "previous_version": 1,
+            "panels": 2,
+            "from": "explore",
+            "added_panels": ["CPU"],
+        },
+        {
+            "owner": "project",
+            "owner_name": "Shop",
+            "version": 3,
+            "previous_version": 2,
+            "panels": 2,
+            "from": "explore",
+            "added_panels": [],
+        },
+    ]
+
+
+async def test_editor_save_details_are_unchanged(monitoring_app, linked_project):
+    http, _ = monitoring_app
+    d = await create(http, linked_project.project_id, doc("API latency"))
+    url = f"{DASHBOARDS}/{d['id']}"
+    assert (await http.put(url, json={"base_version": 1, "spec": doc("API latency", 2)})).is_success
+    assert (
+        await http.put(
+            url, json={"base_version": 2, "spec": doc("API latency", 3), "origin": "editor"}
+        )
+    ).is_success
+    refused = await http.put(
+        url, json={"base_version": 3, "spec": doc("API latency", 3), "origin": "other"}
+    )
+    assert refused.status_code == 422
+    saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
+    assert [r["details"] for r in saves] == [
+        {
+            "owner": "project",
+            "owner_name": "Shop",
+            "version": v,
+            "previous_version": v - 1,
+            "panels": v,
+        }
+        for v in (2, 3)
+    ]
