@@ -28,6 +28,13 @@ the API server's bare 422). Each write bumps `resourceVersion` (and `generation`
 and is recorded in `writes`. Any served object can be deleted (recorded in `deletes`), honouring
 DeleteOptions `preconditions.uid` (and `resourceVersion`) with the API server's 409.
 
+Any served collection (`/apis/{g}/{v}/namespaces/{ns}/{plural}`, pods aside) accepts a POST: the
+object is created (recorded in `created_objects`, with a `uid`, `resourceVersion` "1",
+`generation` 1 and `creationTimestamp`), answering 201 and honouring `dryRun=All`, or the API
+server's 409 `AlreadyExists` when it is there. `prometheus_operator(server)` makes a cluster look
+as if the Prometheus Operator ran in it (its CRDs, a Prometheus object, its Service and the
+namespace); call it before the first request to the app, as discovery is cached.
+
 A pod can be evicted (`POST .../pods/{name}/eviction`, recorded in `eviction_requests`): each
 eviction of a pod takes the next status of `evictions[(ns, name)]` (the last one sticks; none:
 201). 201 deletes the pod, honouring `deleteOptions.preconditions.uid`; 429 is the API server's
@@ -323,6 +330,8 @@ class FakeKubeApi:
         self.forward_gap = 0.0
         self.start_states: list[dict] = [{"waiting": {"reason": "ContainerCreating"}}, STARTED]
         self.created: list[dict] = []
+        # Every object a generic POST created (pods are in `created`).
+        self.created_objects: list[dict] = []
         self.patches: list[dict] = []
         self.deleted: list[tuple[str, str]] = []
         # Every DELETE of one object: its path and DeleteOptions body.
@@ -407,6 +416,8 @@ class FakeKubeApi:
             return await self._write(request, match)
         if method == "DELETE" and (match := API_PATH.match(path)):
             return await self._delete(request, match)
+        if method == "POST" and (match := API_PATH.match(path)):
+            return await self._create(request, match)
         return not_found()
 
     async def _proxy(self, request: web.Request, match: re.Match) -> web.Response:
@@ -638,6 +649,33 @@ class FakeKubeApi:
                 md["generation"] += 1
             self.objects[res.key][key] = changed
         return web.json_response(changed)
+
+    async def _create(self, request: web.Request, match: re.Match) -> web.Response:
+        """POST one object into a served collection."""
+        group, version = match["group"] or "", match["core"] or match["version"]
+        parts = [part for part in (match["rest"] or "").split("/") if part]
+        found = self._resolve(group, version, parts) if parts else None
+        if found is None or len(found[2]) != 1:
+            return not_found()
+        res, ns, _ = found
+        body = await _body(request)
+        metadata = body.setdefault("metadata", {})
+        name = metadata.get("name") or ""
+        key = (ns or "", name)
+        if key in self.objects[res.key]:
+            label = f"{res.plural}.{res.group}" if res.group else res.plural
+            message = f'{label} "{name}" already exists'
+            return web.json_response(status_body(409, "AlreadyExists", message), status=409)
+        if ns is not None:
+            metadata["namespace"] = ns
+        metadata.setdefault("uid", f"u-{res.plural}-{ns or ''}-{name}")
+        metadata["resourceVersion"] = "1"
+        metadata["generation"] = 1
+        metadata["creationTimestamp"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if request.query.get("dryRun") != "All":
+            self.objects[res.key][key] = body
+            self.created_objects.append(copy.deepcopy(body))
+        return web.json_response(body, status=201)
 
     def _items(self, kind_key: str) -> list[tuple[tuple[str, str], dict]]:
         if kind_key == "events":
@@ -1272,6 +1310,64 @@ def service(
             "labels": dict(labels or {}),
         },
         "spec": spec,
+    }
+
+
+_service = service
+
+
+def prometheus_operator(
+    server: FakeKubeApi,
+    *,
+    namespace: str = "monitoring",
+    name: str = "kps",
+    service: str = "kps-prometheus",
+    rule_selector: dict | None = {"matchLabels": {"release": "kps"}},  # noqa: B006
+    rule_namespace_selector: dict | None = {},  # noqa: B006
+) -> None:
+    """Make `server` look like a cluster running the Prometheus Operator: its CRDs, a Prometheus
+    object with those rule selectors (a None selector is left out), the Service in front of it
+    and the namespace. Call it before the first request to the app (discovery is cached)."""
+    group = "monitoring.coreos.com"
+    R = FakeResource
+    server.resources += [
+        R(group, "v1", "prometheuses", "Prometheus", True),
+        R(group, "v1", "prometheusrules", "PrometheusRule", True),
+        R(group, "v1", "alertmanagers", "Alertmanager", True),
+        R(group, "v1", "servicemonitors", "ServiceMonitor", True),
+        R(group, "v1alpha1", "alertmanagerconfigs", "AlertmanagerConfig", True),
+    ]
+    spec: dict = {"replicas": 1}
+    if rule_selector is not None:
+        spec["ruleSelector"] = copy.deepcopy(rule_selector)
+    if rule_namespace_selector is not None:
+        spec["ruleNamespaceSelector"] = copy.deepcopy(rule_namespace_selector)
+    server.objects[f"prometheuses.{group}"][(namespace, name)] = {
+        "apiVersion": f"{group}/v1",
+        "kind": "Prometheus",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-prometheus-{namespace}-{name}",
+            "resourceVersion": "1",
+            "generation": 1,
+        },
+        "spec": spec,
+    }
+    server.objects["services"][(namespace, service)] = _service(
+        namespace,
+        service,
+        ports=[{"name": "web", "port": 9090, "protocol": "TCP"}],
+        selector={"operator.prometheus.io/name": name},
+    )
+    server.objects["namespaces"][("", namespace)] = {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {
+            "name": namespace,
+            "uid": f"u-ns-{namespace}",
+            "labels": {"kubernetes.io/metadata.name": namespace},
+        },
     }
 
 

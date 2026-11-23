@@ -15,20 +15,29 @@ answers that status instead for one path. `require` makes a request without the 
 credentials answer 401; `echo_auth_in_errors` makes error bodies repeat the request's
 `Authorization` header, for leak tests. With a `TlsMaterial` the server speaks HTTPS, and a
 `ClientCert` requirement also demands a client certificate signed by the material's CA.
+
+Alerting: a Prometheus serves `rule_groups` at `/api/v1/rules` (`type=alert` keeps alerting
+rules). A Loki keeps a ruler store, `ruler_groups` (namespace -> group name -> YAML text), behind
+`/loki/api/v1/rules/{namespace}[/{group}]` (`ruler_fail` makes every ruler write answer that
+status) and serves `rule_states` (Prometheus group shape) at `/prometheus/api/v1/rules`.
+`FakeAlertmanager` serves status, alerts (seeded, filtered by `filter=` matchers) and silences.
 """
 
 import asyncio
 import base64
 import datetime
 import ipaddress
+import json
 import re
 import ssl
 import tempfile
+import uuid
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Literal
 
+import yaml
 from aiohttp import web
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -36,6 +45,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 Mode = Literal["ok", "hang", "error500", "not_prometheus", "no_buildinfo"]
+BODY = web.RequestKey("body", bytes)
 
 
 @dataclass
@@ -44,6 +54,11 @@ class FakeRequest:
     path: str
     params: dict[str, list[str]]
     headers: dict[str, str]
+    body: bytes = b""
+
+    @property
+    def json(self):
+        return json.loads(self.body)
 
 
 @dataclass(frozen=True)
@@ -114,8 +129,10 @@ class _FakeTool:
             form = await request.post()
             for key in form:
                 params.setdefault(key, []).extend(str(v) for v in form.getall(key))
+        raw = await request.read()  # after the form: the form has read it, or it is still unread
+        request[BODY] = raw
         headers = dict(request.headers)
-        self.requests.append(FakeRequest(request.method, request.path, params, headers))
+        self.requests.append(FakeRequest(request.method, request.path, params, headers, raw))
         if self.mode == "hang":
             await self.release.wait()
         if not _satisfied(self.require, headers):
@@ -161,6 +178,10 @@ class FakePrometheus(_FakeTool):
     empty_instant: ClassVar[dict] = {"resultType": "vector", "result": []}
     empty_range: ClassVar[dict] = {"resultType": "matrix", "result": []}
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.rule_groups: list[dict] = []
+
     def route(
         self, request: web.Request, params: dict[str, list[str]], headers: dict[str, str]
     ) -> web.StreamResponse:
@@ -181,7 +202,19 @@ class FakePrometheus(_FakeTool):
             return web.json_response({"status": "success", "data": self.metadata})
         if path == "/api/v1/series":
             return self._series(params)
+        if path == "/api/v1/rules":
+            return self._rules(params)
         return web.Response(status=404, text="404 page not found")
+
+    def _rules(self, params: dict[str, list[str]]) -> web.Response:
+        groups = self.rule_groups
+        if (params.get("type") or [""])[0] == "alert":
+            groups = [
+                group
+                | {"rules": [r for r in group.get("rules", []) if r.get("type") == "alerting"]}
+                for group in groups
+            ]
+        return web.json_response({"status": "success", "data": {"groups": groups}})
 
     def _series(self, params: dict[str, list[str]]) -> web.Response:
         limit = (params.get("limit") or [""])[0]
@@ -197,6 +230,9 @@ class FakeLoki(_FakeTool):
     def __init__(self) -> None:
         super().__init__()
         self.ruler = True
+        self.ruler_groups: dict[str, dict[str, str]] = {}
+        self.rule_states: list[dict] = []
+        self.ruler_fail: int | None = None
 
     def route(
         self, request: web.Request, params: dict[str, list[str]], headers: dict[str, str]
@@ -222,7 +258,121 @@ class FakeLoki(_FakeTool):
             if self.ruler:
                 return web.json_response({})
             return web.Response(status=404, text="ruler not enabled")
+        if path == "/prometheus/api/v1/rules" and self.ruler:
+            return web.json_response({"status": "success", "data": {"groups": self.rule_states}})
+        if (match := _RULER.match(path)) and self.ruler:
+            return self._ruler(request, match["namespace"], match["group"])
         return web.Response(status=404, text="404 page not found")
+
+    def _ruler(self, request: web.Request, namespace: str, group: str | None) -> web.Response:
+        if request.method != "GET" and self.ruler_fail is not None:
+            return web.Response(status=self.ruler_fail, text="ruler unavailable")
+        stored = self.ruler_groups.get(namespace, {})
+        if request.method == "POST" and group is None:
+            try:
+                document = yaml.safe_load(request[BODY])
+            except yaml.YAMLError:
+                document = None
+            name = document.get("name") if isinstance(document, dict) else None
+            if not isinstance(name, str) or not name:
+                return web.Response(status=400, text="rule group needs a name")
+            self.ruler_groups.setdefault(namespace, {})[name] = request[BODY].decode()
+            return web.json_response({"status": "success"}, status=202)
+        if group is None:
+            return web.Response(status=405, text="method not allowed")
+        if request.method == "GET" and group in stored:
+            return web.Response(text=stored[group], content_type="application/yaml")
+        if request.method == "DELETE" and group in stored:
+            del stored[group]
+            return web.json_response({"status": "success"}, status=202)
+        if request.method in ("GET", "DELETE"):
+            return web.Response(status=404, text="group does not exist")
+        return web.Response(status=405, text="method not allowed")
+
+
+class FakeAlertmanager(_FakeTool):
+    """Alertmanager's v2 API: `config_yaml` is its configuration, `alerts` the seeded alerts (an
+    alert is {"labels": ..., ...}) and `silences` the silences by id."""
+
+    version = "0.27.0"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.config_yaml = ""
+        self.alerts: list[dict] = []
+        self.silences: dict[str, dict] = {}
+
+    def route(
+        self, request: web.Request, params: dict[str, list[str]], headers: dict[str, str]
+    ) -> web.StreamResponse:
+        path, method = request.path, request.method
+        if path == "/api/v2/status" and method == "GET":
+            return web.json_response(
+                {
+                    "versionInfo": {"version": self.version},
+                    "config": {"original": self.config_yaml},
+                }
+            )
+        if path == "/api/v2/alerts" and method == "GET":
+            matchers = [_parse_matcher(text) for text in params.get("filter", [])]
+            found = [a for a in self.alerts if all(m(a.get("labels", {})) for m in matchers)]
+            return web.json_response(found)
+        if path == "/api/v2/silences" and method == "GET":
+            return web.json_response(list(self.silences.values()))
+        if path == "/api/v2/silences" and method == "POST":
+            return self._silence(request[BODY])
+        if (match := _SILENCE.match(path)) and method == "DELETE":
+            silence = self.silences.get(match["id"])
+            if silence is None:
+                return web.json_response("silence not found", status=404)
+            silence["status"] = {"state": "expired"}
+            return web.Response()
+        return web.Response(status=404, text="404 page not found")
+
+    def _silence(self, raw: bytes) -> web.Response:
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            return web.json_response("bad silence", status=400)
+        matchers = body.get("matchers") or []
+        if not matchers or all(_matches_empty(m) for m in matchers):
+            refusal = "silence invalid: at least one matcher must not match the empty string"
+            return web.json_response(refusal, status=400)
+        silence_id = body.get("id") or str(uuid.uuid4())
+        self.silences[silence_id] = {
+            **body,
+            "id": silence_id,
+            "status": {"state": "active"},
+            "updatedAt": datetime.datetime.now(datetime.UTC).isoformat(),
+        }
+        return web.json_response({"silenceID": silence_id})
+
+
+def _matches_empty(matcher: dict) -> bool:
+    value = matcher.get("value", "")
+    hit = re.fullmatch(value, "") is not None if matcher.get("isRegex") else value == ""
+    return hit if matcher.get("isEqual", True) else not hit
+
+
+def _parse_matcher(text: str):
+    """A `filter=` matcher such as `cluster="a"`, `x!=y` or `name=~"a|b"`, over a label dict."""
+    found = re.fullmatch(r'\s*([^=!~\s]+)\s*(=~|!~|!=|=)\s*"?(.*?)"?\s*', text)
+    if found is None:
+        return lambda labels: False
+    name, operator, value = found.groups()
+
+    def test(labels: dict) -> bool:
+        actual = labels.get(name, "")
+        match operator:
+            case "=":
+                return actual == value
+            case "!=":
+                return actual != value
+            case "=~":
+                return re.fullmatch(value, actual) is not None
+        return re.fullmatch(value, actual) is None
+
+    return test
 
 
 class FakeGrafana:
@@ -241,6 +391,8 @@ class FakeGrafana:
 
 _LABEL_VALUES = re.compile(r"^/api/v1/label/(?P<name>[^/]+)/values$")
 _LOKI_LABEL_VALUES = re.compile(r"^/loki/api/v1/label/(?P<name>[^/]+)/values$")
+_RULER = re.compile(r"^/loki/api/v1/rules/(?P<namespace>[^/]+)(?:/(?P<group>[^/]+))?$")
+_SILENCE = re.compile(r"^/api/v2/silence/(?P<id>[^/]+)$")
 
 
 @dataclass
@@ -370,6 +522,13 @@ async def serve_fake_loki(tls: TlsMaterial | None = None, *, mtls: bool = False)
     if mtls:
         server.require = ClientCert()
     async with _serve(server, tls, mtls=mtls):
+        yield server
+
+
+@asynccontextmanager
+async def serve_fake_alertmanager(tls: TlsMaterial | None = None):
+    server = FakeAlertmanager()
+    async with _serve(server, tls):
         yield server
 
 

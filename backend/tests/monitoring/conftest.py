@@ -27,9 +27,11 @@ from omnikrux.monitoring.sources.transport import TransportFactory
 from omnikrux.monitoring.sources.types import SourceConfig, SourceSecrets
 from omnikrux.security.secrets import SecretBox
 from tests.fakekube import kubeconfig_for
+from tests.monitoring.fake_receivers import serve_fake_smtp, serve_fake_webhook
 from tests.monitoring.fakes import (
     TlsMaterial,
     make_tls_material,
+    serve_fake_alertmanager,
     serve_fake_grafana,
     serve_fake_loki,
     serve_fake_prometheus,
@@ -255,6 +257,31 @@ async def two_projects_on_one_source(monitoring_app, fake_prometheus) -> TwoProj
 @pytest.fixture
 async def fake_loki():
     async with serve_fake_loki() as server:
+        yield server
+
+
+@pytest.fixture
+async def fake_alertmanager():
+    async with serve_fake_alertmanager() as server:
+        yield server
+
+
+@pytest.fixture
+async def fake_webhook():
+    async with serve_fake_webhook() as server:
+        yield server
+
+
+@pytest.fixture
+async def fake_smtp():
+    async with serve_fake_smtp() as server:
+        yield server
+
+
+@pytest.fixture
+async def fake_smtp_tls(fake_tls):
+    """An SMTP server offering STARTTLS (and AUTH only after it) with `fake_tls`'s certificate."""
+    async with serve_fake_smtp(fake_tls) as server:
         yield server
 
 
