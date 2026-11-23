@@ -233,6 +233,8 @@ class FakeLoki(_FakeTool):
         self.ruler_groups: dict[str, dict[str, str]] = {}
         self.rule_states: list[dict] = []
         self.ruler_fail: int | None = None
+        # The real ruler answers a list of rules, when it holds none, with a 404 and these words.
+        self.ruler_empty_404 = False
 
     def route(
         self, request: web.Request, params: dict[str, list[str]], headers: dict[str, str]
@@ -255,6 +257,8 @@ class FakeLoki(_FakeTool):
         if path == "/loki/api/v1/series":
             return self._series(params)
         if path == "/loki/api/v1/rules":
+            if self.ruler and self.ruler_empty_404:
+                return web.Response(status=404, text="no rule groups found\n")
             if self.ruler:
                 return web.json_response({})
             return web.Response(status=404, text="ruler not enabled")

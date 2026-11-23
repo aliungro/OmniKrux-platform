@@ -89,6 +89,13 @@ async def test_loki_alerting_follows_ruler(fake_loki, direct):
     )
 
 
+async def test_loki_alerting_counts_an_empty_ruler_as_on(fake_loki, direct):
+    """Loki answers a list of rules with 404 "no rule groups found" while its ruler holds none."""
+    fake_loki.ruler_empty_404 = True
+    got = await LokiConnector().alerting(direct(fake_loki.url, "loki", NAME), cluster=None)
+    assert (got.omnikrux_engine, got.tool_engine, got.reason) == (True, "loki_ruler", None)
+
+
 @pytest.mark.parametrize("status", [400, 422])
 async def test_loki_refuses_with_plain_text(status):
     with pytest.raises(QueryRejected) as caught:
