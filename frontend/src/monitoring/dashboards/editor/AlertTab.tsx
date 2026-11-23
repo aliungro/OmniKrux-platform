@@ -17,7 +17,7 @@ import { durationWords, notRefreshedWords, seriesWord, STATE_LABEL, STATE_UNKNOW
 import { ALERT_PANEL_TYPES } from "../../alerts/limits";
 import { ruleExpr } from "../../alerts/ruleExpr";
 import { mixedClusterWarnings } from "../../alerts/rules/clusterWarning";
-import { adviceFor, DryRunLine, thresholdText } from "../../alerts/rules/DryRunLine";
+import { adviceFor, calmerWords, DryRunLine, thresholdText } from "../../alerts/rules/DryRunLine";
 import { RuleDetailsFields, type DetailsValue } from "../../alerts/rules/RuleDetailsFields";
 import { parseThreshold, RuleSentence, seriesWordOf, type SentenceValue } from "../../alerts/rules/RuleSentence";
 import { WhereItRuns } from "../../alerts/rules/WhereItRuns";
@@ -112,7 +112,8 @@ export const calmerThresholdRule: RecommendationRule = {
     return {
       id: "calmerThreshold",
       key: `calmerThreshold:${panel.id}:${from}`,
-      text: ["That's often. At ", { strong: thresholdText(to) }, ` it would have fired ${tip.fired === 0 ? "not at all" : "once"}.`],
+      text: ["That's often. At ", { strong: thresholdText(to) }, ` it ${calmerWords(tip.fired)}.`],
+      applyLabel: `Use ${thresholdText(to)}`,
       apply: (p) => (p.alert !== null && p.alert.threshold === from ? { ...p, alert: { ...p.alert, threshold: to } } : p),
     };
   },

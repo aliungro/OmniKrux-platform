@@ -14,6 +14,7 @@ import {
   createRule, getRule, saveRule, useCapabilities, useChannels, useContactPoints,
   type AlertRequestError, type DryRunIn, type RuleChangeOut, type RuleIn, type RuleOut, type ScopeKind, type SourceType,
 } from "../api";
+import { numberText } from "../format";
 import { EVERY_SECONDS, defaultsExpr } from "../limits";
 import { ThresholdChart, type ChartInput } from "../page/RuleChart";
 import { mixedClusterWarnings } from "./clusterWarning";
@@ -194,7 +195,7 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
     setDraft((d) => ({ ...d, ...fill }));
     setStart((d) => ({ ...d, ...fill }));
   }, [projects.data, groups.data, groups.isError, owners, initial, scope, projectList]);
-  const [thresholdText, setThresholdText] = useState(() => kept?.thresholdText ?? String(draft.cond.threshold));
+  const [thresholdText, setThresholdText] = useState(() => kept?.thresholdText ?? numberText(draft.cond.threshold));
   const [thresholdOk, setThresholdOk] = useState(() => parseThreshold(thresholdText) !== null);
   // Something would be lost: the draft moved, or the threshold as typed isn't a number yet.
   const changed = JSON.stringify(draft) !== JSON.stringify(start) || !thresholdOk;

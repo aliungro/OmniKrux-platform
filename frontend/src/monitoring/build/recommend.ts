@@ -21,6 +21,8 @@ export type Recommendation = {
   id: string;
   key: string;
   text: RecText;
+  /** The apply button's words when "Apply" says too little (an alert's "Use 0.41"). */
+  applyLabel?: string;
   apply(panel: PanelSpec): PanelSpec;
 };
 

@@ -518,6 +518,7 @@ async def test_a_project_with_too_many_points_says_so(
     status, code, message = refusal(r)
     assert (status, code) == (502, "too_large")
     assert message.startswith("This query returns 1 series, too many to replay")
+    assert message.endswith('use a shorter "for" or window.')
 
 
 async def test_a_cut_answer_is_not_counted(monitoring_app, fake_prometheus, linked_project):

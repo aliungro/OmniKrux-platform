@@ -120,10 +120,16 @@ def _url_parts(value: str) -> set[str]:
 def scrub(text: str, secrets: Iterable[str]) -> str:
     """`text` with every secret value (and, for addresses, their path and query parts of at
     least 8 characters, also as they look percent-encoded, decoded or JSON-escaped) replaced
-    with `•••`."""
-    for value in sorted(_scrub_values(secrets), key=len, reverse=True):
+    with `•••`. Invisible format characters (zero-width spaces and joiners, Unicode `Cf`) are
+    taken out first: one inside a secret must not hide it from the match."""
+    text = _visible(text)
+    for value in sorted(_scrub_values(_visible(s) for s in secrets), key=len, reverse=True):
         text = text.replace(value, MASK)
     return text
+
+
+def _visible(text: str) -> str:
+    return "".join(c for c in text if unicodedata.category(c) != "Cf")
 
 
 def _scrub_values(secrets: Iterable[str]) -> set[str]:

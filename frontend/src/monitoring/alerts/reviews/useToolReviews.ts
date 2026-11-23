@@ -44,6 +44,7 @@ export function useToolReviews(): ToolReviews {
 // --- Words ----------------------------------------------------------------------------------
 
 export const appliedWords = (rule: string, project: string) => `Applied "${rule}" in ${project}'s cluster.`;
+export const removedWords = (rule: string, project: string) => `Removed "${rule}" from ${project}'s cluster.`;
 export const cancelledWords = (rule: string, project: string) =>
   `"${rule}" isn't applied in ${project}'s cluster yet. Review it from its panel or the Alerts page.`;
 export const failedWords = (rule: string, project: string, message: string) =>

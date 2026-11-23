@@ -713,6 +713,28 @@ async def get_dashboard(id: str, request: Request) -> DashboardOut:
     return _out(record, await _owner_name(services, record.owner_kind, record.owner_id))
 
 
+def alert_changes(old: dict, new: dict) -> dict[str, list[str]]:
+    """The panel alerts a save adds, changes and removes, by name, for its audit record (each
+    becomes, changes or removes an alert rule); only the lists that aren't empty."""
+
+    def alerts(doc: dict) -> dict[str, dict]:
+        return {
+            str(p.get("id")): p["alert"]
+            for p in doc.get("panels", [])
+            if isinstance(p, dict) and isinstance(p.get("alert"), dict)
+        }
+
+    before, after = alerts(old), alerts(new)
+    out = {
+        "alerts_added": [a.get("name", "") for k, a in after.items() if k not in before],
+        "alerts_changed": [
+            a.get("name", "") for k, a in after.items() if k in before and before[k] != a
+        ],
+        "alerts_removed": [a.get("name", "") for k, a in before.items() if k not in after],
+    }
+    return {k: [str(n) for n in v] for k, v in out.items() if v}
+
+
 @router.put("/dashboards/{id}", openapi_extra=_schema(DashboardSaveIn))
 async def save_dashboard(id: str, request: Request) -> DashboardOut:
     """Save the document as the next version; 409 (nothing changed) when another save landed
@@ -740,6 +762,7 @@ async def save_dashboard(id: str, request: Request) -> DashboardOut:
             "from": "explore",
             "added_panels": [p["title"] for p in doc["panels"] if p["id"] not in stored],
         }
+    details |= alert_changes(current.spec, doc)
     record = await begin_change(request, "dashboard_save", "dashboard", doc["title"], details)
     try:
         saved = await services.dashboards.save(id, body.base_version, doc)

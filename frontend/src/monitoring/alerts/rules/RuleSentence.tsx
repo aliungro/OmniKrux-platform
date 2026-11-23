@@ -5,7 +5,7 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import type { PanelAlert, Unit } from "../../dashboards/schema";
-import { durationWords, sentence, unitSuffix } from "../format";
+import { durationWords, numberText, sentence, unitSuffix } from "../format";
 import { parseDuration } from "../limits";
 import s from "./RuleForm.module.css";
 
@@ -53,7 +53,7 @@ export interface RuleSentenceProps {
 export function RuleSentence({ value, seriesWord, unit, onChange, idPrefix, errors, thresholdRef, forRef, onValidity, initialText, onText }: RuleSentenceProps) {
   const local = useId();
   const id = `${idPrefix}${local}`;
-  const [text, setTextState] = useState(() => initialText ?? String(value.threshold));
+  const [text, setTextState] = useState(() => initialText ?? numberText(value.threshold));
   const setText = (next: string) => {
     setTextState(next);
     onText?.(next);
@@ -69,7 +69,7 @@ export function RuleSentence({ value, seriesWord, unit, onChange, idPrefix, erro
     if (shown.current === value.threshold) return;
     shown.current = value.threshold;
     if (parseThreshold(text) !== value.threshold) {
-      setText(String(value.threshold));
+      setText(numberText(value.threshold));
       setBad(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -123,7 +123,7 @@ export function RuleSentence({ value, seriesWord, unit, onChange, idPrefix, erro
             aria-label="Threshold" aria-invalid={thresholdError ? true : undefined}
             aria-describedby={thresholdError ? `${id}-threshold` : undefined}
             size={Math.max(3, Math.min(14, text.length + 1))} value={text} onChange={(e) => typed(e.target.value)}
-            onBlur={() => { if (!bad) setText(String(value.threshold)); }} />
+            onBlur={() => { if (!bad) setText(numberText(value.threshold)); }} />
           {suffix && <span className={s.unit} aria-hidden="true">{suffix}</span>}
         </span>
         {forValue !== "0s" && <span className={s.sentenceWord}>for</span>}

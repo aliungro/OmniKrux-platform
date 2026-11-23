@@ -384,7 +384,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   return (
     <div ref={root} className={s.app}>
       {/* Cluster reviews of tool-run alert rules, one at a time, for every page of the app. */}
-      <ToolReviewHost>
+      <ToolReviewHost place={`${tabs.active}:${view.page}`}>
         <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
           index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} />
         <div className={s.work}>

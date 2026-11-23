@@ -1718,6 +1718,13 @@ async def capabilities(
         project = await services.projects.get(scope_id)
         if not any(link.source_id == source_id for link in project.links):
             raise RuleRefused(404, "not_found", NOT_LINKED).http()
+        try:
+            named = await services.sources.get(source_id)
+        except KeyError:
+            raise _invalid(SOURCE_GONE, "source").http() from None
+        if named.type != source_type:
+            # Another type's source would answer about a source the rule can't read.
+            raise _invalid(wrong_type_copy(source_type), "source").http()
     projects = await sync.scope_projects(scope_kind, scope_id)
     probe = _probe_rule(scope_kind, scope_id, source_type, source_id)
     out: list[CapabilityOut] = []

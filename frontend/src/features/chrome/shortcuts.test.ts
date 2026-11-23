@@ -173,7 +173,11 @@ describe("shortcut registry", () => {
       ["alertsViews", ["1–3"], "Rules, Silences or Contact points"],
       ["alertsMove", ["↑ ↓"], "In the rule list: move and show the rule"],
       ["alertSilence", ["s"], "Silence the selected alert"],
+      ["alertsDetails", ["Enter"], "In the rule list: go to the rule's details"],
+      ["alertsList", ["Esc"], "In the details: back to the rule list"],
+      ["alertsSave", ["Ctrl Enter"], "In a rule, silence or contact point form: save it"],
     ]);
+    expect(keysFor("alertsSave", true)).toEqual(["⌘ Enter"]);
     expect(pressed("alertSilence", { key: "s", ctrlKey: false, metaKey: false, altKey: false })).toBe(true);
     expect(pressed("alertsViews", { key: "2", ctrlKey: false, metaKey: false, altKey: false })).toBe(true);
   });

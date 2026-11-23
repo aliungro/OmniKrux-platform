@@ -64,7 +64,9 @@ async def test_loki_rule_is_written_and_audited(
     assert target["message"] == "Not checked yet: OmniKrux's checks are off."
     unread = await app.state.monitoring.alerts.get_target(target["id"])
     assert (unread.state, unread.message) == ("waiting", "Loading in Loki…")
-    assert [(c["kind"], c["message"]) for c in out["changes"]] == [("written", None)]
+    assert [(c["kind"], c["message"], c["tool"]) for c in out["changes"]] == [
+        ("written", None, "loki_ruler")
+    ]
 
     group = stored_group(fake_loki, target["id"])
     assert group is not None
@@ -241,7 +243,7 @@ async def test_a_failed_loki_removal_keeps_the_rule_until_a_retry(
     gone = await http.delete(f"{RULES}/{rule['id']}", params={"token": review["token"]})
     assert gone.status_code == 200, gone.text
     [change] = gone.json()["changes"]
-    assert change["kind"] == "failed"
+    assert change["kind"] == "failed" and change["tool"] == "loki_ruler"
     left = gone.json()["rule"]
     assert left["removing"] is True
     [leaving] = left["targets"]

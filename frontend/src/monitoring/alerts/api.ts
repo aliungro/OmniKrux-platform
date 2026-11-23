@@ -138,6 +138,8 @@ export interface AlertChangeOut {
   project_name: string;
   kind: AlertChangeKind;
   message: string | null;
+  /** The tool the change is in; absent or null when unknown (a failed change reads as Loki's). */
+  tool?: ToolKind | null;
 }
 
 export interface RuleChangeOut {

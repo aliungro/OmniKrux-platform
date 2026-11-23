@@ -466,4 +466,5 @@ class LokiRuler:
             project_name=await project_name(self._services, target.project_id),
             kind=kind,
             message=message,
+            tool="loki_ruler",
         )

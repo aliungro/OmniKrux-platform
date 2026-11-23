@@ -297,14 +297,14 @@ A **rule** says "alert when any series of this query is above (or below) a numbe
 
 - A rule belongs to a **project** or to a **group**. A group's rule runs once in each of the group's projects, so it holds one rule per project, each reading that project's own source through that project's label filter. A rule never reads another project's data.
 - A rule has a name, a severity (**Critical**, **Warning** or **Info**), a message, and the contact points to notify.
-- A rule's state is its **worst state**: the badge on a rule that runs in several projects shows the most serious one, in this order: **Firing**, **Query error**, **Can't check**, **Not applied**, **Pending**, **Loading**, **No data**, **OK**, **Paused**.
+- A rule's state is its **worst state**: the badge on a rule that runs in several projects shows the most serious one, in this order: **Firing**, **Query error**, **Can't check**, **Not applied**, **Pending**, **Not checked yet**, **No data**, **OK**, **Paused**.
 
 ### Where a rule runs
 
 When you make a rule you choose **Where it runs**.
 
 - **Checked by OmniKrux.** OmniKrux asks the source the rule's query on the interval you picked, and tells the contact points itself. It works with any source, but only while OmniKrux is running. The Alerts page says so under its title.
-- **In the tool.** The tool that holds the data checks the rule and keeps doing so when OmniKrux is off. For Prometheus this is a `PrometheusRule` in the cluster, which the Prometheus Operator loads; for Loki it is a rule in Loki's ruler. Each project says what it can do: the choice is greyed out when no project of the rule has a tool that can run it, and a project whose tool can't take the rule is checked by OmniKrux instead, with the reason shown.
+- **In the tool.** The tool that holds the data checks the rule and keeps doing so when OmniKrux is off. For Prometheus this is a `PrometheusRule` in the cluster, which the Prometheus Operator loads, so only a Prometheus the Operator runs can take it (a Prometheus installed some other way, such as a plain Helm chart, says "isn't run by the Prometheus Operator"); for Loki it is a rule in Loki's ruler. Each project says what it can do: the choice is greyed out when no project of the rule has a tool that can run it, and a project whose tool can't take the rule is checked by OmniKrux instead, with the reason shown.
   - A `PrometheusRule` is a change to the cluster, so it is **reviewed like any cluster change**: the review shows what will be created, changed or removed, and nothing happens until you confirm it. The rule reads **Not applied** until you do.
   - A Loki ruler rule is written (and removed) at once, and **Audit** records each change before it is made.
   - The notifications of a rule that runs in the tool come from that tool's Alertmanager, not from OmniKrux. Pick its **Channel** (an Alertmanager route, with the labels the rule must carry to reach it), or leave **Wherever its Alertmanager sends it**.
@@ -319,12 +319,12 @@ Every rule and every project it runs in shows one state word.
 | --- | --- |
 | **OK** | The query was checked and nothing crosses the line. |
 | **Pending** | Something crosses the line, but not for the **For** time yet. |
-| **Firing** | It has crossed the line for the whole **For** time. Contact points were told (once per series; see [Notifications](#notifications)). |
+| **Firing** | It has crossed the line for the whole **For** time. Contact points were told (once per series; see [Notifications](#notifications)). While a silence mutes it, it still reads **Firing**, with **silenced** after it (or how many of its series are silenced), and its row carries a **Silenced** tag. |
 | **No data** | The query answered, but with no value to compare, for example because nothing matches its labels. Check the query in Explore. If a missing series should itself be an alert, alert on `absent(...)` or on a count instead. |
 | **Can't check** | OmniKrux couldn't reach the source, so it doesn't know. Nothing is resolved and nothing new is claimed. Open the source on the **Sources** page and press **Test**, or see the reason on the rule. After three failed checks in a row OmniKrux sends one "can't check" message to the contact points. |
 | **Query error** | The query can't run as written (a wrong query, no source of the right type in the project, or more series than OmniKrux can follow). The rule says why; fix the query or link the source on the project page. |
 | **Not applied** | The rule should run in the tool but isn't there yet. **Review** opens the cluster change to confirm; **Retry** writes a Loki rule again. A rule that stays **Not applied** after the review is applied says why under its name. |
-| **Loading** | The tool has the rule but hasn't run it yet (Prometheus reloads its rules on a schedule). It reads **Loading** for up to ten minutes, and turns into a **Query error** with the reason if the tool never loaded it. |
+| **Not checked yet** | No check has run yet, so no state is known. A rule OmniKrux checks says when its first check runs ("Not checked yet: the first check runs within 1 min."). A rule in the tool says **Loading in Prometheus…** (or Loki) while the tool hasn't run it yet (Prometheus reloads its rules on a schedule); after ten minutes it turns into a **Query error** with the reason if the tool never loaded it. |
 | **Paused** | You paused the rule. OmniKrux doesn't check it and tells nobody. Only a rule checked by OmniKrux can be paused; a rule in the tool keeps being checked there, so **Silence** it instead. |
 
 If the page can't read the states for a moment, it keeps what it showed, says how old that is ("Couldn't refresh. Last known: Firing at 14:02:11.") and never shows an old state as current.
@@ -375,7 +375,7 @@ A **contact point** is where a message goes. Open **Contact points** (or `3`) an
 | --- | --- |
 | **Slack** | **Webhook address** (an incoming webhook). |
 | **Teams** | **Webhook address** (a Microsoft Teams workflow or connector webhook). |
-| **Email** | **Mail server**, **Port** (587 by default), **Security** (**STARTTLS**, TLS or **None**), **User name** and **Password** (optional), **From** and **To** (up to 20 addresses, separated by commas). A password is only sent over an encrypted connection. |
+| **Email** | **Mail server**, **Port** (587 by default), **Security** (**STARTTLS**, **TLS** or **None**), **User name** and **Password** (optional), **From** and **To** (up to 20 addresses, separated by commas). A password is only sent over an encrypted connection. |
 | **PagerDuty** | **Routing key** (32 letters and digits) and the **Events address** (the PagerDuty events API by default). |
 | **Webhook** | **Webhook address**, and an optional **Bearer token**. OmniKrux posts JSON to it. |
 
@@ -392,7 +392,7 @@ OmniKrux tells the contact points of a rule it checks:
 - **When it resolves**, a **Resolved** message for each series somebody was told about.
 - **When it can't check**, after three failed checks in a row, one **Can't check** message, repeated every 4 hours while it lasts, and **Checking again** when the first check works.
 
-A failed send is tried again (right away, after 5 and after 30 seconds) and recorded; the contact point shows its last result. A rule that runs in the tool is not sent by OmniKrux at all: that tool's Alertmanager sends it, so the contact points of such a rule only matter to the rule that OmniKrux checks.
+A failed send is tried again (right away, after 5 and after 30 seconds) and recorded; the contact point shows its last result. A rule that runs in the tool is not sent by OmniKrux at all: that tool's Alertmanager sends it, so its contact points are only used in the projects where OmniKrux checks it instead (a project whose tool can't take the rule).
 
 ### Silences
 
@@ -402,6 +402,7 @@ A **silence** mutes the notifications of what it matches; it never changes what 
 - **Matchers.** Written like `alertname="API latency high"` or `project="shop", team=~"web|api"`. Use `=`, `!=`, `=~` and `!~`; regular expressions must match the whole value. At least one matcher must name something. While you type, a line says how many alerts it silences now and names the first rules.
 - **Lasts.** **1 h**, **2 h**, **4 h**, **1 day** or **Until…** (a date and time; a silence lasts at most 90 days), and a **Comment** so others know why.
 - Ended silences stay listed for a day. **Expire silence** ends one now ("Its alerts notify again at their next check.").
+- A silence or contact point you are writing isn't kept anywhere else, so going elsewhere (the sidebar, Back, another view), switching or closing the Monitoring tab, or reloading asks first: **Leave "…" with unsaved changes?** ("Leaving loses what you entered in this form.").
 
 An Alertmanager that can't be read is listed under **Problems**; it never hides the others.
 
@@ -415,7 +416,7 @@ Home shows a **Firing** section above the projects: a row for each rule that fir
 
 ### A rule that may read another cluster
 
-If a Kubernetes project's source link has no label filter, because OmniKrux couldn't tell which label separates your clusters in a shared Prometheus or Loki, a rule there may fire on another cluster's data. The rule form and the rule's details then warn: "may include other clusters: OmniKrux couldn't tell which label separates them, so this rule may fire on another cluster's data. Add a filter on the project page." To fix it, open the project, add a [label filter](#label-filters) such as `cluster="prod-east"` to that link, and save; the rule's query then carries the filter and the warning goes.
+If a Kubernetes project's source link has no label filter, because OmniKrux couldn't tell which label separates your clusters in a shared Prometheus or Loki, a rule there may fire on another cluster's data. The rule form, the rule's details, a panel's **Alert** tab and the project's link then warn: "…may include other clusters: OmniKrux couldn't tell which label separates them, so this rule may fire on another cluster's data. Add a filter on the project page." To fix it, open the project, add a [label filter](#label-filters) such as `cluster="prod-east"` to that link, and save; the rule's query then carries the filter and the warning goes.
 
 ### Deleting things that have rules
 

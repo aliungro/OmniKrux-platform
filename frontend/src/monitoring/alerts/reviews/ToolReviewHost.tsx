@@ -4,7 +4,9 @@
 // each review did is said in a polite status line. After an apply or a cancel, the alerts lists
 // are read again (not an open dry run: nothing it reads changed). The keyboard never rests on
 // <body>: a closed review hands it back to where the review started, the next review takes it,
-// and when the queue ends it goes to `after.focus` (or the Monitoring workspace).
+// and when the queue ends it goes to `after.focus` (or the Monitoring workspace). A status of
+// successes only goes away by itself after a while, and when the workspace moves to another page
+// (`place`); one that says something is left to do stays until it is dismissed.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -15,7 +17,7 @@ import { discardPlans } from "../../../features/actions/useActions";
 import { focusMainFrom } from "../../focus";
 import { syncTarget, type AlertChangeOut, type SyncOut } from "../api";
 import {
-  appliedWords, cancelledWords, failedWords, lokiFailedWords, TOOL_FAILED, ToolReviewsContext,
+  appliedWords, cancelledWords, failedWords, lokiFailedWords, removedWords, TOOL_FAILED, ToolReviewsContext,
   type ToolReviewRequest, type ToolReviewResult, type ToolReviews,
 } from "./useToolReviews";
 import s from "./ToolReviewHost.module.css";
@@ -36,6 +38,8 @@ interface Line {
 
 /** The status keeps the latest few lines of the run. */
 const MAX_LINES = 6;
+/** How long a status of successes only stays up. */
+export const OK_STATUS_MS = 8000;
 
 /** Whether the keyboard is nowhere (on <body>, or on something just removed). */
 function focusLost(): boolean {
@@ -43,7 +47,11 @@ function focusLost(): boolean {
   return active === null || active === document.body || !active.isConnected;
 }
 
-export function ToolReviewHost({ children }: { children: ReactNode }) {
+export function ToolReviewHost({ children, place }: {
+  children: ReactNode;
+  /** Names the page the workspace shows: a status of successes only goes when it changes. */
+  place?: string;
+}) {
   const client = useQueryClient();
   const queue = useRef<Item[]>([]);
   const running = useRef(false);
@@ -77,14 +85,14 @@ export function ToolReviewHost({ children }: { children: ReactNode }) {
   }, [client]);
 
   /** What a `done` answer means: nothing left to review, unless the tool refused the rule. */
-  const doneResult = useCallback((item: Item, answer: Extract<SyncOut, { kind: "done" }>, sayApplied: boolean): ToolReviewResult => {
+  const doneResult = useCallback((item: Item, answer: Extract<SyncOut, { kind: "done" }>, sayApplied: boolean, removal = false): ToolReviewResult => {
     const target = answer.target;
     if (target?.tool_state === "failed") {
       const message = target.tool_message ?? TOOL_FAILED;
       say("failed", target.tool === "loki_ruler" ? lokiFailedWords(item.ruleName, message) : failedWords(item.ruleName, item.projectName, message));
       return "failed";
     }
-    if (sayApplied) say("ok", appliedWords(item.ruleName, item.projectName));
+    if (sayApplied) say("ok", (removal ? removedWords : appliedWords)(item.ruleName, item.projectName));
     return "applied";
   }, [say]);
 
@@ -154,7 +162,11 @@ export function ToolReviewHost({ children }: { children: ReactNode }) {
     const failed = changes.filter((c) => c.kind === "failed");
     if (reviews.length === 0 && failed.length === 0) return;
     const fresh = startRun();
-    for (const c of failed) say("failed", lokiFailedWords(c.rule_name, c.message ?? TOOL_FAILED));
+    for (const c of failed) {
+      const message = c.message ?? TOOL_FAILED;
+      // A PrometheusRule's change names the project's cluster; anything else was a Loki ruler's.
+      say("failed", c.tool === "prometheus_rule" ? failedWords(c.rule_name, c.project_name, message) : lokiFailedWords(c.rule_name, message));
+    }
     if (reviews.length === 0) return;
     if (opts?.focus !== undefined || fresh) after.current = opts?.focus ?? null;
     for (const c of reviews) add({ targetId: c.target_id, ruleName: c.rule_name, projectName: c.project_name });
@@ -187,7 +199,8 @@ export function ToolReviewHost({ children }: { children: ReactNode }) {
       say("wait", cancelledWords(now.item.ruleName, now.item.projectName));
       finish("cancelled");
     } else {
-      say("ok", appliedWords(now.item.ruleName, now.item.projectName));
+      const words = now.plan.action === "delete" ? removedWords : appliedWords;
+      say("ok", words(now.item.ruleName, now.item.projectName));
       finish("applied");
     }
   }, [finish, say]);
@@ -204,7 +217,7 @@ export function ToolReviewHost({ children }: { children: ReactNode }) {
     }
     discardPlans([now.plan.plan_id]);
     if (answer.kind === "review") show({ item: now.item, plan: answer.plan });
-    else finish(doneResult(now.item, answer, true));
+    else finish(doneResult(now.item, answer, true, now.plan.action === "delete"));
   }, [doneResult, finish, show]);
 
   // Leaving Monitoring: the review on screen is closed on the server, and whoever waits hears
@@ -241,10 +254,28 @@ export function ToolReviewHost({ children }: { children: ReactNode }) {
     else if (focusLost()) focusMainFrom(region.current);
   }, [ended]);
 
-  const dismiss = () => {
+  const dismiss = useCallback(() => {
     if (region.current?.contains(document.activeElement)) focusMainFrom(region.current);
     setLines([]);
-  };
+  }, []);
+
+  // Successes only, with nothing left to review: said, so they go by themselves (not while the
+  // keyboard is on the status) and when the workspace shows another page. A line that says what
+  // is left to do stays until it is dismissed.
+  const onlyOk = lines.length > 0 && lines.every((l) => l.tone === "ok") && pending === 0 && open === null;
+  useEffect(() => {
+    if (!onlyOk) return;
+    const timer = window.setTimeout(() => {
+      if (!region.current?.contains(document.activeElement)) setLines([]);
+    }, OK_STATUS_MS);
+    return () => window.clearTimeout(timer);
+  }, [onlyOk, lines]);
+  const seenPlace = useRef(place);
+  useEffect(() => {
+    if (seenPlace.current === place) return;
+    seenPlace.current = place;
+    if (onlyOk) dismiss();
+  }, [place, onlyOk, dismiss]);
 
   const value = useMemo<ToolReviews>(() => ({ enqueue, reviewTarget, pending }), [enqueue, reviewTarget, pending]);
   return (

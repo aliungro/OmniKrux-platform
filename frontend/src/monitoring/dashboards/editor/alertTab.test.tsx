@@ -273,6 +273,9 @@ describe("The Alert tab", () => {
     expect(rec?.key).toBe("calmerThreshold:p-1:0.3");
     expect(rec?.text.map((t) => (typeof t === "string" ? t : t.strong)).join("")).toBe("That's often. At 0.5 it would have fired once.");
     expect(rec?.apply(p).alert?.threshold).toBe(0.5);
+    expect(rec?.applyLabel).toBe("Use 0.5");
+    const quiet = recommendFor(ctx(dryRun(5, [{ threshold: 0.8, fired: 0 }])), new Set());
+    expect(quiet?.text.map((t) => (typeof t === "string" ? t : t.strong)).join("")).toBe("That's often. At 0.8 it wouldn't have fired.");
     // Not often enough, part of the data unread, or a dry run of another threshold: nothing.
     expect(recommendFor(ctx(dryRun(2, often.candidates)), new Set())).toBeNull();
     expect(recommendFor(ctx(dryRun(5, often.candidates, true)), new Set())).toBeNull();
@@ -287,7 +290,7 @@ describe("The Alert tab", () => {
     expect(within(settings()).getAllByText(/That's often/)).toHaveLength(1);
     const body = dryRuns(api)[0].body as Record<string, unknown>;
     expect(body).toMatchObject({ scope: { kind: "project", id: "p1" }, source: { type: "prometheus", id: null }, expr: "up", op: "above", threshold: 0.3, suggest: true });
-    await user.click(within(settings()).getByRole("button", { name: "Apply" }));
+    await user.click(within(settings()).getByRole("button", { name: "Use 0.5" }));
     expect(draftPanel("p-1").alert!.threshold).toBe(0.5);
     await waitFor(() => expect(threshold().value).toBe("0.5"));
     expect(document.activeElement).not.toBe(document.body);

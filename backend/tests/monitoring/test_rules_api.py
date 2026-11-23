@@ -271,6 +271,7 @@ async def test_tool_engine_where_possible(
             "project_name": "Apps",
             "kind": "review",
             "message": None,
+            "tool": "prometheus_rule",
         }
     ]
     assert out["rule"]["state"] == "not_applied"
@@ -673,3 +674,18 @@ async def test_fix_round_refusals_and_empty_rules(monitoring_app, linked_project
         },
     )
     assert [c["source_id"] for c in linked.json()] == [linked_project.source_id]
+    # A linked source of another type is refused, never answered about.
+    other_type = await http.get(
+        f"{ALERTS}/capabilities",
+        params={
+            "scope_kind": "project",
+            "scope_id": pid,
+            "source_type": "loki",
+            "source_id": linked_project.source_id,
+        },
+    )
+    assert refusal(other_type) == (
+        422,
+        "invalid_rule",
+        "That source isn't a Loki source. Pick one that is.",
+    )

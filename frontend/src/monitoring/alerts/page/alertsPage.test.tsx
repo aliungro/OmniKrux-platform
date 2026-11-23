@@ -409,6 +409,9 @@ describe("the Alerts page", () => {
     expect(group.textContent).toContain("Rules, Silences or Contact points");
     expect(group.textContent).toContain("In the rule list: move and show the rule");
     expect(group.textContent).toContain("Silence the selected alert");
+    expect(group.textContent).toContain("In the rule list: go to the rule's details");
+    expect(group.textContent).toContain("In the details: back to the rule list");
+    expect(group.textContent).toContain("In a rule, silence or contact point form: save it");
   });
 
   it("a failed refresh keeps the list, the details and the keyboard, and says so until a read works", async () => {

@@ -131,6 +131,8 @@ class AlertChange:
     project_name: str
     kind: AlertChangeKind
     message: str | None
+    # The tool the change is in (a PrometheusRule or a Loki ruler rule); None when unknown.
+    tool: ToolKind | None = None
 
 
 class AlertChangeOut(BaseModel):
@@ -143,6 +145,7 @@ class AlertChangeOut(BaseModel):
     project_name: str
     kind: AlertChangeKind
     message: str | None
+    tool: ToolKind | None = None
 
 
 def change_out(change: AlertChange) -> AlertChangeOut:
@@ -154,6 +157,7 @@ def change_out(change: AlertChange) -> AlertChangeOut:
         project_name=change.project_name,
         kind=change.kind,
         message=change.message,
+        tool=change.tool,
     )
 
 
@@ -301,6 +305,7 @@ class ReviewEveryChange:
             project_name=await project_name(self._services, target.project_id),
             kind="review",
             message=None,
+            tool="prometheus_rule",
         )
 
 
@@ -672,6 +677,7 @@ class AlertSync:
             project_name=await project_name(self._services, target.project_id),
             kind=kind,
             message=message,
+            tool=target.tool_object.kind if target.tool_object is not None else target.tool_kind,
         )
 
     # -- panel alerts --------------------------------------------------------------------------

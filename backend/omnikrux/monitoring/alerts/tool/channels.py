@@ -16,6 +16,8 @@ from omnikrux.monitoring.sources.transport import SourceTransport
 PATTERN_REASON = "Uses a pattern match, so OmniKrux can't add labels that reach it."
 UNPARSED_REASON = "OmniKrux couldn't read this route's matchers."
 SHADOWED_REASON = "An earlier route catches these alerts first, so they never reach this one."
+CHILD_REASON = "A route under it catches these alerts first, so they never reach this one."
+NOWHERE_REASON = "Sends nowhere: this receiver has no notifications set up."
 CONTRADICTS_REASON = "Its labels contradict the routes above it, so no alert can reach it."
 UNREADABLE = "{name}'s configuration couldn't be read, so its channels can't be listed."
 PROBE_SECONDS = 10.0
@@ -91,10 +93,10 @@ def _walk(
     # child whose labels are all among this route's (a catch-all has none) takes every alert
     # this route's channel stands for. A child with a pattern or unreadable matcher can't be
     # proved to match everything, so it takes none.
-    if reason is None and any(why is None and lab.items() <= labels.items() for lab, why in parts):
-        reason = SHADOWED_REASON
     if shadowed and reason is None:
         reason = SHADOWED_REASON
+    if reason is None and any(why is None and lab.items() <= labels.items() for lab, why in parts):
+        reason = CHILD_REASON
     if receiver:
         out.append(
             Channel(
@@ -143,6 +145,13 @@ def parse_channels(config_yaml: str) -> list[Channel]:
         raise ChannelsUnreadable(UNREADABLE.format(name="The Alertmanager"))
     found: list[Channel] = []
     _walk(route, None, {}, None, "default", 0, found)
+    nowhere = _silent_receivers(config.get("receivers"))
+    found = [
+        Channel(c.receiver, c.labels, False, NOWHERE_REASON, c.path)
+        if c.usable and c.receiver in nowhere
+        else c
+        for c in found
+    ]
     at: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
     channels: list[Channel] = []
     for c in found:
@@ -153,6 +162,21 @@ def parse_channels(config_yaml: str) -> list[Channel]:
         elif not channels[at[key]].usable and c.usable:
             channels[at[key]] = c
     return channels
+
+
+def _silent_receivers(receivers: Any) -> set[str]:
+    """The receivers that send nowhere (no `*_configs` with an entry, like the usual "null"
+    receiver); none when the list can't be read."""
+    if not isinstance(receivers, list):
+        return set()
+    silent: set[str] = set()
+    for r in receivers:
+        if not isinstance(r, dict) or not isinstance(r.get("name"), str):
+            continue
+        sends = any(k.endswith("_configs") and isinstance(v, list) and v for k, v in r.items())
+        if not sends:
+            silent.add(r["name"])
+    return silent
 
 
 async def read_channels(transport: SourceTransport, name: str) -> list[Channel]:

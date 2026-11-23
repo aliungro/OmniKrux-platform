@@ -96,10 +96,17 @@ async def test_saving_a_panel_alert_creates_its_rule(monitoring_app, linked_proj
     [target] = rule["targets"]
     assert target["project_id"] == pid and target["engine"] == "omnikrux"
     assert target["rule_text"] == '(rate(x{cluster="a"}[4m])\n) > 0.3'
-    # The dashboard's save is the record: M2's details, nothing more.
+    # The dashboard's save is the record: M2's details and the alert it adds, by name.
     saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
     assert [r["details"] for r in saves] == [
-        {"owner": "project", "owner_name": "Shop", "version": 2, "previous_version": 1, "panels": 1}
+        {
+            "owner": "project",
+            "owner_name": "Shop",
+            "version": 2,
+            "previous_version": 1,
+            "panels": 1,
+            "alerts_added": ["API latency high"],
+        }
     ]
 
 
@@ -118,6 +125,8 @@ async def test_changing_the_panel_alert_changes_the_rule(monitoring_app, linked_
 
     # Saving the same alert again changes nothing about the rule.
     await save(http, changed, changed["spec"] | {"title": "Latency now"})
+    saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
+    assert [r["details"].get("alerts_changed") for r in saves] == [["API latency high"], None]
     [same] = await rules(http)
     assert same["id"] == first["id"] and same["version"] == 2
     assert same["panel"]["dashboard_title"] == "Latency now"
@@ -129,6 +138,8 @@ async def test_removing_the_alert_deletes_its_rule(monitoring_app, linked_projec
     [rule] = await rules(http)
 
     saved = await save(http, made, board(panel()))
+    [record] = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
+    assert record["details"]["alerts_removed"] == ["API latency high"]
     # The rule went as a DELETE /alerts/rules/{id} would take it: its target is removed at once.
     assert [(c["rule_id"], c["kind"]) for c in saved["alert_changes"]] == [(rule["id"], "removed")]
     assert await rules(http) == []
@@ -157,6 +168,7 @@ async def test_deleting_a_panel_rule_clears_the_panel(monitoring_app, linked_pro
                 "project_name": "Shop",
                 "kind": "removed",
                 "message": None,
+                "tool": None,
             }
         ],
     }
@@ -283,6 +295,7 @@ async def test_tool_run_panel_alert_saves_and_asks_for_review(monitoring_app, li
             "project_name": "Shop",
             "kind": "review",
             "message": None,
+            "tool": "prometheus_rule",
         }
     ]
     # Reading it again says nothing new happened in the tool.

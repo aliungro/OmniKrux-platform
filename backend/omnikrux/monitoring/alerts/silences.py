@@ -105,7 +105,10 @@ def _quantifier(text: str, i: int) -> tuple[bool, bool, int] | None:
     if c == "{" and (m := _COUNT.match(text, i)) and (m.group(1) or m.group(3)):
         low, comma, high = m.group(1), m.group(2), m.group(3)
         many = int(low) > 1 if comma is None else (not high or int(high) > 1)
-        return many, comma is not None and not high, m.end()
+        # `{n,}`, and `{n,m}` with m over 1, try a varying number of repeats like `*` and `+`
+        # do: side by side, they backtrack just as much.
+        varying = comma is not None and (not high or int(high) > 1)
+        return many, varying, m.end()
     return None
 
 
@@ -118,7 +121,8 @@ def nested_repetition(text: str) -> bool:
 
 
 def unbounded_count(text: str) -> int:
-    """How many quantifiers without an upper bound (`*`, `+`, `{n,}`) the pattern holds."""
+    """How many quantifiers that try a varying number of repeats (`*`, `+`, `{n,}`, and
+    `{n,m}` with m over 1) the pattern holds."""
     return _scan(text)[1]
 
 

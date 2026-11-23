@@ -78,7 +78,7 @@ export function RecommendationBar({ context, scope, onApply, onDone }: Recommend
           <div key={rec.key} className={s.rec}>
             <span className={s.icon} aria-hidden="true">💡</span>
             <p className={s.text}><Text text={rec.text} /></p>
-            <button type="button" className={s.apply} onClick={apply}>Apply</button>
+            <button type="button" className={s.apply} onClick={apply}>{rec.applyLabel ?? "Apply"}</button>
             <button type="button" className={s.x} aria-label="Dismiss this recommendation" onClick={dismissIt}>
               <span aria-hidden="true">✕</span>
             </button>

@@ -7,13 +7,13 @@ import pytest
 
 from omnikrux.monitoring.sources import messages
 from omnikrux.monitoring.sources.connector import NO_OPERATOR
-from omnikrux.monitoring.sources.prometheus_operator import NOT_SERVED
 from omnikrux.monitoring.sources.discovery import (
     CLUSTER_GONE,
     KubeClusterProbe,
     candidates,
     pick_port,
 )
+from omnikrux.monitoring.sources.prometheus_operator import NOT_SERVED
 from tests.fakekube import FakeResource, service
 
 BASE = "/api/monitoring/discovery"

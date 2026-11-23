@@ -1,8 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { DryRunOut } from "./api";
 import {
-  STATE_LABEL, dryRunSentence, durationWords, seriesWord, sentence, sinceShort, stateTone, whereLabel,
+  STATE_LABEL, dryRunSentence, durationWords, numberText, seriesWord, sentence, sinceShort, stateTone, whereLabel,
 } from "./format";
+import { labelsText } from "./page/words";
+
+describe("numbers and labels in words", () => {
+  it("thresholds print as written", () => {
+    expect(numberText(0.1 + 0.2)).toBe("0.3");
+    expect(numberText(1e-7)).toBe("0.0000001");
+    expect(numberText(1.5e-9)).toBe("0.0000000015");
+    expect(numberText(80)).toBe("80");
+    expect(numberText(-0.25)).toBe("-0.25");
+    expect(sentence({ of: "each", op: "above", threshold: 1e-7, for: "0s" }, { seriesWord: "series", unit: "none" })).toContain("above 0.0000001");
+  });
+
+  it("an alert's labels leave out the ones OmniKrux sets", () => {
+    expect(labelsText({ alertname: "A", omnikrux_rule: "17ba07", omnikrux_project: "p1", severity: "warning", route: "/a" })).toBe("route=/a");
+    expect(labelsText({ omnikrux_rule: "17ba07", project: "kind-dev" })).toBe("project=kind-dev");
+  });
+});
 
 const at = (y: number, mo: number, d: number, h: number, mi: number) => new Date(y, mo - 1, d, h, mi).getTime() / 1000;
 
@@ -39,6 +56,9 @@ describe("alert words", () => {
     expect(durationWords(2 * 86400)).toBe("2 d");
     expect(durationWords(0)).toBe("0 s");
     expect(durationWords(90)).toBe("1 min 30 s");
+    expect(durationWords(3 * 3600 + 30)).toBe("3 h");
+    expect(durationWords(86400 + 5 * 60)).toBe("1 d");
+    expect(durationWords(86400 + 3600 + 5)).toBe("1 d 1 h");
   });
 
   it("short ages for a list", () => {

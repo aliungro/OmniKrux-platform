@@ -90,6 +90,7 @@ def shapes(config: str):
 
 
 SHADOW = "An earlier route catches these alerts first, so they never reach this one."
+CHILD = "A route under it catches these alerts first, so they never reach this one."
 
 
 def test_a_catch_all_sibling_shadows_everything_after_it_and_the_default():
@@ -103,7 +104,7 @@ route:
       matchers: ['team="a"']
 """
     )
-    assert got == [("root", False, SHADOW), ("all", True, None), ("later", False, SHADOW)]
+    assert got == [("root", False, CHILD), ("all", True, None), ("later", False, SHADOW)]
 
 
 def test_an_equal_or_broader_earlier_sibling_shadows():
@@ -148,7 +149,7 @@ route:
     # The catch-all child takes everything the root would get, `continue` or not; `first` has
     # `continue`, so `second` is still tried.
     assert got == [
-        ("root", False, SHADOW),
+        ("root", False, CHILD),
         ("first", True, None),
         ("second", True, None),
         ("all", True, None),
@@ -273,3 +274,24 @@ route:
     assert by["b"].reason == "Its labels contradict the routes above it, so no alert can reach it."
     assert by["c"].reason == "OmniKrux couldn't read this route's matchers."
     assert not by["b"].usable and not by["c"].usable
+
+
+def test_a_receiver_that_sends_nowhere_is_not_offered():
+    got = shapes(
+        """
+route:
+  receiver: "null"
+  routes:
+    - receiver: live
+      matchers: ['team="live"']
+    - receiver: "null"
+      matchers: ['team="quiet"']
+receivers:
+  - name: "null"
+  - name: live
+    webhook_configs:
+      - url: http://hook.example.test/
+"""
+    )
+    nowhere = "Sends nowhere: this receiver has no notifications set up."
+    assert got == [("null", False, nowhere), ("live", True, None), ("null", False, nowhere)]

@@ -441,3 +441,17 @@ async def test_setting_up_a_project_brings_its_rules_up_to_date(monitoring_app, 
     made = await http.post(f"{API}/setup", json={"name": "Fresh", "kind": "custom"})
     assert made.status_code == 201, made.text
     assert asked == [("project", made.json()["id"])]
+
+
+def test_written_back_counts_rules_not_targets():
+    """A group rule spread over three projects is one rule written back, not three."""
+    from types import SimpleNamespace
+
+    from omnikrux.monitoring.alerts.sync import written_back_copy
+    from omnikrux.monitoring.projects.api import _rule_count
+
+    targets = [SimpleNamespace(rule_id="g1") for _ in range(3)] + [SimpleNamespace(rule_id="p1")]
+    assert _rule_count(targets) == 2
+    assert written_back_copy(_rule_count(targets[:3])) == (
+        "1 alert rule had been taken out of Loki and is being written back."
+    )

@@ -481,9 +481,14 @@ async def _remove_from_loki(
         message = exc.message
         if exc.removed:
             await sync.write_back_loki(exc.removed, kind, id)
-            message = f"{message} {written_back_copy(len(exc.removed))}"
+            message = f"{message} {written_back_copy(_rule_count(exc.removed))}"
         await _finish_all(request, records, False, message)
         raise HTTPException(status_code=502, detail=message) from None
+
+
+def _rule_count(targets: Iterable[TargetRecord]) -> int:
+    """How many alert rules the targets belong to (a group rule has one per project)."""
+    return len({t.rule_id for t in targets})
 
 
 async def _written_back(
@@ -494,7 +499,7 @@ async def _written_back(
     if not removed:
         return detail
     await _services(request).alert_sync.write_back_loki(removed, kind, id)
-    return f"{detail} {NOTHING_DELETED} {written_back_copy(len(removed))}"
+    return f"{detail} {NOTHING_DELETED} {written_back_copy(_rule_count(removed))}"
 
 
 async def _reconcile(services: MonitoringServices, kind: ScopeKind, id: str) -> None:

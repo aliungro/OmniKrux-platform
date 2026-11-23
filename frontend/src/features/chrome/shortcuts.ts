@@ -49,7 +49,7 @@ export type ShortcutId =
   | "panelFocus" | "panelMove" | "panelResize" | "panelSettings" | "panelAdd" | "panelRemove" | "panelLeave"
   | "queryRun" | "chartCrosshair" | "tableSort" | "logLabels" | "addPanelPick" | "suggestionsFocus"
   | "exploreQuery" | "exploreBrowse" | "exploreLogs" | "exploreTime" | "exploreRun" | "exploreAdd" | "exploreWindow" | "exploreShowAll"
-  | "alertsViews" | "alertsMove" | "alertSilence";
+  | "alertsViews" | "alertsMove" | "alertSilence" | "alertsDetails" | "alertsList" | "alertsSave";
 
 export interface Shortcut {
   id: ShortcutId;
@@ -176,6 +176,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "alertsViews", scope: "alerts", keys: ["1–3"], match: ["1", "2", "3"], label: "Rules, Silences or Contact points" },
   { id: "alertsMove", scope: "alerts", keys: ["↑ ↓"], match: ["ArrowUp", "ArrowDown"], label: "In the rule list: move and show the rule" },
   { id: "alertSilence", scope: "alerts", keys: ["s"], match: ["s"], label: "Silence the selected alert" },
+  { id: "alertsDetails", scope: "alerts", keys: ["Enter"], match: ["Enter"], label: "In the rule list: go to the rule's details" },
+  { id: "alertsList", scope: "alerts", keys: ["Esc"], match: ["Escape"], label: "In the details: back to the rule list" },
+  { id: "alertsSave", scope: "alerts", keys: ["Ctrl Enter"], macKeys: ["⌘ Enter"], match: ["Enter"], ctrl: true, label: "In a rule, silence or contact point form: save it" },
 ];
 
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));

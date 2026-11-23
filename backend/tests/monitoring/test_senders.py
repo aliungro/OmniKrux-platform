@@ -426,6 +426,9 @@ def test_scrub_hides_secrets_and_their_url_parts():
         assert secret not in scrubbed
     assert "hooks.example.test" in scrubbed and "•••" in scrubbed
     assert scrub("nothing here", ["", "zzz"]) == "nothing here"
+    # A zero-width character inside a secret doesn't let it through.
+    hidden = scrub("password hun\u200bter2 and \ufeffabcdefgh123", ["hunter2", url])
+    assert "hunter2" not in hidden and "abcdefgh123" not in hidden and "\u200b" not in hidden
 
 
 def test_contact_point_repr_leaves_secrets_out():

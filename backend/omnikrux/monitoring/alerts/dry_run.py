@@ -71,7 +71,7 @@ FOR_DURATION = "Use a duration from 0s to 24h, like 5m."
 DRY_RUN_FAILED = "Something went wrong running this query. Try again."
 TOO_MANY_TOGETHER = (
     "This group's projects return too many points together to replay over this window. "
-    "Narrow the query with a label, alert on the total, or use a shorter window."
+    'Narrow the query with a label, alert on the total, or use a shorter "for" or window.'
 )
 REPLAY_TOO_LONG = (
     "The dry run took too long to replay. "
@@ -91,7 +91,7 @@ def wrong_type_copy(source_type: str) -> str:
 def too_many_points_copy(series: int | str) -> str:
     return (
         f"This query returns {series} series, too many to replay over this window. "
-        "Narrow it with a label, alert on the total, or use a shorter window."
+        'Narrow it with a label, alert on the total, or use a shorter "for" or window.'
     )
 
 

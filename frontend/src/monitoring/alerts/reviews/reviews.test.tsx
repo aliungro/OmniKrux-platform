@@ -7,7 +7,7 @@ import type { Plan } from "../../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp } from "../../test/renderMonitoringApp";
 import { alertsKeys, type AlertChangeOut, type SyncOut, type TargetOut } from "../api";
-import { ToolReviewHost } from "./ToolReviewHost";
+import { OK_STATUS_MS, ToolReviewHost } from "./ToolReviewHost";
 import { useToolReviews, type ToolReviewResult, type ToolReviews } from "./useToolReviews";
 
 afterEach(() => {
@@ -155,6 +155,38 @@ describe("tool review queue", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Save" }));
   });
 
+  it("a removal says Removed, and a status of successes goes by itself and with the page", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const { fallback } = pipeline([APPLIED]);
+      installFakeMonitoringApi({ syncAnswers: { t1: review(plan({ action: "delete", apply_label: "Delete" })) } }, fallback);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const host = (place: string) => (
+        <QueryClientProvider client={client}>
+          <main tabIndex={-1}><ToolReviewHost place={place}><Probe changes={[change()]} /></ToolReviewHost></main>
+        </QueryClientProvider>
+      );
+      const { rerender } = render(host("a"));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(status().textContent).toBe(`Removed "Slow checkout" from Shop's cluster.`));
+      act(() => { vi.advanceTimersByTime(OK_STATUS_MS + 10); });
+      expect(status().textContent).toBe("");
+      expect(document.activeElement).not.toBe(document.body);
+
+      // Again, then the workspace moves to another page: the successes go with it.
+      installFakeMonitoringApi({ syncAnswers: { t1: review(plan()) } }, pipeline([APPLIED]).fallback);
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(status().textContent).toBe(`Applied "Slow checkout" in Shop's cluster.`));
+      rerender(host("b"));
+      expect(status().textContent).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a cancelled review leaves the rule not applied with Review", async () => {
     const user = userEvent.setup();
     const { seen, fallback } = pipeline([APPLIED]);
@@ -217,13 +249,18 @@ describe("tool review queue", () => {
         t2: review(plan({ plan_id: "plan-2" })),
       },
     }, fallback);
-    renderHost([change(), change({ target_id: "t2", rule_name: "Errors" }), change({ target_id: "t9", rule_name: "Logs", kind: "failed", message: "The ruler refused the rule." })]);
+    renderHost([
+      change(), change({ target_id: "t2", rule_name: "Errors" }),
+      change({ target_id: "t9", rule_name: "Logs", kind: "failed", message: "The ruler refused the rule.", tool: "loki_ruler" }),
+      change({ target_id: "t8", rule_name: "Latency", kind: "failed", message: null, tool: "prometheus_rule" }),
+    ]);
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     const dialog = await screen.findByRole("dialog");
     const lines = [...status().querySelectorAll("li")].map((li) => li.textContent);
     expect(lines).toEqual([
       `"Logs" couldn't be written to Loki: The ruler refused the rule.`,
+      `"Latency" couldn't be applied in Shop's cluster: OmniKrux couldn't bring this rule up to date in the tool. Try again.`,
       `"Slow checkout" couldn't be applied in Shop's cluster: Another change to this cluster is under way. Try again in a moment.`,
     ]);
     expect(syncs(api)).toEqual(["/api/monitoring/alerts/targets/t1/sync", "/api/monitoring/alerts/targets/t2/sync"]);

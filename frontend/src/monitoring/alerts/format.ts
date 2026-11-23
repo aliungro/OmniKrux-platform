@@ -21,6 +21,20 @@ export const STATE_LABEL: Record<TargetState, string> = {
   not_applied: "Not applied",
 };
 
+/**
+ * A threshold as a person writes it: no float noise (`0.30000000000000004` is `0.3`) and no
+ * exponent (`1e-7` is `0.0000001`).
+ */
+export function numberText(n: number): string {
+  if (!Number.isFinite(n)) return String(n);
+  const clean = Number(n.toPrecision(15));
+  const text = String(clean);
+  if (!/e/i.test(text)) return text;
+  const [mantissa, exponent] = clean.toExponential().split("e");
+  const decimals = Math.min(100, Math.max(0, (mantissa.split(".")[1]?.length ?? 0) - Number(exponent)));
+  return clean.toFixed(decimals);
+}
+
 /** A badge whose state is still being read from the server (nothing is known yet). */
 export const STATE_READING = "Loading";
 
@@ -55,14 +69,20 @@ export function whereLabel(t: Pick<TargetOut, "engine" | "tool"> | { engine: Eng
   return t.engine === "tool" && t.tool !== null ? WHERE[t.tool] : "checked by OmniKrux";
 }
 
-/** `45 s`, `12 min`, `3 h 5 min`, `2 d`: the two largest units that aren't zero. */
+/** `45 s`, `12 min`, `3 h 5 min`, `2 d`: the largest unit that isn't zero and the one right
+ * below it when that isn't zero (3 h 0 min 30 s is "3 h", never "3 h 30 s"). */
 export function durationWords(seconds: number): string {
   let rest = Math.max(0, Math.round(seconds));
   const parts: string[] = [];
   for (const [size, word] of [[86400, "d"], [3600, "h"], [60, "min"], [1, "s"]] as const) {
     const n = Math.floor(rest / size);
     rest -= n * size;
-    if (n > 0 && parts.length < 2) parts.push(`${n} ${word}`);
+    if (parts.length === 0) {
+      if (n > 0) parts.push(`${n} ${word}`);
+    } else {
+      if (n > 0) parts.push(`${n} ${word}`);
+      break;
+    }
   }
   return parts.length ? parts.join(" ") : "0 s";
 }
@@ -110,7 +130,7 @@ export function sentence(
   const subject = alert.of === "total" ? "the total" : `any ${opts.seriesWord}`;
   const seconds = parseDuration(alert.for) ?? 0;
   const wait = seconds === 0 ? "right away" : `for ${durationWords(seconds)}`;
-  return `Alert when ${subject} is ${alert.op} ${alert.threshold}${SUFFIX[opts.unit]} ${wait}`;
+  return `Alert when ${subject} is ${alert.op} ${numberText(alert.threshold)}${SUFFIX[opts.unit]} ${wait}`;
 }
 
 const LEGEND_LABEL = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/;

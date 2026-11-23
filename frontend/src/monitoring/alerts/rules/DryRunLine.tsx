@@ -6,7 +6,7 @@
 import { useEffect, useRef } from "react";
 import { failure } from "../../../api/http";
 import type { DryRunIn, DryRunOut, Op } from "../api";
-import { dryRunSentence } from "../format";
+import { dryRunSentence, numberText } from "../format";
 import { useRuleDryRun } from "./useRuleDryRun";
 import s from "./RuleForm.module.css";
 
@@ -14,7 +14,7 @@ export const CHECKING = "Checking the last 6 hours…";
 export const couldntCheckWords = (message: string) => `Couldn't check the last 6 hours: ${message}`;
 
 /** A threshold in a few digits, as the advice says it (0.30000000000000004 reads 0.3). */
-export const thresholdText = (n: number): string => String(Number(n.toPrecision(6)));
+export const thresholdText = (n: number): string => numberText(Number(n.toPrecision(6)));
 
 /**
  * The calmer threshold the dry run found: among its candidates that fired at most once, the one
@@ -22,6 +22,9 @@ export const thresholdText = (n: number): string => String(Number(n.toPrecision(
  * `threshold`, every candidate counts as calmer (the server only suggests calmer ones). Never asks
  * the server itself.
  */
+/** What the calmer threshold would have done: "wouldn't have fired" or "would have fired once". */
+export const calmerWords = (fired: number) => (fired === 0 ? "wouldn't have fired" : "would have fired once");
+
 export function calmerThreshold(out: DryRunOut, op: Op, threshold?: number): { threshold: number; fired: number } | null {
   const calm = out.candidates.filter((c) =>
     c.fired <= 1 && Number.isFinite(c.threshold) && (threshold === undefined || (op === "above" ? c.threshold > threshold : c.threshold < threshold)));
@@ -85,7 +88,7 @@ export function DryRunLine({ body, onAdvice, onResult, advice = true }: DryRunLi
       </div>
       {tip && (
         <p className={s.advice}>
-          <span>That's often. At {thresholdText(tip.threshold)} it would have fired {tip.fired === 0 ? "not at all" : "once"}.</span>
+          <span>That's often. At {thresholdText(tip.threshold)} it {calmerWords(tip.fired)}.</span>
           {onAdvice && (
             <button type="button" className={s.adviceButton} onClick={() => onAdvice(tip.threshold)}>Use {thresholdText(tip.threshold)}</button>
           )}
