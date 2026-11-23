@@ -1,6 +1,6 @@
 # Monitoring
 
-Monitoring is the second app in OmniKrux. It is in development. So far you can describe what you run, connect the tools that hold its metrics and logs, have OmniKrux check that it can reach them and query them safely, and build dashboards on top of that. Explore and Alerts come in later updates.
+Monitoring is the second app in OmniKrux. It is in development. So far you can describe what you run, connect the tools that hold its metrics and logs, have OmniKrux check that it can reach them and query them safely, build dashboards on top of that, and ask one-off questions of your metrics and logs in Explore. Alerts come in a later update.
 
 Open it from the left rail, or press `Alt 2`.
 
@@ -58,7 +58,7 @@ Use **+** next to Groups in the sidebar to make a **New group**: give it a name 
 
 In the sidebar a group lists its projects as shortcuts (**Go to project …**), so a project that is in a group is one click away from either place. Home lists **Recently opened** projects and groups, and its search finds projects, groups and sources.
 
-**Explore** and **Alerts** in the sidebar tell you they arrive in a later update. Nothing in Monitoring evaluates rules or sends notifications yet.
+**Explore** in the sidebar opens [Explore](#explore). **Alerts** tells you it arrives in a later update; nothing in Monitoring evaluates rules or sends notifications yet.
 
 ## Dashboards
 
@@ -105,13 +105,13 @@ The panel types are **Time series** (**Lines**, **Area** or **Stacked**), **Stat
 
 Press **Edit** (or `e`). The header then says **Editing** and shows **Discard** and **Save dashboard**. Nothing is saved until you press **Save dashboard** (or Ctrl S, which works inside fields too). A save with no changes writes nothing: it just ends editing.
 
-- **Add:** the dashed **Add panel** tile (or `a`) adds a time series panel in the first free spot.
+- **Add:** the dashed **Add panel** tile (or `a`) opens a search where you type what you want to see; see [Adding panels](#adding-panels).
 - **Move and resize with the mouse:** drag a panel by its **⋮⋮** handle, and resize it from its corner. Other panels move out of the way, and Esc cancels a drag in progress.
 - **Move and resize with the keys:** click a panel, or Tab to one. The arrow keys move between panels. Shift with an arrow moves the panel one step, and Ctrl Shift with an arrow makes it narrower, wider, shorter or taller. A message announces each change.
 - **Remove:** Ctrl Del (Cmd Backspace on a Mac) removes the panel from the draft. **Discard** brings it back.
 - **Settings:** click a panel or press Enter to open **Panel settings** beside the grid. Esc closes them; the next Esc goes to **Save dashboard**.
 
-The settings have four tabs.
+At the top of the settings a one-line recommendation can appear (see [Recommendations](#recommendations)). Below it are four tabs.
 
 - **Query.** **Source** says where the queries run: on a project dashboard the project's first Prometheus-compatible or Loki source, or one specific linked source; on a group dashboard each project's own. Each query is code with a **Legend** (for example `{{pod}}`) and a **Hide** checkbox; **+ Add query** adds up to ten, and a logs panel has exactly one. A run follows 300 ms after you stop typing, or at once with Ctrl Enter. The line under the queries says what the last run returned: series, points and how long it took.
 - **Chart.** The **Chart type** tiles, and what the type offers: **Style** for a time series, **Show** (last, mean, max, min or sum) and **Sparkline** for a stat, **Show** for a gauge, **Direction** for a bar, **Columns** for a table, and **Lines**, **Wrap long lines** and **Order** for logs. Changing the type keeps the queries, the title and the size.
@@ -119,6 +119,38 @@ The settings have four tabs.
 - **Alert.** Says alerts arrive in a later update, together with the Alerts page.
 
 Charts redraw as you edit. A panel whose query you change morphs to the new data, a stat counts to its new number, and an edited panel's frame is highlighted briefly. If your system asks for reduced motion, none of that animates: charts jump, numbers change at once and nothing is highlighted.
+
+### Adding panels
+
+**Add panel** (the dashed tile, or `a`) opens a search over what the owner's sources hold. Type plain words, such as `errors by route`, `p99 latency`, `crashes` or `api logs`, and the matching panels are listed as cards, best first, up to six.
+
+- **What it matches.** The words are matched against metric names, their help text and their labels, and against log label values. Filler words ("show me the") are ignored. Related words count as the same thing, so `errors`, `failures` and `5xx` find alike, as do `latency` and `duration`, `restarts` and `crashes`, or `logs` and `lines`. `by route` splits a panel by that label, and `p50`, `p90`, `p95` or `p99` picks a latency percentile. It is fixed rules over names, help text and labels: no AI and no paid service is involved, and your words are never sent anywhere.
+- **What it writes.** A counter is shown as a rate per second, a histogram as a percentile and a gauge as it is. An error card for a request counter keeps the 5xx status codes, using the label that holds the status. Each card names its metric and kind, so you can see what it will run.
+- **Previews.** The first few cards draw a small live preview of their query, run through the owner's label filter. Looking at a preview saves nothing.
+- **Keys.** The keyboard stays in the field. `↑` and `↓` move the highlight, **Enter** adds the highlighted card (the first one until you move), and `Ctrl End` jumps to **Empty panel**. **Esc** clears the text, and a second **Esc** closes the search. With no text, it lists the suggestions for this owner.
+- **Empty panel.** Always the last entry: a blank time series that you fill in yourself ("Write the query yourself.").
+- **Refresh list.** The list of known metrics and log labels is read from the sources and kept for a few minutes, so a metric that appeared a minute ago may not be there yet. The footer says how old it is ("Known metrics from 2 min ago"). **Refresh list** reads the sources again. If reading fails, **Try again** does the same.
+
+A card adds a panel to your draft like any other edit, so **Discard** takes it back.
+
+### Suggestions on a new dashboard
+
+When you start editing a dashboard that has no panels (a new one, or one you emptied), a rail beside the grid offers up to eight ready-made panels, headed "Suggested for _name_ · from what Prometheus and Loki have". It offers only what the sources hold: a request rate, an error rate, a p95 latency, pod restarts, CPU and memory by pod, node CPU busy, targets that are down, log volume (by level when there is a level label) and error log lines. Each card shows a live preview.
+
+- Pick a card with the mouse or Enter. It flies to its place in the grid and the card reads **Added**. The keyboard stays in the rail on the next suggestion, so a dashboard can be built with Enter alone.
+- `s` moves to the first suggestion not yet added.
+- **Hide suggestions** closes the rail for this edit. Esc on a suggestion goes back to **Add panel**.
+- When nothing in the sources fits, the rail says so and points to **Add panel**.
+
+### Recommendations
+
+In a panel's settings, and in Explore under the query, one recommendation at a time can appear, with a light bulb, an **Apply** button and a dismiss button (**✕**). There are three kinds:
+
+- **A raw counter.** "… is a counter, so its raw value only goes up. Show it per second?" **Apply** wraps the query in a rate.
+- **A noisy line.** When a line is jagged at its window, it suggests a wider window (at least five minutes, or four steps). **Apply** widens it.
+- **Several rates.** Two to ten rates read better stacked. **Apply** changes the style to stacked area.
+
+**Apply** is a normal edit of the draft, and **Discard** undoes it. If you changed the query since the suggestion was made, it says "That query changed. Review it and try again." and changes nothing. A dismissed recommendation does not come back for that dashboard (or, in Explore, for that project). Dismissals are kept in this browser only. The recommendation that suggests an alert threshold arrives with alerts.
 
 ### Drafts
 
@@ -180,12 +212,79 @@ These are the keys listed under **Monitoring** and **Dashboards** in the **?** s
 | `Shift` + arrows | While editing: move the panel one step |
 | `Ctrl Shift` + arrows (`⌘ Shift`) | While editing: make the panel narrower, wider, shorter or taller |
 | `Enter` | While editing: open the panel's settings |
-| `a` | While editing: add a panel |
+| `a` | While editing: add a panel (type what you want to see) |
 | `Ctrl Del` (`⌘ ⌫`) | While editing: remove the panel from the draft |
 | `Esc` | Close the panel's settings, then go to **Save dashboard** |
+| `↑ ↓`, `Enter` | In Add panel: pick a result and add it (`Ctrl End`: Empty panel; Esc clears, then closes) |
+| `s` | While editing a new dashboard: go to the suggestions |
 | `Ctrl Enter` (`⌘ Enter`) | In a query: run it now. In the JSON: review the changes |
 | `← →` | On a chart: move the crosshair; Esc hides it |
 | `Enter` | On a table column: sort by it. On a log line: show its labels |
+
+## Explore
+
+**Explore** (in the sidebar) asks a one-off question of a project's sources without building a dashboard, and redraws as you type.
+
+### Where to look
+
+- **Project** and **Source** pick what to read. Explore opens on the project you came from, else the one you opened last. The source is the project's first Prometheus-compatible one, else its first Loki one. Every query goes through the project's label filter, as everywhere else in Monitoring.
+- The time button sets the range (the default is the last hour) and offers the same presets and **Custom range…** as a dashboard. `t` opens it.
+- The page's state (project, source, query, logs query and range) belongs to the workspace tab. After a reload, or Back, it is as you left it.
+
+### The query bar
+
+Type a PromQL query (LogQL for a Loki source) in the **Query** field. It runs 300 ms after you stop typing, and **Ctrl Enter** runs it now. A line under it says how the last run ended, for example `✓ 4 series · 38 ms · Last 1 hour · updated 10:21:07`, and **Running…** shows beside it while a run is on.
+
+- A query the tool can't read keeps the last result on screen, dimmed and labelled **Last good result** with the query that made it, so a typo while typing never blanks the chart. The line says what is wrong and "showing the last result".
+- Text with an unclosed bracket or quote is refused on the spot with a message and is not sent.
+- A tool that didn't answer (**Source unreachable**) or refused the query (**Query error**) draws no chart, never the old one as if it were current, and offers **Try again**.
+- A slow answer to an older text never replaces a newer one.
+
+### The trail
+
+**Recent queries** keeps the project's last queries that answered (twenty kept, the newest eight shown). Pick one with the mouse or Enter, or move with `←` and `→`, to bring back its query and its source. **Clear** empties the trail. A query joins the trail when it answered and its text stayed for two seconds, when you press Ctrl Enter, or when you add it to a dashboard. The trail is kept in this browser, per project.
+
+### Browsing
+
+The list on the left shows **Metrics** for a Prometheus-compatible source, or **Log streams** for Loki, as they are under the project's filter. Type in **Filter** to narrow it, and `b` goes to the list. Pick a metric and Explore writes its query: a counter as a rate per second, a histogram as a percentile, a gauge as it is. Pick a log stream (`label = value`) and it writes the selector. The footer says how old the list is and has **Refresh list**. On a narrow window the list folds behind a **Metrics** or **Log streams** button.
+
+Chips under the query shape it:
+
+- **Split by** groups the result by one label.
+- **Only** keeps one value of a label (`label=value`). A label with more than eight values has a **more…** popover with a **Filter values** box. For logs the values come from the log streams.
+
+Clicking a chip rewrites the query and runs it. If you edit the query by hand, Explore says "You edited the query by hand. Clicking a chip writes it again from the chips." and leaves your text alone until you click a chip. You can always write the query yourself; the list and chips are only a way to start.
+
+### Logs on the same timeline
+
+Under the chart, **Log lines** shows the lines of the same time range, newest first, up to 1000.
+
+- With a metrics query, the lines come from the **Only** chips whose labels Loki also has, or from a LogQL selector you type in the **Logs query** field. Ticks along the chart mark the times of the lines, toned by level. A project with no Loki source has no lines.
+- **Drag a window** across the chart, or press `Shift ←` or `Shift →` on the focused chart, and the lines narrow to exactly that window. **Show all** (or Esc on the chart) goes back to the whole range.
+- With a Loki source the query bar takes LogQL. Explore charts the log volume (split by the **Split by** chip) and lists the lines below it. A LogQL query that counts something, such as `rate({app="api"}[5m])`, is a metric query: it draws a chart and lists no lines.
+
+### Add to dashboard
+
+**Add to dashboard** (or `a`) turns the query into a panel. Pick a dashboard of the project, or of a group that holds it, or **New dashboard in …** with a **Title**. Then set the **Panel title** and the **Chart** (**Time series**, **Stat**, **Bar** or **Table**; a log query becomes a **Logs** panel) and press **Add panel**. The query text is added exactly as written. The page then says `Added to "…".` with **Open dashboard**.
+
+If the dashboard has unsaved changes in this browser, the panel is saved to it now, and saving your draft later asks you to review the differences. The change is written to the Audit log as **Saved a dashboard** (or **Added a dashboard** for a new one); its details say it came from Explore and name the panel it added.
+
+### Reduced motion and keys
+
+If your system asks for reduced motion, Explore's charts jump instead of morphing, and a panel added from Add panel or the suggestions appears at once instead of flying in.
+
+Keys in Explore, as in the `?` sheet (letters work only when you aren't typing in a field):
+
+| Key | What it does |
+| --- | --- |
+| `q` | Go to the query |
+| `b` | Go to the metric or log stream list |
+| `l` | Go to the log lines |
+| `t` | Pick the time range |
+| `Ctrl Enter` (`⌘ Enter`) | In the query: run it now |
+| `a` | Add the query to a dashboard |
+| `Shift ← →` | On the chart: select a time window for the log lines |
+| `Esc` | On the chart: show all log lines again |
 
 ## Rename, unlink and delete
 
@@ -203,11 +302,10 @@ A source a project did not create, or that another project still uses, is never 
 
 ## Audit
 
-Every change in Monitoring is written to the Audit log, marked as coming from Monitoring: **Added a source**, **Changed a source**, **Removed a source**, and the same for projects and groups. For dashboards the entries are **Added a dashboard** (a new one or a copy), **Saved a dashboard**, **Restored a dashboard version** and **Removed a dashboard**. An entry names what changed and whether it succeeded. A dashboard's entries say who owns it, which versions are involved and how many panels it has, never its queries. Details never include secrets: an entry says which kind of sign-in a source uses, not the password or token. Reading is not audited: testing a source, opening a project or running a query leaves no entry.
+Every change in Monitoring is written to the Audit log, marked as coming from Monitoring: **Added a source**, **Changed a source**, **Removed a source**, and the same for projects and groups. For dashboards the entries are **Added a dashboard** (a new one or a copy), **Saved a dashboard**, **Restored a dashboard version** and **Removed a dashboard**. An entry names what changed and whether it succeeded. A dashboard's entries say who owns it, which versions are involved and how many panels it has, never its queries. A panel added from Explore is recorded as **Saved a dashboard**, with a note that it came from Explore and the title of the panel added. Details never include secrets: an entry says which kind of sign-in a source uses, not the password or token. Reading is not audited: testing a source, opening a project or running a query leaves no entry.
 
 ## What comes in later updates
 
 - Importing existing Grafana dashboards, and alerts on a panel (the **Alert** tab says so).
-- Explore: query as you type and browse metrics and logs.
 - Alerts: rules, evaluation and notifications.
 - Installing monitoring tools from OmniKrux, and discovery for Docker hosts and servers.

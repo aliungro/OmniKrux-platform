@@ -1,5 +1,6 @@
 """Monitoring against the Prometheus and Loki installed in kind's `monitoring` namespace."""
 
+import re
 import time
 from contextlib import contextmanager
 
@@ -320,3 +321,123 @@ def test_dashboard_lifecycle_on_the_cluster(client, prometheus_project):
         ("dashboard_restore", "succeeded"),
         ("dashboard_remove", "succeeded"),
     ]
+
+
+# --- Building and Explore: the catalog and the suggestion templates -----------------------------
+
+CHECK_JOB = "omnikrux-m3-check"
+# The order the browser's suggestion rules pick a log label in (frontend/src/monitoring/build).
+STREAM_LABELS = ["namespace", "app", "service_name", "job", "container"]
+IDENT = r"^[A-Za-z_][A-Za-z0-9_]*$"
+
+
+@pytest.fixture
+def both_project(client, cluster, tools):
+    """A Kubernetes project over the found Prometheus and Loki with no filter."""
+    sources = [{"source": new_source(cluster, tools[t]), "filter": ""} for t in tools]
+    with project_cleanup(client) as made:
+        project = set_up(client, cluster, "Kind catalog", sources)
+        made.append(project["id"])
+        yield project
+
+
+def catalog_of(client, project: dict) -> dict[str, dict]:
+    """The project's catalog sections, by source type."""
+    response = client.get(f"{API}/projects/{project['id']}/catalog")
+    assert response.status_code == 200, response.text
+    return {section["source_type"]: section for section in response.json()["sources"]}
+
+
+def metrics_by_name(section: dict) -> dict[str, dict]:
+    return {m["name"]: m for m in section["metrics"]}
+
+
+def test_catalog_on_the_cluster(client, both_project):
+    sections = catalog_of(client, both_project)
+
+    prometheus = sections["prometheus"]
+    assert prometheus["state"] in ("ok", "partial"), prometheus["message"]
+    metrics = metrics_by_name(prometheus)
+    requests = metrics["prometheus_http_requests_total"]
+    assert requests["type"] == "counter"
+    assert {"code", "handler"} <= set(requests["labels"])
+    buckets = metrics["prometheus_http_request_duration_seconds_bucket"]
+    assert buckets["family"] == "prometheus_http_request_duration_seconds"
+    assert "kube_pod_container_status_restarts_total" in metrics
+
+    loki = sections["loki"]
+    assert loki["state"] in ("ok", "partial"), loki["message"]
+    streams = {s["name"]: s for s in loki["streams"]}
+    assert CHECK_JOB in streams["job"]["values"], "push the log lines again (see live-check.md)"
+    assert "level" in streams
+
+
+def test_suggestion_templates_run_on_the_cluster(client, both_project):
+    project = both_project
+    loki_section = catalog_of(client, project)["loki"]
+    writable = [s["name"] for s in loki_section["streams"] if re.match(IDENT, s["name"])]
+    assert writable, "Loki lists no log label"
+    label = next((name for name in STREAM_LABELS if name in writable), writable[0])
+    volume = f'sum by (level) (count_over_time({{{label}=~".+"}}[30s]))'
+    errors = f'{{{label}=~".+"}} |~ "(?i)(error|fatal|panic)"'
+
+    prometheus_queries = {
+        "rate": "sum by (handler) (rate(prometheus_http_requests_total[2m]))",
+        "error_rate": (
+            'sum(rate(prometheus_http_requests_total{code=~"5.."}[2m]))'
+            " / sum(rate(prometheus_http_requests_total[2m]))"
+        ),
+        "latency": (
+            "histogram_quantile(0.95, sum by (le) "
+            "(rate(prometheus_http_request_duration_seconds_bucket[2m])))"
+        ),
+        "restarts": (
+            "topk(5, sum by (namespace, pod) "
+            "(increase(kube_pod_container_status_restarts_total[1h])))"
+        ),
+        "cpu": (
+            "topk(10, sum by (namespace, pod) "
+            '(rate(container_cpu_usage_seconds_total{container!=""}[2m])))'
+        ),
+        "down": "count(up == 0) or vector(0)",
+    }
+    now = time.time()
+    window = {"kind": "range", "start": now - HOUR, "end": now, "step": STEP}
+    prometheus_id = link_of(project, "prometheus")["source_id"]
+    loki_id = link_of(project, "loki")["source_id"]
+    named = [(name, prometheus_id, text) for name, text in prometheus_queries.items()]
+    named += [("volume", loki_id, volume), ("errors", loki_id, errors)]
+    requests = [
+        {"source_id": source_id, "project_id": project["id"], "query": text} | window
+        for _, source_id, text in named
+    ]
+    results = run_batch(client, requests)
+    answers = dict(zip([name for name, _, _ in named], results, strict=True))
+    for name, result in answers.items():
+        code = (result.get("error") or {}).get("code")
+        assert code != "bad_query", f"{name}: {result['error']}"
+
+    assert answers["rate"]["ok"] and answers["rate"]["response"]["series"]
+    assert answers["volume"]["ok"], answers["volume"]
+    assert answers["volume"]["response"]["series"], "push the log lines again (see live-check.md)"
+
+
+def test_catalog_follows_a_filter_on_the_cluster(client, cluster, tools):
+    prometheus = new_source(cluster, tools["prometheus"])
+    restarts = "kube_pod_container_status_restarts_total"
+    with project_cleanup(client) as made:
+        wide = set_up(client, cluster, "Kind catalog wide", [{"source": prometheus, "filter": ""}])
+        made.append(wide["id"])
+        narrow = set_up(
+            client,
+            cluster,
+            "Kind catalog narrow",
+            [{"source_id": wide["links"][0]["source_id"], "filter": 'job="prometheus"'}],
+        )
+        made.append(narrow["id"])
+
+        assert restarts in metrics_by_name(catalog_of(client, wide)["prometheus"])
+        narrow_section = catalog_of(client, narrow)["prometheus"]
+        assert narrow_section["state"] in ("ok", "partial"), narrow_section["message"]
+        assert narrow_section["metrics"]
+        assert restarts not in metrics_by_name(narrow_section)

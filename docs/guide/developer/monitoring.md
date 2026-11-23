@@ -1,6 +1,6 @@
 # Monitoring: developer guide
 
-Monitoring reads metrics and logs from tools you already run (a Prometheus-compatible service, Loki) and shows them per project. It has sources, projects, groups, label filters, discovery in known clusters, the query proxy and dashboards. Explore and Alerts are not here yet. For what the app does for its users, see the [user guide](../user/monitoring.md).
+Monitoring reads metrics and logs from tools you already run (a Prometheus-compatible service, Loki) and shows them per project. It has sources, projects, groups, label filters, discovery in known clusters, the query proxy, dashboards, the catalog that the building tools and Explore read, the faster ways to build a panel, and Explore. Alerts are not here yet. For what the app does for its users, see the [user guide](../user/monitoring.md).
 
 ## Code layout
 
@@ -15,9 +15,10 @@ Backend, under `backend/omnikrux/monitoring/`:
 | `projects/` | Projects, links and groups: `store.py`, `types.py`, `api.py` (`/projects`, `/groups`, `/tree`, `/setup`). |
 | `query/` | `api.py` (`POST /query`, `POST /query/batch`, `GET /label-values`), `run.py` (the pipeline behind them), `filters.py` (label filters and their injection), `series.py` (the one result format), `suggest.py` (filter suggestions for Kubernetes projects). |
 | `dashboards/` | `schema.py` (the dashboard document and its checks), `store.py` (dashboards and their versions), `api.py` (the routes), `ready_made.py` (the generated views). See [Dashboards](#dashboards). |
+| `explore/` | `catalog.py` (the catalog cache and `project_catalog`) and `api.py` (`GET /projects/{id}/catalog`). See [The catalog](#the-catalog). |
 | `audit.py` | Writes Monitoring's entries to the shared audit log. |
 
-Frontend, under `frontend/src/monitoring/`: `MonitoringApp.tsx` (the app and its pages), `shell/` (tab state), `sidebar/`, `home/`, `sources/`, `setup/`, `projects/`, `groups/`, `search/`, `api/` (client, hooks, types, query helper), `dashboards/` and `charts/` (see [Dashboards](#dashboards)) and `test/` (a fake API for tests).
+Frontend, under `frontend/src/monitoring/`: `MonitoringApp.tsx` (the app and its pages), `shell/` (tab state), `sidebar/`, `home/`, `sources/`, `setup/`, `projects/`, `groups/`, `search/`, `api/` (client, hooks, types, query helper), `dashboards/` and `charts/` (see [Dashboards](#dashboards)), `catalog/` (the catalog's client and merge, see [The catalog](#the-catalog)), `build/` (the finder, suggestions, recommendations and Add panel's search and rail, see [Building faster](#building-faster-the-finder-and-the-suggestions)), `explore/` (see [Explore](#explore)) and `test/` (a fake API for tests).
 
 ### Tables and migrations
 
@@ -35,7 +36,7 @@ A change to these tables is a new migration under `backend/omnikrux/migrations/v
 A connector knows one tool's API and nothing about reaching it. `sources/connector.py` defines the `Connector` protocol:
 
 - `type`, `label` and `language` (`promql` or `logql`);
-- `test` (never raises for an unreachable tool; it reports it), `query`, `describe_fields`, `label_values` and `alerting`.
+- `test` (never raises for an unreachable tool; it reports it), `query`, `describe_fields`, `catalog`, `label_values` and `alerting`.
 
 Every call besides `test` raises `SourceUnreachable` when the tool can't be reached and `QueryRejected` when the tool refuses a request. Both carry plain-words messages. The `SourceTransport` a connector is handed does the reaching: the address, authentication, headers, CA and the path through a cluster's API when a source is reached inside a cluster.
 
@@ -225,6 +226,104 @@ Backend, under `backend/omnikrux/monitoring/`: `dashboards/` (`schema.py`, `stor
 
 Frontend, under `frontend/src/monitoring/`: `dashboards/` (`schema.ts`, `interpolate.ts`, `time.ts`, `runPanel.ts`, `layout.ts`, `api.ts`, and the folders `page/` (header, time, refresh, variables, the page), `grid/` (panels and their states), `editor/` (edit mode, settings, save), `drafts/`, `json/`, `versions/` and `create/` (new, copy, delete)), `OwnerDashboards.tsx` (the lists and ready-made views on project and group pages) and `charts/`.
 
+## The catalog
+
+The catalog is what a project's sources hold under that project's label filter: metric names with their type, help, unit, labels and series count, and Loki's stream labels with their values. Add panel, the suggestions, the recommendations and Explore's list all read it.
+
+### Route and shape
+
+`GET /api/monitoring/projects/{id}/catalog` (`explore/api.py`) answers one section per linked source, in link order: `source_id`, `source_name`, `source_type`, `state` (`ok`, `partial` when it carries notes, or `error` with a `message` and no catalog), `built_at`, `metrics`, `labels`, `streams` and `notes`. A source that fails is its own `error` section and never fails the project's other sources. It is read only, so nothing is audited. `?refresh=true` rebuilds (`true` or `1`; `false`, `0` or nothing reads the cache; anything else is a `400`). A project that doesn't exist is `404 not_found`.
+
+### What each connector reads
+
+`Connector.catalog(transport, matchers=, now=, limits=)` returns a `SourceCatalog` (`sources/connector.py`).
+
+- **Prometheus-compatible** (`prometheus.py`): `/api/v1/label/__name__/values` and `/api/v1/labels`, both with `match[]` set to the link's filter; `/api/v1/metadata?limit_per_metric=1`; and `/api/v1/series` over the last 15 minutes with the filter injected into `{__name__=~".+"}`, for the labels and series count of each metric. A metric's type comes from its metadata or, without it, from the histogram family rule: `_bucket`, `_sum` and `_count` follow their base name (and a `_bucket` with an `le` label is a histogram). A tool that refuses to list series (4xx), answers too much or too slowly leaves labels empty and adds a note.
+- **Loki** (`loki.py`): without a filter, `/loki/api/v1/labels` over the last hour and the values of each label (six calls at a time). With a filter, one `/loki/api/v1/series` call with the filter as the selector, so nothing outside the filter is ever asked for, and the labels and values are read from the streams it returns. Labels that start with `__` are dropped.
+
+### Limits and notes
+
+`CatalogLimits` holds the limits and the connector adds a plain-words note when one applies:
+
+| Limit | Value | Note |
+| --- | --- | --- |
+| metrics | 5000 | "Showing the first 5000 metrics. Search and the list cover only those." |
+| help text | 200 characters, cut with `…` | none |
+| series read | 50000 | "Labels per metric come from the first 50000 series." |
+| labels per metric | 50 | none |
+| stream labels | 50 | "Showing the first 50 log labels." |
+| values per stream label | 200 | "Some log labels have more than 200 values; only the first 200 are listed." |
+| streams read | 5000 | none |
+| no series listing | | "This source didn't list its series, so labels per metric are missing." |
+
+### The filter rule and one caveat
+
+Every Prometheus call that can take `match[]` carries the link's filter, so names and labels come only from what the project may see. The metadata endpoint takes no `match[]`, so it is read whole, but only the names the filtered list returned are looked up in it, and for a histogram's base name only the type is read, never its help or unit.
+
+With `limit_per_metric=1` the answer holds a single entry per metric name, whichever the tool returns first. So a metric name that two projects both export (the same exporter on two clusters behind one shared Prometheus) can show the other project's help text. Only the help and unit are affected; the names, labels and series counts always come from the filtered calls.
+
+### Cache
+
+`explore/catalog.py` keeps entries in `CatalogCache`, keyed by project id, source id, the filter's text and the source's `updated_at`, so one project's entry is never served to another and a changed filter or source builds a new one.
+
+- An entry is served for 300 s (an error for 30 s). `refresh=true` rebuilds, but not more than once per 10 s per source; a refresh inside that gap gets the entry as it is.
+- One build per key at a time (single flight): every caller for that key awaits the same task. A caller that goes away never cancels it.
+- A build is bounded by 20 s inside the shared task, so a timed-out build ends there and its error is cached like any other. `project_catalog` reads at most four of a call's sources at once, and the whole call answers within the timeout however many sources hang.
+- At most 64 entries are kept, the least recently used dropped first.
+- The secrets are checked before any request, as for a query. A source whose secrets can't be read is that source's `error` entry.
+
+In the browser, `useProjectCatalog` keeps an answer for 300 s too (`CATALOG_STALE_MS`), and `useRefreshCatalog` asks for `refresh=true` and puts the answer in the cache. A group's catalog is its members' catalogs read one by one (never one request for several projects) and merged by name in `catalog/merge.ts`. Both shapes carry `builtAt`, the oldest build, for the "Known metrics from …" line.
+
+## Building faster: the finder and the suggestions
+
+Code is in `frontend/src/monitoring/build/`. Nothing here calls a model or a paid service.
+
+### The finder
+
+`finder.ts` turns plain words into candidate panels. `buildFinderIndex(catalog)` tokenizes the catalog once (metric names split at `_` and `:`, labels, help words, stream labels and values), and `findPanels(index, text)` scores entries, so a keystroke never re-splits thousands of names. The rules:
+
+- The text is lowered and split on anything but letters, digits, `_` and `:`; words in `STOP_WORDS` are dropped. `by` or `per` followed by a word is the split label; `p50`, `p90`, `p95` and `p99` set the percentile.
+- A word scores 4 for a whole-token match (after plural stripping and `SYNONYMS`), 2 for a token it starts (words of three letters or more), 2 for a label name and 1 for a help word. An entry carrying the split label gets 4 more, and one that lacks it loses 3. An entry with no content points never qualifies on intent alone.
+- An intent bonus is added by kind: errors (the `error` synonym group, a status label on the counter) +3, latency (a percentile or the latency group, a histogram that looks like a timing) +3, logs +3 for lines and +1 for volume, and "volume" or "count" +3 for volume.
+- Results sort by score, then kind (rate, errors, quantile, value, volume, lines), then series count, then title; at most six are kept (`FINDER_MAX_RESULTS`), and a candidate whose query can't be written (`UnwritableQuery`) or repeats an earlier query is skipped.
+- Queries are written only through `writeQuery.ts` (`writeMetricQuery`, `writeLogQuery`, `writeVolumeQuery`), which writes a name or label only when it is a plain identifier.
+
+A test (`finder.test.ts`) matches 5000 metrics and requires each search to take under 50 ms on average.
+
+To add a synonym, add the word to the right group in `SYNONYMS` (or a new group, then use it where intent is read in `findPanels`) and add a case to `finder.test.ts`. To add a candidate kind, extend `Kind` and `KIND_RANK`, make `findPanels` call `put` for it, write its query in `write`, and add its tests to `finder.test.ts`.
+
+### The suggestion table
+
+`suggest.ts` holds `RULES`, one function per suggestion; each returns a `Candidate` or `null` when what it needs isn't in the catalog. `suggestPanels(catalog)` runs them in order and keeps up to `MAX_SUGGESTIONS` (8): `requestRate`, `errorRate`, `latencyP95`, `podRestarts`, `logVolume`, `cpuByPod`, `memoryByPod`, `nodeCpu`, `targetsDown`, `errorLogs`. Two rules pick a label in a fixed order: the split label from `SPLIT_LABELS` and the log label from `STREAM_LABELS` (`namespace`, `app`, `service_name`, `job`, `container`), so a cluster whose logs carry both `namespace` and `job` gets `{namespace=~".+"}`.
+
+To add a suggestion:
+
+1. Add a `Make` function to `RULES` in `suggest.ts`. Write its query through the writers, give it a stable `key`, a title and a subtitle.
+2. Add its exact-query test to `suggest.test.ts`, against a catalog from `testCatalogs.ts`, and a case for when it must not appear.
+3. Add its template to the kind test `test_suggestion_templates_run_on_the_cluster`, with the built-ins filled in (`$__rate_interval` as `2m`, `$__interval` as `30s`).
+
+`candidatePanel` turns a candidate into a panel for the dashboard schema (a logs panel takes no `unit`). `usePreviews` runs the first few cards' queries through `POST /query/batch` (each item carries `project_id`) 250 ms after the list settles, with at most three previews at a time in Add panel.
+
+## Recommendations
+
+`recommend.ts` holds `RULES` (`perSecond`, `widerWindow`, `stackedArea`), each a `RecommendationRule` whose `evaluate(context)` returns a `Recommendation` (`id`, `key`, `text`, `apply(panel)`) or `null`. `recommendFor` returns the first whose key was not dismissed. The key names the rule, the panel and the query, so a dismissal holds for that one case. `RecommendationBar` shows it: **Apply** passes `onApply` a function that rewrites the panel as it is at that moment, and says "That query changed. Review it and try again." when the rewrite changes nothing. Dismissals live in `localStorage` under `omnikrux.monitoring.recommendations.dismissed` (at most 500, with an in-memory fallback), scoped by dashboard id or `explore:{project id}` (`dismissals.ts`).
+
+To add a rule, write a `RecommendationRule` and add it to `RULES`, or call `registerRecommendationRule(rule)`, which returns an unregister function. `RecommendationContext` has a reserved `alert` field: the alerts work will set it from its dry run and register the rule that suggests a threshold, so the context never needs another shape. Nothing sets it yet.
+
+## Explore
+
+Code is in `frontend/src/monitoring/explore/`; the page is lazy like the rest of Monitoring (`ExplorePage.tsx`), and it draws through the lazy `charts/` chunk.
+
+- **Run model** (`useExploreRun.ts`). The text runs `EXPLORE_DEBOUNCE_MS` (300 ms) after the last change, or at once with `run`. Each run is one `POST /query/batch` item carrying `project_id`, so the label filter always applies, and it is built with the same `buildPanelRun` as a dashboard panel. A newer run aborts the older one (`AbortController`) and gets a higher run id; an answer for an older id is dropped. The outcomes are `idle`, `done`, `invalid` (the tool refused the query, or `quickCheck` found an unclosed bracket or quote; the last good result is kept and drawn dimmed as **Last good result**) and `failed` (nothing is drawn). A change of project or source starts over. In logs mode the chart is the log volume (`writeVolumeQuery`, split by the Split chip). `useLinesRun` runs the lines under the chart: one item of at most 1000 lines (`LINES_LIMIT`), newest first, over the whole range or the chosen window, with states of its own, so a failure stays in its section.
+- **View state.** `ExploreView` in `shell/tabState.ts` holds `project`, `source`, `expr`, `logs` and `time`. The page writes it with `replace` after a pause; `samePageAndItem` treats an Explore replace as staying, so focus stays in the query field. Each field is validated on its own when a tab is restored. A view that changes under the page (Back, or the sidebar opening Explore on another project) restarts it from that view.
+- **Builder** (`builderState.ts`). Picking a metric or stream, **Split by** and **Only** are a reducer over `ExploreBuilder`; `builderQuery` writes the query through the writers. A hand edit sets `detached`, and a chip click writes the query again.
+- **Trail** (`trailStore.ts`). Per project in `localStorage` under `omnikrux.monitoring.explore.trail.{project id}`, twenty entries (eight shown). Every access is guarded: blocked or damaged storage only loses the trail.
+- **Add to dashboard** (`addToDashboard.ts`). Saves through `PUT /dashboards/{id}` with `origin: "explore"`; the backend then adds `from: "explore"` and `added_panels` (the titles of panels new in that version) to the `dashboard_save` audit details, and refuses the save with a conflict before auditing when the version moved. A new dashboard is created with the panel in it (`createDashboardWithPanel`).
+
+### Chart selection and marks
+
+`TimeSeriesChart` binds pointer and key handlers for a window only when `onSelect` is given, which only Explore does, so dashboards get the same chart as before. A drag across the plot, or `Shift ←` and `Shift →` from the crosshair (chosen once the keys rest), selects a window that snaps to the run's step (or the samples' spacing); the band stays drawn over the whole range. `marks` (`logMarks`) draws one tick per log line at its time, toned by level (`lineTone`), along the bottom. The chosen window goes to `useLinesRun`, and **Show all** (or Esc) clears it.
+
 ## Running the tests
 
 Backend, from `backend`:
@@ -250,14 +349,20 @@ The Monitoring app is a lazy chunk: the shell loads it only when you open Monito
 
 ### The kind tests
 
-`backend/tests/e2e/test_monitoring_kind.py` checks discovery, setup, queries, filters and dashboards against a real Prometheus and Loki in the `omnikrux-dev` kind cluster (see [Setup](setup.md) for the cluster). They run with the other kind tests:
+`backend/tests/e2e/test_monitoring_kind.py` checks discovery, setup, queries, filters, dashboards, the catalog and the suggestion templates against a real Prometheus and Loki in the `omnikrux-dev` kind cluster (see [Setup](setup.md) for the cluster). They run with the other kind tests:
 
 ```bash
 cd backend
 python -m uv run --frozen pytest -q -m kind tests/e2e/test_monitoring_kind.py
 ```
 
-They need Prometheus and Loki in the namespace `monitoring`, with Services named `prometheus-server` and `loki`, and three log lines to read. Without the Services the tests skip and say so. They create their projects, sources and dashboards through the API and delete them again, leaving the tools installed.
+They need Prometheus and Loki in the namespace `monitoring`, with Services named `prometheus-server` and `loki`, and log lines to read (below). Without the Services the tests skip and say so. They create their projects, sources and dashboards through the API and delete them again, leaving the tools installed.
+
+The catalog and suggestion tests use both tools, and need log lines labelled `job="omnikrux-m3-check"`, `namespace="demo"` and a `level` of `info`, `warn` or `error`, from the last hour (push them again when the tests find the `job` value missing or the Loki volume empty; see below):
+
+- `test_catalog_on_the_cluster` sets up a project over the found Prometheus and Loki with empty filters and reads its catalog. Prometheus is `ok` or `partial` and lists `prometheus_http_requests_total` as a `counter` with the labels `code` and `handler`, `prometheus_http_request_duration_seconds_bucket` with its `family`, and `kube_pod_container_status_restarts_total`. Loki lists `job` with the value `omnikrux-m3-check` and a `level` label.
+- `test_suggestion_templates_run_on_the_cluster` fills the suggestion templates in for this cluster's metrics (`$__rate_interval` as `2m`, `$__interval` as `30s`) and sends them through `POST /query/batch` over the last hour at step 30. No item may answer `bad_query`, and the request rate and the log volume must return data. The two Loki queries use the log label the suggestion rule would pick: the test reads the catalog and takes the first of `namespace`, `app`, `service_name`, `job` and `container` that it lists (the same order as `STREAM_LABELS` in `build/writeQuery.ts`), so on this cluster they are `{namespace=~".+"}`, not `{job=~".+"}`.
+- `test_catalog_follows_a_filter_on_the_cluster` links the same Prometheus to a second project with the filter `job="prometheus"`; its catalog lacks `kube_pod_container_status_restarts_total` and the first project's has it.
 
 The dashboard tests use the Prometheus only:
 
@@ -335,3 +440,16 @@ curl -s -X POST http://127.0.0.1:3100/loki/api/v1/push -H 'Content-Type: applica
 ```
 
 Loki keeps them for as long as the pod runs; push them again after it restarts. With no persistent volume they are lost when the pod is replaced.
+
+To push the lines the catalog tests read, send one batch with a port-forward open. These are three streams that differ only in `level`:
+
+```bash
+kubectl -n monitoring port-forward svc/loki 3100:3100 &
+now=$(date +%s)000000000
+for level in info warn error; do
+  curl -s -X POST http://127.0.0.1:3100/loki/api/v1/push -H 'Content-Type: application/json' \
+    -d "{\"streams\":[{\"stream\":{\"job\":\"omnikrux-m3-check\",\"namespace\":\"demo\",\"level\":\"$level\"},\"values\":[[\"$now\",\"$level line\"]]}]}"
+done
+```
+
+Both sets of lines age out: Loki only lists labels for streams with lines in the last hour, so push them again before a run when the tests report that the `job` value or the log volume is missing.
