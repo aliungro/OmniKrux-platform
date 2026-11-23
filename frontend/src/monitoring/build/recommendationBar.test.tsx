@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { catalogOf, metric, source } from "../catalog/fixtures";
 import { JSON_FIRST } from "../dashboards/editor/editorState";
 import { editSessions } from "../dashboards/editor/useDashboardEditor";
 import type { ChartSeries, PanelData } from "../dashboards/runPanel";
 import { newPanel, type PanelSpec } from "../dashboards/schema";
+import { RATE_INTERVAL_FLOOR } from "../dashboards/interpolate";
 import { durationText } from "../dashboards/time";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { gate, intercept, linkedProject, panel, seedDashboard, spec } from "../test/dashboardSeeds";
@@ -72,9 +73,9 @@ const draftPanel = (): PanelSpec => {
   return s.draft.panels[0];
 };
 
-async function openSettings(api: FakeMonitoringApi) {
+async function openSettings(api: FakeMonitoringApi, refresh?: "10s") {
   const user = userEvent.setup();
-  renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+  renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", ...(refresh ? { refresh } : {}) }) });
   const title = await screen.findByRole("heading", { level: 1 });
   await waitFor(() => expect(document.activeElement).toBe(title));
   await screen.findAllByText(/^chart /);
@@ -110,7 +111,7 @@ describe("Recommendation bar", () => {
     expect(within(settings()).getByRole("textbox", { name: "Query A" })).toHaveProperty("value", "rate(http_requests_total[$__rate_interval])");
     expect(document.activeElement).toBe(tabNamed("Query"));
     // The batch carries the substituted duration, not the builtin.
-    const sent = `rate(http_requests_total[${durationText(Math.max(4 * step, 60))}])`;
+    const sent = `rate(http_requests_total[${durationText(Math.max(4 * step, RATE_INTERVAL_FLOOR))}])`;
     await waitFor(() => expect(batches(api).some((b) => b.queries.some((q) => q.query === sent))).toBe(true));
     expect(bar()).toBeNull();
   });
@@ -173,6 +174,33 @@ describe("Recommendation bar", () => {
     held.open();
     await waitFor(() => expect(bar()?.textContent).toContain("is smoother"));
     expect(user).toBeTruthy();
+  });
+
+  it("an auto-refresh tick keeps the recommendation and the keyboard on its button", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const api = shop("rate(http_requests_total[1m])", noisy);
+      const { user } = await openSettings(api, "10s");
+      await waitFor(() => expect(bar()?.textContent).toContain("is smoother"));
+      const apply = within(bar()!).getByRole("button", { name: "Apply" });
+      apply.focus();
+      // The tick's run is held, so the panel is refetching for the whole check.
+      const held = gate();
+      let asked = 0;
+      intercept((url, pass) => (url === "/api/monitoring/query/batch" ? (asked++, held.opened.then(pass)) : null));
+      act(() => { vi.advanceTimersByTime(10_000); });
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(asked).toBeGreaterThan(0);
+      expect(bar()?.textContent).toContain("is smoother");
+      expect(document.activeElement).toBe(apply);
+      held.open();
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(bar()?.textContent).toContain("is smoother");
+      expect(document.activeElement).toBe(apply);
+      expect(user).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("an option-only edit keeps a data-based recommendation", async () => {

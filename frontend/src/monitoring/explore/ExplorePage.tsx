@@ -111,8 +111,6 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const linesBox = useRef<HTMLElement>(null);
   const linesHeading = useRef<HTMLHeadingElement>(null);
   const showAll = useRef<HTMLButtonElement>(null);
-  // A window chosen with the keys: Show all takes the keyboard once it shows.
-  const wantShowAll = useRef(false);
 
   // --- project and source ---------------------------------------------------------------------
   const project = tree.data ? defaultExploreProject({ project: projectId }, tree.data, recent) : null;
@@ -234,10 +232,6 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     if (wantList.current && listBox.current) {
       wantList.current = false;
       listBox.current.focus({ preventScroll: true });
-    }
-    if (wantShowAll.current && showAll.current) {
-      wantShowAll.current = false;
-      showAll.current.focus({ preventScroll: true });
     }
   });
 
@@ -387,10 +381,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     () => (linesShown && lines.marksFor === linesFor ? logMarks(lines.marks) : []),
     [linesShown, lines.marksFor, lines.marks, linesFor],
   );
-  const onSelectWindow = useCallback((range: { start: number; end: number } | null, via?: "pointer" | "keyboard") => {
+  // A window from the keyboard leaves it on the chart: more Shift+arrows adjust it, and Esc shows
+  // all again. The lines' status line says which window is shown.
+  const onSelectWindow = useCallback((range: { start: number; end: number } | null) => {
     if (range === null) { setWindowSel(null); return; }
     setWindowSel({ key: linesFor, range });
-    if (via === "keyboard") wantShowAll.current = true;
   }, [linesFor]);
   const showAllLines = () => {
     // Show all leaves with the click: the keyboard goes to the chart, never <body>.

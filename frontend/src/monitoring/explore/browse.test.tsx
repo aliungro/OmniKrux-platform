@@ -304,6 +304,22 @@ describe("Browse metrics and log streams", () => {
     expect(document.activeElement).toBe(box);
   });
 
+  it("letters typed on the list go into its filter", async () => {
+    prom();
+    const user = userEvent.setup();
+    await openExplore();
+    const box = await list();
+    await user.keyboard("b");
+    expect(document.activeElement).toBe(box);
+    await user.keyboard("up");
+    const filter = screen.getByRole("textbox", { name: "Filter the list" }) as HTMLInputElement;
+    expect(document.activeElement).toBe(filter);
+    expect(filter.value).toBe("up");
+    await waitFor(() => expect(within(box).getAllByRole("option").map((o) => o.textContent)).toEqual(["up gauge"]));
+    // The query and the page's letters are left alone.
+    expect(query().value).toBe("");
+  });
+
   it("a catalog that can't be read says so and tries again", async () => {
     prom(promCatalog(), { catalogs: {} });
     const user = userEvent.setup();

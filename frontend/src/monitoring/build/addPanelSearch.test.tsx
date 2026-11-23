@@ -311,12 +311,15 @@ describe("Add panel search", () => {
     const held = gate();
     intercept((url, pass) => (url.includes("/catalog") ? held.opened.then(pass) : null));
     await opened(api);
-    expect(within(dialog()).getByText("Reading what Shop's sources have…")).toBeTruthy();
+    // Said in the list's status region, which stays mounted, so screen readers hear it.
+    const status = within(dialog()).getByRole("status");
+    expect(status.textContent).toBe("Reading what Shop's sources have…");
     // Empty panel is there while it reads.
     expect(options()).toHaveLength(1);
     held.open();
     expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus have")).toBeTruthy();
     expect(within(dialog()).queryByText("Reading what Shop's sources have…")).toBeNull();
+    expect(within(dialog()).getByRole("status")).toBe(status);
   });
 
   it("a catalog that can't be read says why, and Try again reads it", async () => {
@@ -325,6 +328,7 @@ describe("Add panel search", () => {
     const { user } = await opened(api);
     const why = await within(dialog()).findByText(/^Couldn't read the metrics: /);
     expect(why.textContent).toBe("Couldn't read the metrics: That project no longer exists.");
+    expect(why).toBe(within(dialog()).getByRole("status"));
     expect(options()).toHaveLength(1);
     api.state.catalogs.p1 = shopCatalog("p1");
     await user.click(within(dialog()).getByRole("button", { name: "Try again" }));

@@ -59,6 +59,18 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
   const tab = state.sideTab;
   const { catalog } = useOwnerCatalog(owner);
 
+  // The run's data is what the draft's queries answered: not while they are changing or running
+  // (a query edit changes the run key, so pending and fetching cover it). An auto-refresh tick
+  // runs the same queries again: the last answer stands meanwhile, so a recommendation (and the
+  // keyboard on its button) doesn't go away and come back on every tick. Only an edit of the
+  // queries, or another panel, drops it.
+  const queriesKey = panel ? JSON.stringify([panel.id, panel.queries]) : "";
+  const fresh = live !== null && !live.pending && !live.fetching && panelData !== null;
+  const lastFresh = useRef<{ key: string; data: PanelData; step: number | null } | null>(null);
+  if (fresh) lastFresh.current = { key: queriesKey, data: panelData, step: live.step };
+  else if (live === null || live.pending || lastFresh.current?.key !== queriesKey) lastFresh.current = null;
+  const recData = lastFresh.current;
+
   useLayoutEffect(() => {
     if (initialFocus === "query") body.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
     else if (initialFocus === "tab") tabs.current[tab]?.focus();
@@ -86,10 +98,6 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
     if (state.jsonText !== null) return JSON_FIRST;
     update(apply);
   };
-  // The run's data is what the draft's queries answered: not while they are changing or running
-  // (a query edit changes the run key, so pending and fetching cover it).
-  const fresh = live !== null && !live.pending && !live.fetching && panelData !== null;
-
   return (
     <aside className={s.side} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>
       <div className={s.head}>
@@ -99,7 +107,7 @@ export function SidePanel({ state, dispatch, owner, ownerKind, panelData, live =
         </button>
       </div>
       <RecommendationBar
-        context={{ panel, data: fresh ? panelData : null, catalog, stepSeconds: live?.step ?? 0 }}
+        context={{ panel, data: recData?.data ?? null, catalog, stepSeconds: recData?.step ?? live?.step ?? 0 }}
         scope={state.dashboardId} onApply={applyRecommendation} onDone={() => select("query")} />
       <div role="tablist" aria-label="Panel settings" className={s.tabs} onKeyDown={onTabKey}>
         {TABS.map(([t, label]) => (

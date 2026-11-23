@@ -1,6 +1,7 @@
 // The browse list (X2): the metrics of the project's Prometheus-compatible source, or the log
 // streams of its Loki source, as one virtualized listbox. The keyboard stays on the listbox:
-// Up/Down move the highlight, Enter picks. A pick writes the query; it never moves the focus.
+// Up/Down move the highlight, Enter picks, and a letter goes into the filter. A pick writes the
+// query; it never moves the focus.
 
 import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -109,6 +110,12 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
     else if (e.key === "Home") { e.preventDefault(); move(0); }
     else if (e.key === "End") { e.preventDefault(); move(options.length - 1); }
     else if (e.key === "Enter" && activeRow >= 0) { e.preventDefault(); pickRow(activeRow); }
+    else if (e.key.length === 1 && e.key !== " " && e.key !== "?") {
+      // Typeahead: a letter typed on the list goes into the filter, which takes the keyboard.
+      e.preventDefault();
+      setText((t) => t + e.key);
+      filter.current?.focus();
+    }
   };
   const onFilterKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {

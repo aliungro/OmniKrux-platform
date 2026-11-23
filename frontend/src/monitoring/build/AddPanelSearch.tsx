@@ -149,6 +149,9 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     ? `${candidates.length} ${candidates.length === 1 ? "panel matches" : "panels match"}.`
     : "";
   const age = catalog ? catalogAge(catalog.builtAt, Date.now()) : "";
+  const statusText = reading ? `Reading what ${ownerName}'s sources have…`
+    : readFailed ? `Couldn't read the metrics: ${readFailed}`
+      : nothing ? "Nothing matches yet. Try another word." : found;
 
   return (
     <DialogShell provider="monitoring" role="dialog" busy={false} onCancel={onClose} first={input}
@@ -167,18 +170,17 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
       {refused && <p key={refused.attempt} className={s.refused} role="alert">{refused.text}</p>}
 
       <div className={s.body}>
-        {reading && <p className={s.line}>Reading what {ownerName}'s sources have…</p>}
-        {readFailed && (
-          <div className={s.failed}>
-            <p className={s.line}>Couldn't read the metrics: {readFailed}</p>
+        {/* One status region, always there, says the reading, the failure and the matches. */}
+        <div className={readFailed ? s.failed : undefined}>
+          <p role="status" className={reading || readFailed ? s.line : nothing ? s.none : s.hidden}>{statusText}</p>
+          {readFailed && (
             <button type="button" className={s.action} aria-disabled={refreshing || undefined} onClick={refresh}>
               {refreshing ? "Trying again…" : "Try again"}
             </button>
-          </div>
-        )}
+          )}
+        </div>
         {catalog && !searching && <h3 className={s.heading}>{suggestionsHeading(ownerName, catalog)}</h3>}
         {catalog && [...catalog.problems, ...catalog.notes].map((n) => <p key={n} className={s.muted}>{n}</p>)}
-        <p role="status" className={nothing ? s.none : s.hidden}>{nothing ? "Nothing matches yet. Try another word." : found}</p>
 
         <div role="listbox" id={ids.list} aria-label="Results" className={s.results}>
           {candidates.map((c, i) => (

@@ -252,9 +252,7 @@ describe("Metrics and logs on one timeline", () => {
     await within(section()).findByText("Last 1 hour · 3 log lines");
     const full = linesSent(sent).at(-1) as QueryRequest;
     await user.click(screen.getByRole("button", { name: "Keys select a window" }));
-    // After a keyboard selection the keyboard is on Show all.
     const showAll = await within(section()).findByRole("button", { name: "Show all" });
-    await waitFor(() => expect(document.activeElement).toBe(showAll));
     const count = linesSent(sent).length;
     await user.click(showAll);
     await waitFor(() => expect(linesSent(sent).length).toBe(count + 1));
@@ -280,6 +278,27 @@ describe("Metrics and logs on one timeline", () => {
     fireEvent.keyDown(screen.getByRole("img", { name: "Volume" }), { key: "Escape" });
     await waitFor(() => expect(linesSent(sent).length).toBe(count + 1));
     expect(await within(section()).findByText("Last 1 hour · 3 log lines")).toBeTruthy();
+  });
+
+  it("a window chosen with the keys keeps the keyboard on the chart, where Esc shows all again", async () => {
+    shop();
+    const sent = batchItems();
+    await openExplore();
+    await linkByChip(userEvent.setup());
+    await within(section()).findByText("Last 1 hour · 3 log lines");
+    const chart = screen.getByRole("img", { name: "Volume" });
+    chart.focus();
+    // Shift+arrows on the chart: the window comes from the keyboard, and the keyboard stays put.
+    fireEvent.click(screen.getByRole("button", { name: "Keys select a window" }));
+    const win = windowOf(lastRange as Range);
+    expect(await within(section()).findByText(`${clock(win.start)} – ${clock(win.end)} · 3 log lines`)).toBeTruthy();
+    expect(within(section()).getByRole("button", { name: "Show all" })).toBeTruthy();
+    expect(document.activeElement).toBe(chart);
+    const count = linesSent(sent).length;
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    await waitFor(() => expect(linesSent(sent).length).toBe(count + 1));
+    expect(await within(section()).findByText("Last 1 hour · 3 log lines")).toBeTruthy();
+    expect(within(section()).queryByRole("button", { name: "Show all" })).toBeNull();
   });
 
   it("an empty window says so", async () => {
