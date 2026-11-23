@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkOut, ProjectOut, QueryRequest, QueryResponse } from "../api/types";
 import { DashboardRequestError, type BatchItemOut } from "../dashboards/api";
 import type { DashboardOwner } from "../dashboards/runPanel";
-import { durationText, stepFor } from "../dashboards/time";
+import { stepFor } from "../dashboards/time";
 import type { Candidate } from "./candidates";
 import PreviewCard from "./PreviewCard";
 import { MAX_PREVIEWS, PREVIEW_DEBOUNCE_MS, PREVIEW_LOG_LINES, PREVIEW_WIDTH, usePreviews } from "./usePreviews";
@@ -57,7 +57,8 @@ describe("previews", () => {
     expect(queries).toHaveLength(3);
     const step = stepFor(3600, PREVIEW_WIDTH);
     expect(queries[0]).toMatchObject({ project_id: "p1", kind: "range", step });
-    expect(queries[0].query).toBe(`rate(a[${durationText(Math.max(4 * step, 60))}])`);
+    // A preview of the last hour has a small step: the four-minute floor holds.
+    expect(queries[0].query).toBe("rate(a[4m])");
     expect(result.current.a.status).toBe("done");
     expect(MAX_PREVIEWS).toBe(3);
   });

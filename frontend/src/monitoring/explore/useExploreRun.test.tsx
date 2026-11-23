@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkOut, ProjectOut, QueryRequest, QueryResponse } from "../api/types";
 import { UNREADABLE } from "../build/promql";
 import { DashboardRequestError, type BatchItemOut } from "../dashboards/api";
-import { durationText, stepFor } from "../dashboards/time";
+import { stepFor } from "../dashboards/time";
 import { EXPLORE_DEBOUNCE_MS, useExploreRun } from "./useExploreRun";
 
 const runBatch = vi.fn<(q: QueryRequest[], s?: AbortSignal) => Promise<BatchItemOut[]>>();
@@ -58,7 +58,8 @@ describe("useExploreRun", () => {
     const step = stepFor(3600, 24);
     // The batch carries the substituted window, never `$__rate_interval`; and always the project.
     expect(req).toMatchObject({ project_id: "p1", source_id: "prom", kind: "range", step });
-    expect(req.query).toBe(`rate(up[${durationText(Math.max(4 * step, 60))}])`);
+    // An hour at full width has a small step: the four-minute floor holds.
+    expect(req.query).toBe("rate(up[4m])");
     expect(result.current.state.status).toBe("done");
     expect(result.current.state.data?.series).toHaveLength(3);
     expect(result.current.state.tookMs).toBe(41);
