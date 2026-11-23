@@ -278,8 +278,11 @@ async def project_name(services: MonitoringServices, project_id: str) -> str:
 
 
 class ReviewEveryChange:
-    """The `ToolSync` until the tool engines land (Tasks 10 and 11): nothing is written into a
-    tool; every change waits for a review."""
+    """A `ToolSync` that writes nothing into a tool: every change waits for a review. A
+    PrometheusRule is always written this way (a cluster change goes through the action
+    pipeline: `POST /alerts/targets/{id}/sync` plans the create, update or, for a leaving
+    target or one that no longer runs in Prometheus, the delete). Loki ruler targets wait here
+    too until Task 11's ruler engine writes them."""
 
     def __init__(self, services: MonitoringServices) -> None:
         self._services = services
@@ -302,6 +305,23 @@ class ReviewEveryChange:
         )
 
 
+class ToolEngines:
+    """The `ToolSync` that hands each target to the engine of its tool (the tool its object is
+    in, else the one it runs in): a PrometheusRule waits for its review (`ReviewEveryChange`,
+    a delete plan when the target is leaving); a Loki ruler rule goes to `loki` (until Task 11,
+    the same review stub)."""
+
+    def __init__(self, services: MonitoringServices, *, loki: ToolSync | None = None) -> None:
+        self._prometheus = ReviewEveryChange(services)
+        self.loki: ToolSync = loki if loki is not None else ReviewEveryChange(services)
+
+    async def after_change(self, target: TargetRecord, rule: RuleRecord) -> AlertChange | None:
+        kind = target.tool_object.kind if target.tool_object is not None else target.tool_kind
+        if kind == "loki_ruler":
+            return await self.loki.after_change(target, rule)
+        return await self._prometheus.after_change(target, rule)
+
+
 def _injector(source: SourceConfig):
     return inject_logql if source.type == "loki" else inject_promql
 
@@ -309,9 +329,7 @@ def _injector(source: SourceConfig):
 class AlertSync:
     def __init__(self, services: MonitoringServices, *, tool_sync: ToolSync | None = None) -> None:
         self._services = services
-        self.tool_sync: ToolSync = (
-            tool_sync if tool_sync is not None else ReviewEveryChange(services)
-        )
+        self.tool_sync: ToolSync = tool_sync if tool_sync is not None else ToolEngines(services)
         self._locks: dict[str, asyncio.Lock] = {}
         self._waiting: dict[str, int] = {}
 
@@ -593,6 +611,22 @@ class AlertSync:
             except UnknownTarget:
                 return False
         return True
+
+    async def forget_target(self, target: TargetRecord) -> bool:
+        """The target's object left its tool (its removal was applied): the target goes, and
+        its rule too when the rule was deleted and this was its last target. Whether the target
+        was still there."""
+        gone = await self._delete(target)
+        try:
+            rule = await self._services.alerts.get_rule(target.rule_id)
+        except UnknownRule:
+            return gone
+        if rule.deleted_at is not None:
+            try:
+                await self._services.alerts.purge_rule(rule.id)
+            except UnknownRule:
+                pass
+        return gone
 
     async def _tell(self, target: TargetRecord, rule: RuleRecord) -> AlertChange | None:
         try:

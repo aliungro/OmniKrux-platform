@@ -24,6 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from omnikrux.actions.pipeline import PlanOut
+from omnikrux.audit.store import actor_of
 from omnikrux.monitoring.alerts.contact_points.types import ContactPoint, ContactPointType
 from omnikrux.monitoring.alerts.dry_run import (
     FOR_DURATION,
@@ -56,6 +58,7 @@ from omnikrux.monitoring.alerts.store import (
     RuleSpec,
     TargetRecord,
     UnknownRule,
+    UnknownTarget,
 )
 from omnikrux.monitoring.alerts.sync import (
     CONTACT_POINT_GONE,
@@ -68,6 +71,7 @@ from omnikrux.monitoring.alerts.sync import (
 )
 from omnikrux.monitoring.alerts.sync import change_out as _change_out
 from omnikrux.monitoring.alerts.tool.channels import ChannelsUnreadable, read_channels
+from omnikrux.monitoring.alerts.tool.prometheus_rule import wanted_mode
 from omnikrux.monitoring.alerts.types import (
     ALERT_PANEL_TYPES,
     EVERY_CHOICES,
@@ -134,6 +138,7 @@ RuleErrorCode = Literal[
 # -- copy --------------------------------------------------------------------------------------
 
 RULE_GONE = "That alert rule no longer exists."
+LOKI_NOT_REVIEWED = "OmniKrux writes Loki ruler rules itself: there is nothing to review."
 UNKNOWN_SCOPE = "That project or group no longer exists."
 PANEL_RULE = 'This rule belongs to the panel "{panel}" on "{dashboard}". Change it there.'
 TOOL_RULE = "This rule runs in the tool, which keeps checking it. Silence it instead."
@@ -1249,6 +1254,66 @@ async def delete_rule(id: str, token: str, request: Request) -> RuleChangeOut:
     else:
         out = await _rule_out(services, left, await _names(services))
     return RuleChangeOut(rule=out, changes=[_change_out(c) for c in changes])
+
+
+# -- routes: tools -----------------------------------------------------------------------------
+
+
+class SyncReviewOut(BaseModel):
+    kind: Literal["review"]
+    plan: PlanOut
+
+
+class SyncDoneOut(BaseModel):
+    kind: Literal["done"]
+    target: TargetOut | None  # None: the target went (its object was removed)
+
+
+async def _done(services: MonitoringServices, target_id: str, rule: RuleRecord) -> SyncDoneOut:
+    try:
+        target = await services.alerts.get_target(target_id)
+    except UnknownTarget:
+        return SyncDoneOut(kind="done", target=None)
+    names = await _names(services, contact_points=False)
+    instances = await services.alerts.instances(target.id)
+    return SyncDoneOut(kind="done", target=_target_out(rule, target, instances, names))
+
+
+@router.post("/targets/{target_id}/sync")
+async def sync_target(target_id: str, request: Request) -> SyncReviewOut | SyncDoneOut:
+    """Bring the target's tool in line with it. A PrometheusRule is a cluster change: the answer
+    is its review (a plan of the action pipeline, applied through `POST /api/actions/{id}/apply`),
+    or `done` when nothing is left to do. A refusal is the pipeline's answer, and the target
+    reads "failed" with its words."""
+    services = _services(request)
+    try:
+        target = await services.alerts.get_target(target_id)
+        rule = await services.alerts.get_rule(target.rule_id)
+    except (UnknownTarget, UnknownRule):
+        raise RuleRefused(404, "not_found", RULE_GONE).http() from None
+    kind = target.tool_object.kind if target.tool_object is not None else target.tool_kind
+    if kind == "loki_ruler":
+        raise RuleRefused(409, "tool_rule", LOKI_NOT_REVIEWED).http()
+    mode = wanted_mode(target)
+    if mode is None or (mode == "upsert" and target.tool_state == "in_sync"):
+        return await _done(services, target.id, rule)
+    try:
+        plan = await services.prometheus_rules.review(
+            request.app.state, actor=actor_of(request), target=target, rule=rule, mode=mode
+        )
+    except HTTPException as exc:
+        detail = exc.detail
+        message = detail.get("message") if isinstance(detail, dict) else str(detail)
+        try:
+            await services.alerts.set_tool(
+                target.id, tool_state="failed", tool_message=str(message)
+            )
+        except UnknownTarget:
+            pass
+        raise
+    if plan is None:
+        return await _done(services, target.id, rule)
+    return SyncReviewOut(kind="review", plan=plan)
 
 
 # -- routes: panels ----------------------------------------------------------------------------

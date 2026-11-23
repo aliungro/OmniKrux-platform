@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from omnikrux.monitoring.alerts.engine import AlertEngine
     from omnikrux.monitoring.alerts.notify import Notifier
     from omnikrux.monitoring.alerts.sync import AlertSync
+    from omnikrux.monitoring.alerts.tool.prometheus_rule import PrometheusRuleAction
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class MonitoringServices:
     notifier: Notifier = field(init=False)
     engine: AlertEngine = field(init=False)
     alert_sync: AlertSync = field(init=False)
+    # Plans and applies a target's PrometheusRule through the action pipeline.
+    prometheus_rules: PrometheusRuleAction = field(init=False)
     # The startup pass of `alert_sync.reconcile_all` (`start_alerts`), while it runs.
     startup_reconcile: asyncio.Task | None = field(default=None, init=False)
 
@@ -116,6 +119,7 @@ def build_services(
     from omnikrux.monitoring.alerts.engine import AlertEngine
     from omnikrux.monitoring.alerts.notify import Notifier
     from omnikrux.monitoring.alerts.sync import AlertSync
+    from omnikrux.monitoring.alerts.tool.prometheus_rule import PrometheusRuleAction
 
     sources = SourceStore(sessionmaker, box)
     transports = TransportFactory(connections, registry)
@@ -142,4 +146,5 @@ def build_services(
     services.notifier = Notifier(services)
     services.engine = AlertEngine(services, enabled=alert_engine)
     services.alert_sync = AlertSync(services)
+    services.prometheus_rules = PrometheusRuleAction(services)
     return services
