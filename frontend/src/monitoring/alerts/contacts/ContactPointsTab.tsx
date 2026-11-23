@@ -124,7 +124,12 @@ export function ContactPointsTab({ leaveRef }: { leaveRef: LeaveRef }) {
                 </button>
                 <button type="button" className={s.small} aria-label={`Edit ${p.name}`}
                   ref={(el) => { if (el) editRefs.current.set(p.id, el); else editRefs.current.delete(p.id); }}
-                  onClick={() => setOpen({ mode: "edit", id: p.id })}>
+                  onClick={() => {
+                    // Another form open: it asks first when it has changes.
+                    const go = () => setOpen({ mode: "edit", id: p.id });
+                    if (open !== null && leaveRef.current) leaveRef.current(go);
+                    else go();
+                  }}>
                   Edit
                 </button>
                 <button type="button" className={s.small} aria-label={`Delete ${p.name}…`}

@@ -131,7 +131,7 @@ export function ContactPointForm({ initial, onDone, leaveRef }: ContactPointForm
     const e = err as AlertRequestError;
     const secret = e.field && e.field.startsWith("secrets.") ? (e.field as FieldKey) : null;
     if (secret && fields.current.has(secret)) fail(secret, e.message);
-    else if (e.status === 409 && /named/.test(e.message)) fail("name", e.message);
+    else if (e.status === 409) fail("name", e.message); // the only conflict a save can answer is a name already taken
     else setFormError(failure(err, "try again"));
   };
 

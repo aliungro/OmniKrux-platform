@@ -9,7 +9,7 @@ import { DeleteReviewDialog } from "../../DeleteReviewDialog";
 import { alertsKeys, listSilences, refreshAlerts, expireSilence, type AlertRequestError, type SilenceOut, type SilencesOut } from "../api";
 import { durationWords } from "../format";
 import type { LeaveRef } from "../leave";
-import { SilenceForm, type SilencePrefill } from "./SilenceForm";
+import { SilenceForm, plural, type SilencePrefill } from "./SilenceForm";
 import { splitMatchers, whenShort } from "./when";
 import s from "./Silences.module.css";
 
@@ -49,7 +49,7 @@ function SilenceRow({ x, now, onExpire }: { x: SilenceOut; now: number; onExpire
       {x.comment && <p className={s.comment}>{x.comment}</p>}
       <p className={s.meta}>
         {whereWords(x)}
-        {x.affects !== null && !ended && <> · Silences {x.affects} alerts now</>}
+        {x.affects !== null && !ended && <> · Silences {plural(x.affects)} now</>}
       </p>
       {!ended && (
         <div className={s.side}>
@@ -92,6 +92,8 @@ export function SilencesTab({ ask, onAskTaken, leaveRef }: { ask: SilenceAsk | n
     }
   });
   const openNew = () => {
+    // An open form keeps what was typed in it: New silence does nothing until it is closed.
+    if (form) return;
     keyCount.current += 1;
     setForm({ key: keyCount.current });
   };

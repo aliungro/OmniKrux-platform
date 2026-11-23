@@ -17,7 +17,8 @@ const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
 const ahead = (min: number) => new Date(NOW + min * 60_000).toISOString();
 
 const link: LinkOut = { source_id: "s1", source_name: "Prometheus", source_type: "prometheus", filter: "", filter_origin: "none", created_by_project: false };
-const dev = { ...seedProject("p1", "kind-dev"), links: [link] };
+const amLink: LinkOut = { source_id: "am1", source_name: "Alertmanager", source_type: "alertmanager", filter: "", filter_origin: "none", created_by_project: false };
+const dev = { ...seedProject("p1", "kind-dev"), links: [link, amLink] };
 
 const target = (id: string, over: Partial<TargetOut> = {}): TargetOut => ({
   id, project_id: dev.id, project_name: dev.name, engine: "omnikrux", tool: null, where: "checked by OmniKrux", engine_note: null,
@@ -36,6 +37,7 @@ const toolRule = rule("r7", "ApiDown", {
 });
 
 const am = { id: "am1", name: "Alertmanager", type: "alertmanager", used_by: [] } as unknown as SourceOut;
+const otherAm = { id: "am2", name: "Elsewhere", type: "alertmanager", used_by: [] } as unknown as SourceOut;
 const silence = (over: Partial<SilenceOut> = {}): SilenceOut => ({
   id: "sil1", where: { kind: "omnikrux", source_id: null, source_name: null }, matchers: 'alertname="Slow",project="kind-dev"',
   starts_at: ago(10), ends_at: ahead(95), comment: "Deploy window", created_by: "ali", state: "active", affects: 2, ...over,
@@ -95,14 +97,17 @@ describe("silences", () => {
   it("a tool rule silences in its Alertmanager", async () => {
     const user = userEvent.setup();
     const { api } = open({
-      sources: [am], channels: { p1: { alertmanager: { id: "am1", name: "Alertmanager" }, channels: [], message: null } },
+      sources: [am, otherAm], channels: { p1: { alertmanager: { id: "am1", name: "Alertmanager" }, channels: [], message: null } },
     }, "r7");
     await waitFor(() => expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("ApiDown"));
     await user.click(screen.getByRole("button", { name: "Silence" }));
     const matchers = (await screen.findByLabelText("Matchers")) as HTMLInputElement;
     expect(matchers.value).toBe('omnikrux_rule="r7"');
-    await waitFor(() => expect((screen.getByRole("radio", { name: /Alertmanager/ }) as HTMLInputElement).checked).toBe(true));
+    await waitFor(() => expect((screen.getByRole("radio", { name: /^Alertmanager —/ }) as HTMLInputElement).checked).toBe(true));
     expect(screen.getByText(/for rules that run in Prometheus or Loki/)).toBeTruthy();
+    // Only the project's Alertmanager is offered; OmniKrux can't hold a tool rule's silence.
+    expect(screen.queryByRole("radio", { name: /Elsewhere/ })).toBeNull();
+    expect((screen.getByRole("radio", { name: /OmniKrux/ }) as HTMLInputElement).disabled).toBe(true);
     await user.type(screen.getByLabelText("Comment"), "Planned restart");
     await user.click(screen.getByRole("button", { name: "Silence" }));
     await waitFor(() => expect(posted(api)).toHaveLength(1));
@@ -113,7 +118,7 @@ describe("silences", () => {
 
   it("a tool rule without an Alertmanager says how to silence it", async () => {
     const user = userEvent.setup();
-    const { api } = open({}, "r7");
+    const { api } = open({ projects: [{ ...dev, links: [link] }] }, "r7");
     await waitFor(() => expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("ApiDown"));
     await user.click(screen.getByRole("button", { name: "Silence" }));
     const words = await screen.findByText("This rule runs in Prometheus; link its Alertmanager to silence it from here.");
@@ -123,6 +128,33 @@ describe("silences", () => {
     await user.type(screen.getByLabelText("Comment"), "x");
     await user.click(save);
     expect(posted(api)).toHaveLength(0);
+  });
+
+  it("a failed read of the project's Alertmanager says so and can be tried again", async () => {
+    const user = userEvent.setup();
+    open({ sources: [am], channels: { p1: { alertmanager: { id: "am1", name: "Alertmanager" }, channels: [], message: null } } }, "r7");
+    const real = globalThis.fetch;
+    let fail = true;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      fail && String(url).includes("/alerts/channels") ? Promise.resolve(json({ detail: "The channels couldn't be read." }, 500)) : real(url, init));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("ApiDown"));
+    await user.click(screen.getByRole("button", { name: "Silence" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The channels couldn't be read.");
+    fail = false;
+    await user.click(within(alert).getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect((screen.getByRole("radio", { name: /^Alertmanager —/ }) as HTMLInputElement).checked).toBe(true));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("New silence keeps what is typed in an open form", async () => {
+    const user = userEvent.setup();
+    open();
+    await user.click(await screen.findByRole("tab", { name: "Silences" }));
+    await user.click(await screen.findByRole("button", { name: "New silence" }));
+    await user.type(await screen.findByLabelText("Matchers"), 'alertname="A"');
+    await user.click(screen.getByRole("button", { name: "New silence" }));
+    expect((screen.getByLabelText("Matchers") as HTMLInputElement).value).toBe('alertname="A"');
   });
 
   it("matchers are checked as you type", async () => {
@@ -174,6 +206,7 @@ describe("silences", () => {
     expect(row.textContent).toMatch(/\(1 h 3[45] min left\)/);
     expect(row.textContent).toContain("In OmniKrux");
     expect(row.textContent).toContain("Silences 2 alerts now");
+
     expect(within(row).getByText('alertname="Slow"')).toBeTruthy();
     expect(within(row).getByText('project="kind-dev"')).toBeTruthy();
 
@@ -195,6 +228,13 @@ describe("silences", () => {
     await waitFor(() => expect(screen.getByText("Expired")).toBeTruthy());
     expect(screen.queryByRole("button", { name: /^Expire…/ })).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "New silence" }));
+  });
+
+  it("one affected alert is said in the singular", async () => {
+    const user = userEvent.setup();
+    open({ silences: [silence({ affects: 1 })] });
+    await user.click(await screen.findByRole("tab", { name: "Silences" }));
+    expect((await screen.findByText("Deploy window")).closest("li")!.textContent).toContain("Silences 1 alert now");
   });
 
   it("an Alertmanager's silence expires with its source", async () => {

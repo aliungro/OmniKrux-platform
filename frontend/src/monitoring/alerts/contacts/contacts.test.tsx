@@ -105,6 +105,21 @@ describe("contact points", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit Ops hook 2" }));
   });
 
+  it("Edit on another row asks before it drops what is typed", async () => {
+    const user = userEvent.setup();
+    open({ contactPoints: [point(), point({ id: "c2", name: "Spare" })] });
+    await user.click(await screen.findByRole("button", { name: "Edit Ops hook" }));
+    await user.type(screen.getByLabelText("Address"), ADDRESS);
+    await user.click(screen.getByRole("button", { name: "Edit Spare" }));
+    const ask = await screen.findByRole("alertdialog", { name: "Discard this contact point?" });
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe(ADDRESS);
+    await user.click(screen.getByRole("button", { name: "Edit Spare" }));
+    await user.click(await screen.findByRole("button", { name: "Discard" }));
+    await waitFor(() => expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Spare"));
+    expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe("");
+  });
+
   it("an explicit clear removes an optional secret", async () => {
     const user = userEvent.setup();
     const { api } = open({ contactPoints: [point()] });

@@ -7,7 +7,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, ty
 import { useQuery } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { pressed } from "../../../features/chrome/shortcuts";
-import { useSources } from "../../api/hooks";
+import { useProjects } from "../../api/hooks";
 import { validFilter } from "../../projects/FilterField";
 import {
   alertsKeys, previewSilence, useChannels, useCreateSilence,
@@ -70,13 +70,13 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-const plural = (n: number) => `${n} alert${n === 1 ? "" : "s"}`;
+export const plural = (n: number) => `${n} alert${n === 1 ? "" : "s"}`;
 export const previewWords = (p: SilencePreviewOut) =>
   `Silences ${plural(p.affects)} now${p.rules.length > 0 ? `: ${p.rules.join(", ")}` : ""}.`;
 
 export function SilenceForm({ prefill, onDone, leaveRef }: { prefill?: SilencePrefill; onDone(): void; leaveRef?: LeaveRef }) {
   const ids = useId();
-  const sources = useSources();
+  const projects = useProjects();
   const create = useCreateSilence();
   const matchersRef = useRef<HTMLInputElement>(null);
   const commentRef = useRef<HTMLInputElement>(null);
@@ -101,16 +101,27 @@ export function SilenceForm({ prefill, onDone, leaveRef }: { prefill?: SilencePr
   const defaultWhere = !prefill || prefill.where.kind === "omnikrux" ? "omnikrux"
     : prefill.where.source_id ?? channels.data?.alertmanager?.id ?? null;
   const whereKey = picked ?? defaultWhere;
-  const blocked = picked === null && wantsProjectAm && prefill?.tool !== undefined && channels.data !== undefined
-    && channels.data.alertmanager === null;
-  const waiting = picked === null && wantsProjectAm && whereKey === null && !blocked;
+  // A tool's rule can only be silenced where its alerts go: in its project's Alertmanager.
+  const blocked = wantsProjectAm && prefill?.tool !== undefined && channels.data !== undefined && channels.data.alertmanager === null;
+  const channelsFailed = wantsProjectAm && channels.isError;
+  const waiting = wantsProjectAm && whereKey === null && !blocked;
 
-  const managers = (sources.data ?? []).filter((x) => x.type === "alertmanager");
+  // Only the Alertmanagers linked to the rule's project (any project, for a silence written by hand).
+  const managers = new Map<string, string>();
+  for (const project of projects.data ?? []) {
+    if (prefill?.projectId !== undefined && project.id !== prefill.projectId) continue;
+    for (const l of project.links) if (l.source_type === "alertmanager") managers.set(l.source_id, l.source_name);
+  }
+  const resolved = channels.data?.alertmanager;
+  if (resolved && !managers.has(resolved.id)) managers.set(resolved.id, resolved.name);
   const places = [
-    { key: "omnikrux", label: "OmniKrux", hint: "for rules checked by OmniKrux" },
-    ...managers.map((m) => ({ key: m.id, label: m.name, hint: "for rules that run in Prometheus or Loki" })),
+    wantsProjectAm
+      ? { key: "omnikrux", label: "OmniKrux", hint: `${prefill?.tool ?? "its tool"} rules are silenced in their Alertmanager`, off: true }
+      : { key: "omnikrux", label: "OmniKrux", hint: "for rules checked by OmniKrux", off: false },
+    ...[...managers].map(([key, label]) => ({ key, label, hint: "for rules that run in Prometheus or Loki", off: false })),
   ];
 
+  const firstOn = places.find((p) => !p.off)?.key;
   const matcherProblem = matchers.trim() === "" ? null : validFilter(matchers);
   const debounced = useDebounced(matchers.trim(), 350);
   const previewOn = whereKey === "omnikrux" && debounced !== "" && validFilter(debounced) === null;
@@ -168,7 +179,7 @@ export function SilenceForm({ prefill, onDone, leaveRef }: { prefill?: SilencePr
     } catch (err) {
       setSaving(false);
       const refused = err as AlertRequestError;
-      const field = FIELDS.find((f) => f === refused.field) ?? (refused.code === "invalid_silence" && /pattern/i.test(refused.message) ? "matchers" : null);
+      const field = FIELDS.find((f) => f === refused.field) ?? null;
       if (refused.code === "invalid_silence" && field) fail(field, refused.message);
       else setFormError(failure(err, "try again"));
     }
@@ -196,15 +207,21 @@ export function SilenceForm({ prefill, onDone, leaveRef }: { prefill?: SilencePr
       <fieldset className={s.field} aria-describedby={err("where") ? `${ids}-where-e` : undefined}>
         <legend className={s.label}>Where</legend>
         <div className={s.places}>
-          {places.map((p, i) => (
+          {places.map((p) => (
             <label key={p.key} className={s.place}>
-              <input ref={i === 0 ? whereRef : undefined} type="radio" name={`${ids}-where`} checked={whereKey === p.key}
+              <input ref={p.key === firstOn ? whereRef : undefined} type="radio" name={`${ids}-where`} checked={whereKey === p.key} disabled={p.off || undefined}
                 onChange={() => { setPicked(p.key); setErrors({}); }} />
               <span><strong>{p.label}</strong> <span className={s.hint}>— {p.hint}</span></span>
             </label>
           ))}
         </div>
         {err("where") && <p id={`${ids}-where-e`} className={s.fieldError}>{err("where")}</p>}
+        {channelsFailed && (
+          <div className={s.blocked} role="alert" data-tone="warn">
+            <p>{failure(channels.error, "try again")}</p>
+            <button type="button" className={s.small} onClick={() => void channels.refetch()}>Try again</button>
+          </div>
+        )}
         {blocked && prefill?.tool && <p className={s.blocked} role="status" data-tone="warn">{noAlertmanager(prefill.tool)}</p>}
       </fieldset>
 
