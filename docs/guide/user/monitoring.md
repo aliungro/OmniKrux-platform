@@ -246,7 +246,7 @@ Type a PromQL query (LogQL for a Loki source) in the **Query** field. It runs 30
 
 ### Browsing
 
-The list on the left shows **Metrics** for a Prometheus-compatible source, or **Log streams** for Loki, as they are under the project's filter. Type in **Filter** to narrow it, and `b` goes to the list. Pick a metric and Explore writes its query: a counter as a rate per second, a histogram as a percentile, a gauge as it is. Pick a log stream (`label = value`) and it writes the selector. The footer says how old the list is and has **Refresh list**. On a narrow window the list folds behind a **Metrics** or **Log streams** button.
+The list on the left shows **Metrics** for a Prometheus-compatible source, or **Log streams** for Loki, as they are under the project's filter. Type in **Filter** to narrow it, and `b` goes to the list. Letters typed on the list go into **Filter**. Pick a metric and Explore writes its query: a counter as a rate per second, a histogram as a percentile, a gauge as it is. Pick a log stream (`label = value`) and it writes the selector. The footer says how old the list is and has **Refresh list**. On a narrow window the list folds behind a **Metrics** or **Log streams** button.
 
 Chips under the query shape it:
 
@@ -260,7 +260,7 @@ Clicking a chip rewrites the query and runs it. If you edit the query by hand, E
 Under the chart, **Log lines** shows the lines of the same time range, newest first, up to 1000.
 
 - With a metrics query, the lines come from the **Only** chips whose labels Loki also has, or from a LogQL selector you type in the **Logs query** field. Ticks along the chart mark the times of the lines, toned by level. A project with no Loki source has no lines.
-- **Drag a window** across the chart, or press `Shift ←` or `Shift →` on the focused chart, and the lines narrow to exactly that window. **Show all** (or Esc on the chart) goes back to the whole range.
+- **Drag a window** across the chart, or press `Shift ←` or `Shift →` on the focused chart, and the lines narrow to exactly that window. With the keys the chart keeps the keyboard, so more `Shift ←` or `Shift →` presses widen or narrow the window. **Show all** (or Esc on the chart) goes back to the whole range.
 - With a Loki source the query bar takes LogQL. Explore charts the log volume (split by the **Split by** chip) and lists the lines below it. A LogQL query that counts something, such as `rate({app="api"}[5m])`, is a metric query: it draws a chart and lists no lines.
 
 ### Add to dashboard

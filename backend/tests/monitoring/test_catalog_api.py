@@ -341,6 +341,21 @@ async def test_unknown_project_is_404(monitoring_app):
     }
 
 
+async def test_a_stopping_app_answers_503_in_words(monitoring_app, fake_prometheus, linked_project):
+    """While OmniKrux stops, the closed catalog cache refuses in plain words, never a bare 500."""
+    http, app = monitoring_app
+    seed_shop(fake_prometheus)
+    await use_cache(app).close()
+    r = await http.get(catalog_url(linked_project.project_id))
+    assert r.status_code == 503
+    assert r.json() == {
+        "detail": {
+            "code": "unavailable",
+            "message": "OmniKrux is stopping. Try again in a moment.",
+        }
+    }
+
+
 async def test_catalog_refuses_cross_origin(monitoring_app, fake_prometheus, linked_project):
     http, _ = monitoring_app
     r = await http.get(

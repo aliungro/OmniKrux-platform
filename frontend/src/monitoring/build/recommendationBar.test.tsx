@@ -162,7 +162,7 @@ describe("Recommendation bar", () => {
 
   it("no data-based recommendation while the old data is shown for a new query", async () => {
     const api = shop("rate(http_requests_total[1m])", noisy);
-    const { user } = await openSettings(api);
+    await openSettings(api);
     await waitFor(() => expect(bar()?.textContent).toContain("is smoother"));
     const held = gate();
     intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
@@ -173,14 +173,13 @@ describe("Recommendation bar", () => {
     expect(bar()).toBeNull();
     held.open();
     await waitFor(() => expect(bar()?.textContent).toContain("is smoother"));
-    expect(user).toBeTruthy();
   });
 
   it("an auto-refresh tick keeps the recommendation and the keyboard on its button", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       const api = shop("rate(http_requests_total[1m])", noisy);
-      const { user } = await openSettings(api, "10s");
+      await openSettings(api, "10s");
       await waitFor(() => expect(bar()?.textContent).toContain("is smoother"));
       const apply = within(bar()!).getByRole("button", { name: "Apply" });
       apply.focus();
@@ -197,7 +196,6 @@ describe("Recommendation bar", () => {
       await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
       expect(bar()?.textContent).toContain("is smoother");
       expect(document.activeElement).toBe(apply);
-      expect(user).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }

@@ -176,6 +176,19 @@ describe("Metrics and logs on one timeline", () => {
     expect(field.value).toBe('{namespace="web"}');
   });
 
+  it("a logs query of only spaces follows the chips too", async () => {
+    shop();
+    batchItems();
+    const user = userEvent.setup();
+    await openExplore();
+    await linkByChip(user);
+    const field = within(section()).getByRole("textbox", { name: "Logs query" }) as HTMLTextAreaElement;
+    fireEvent.change(field, { target: { value: "   " } });
+    expect(field.value).toBe('{namespace="api"}');
+    await user.click(screen.getByRole("button", { name: "namespace=web" }));
+    expect(field.value).toBe('{namespace="web"}');
+  });
+
   it("the lines follow the time they show", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);

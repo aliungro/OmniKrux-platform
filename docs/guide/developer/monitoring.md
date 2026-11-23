@@ -232,7 +232,7 @@ The catalog is what a project's sources hold under that project's label filter: 
 
 ### Route and shape
 
-`GET /api/monitoring/projects/{id}/catalog` (`explore/api.py`) answers one section per linked source, in link order: `source_id`, `source_name`, `source_type`, `state` (`ok`, `partial` when it carries notes, or `error` with a `message` and no catalog), `built_at`, `metrics`, `labels`, `streams` and `notes`. A source that fails is its own `error` section and never fails the project's other sources. It is read only, so nothing is audited. `?refresh=true` rebuilds (`true` or `1`; `false`, `0` or nothing reads the cache; anything else is a `400`). A project that doesn't exist is `404 not_found`.
+`GET /api/monitoring/projects/{id}/catalog` (`explore/api.py`) answers one section per linked source, in link order: `source_id`, `source_name`, `source_type`, `state` (`ok`, `partial` when it carries notes, or `error` with a `message` and no catalog), `built_at`, `metrics`, `labels`, `streams` and `notes`. A source that fails is its own `error` section and never fails the project's other sources. It is read only, so nothing is audited. `?refresh=true` rebuilds (`true` or `1`; `false`, `0` or nothing reads the cache; anything else is a `400`). A project that doesn't exist is `404 not_found`. While OmniKrux stops, the closed cache starts no build and the route answers `503 unavailable` ("OmniKrux is stopping. Try again in a moment.").
 
 ### What each connector reads
 

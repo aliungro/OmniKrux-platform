@@ -467,15 +467,21 @@
   }
 }
 
-/* The confirmation beside the page's Add to dashboard button: it settles in, unless motion is off. */
+/* The confirmation beside the page's Add to dashboard button. The region is always there; each
+   message in it settles in, unless motion is off. */
 .addStatus {
+  display: inline-flex;
+  min-width: 0;
+  color: var(--ok);
+  font-size: 12.5px;
+}
+
+.addMessage {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 10px;
   min-width: 0;
-  color: var(--ok);
-  font-size: 12.5px;
   animation: settle 180ms ease-out;
 }
 
@@ -500,7 +506,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .addStatus {
+  .addMessage {
     animation: none;
   }
 }

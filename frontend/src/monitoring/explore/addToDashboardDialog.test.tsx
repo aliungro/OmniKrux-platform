@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -65,6 +68,9 @@ describe("Add to dashboard", () => {
     const api = shop({ d1: seedDashboard("d1", owner, latency()) });
     await openExplore();
     await screen.findByText("chart 1");
+    // The status region is there from the start, empty: nothing settles in on page load.
+    const status = addButton().parentElement!.querySelector<HTMLElement>('[role="status"]')!;
+    expect(status.childElementCount).toBe(0);
     const user = userEvent.setup();
     fireEvent.click(addButton());
     const select = await within(await screen.findByRole("dialog")).findByRole("combobox", { name: "Dashboard" }) as HTMLSelectElement;
@@ -73,7 +79,10 @@ describe("Add to dashboard", () => {
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(addButton());
-    expect(screen.getByText('Added to "API latency".').closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByText('Added to "API latency".').closest('[role="status"]')).toBe(status);
+    // The message is the region's one child, which carries the settle animation.
+    expect(status.childElementCount).toBe(1);
+    expect(status.firstElementChild!.className).toMatch(/addMessage/);
     expect(screen.getByText('Added to "API latency".')).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open dashboard" })).toBeTruthy();
     expect(puts(api)).toHaveLength(1);
@@ -217,5 +226,14 @@ describe("Add to dashboard", () => {
     fireEvent.click(button);
     await userEvent.setup().keyboard("a");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("the Added status", () => {
+  it("animates its message, never the region that is there on page load", () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ExplorePage.module.css"), "utf8");
+    const rule = (name: string) => css.match(new RegExp(`\\.${name}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    expect(rule("addStatus")).not.toMatch(/animation/);
+    expect(rule("addMessage")).toMatch(/animation:\s*settle/);
   });
 });

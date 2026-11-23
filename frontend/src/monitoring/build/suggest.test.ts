@@ -40,6 +40,10 @@ describe("suggestPanels", () => {
     expect(s.find((c) => c.key === "cpuByPod")!.expr).toBe(
       'topk(10, sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{container!=""}[$__rate_interval])))',
     );
+    expect(s.find((c) => c.key === "nodeCpu")).toMatchObject({
+      title: "Node CPU busy",
+      expr: '1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[$__rate_interval]))',
+    });
     expect(s.find((c) => c.key === "targetsDown")!.expr).toBe("count(up == 0) or vector(0)");
     expect(s.find((c) => c.key === "logVolume")!.expr).toBe('sum by (level) (count_over_time({job=~".+"}[$__interval]))');
     expect(s.length).toBeLessThanOrEqual(MAX_SUGGESTIONS);

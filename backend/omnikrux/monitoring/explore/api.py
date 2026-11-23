@@ -8,12 +8,18 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from omnikrux.monitoring.explore.catalog import CatalogEntry, CatalogState, project_catalog
+from omnikrux.monitoring.explore.catalog import (
+    CatalogCacheClosed,
+    CatalogEntry,
+    CatalogState,
+    project_catalog,
+)
 from omnikrux.monitoring.projects.types import UnknownProject
 from omnikrux.monitoring.query.run import PROJECT_GONE
 from omnikrux.monitoring.sources.types import SourceType
 
 REFRESH_CHOICE = "Use refresh=true or refresh=false."
+STOPPING = "OmniKrux is stopping. Try again in a moment."
 
 router = APIRouter()
 
@@ -52,7 +58,7 @@ class CatalogOut(BaseModel):
     sources: list[SourceCatalogOut]  # in link order
 
 
-def _refusal(status: int, code: Literal["not_found", "bad_request"], message: str):
+def _refusal(status: int, code: Literal["not_found", "bad_request", "unavailable"], message: str):
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
@@ -103,4 +109,7 @@ async def catalog_route(id: str, request: Request, refresh: str | None = None) -
         entries = await project_catalog(request.app.state.monitoring, id, refresh=wanted)
     except UnknownProject:
         raise _refusal(404, "not_found", PROJECT_GONE) from None
+    except CatalogCacheClosed:
+        # The app is shutting down: the cache starts no new build.
+        raise _refusal(503, "unavailable", STOPPING) from None
     return CatalogOut(project_id=id, sources=[_source_out(e) for e in entries])

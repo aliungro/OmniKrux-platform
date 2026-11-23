@@ -35,6 +35,8 @@ export const KIND = catalog(
     family("prometheus_http_request_duration_seconds", "histogram", ["handler"]),
     counter("kube_pod_container_status_restarts_total", ["namespace", "pod"]),
     counter("container_cpu_usage_seconds_total", ["namespace", "pod", "container"]),
+    // node-exporter, as the cluster scrapes it.
+    counter("node_cpu_seconds_total", ["cpu", "instance", "job", "mode"], 32),
     gauge("up", ["job", "instance"]),
   ],
   [streamOf("job", ["a", "b"]), streamOf("level", ["error", "info"])],

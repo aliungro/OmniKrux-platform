@@ -97,6 +97,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   // Add to dashboard (X5): the dialog, and what the last add said.
   const [addOpen, setAddOpen] = useState(false);
   const [added, setAdded] = useState<Added | null>(null);
+  const [addSeq, setAddSeq] = useState(0);
   const addButton = useRef<HTMLButtonElement>(null);
   const openAdd = useRef<() => void>(() => {});
 
@@ -353,8 +354,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   // The Only chips' labels that Loki has, written by the Task 5 writer (F16).
   const linked = !logsMode && builder.metric !== null ? linkedLogSelector(builder.only, lokiLabels) : null;
   const fieldText = logsText ?? linked ?? "";
-  // An emptied field follows the chips again.
-  const editLogs = (text: string) => setLogsText(text === "" ? null : text);
+  // An emptied field (or one of only spaces) follows the chips again.
+  const editLogs = (text: string) => setLogsText(text.trim() === "" ? null : text);
   const linesText = logsMode ? expr : fieldText;
   const metricQuery = linesText.trim() !== "" && isLogQlMetric(linesText);
   const linesQuery = metricQuery ? "" : linesText;
@@ -505,10 +506,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
             {working && (
               <span className={s.addStatus} role="status">
                 {added && (
-                  <>
+                  // Keyed by the add, so each new message settles in; the empty region never does.
+                  <span key={addSeq} className={s.addMessage}>
                     <span>{`Added to "${added.title}".`}</span>
                     <button type="button" className={s.addOpen} onClick={() => openInNewTab({ page: "dashboard", id: added.id })}>Open dashboard</button>
-                  </>
+                  </span>
                 )}
               </span>
             )}
@@ -524,6 +526,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
             // The query that was added is worth keeping in the trail.
             record({ expr, sourceId: source.source_id });
             setAdded(done);
+            setAddSeq((n) => n + 1);
             setAddOpen(false);
           }} />
       )}

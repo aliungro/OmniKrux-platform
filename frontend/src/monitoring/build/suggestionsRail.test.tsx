@@ -285,8 +285,8 @@ describe("Suggestions rail", () => {
     await user.click(cards()[0]);
     expect(cards()[0].textContent).toContain("Added");
     await user.click(screen.getByRole("button", { name: "Discard" }));
-    const confirm = screen.queryByRole("button", { name: "Discard changes" });
-    if (confirm) await user.click(confirm);
+    // An added panel is unsaved work, so Discard asks first.
+    await user.click(await screen.findByRole("button", { name: "Discard changes" }));
     await screen.findByRole("button", { name: "Edit" });
     await user.keyboard("e");
     await screen.findByRole("button", { name: "Save dashboard" });

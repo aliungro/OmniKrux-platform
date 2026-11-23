@@ -23,7 +23,7 @@ describe("Monitoring app shell", () => {
     expect(tabs()).toHaveLength(1);
   });
 
-  it("Explore and Alerts say they come later", async () => {
+  it("Alerts says it comes later", async () => {
     installFakeMonitoringApi();
     renderMonitoringApp();
     fireEvent.click(screen.getByRole("button", { name: "Alerts" }));
