@@ -3,17 +3,21 @@
 // every rule under its project or group, and beside it the selected rule's details. The view's
 // `tab` and `rule` are written with `replace` (the keyboard stays where it is): Back leaves the
 // page, not each rule looked at. Rules and states are read again every 15 seconds; a read that
-// fails says so and is never shown as current.
+// fails says so and is never shown as current. New alert rule and Edit rule open the rule form in
+// the details' place; picking another rule or leaving asks first about a form with changes.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { pageKey, pressed } from "../../../features/chrome/shortcuts";
-import { invalidateMonitoring } from "../../api/hooks";
 import type { MonitoringPageProps } from "../../MonitoringApp";
 import { keyboardIsFree } from "../../pages/Gone";
 import type { AlertsView, MonitoringView } from "../../shell/tabState";
-import { alertsKeys, listRules, useAlertOverview, type AlertChangeOut, type AlertRequestError, type OverviewOut, type RuleOut } from "../api";
+import {
+  alertsKeys, listRules, refreshAlerts, useAlertOverview,
+  type AlertChangeOut, type AlertRequestError, type OverviewOut, type RuleChangeOut, type RuleOut, type ScopeKind,
+} from "../api";
+import { RuleForm, type RuleFormHandle } from "../rules/RuleForm";
 import { useToolReviews } from "../reviews/useToolReviews";
 import { escapeCloses } from "../../focus";
 import { EngineNote } from "./EngineNote";
@@ -40,7 +44,7 @@ const RULE_GONE = "That alert rule no longer exists. Pick another from the list.
 function pageKeyHere(e: globalThis.KeyboardEvent): boolean {
   if (!pageKey(e)) return false;
   const t = e.target;
-  return !(t instanceof Element && t.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [data-dashboard-popup]'));
+  return !(t instanceof Element && t.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [data-dashboard-popup], [data-rule-form]'));
 }
 
 function useNarrow(): boolean {
@@ -62,6 +66,9 @@ export default function AlertsPage({ view, nav }: MonitoringPageProps) {
   const heading = useRef<HTMLHeadingElement>(null);
   const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
   const overview = useAlertOverview();
+  const newButton = useRef<HTMLButtonElement>(null);
+  // New alert rule, asked: the Rules view opens the form once it is there (and says so).
+  const [newAsk, setNewAsk] = useState<number | null>(null);
 
   // The view as last written: a second write before the tab re-renders builds on the first.
   const navRef = useRef(nav);
@@ -142,14 +149,22 @@ export default function AlertsPage({ view, nav }: MonitoringPageProps) {
             );
           })}
         </div>
-        <button type="button" className={s.primary} aria-disabled="true" title={LATER}>New alert rule</button>
+        <button ref={newButton} type="button" className={s.primary}
+          onClick={() => {
+            if (tab !== "rules") write({ tab: "rules" });
+            setNewAsk((n) => (n ?? 0) + 1);
+          }}>
+          New alert rule
+        </button>
       </header>
       <EngineNote overview={overview.data} error={overview.error} staleAt={overviewStaleAt} />
       <div id={`${ids}-panel`} role="tabpanel" aria-labelledby={`${ids}-tab-${tab}`} className={s.panel}>
         {tab === "rules" ? (
           <RulesView alerts={alerts} write={write} open={open} overview={overview.data} overviewStaleAt={overviewStaleAt}
             refetchOverview={() => void overview.refetch()}
-            overviewSettled={overview.data !== undefined || overview.isError} pageHeading={heading} />
+            overviewSettled={overview.data !== undefined || overview.isError} pageHeading={heading}
+            newAsk={newAsk} onNewTaken={() => setNewAsk(null)} newButton={newButton}
+            openContactPoints={() => write({ tab: "contacts" })} />
         ) : (
           <p className={s.later}>{tab === "silences" ? "Silences" : "Contact points"}: {LATER}</p>
         )}
@@ -171,9 +186,19 @@ interface RulesViewProps {
   /** The overview answered (or failed): what fires is known, so the first row won't move. */
   overviewSettled: boolean;
   pageHeading: RefObject<HTMLHeadingElement | null>;
+  /** New alert rule was pressed (a new number each time); `onNewTaken` once the form is opening. */
+  newAsk: number | null;
+  onNewTaken(): void;
+  newButton: RefObject<HTMLButtonElement | null>;
+  openContactPoints(): void;
 }
 
-function RulesView({ alerts, write, open, overview, overviewStaleAt, refetchOverview, overviewSettled, pageHeading }: RulesViewProps) {
+type FormState = { mode: "new"; scope?: { kind: ScopeKind; id: string } } | { mode: "edit"; rule: RuleOut };
+
+function RulesView({
+  alerts, write, open, overview, overviewStaleAt, refetchOverview, overviewSettled, pageHeading, newAsk, onNewTaken, newButton,
+  openContactPoints,
+}: RulesViewProps) {
   const client = useQueryClient();
   const reviews = useToolReviews();
   const detailsId = useId();
@@ -219,7 +244,23 @@ function RulesView({ alerts, write, open, overview, overviewStaleAt, refetchOver
   }, []);
   const detailsHeading = useRef<HTMLHeadingElement>(null);
   const [showDetails, setShowDetails] = useState(false);
-  const want = useRef<"details" | "row" | null>(null);
+  const want = useRef<"details" | "row" | "new" | null>(null);
+
+  // The rule form, in the details' place. A form with changes is asked about before it goes.
+  const [form, setForm] = useState<FormState | null>(null);
+  const [formKey, setFormKey] = useState(0);
+  const formRef = useRef<RuleFormHandle>(null);
+  const leaveForm = (then: () => void) => {
+    if (form && formRef.current) formRef.current.requestClose(() => { setForm(null); then(); });
+    else then();
+  };
+  const openForm = (next: FormState) => leaveForm(() => {
+    setForm(next);
+    setFormKey((k) => k + 1);
+    if (narrow) setShowDetails(true);
+  });
+  // The changes a save hands on: queued once the saved rule's details have the keyboard.
+  const savedChanges = useRef<AlertChangeOut[] | null>(null);
 
   const focusRow = useCallback(() => {
     const el = active ? rowEls.current.get(active.key) : undefined;
@@ -227,6 +268,10 @@ function RulesView({ alerts, write, open, overview, overviewStaleAt, refetchOver
   }, [active, pageHeading]);
 
   const pick = (key: string, how: "click" | "key") => {
+    if (form) leaveForm(() => choose(key, how));
+    else choose(key, how);
+  };
+  const choose = (key: string, how: "click" | "key") => {
     const row = ruleRows.find((r) => r.key === key);
     if (!row?.ruleId) return;
     setPicked(key);
@@ -244,6 +289,10 @@ function RulesView({ alerts, write, open, overview, overviewStaleAt, refetchOver
     } else detailsHeading.current?.focus();
   };
   const escape = () => {
+    if (form) leaveForm(back);
+    else back();
+  };
+  const back = () => {
     if (narrow) {
       want.current = "row";
       setShowDetails(false);
@@ -257,6 +306,12 @@ function RulesView({ alerts, write, open, overview, overviewStaleAt, refetchOver
     if (want.current === "details" && detailsHeading.current) {
       want.current = null;
       detailsHeading.current.focus();
+      const changes = savedChanges.current;
+      savedChanges.current = null;
+      if (changes) reviews.enqueue(changes, { focus: detailsHeading.current });
+    } else if (want.current === "new") {
+      want.current = null;
+      (newButton.current ?? pageHeading.current)?.focus();
     } else if (want.current === "row" && (!narrow || !showDetails)) {
       want.current = null;
       focusRow();
@@ -287,8 +342,38 @@ function RulesView({ alerts, write, open, overview, overviewStaleAt, refetchOver
     setPicked(next?.key ?? null);
     write({ rule: next?.ruleId ?? null });
     if (narrow) setShowDetails(false);
-    void invalidateMonitoring(client);
+    void refreshAlerts(client);
     reviews.enqueue(changes, { focus: restore.current });
+  };
+
+  // New alert rule: for the shown rule's project or group, else the first.
+  useEffect(() => {
+    if (newAsk === null) return;
+    onNewTaken();
+    openForm({ mode: "new", ...(rule ? { scope: { kind: rule.scope.kind, id: rule.scope.id } } : {}) });
+    // Once per press: `newAsk` is a new number each time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newAsk]);
+
+  const cancelForm = () => {
+    setForm(null);
+    want.current = rule ? "details" : "new";
+    if (narrow && !rule) setShowDetails(false);
+  };
+  const saved = (change: RuleChangeOut) => {
+    const made = change.rule;
+    setForm(null);
+    if (!made) return;
+    // Shown at once (the list is read again too), selected, with the keyboard on its name.
+    client.setQueryData<RuleOut[]>(alertsKeys.rules(), (old) =>
+      !old ? [made] : old.some((r) => r.id === made.id) ? old.map((r) => (r.id === made.id ? made : r)) : [...old, made]);
+    client.setQueryData(alertsKeys.rule(made.id), made);
+    setPicked(null);
+    if (made.id !== alerts.rule) write({ rule: made.id });
+    savedChanges.current = change.changes;
+    want.current = "details";
+    if (narrow) setShowDetails(true);
+    void refreshAlerts(client);
   };
   const afterDelete = (gone: RuleOut) => {
     const next = nextAfter(gone.id);
@@ -310,16 +395,23 @@ function RulesView({ alerts, write, open, overview, overviewStaleAt, refetchOver
   }
 
   let details = null;
-  if (rule) {
+  if (form) {
+    details = (
+      <RuleForm key={formKey} ref={formRef} initial={form.mode === "edit" ? form.rule : undefined}
+        scope={form.mode === "new" ? form.scope : undefined} headingRef={detailsHeading}
+        onSaved={saved} onCancel={cancelForm} onOpenContactPoints={() => { setForm(null); openContactPoints(); }} />
+    );
+  } else if (rule) {
     details = (
       <RuleDetails key={rule.id} id={detailsId} rule={rule} now={now} headingRef={detailsHeading} onOpen={open} onEscape={escape}
-        afterDelete={() => afterDelete(rule)} onDeleted={(changes, restore) => deleted(rule, changes, restore)} />
+        afterDelete={() => afterDelete(rule)} onDeleted={(changes, restore) => deleted(rule, changes, restore)}
+        onEdit={rule.origin === "page" ? () => openForm({ mode: "edit", rule }) : undefined} />
     );
   } else if (data && alerts.rule) {
     details = <p className={s.detailsNote} data-alerts-gone="">{RULE_GONE}</p>;
   }
 
-  const stacked = narrow && data !== undefined && ruleRows.length > 0;
+  const stacked = narrow && data !== undefined && (ruleRows.length > 0 || form !== null);
   return (
     <>
       {/* Always present, so the note is announced when it appears. */}

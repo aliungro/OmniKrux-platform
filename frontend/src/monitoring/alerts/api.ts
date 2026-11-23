@@ -6,12 +6,12 @@
 //
 // Contact point calls (create, update, test) carry secrets: they are plain functions, never
 // `useMonitoringMutation`, because TanStack keeps a mutation's `variables`. Call them, then
-// `invalidateMonitoring(client)`; the form clears its secret inputs after the call.
+// `refreshAlerts(client)`; the form clears its secret inputs after the call. No alerts change
+// refetches an open dry run (`refreshAlerts`).
 
-import { useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
 import type { QueryErrorCode } from "../api/types";
 import type { Plan } from "../../api/types";
-import { invalidateMonitoring, useMonitoringMutation } from "../api/hooks";
 import { NETWORK_MESSAGE, UNREADABLE_ANSWER } from "../api/query";
 import type { DashboardErrorCode, DashboardOut } from "../dashboards/api";
 import type { Problem } from "../dashboards/schema";
@@ -608,22 +608,40 @@ export const useDryRun = (body: DryRunIn | null): Result<DryRunOut> =>
 
 // --- Mutations (none of these bodies holds a secret) ------------------------------------------
 
+/**
+ * After an alerts change: everything Monitoring shows is read again, and so is the audit log, but
+ * not a dry run: it answers for the rule as written in an open form or Alert tab, which the change
+ * didn't touch, and asking again would only replace an answer that is still current.
+ */
+export async function refreshAlerts(client: QueryClient): Promise<void> {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: ["monitoring"], predicate: (q) => !(q.queryKey[1] === "alerts" && q.queryKey[2] === "dryRun") }),
+    client.invalidateQueries({ queryKey: ["audit"] }),
+  ]);
+}
+
+/** An alerts change whose body holds no secret: `refreshAlerts` after it. */
+function useAlertsMutation<V, R>(fn: (vars: V) => Promise<R>): UseMutationResult<R, Error, V> {
+  const client = useQueryClient();
+  return useMutation<R, Error, V>({ mutationFn: fn, onSuccess: () => refreshAlerts(client) });
+}
+
 type Mutation<V, R> = UseMutationResult<R, Error, V>;
 
-export const useCreateRule = (): Mutation<RuleIn, RuleChangeOut> => useMonitoringMutation(createRule);
-export const useSaveRule = (): Mutation<{ id: string; body: RuleSaveIn }, RuleChangeOut> => useMonitoringMutation((v) => saveRule(v.id, v.body));
-export const usePauseRule = (): Mutation<string, RuleOut> => useMonitoringMutation(pauseRule);
-export const useResumeRule = (): Mutation<string, RuleOut> => useMonitoringMutation(resumeRule);
-export const useDeleteRule = (): Mutation<{ id: string; token: string }, RuleChangeOut> => useMonitoringMutation((v) => deleteRule(v.id, v.token));
-export const useAttachRule = (): Mutation<{ id: string; body: AttachIn }, AttachOut> => useMonitoringMutation((v) => attachRule(v.id, v.body));
-export const useSyncTarget = (): Mutation<string, SyncOut> => useMonitoringMutation(syncTarget);
-export const useDeleteContactPoint = (): Mutation<{ id: string; token: string }, void> => useMonitoringMutation((v) => deleteContactPoint(v.id, v.token));
-export const useCreateSilence = (): Mutation<SilenceIn, SilenceOut> => useMonitoringMutation(createSilence);
+export const useCreateRule = (): Mutation<RuleIn, RuleChangeOut> => useAlertsMutation(createRule);
+export const useSaveRule = (): Mutation<{ id: string; body: RuleSaveIn }, RuleChangeOut> => useAlertsMutation((v) => saveRule(v.id, v.body));
+export const usePauseRule = (): Mutation<string, RuleOut> => useAlertsMutation(pauseRule);
+export const useResumeRule = (): Mutation<string, RuleOut> => useAlertsMutation(resumeRule);
+export const useDeleteRule = (): Mutation<{ id: string; token: string }, RuleChangeOut> => useAlertsMutation((v) => deleteRule(v.id, v.token));
+export const useAttachRule = (): Mutation<{ id: string; body: AttachIn }, AttachOut> => useAlertsMutation((v) => attachRule(v.id, v.body));
+export const useSyncTarget = (): Mutation<string, SyncOut> => useAlertsMutation(syncTarget);
+export const useDeleteContactPoint = (): Mutation<{ id: string; token: string }, void> => useAlertsMutation((v) => deleteContactPoint(v.id, v.token));
+export const useCreateSilence = (): Mutation<SilenceIn, SilenceOut> => useAlertsMutation(createSilence);
 export const useExpireSilence = (): Mutation<{ kind: "omnikrux" | "alertmanager"; id: string; sourceId?: string | null }, void> =>
-  useMonitoringMutation((v) => expireSilence(v.kind, v.id, v.sourceId));
+  useAlertsMutation((v) => expireSilence(v.kind, v.id, v.sourceId));
 
-/** After a contact point call made plainly: everything Monitoring shows is read again. */
+/** After a contact point call made plainly: everything Monitoring shows is read again (not a dry run). */
 export function useRefreshAfterContactPoint(): () => Promise<void> {
   const client = useQueryClient();
-  return () => invalidateMonitoring(client);
+  return () => refreshAlerts(client);
 }

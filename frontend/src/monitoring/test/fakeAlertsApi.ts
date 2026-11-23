@@ -31,6 +31,8 @@ export interface FakeAlertsState {
   syncAnswers: Record<string, SyncOut | FakeRefusal>;
   /** What a dashboard save answers as `alert_changes`. */
   alertChangesOnSave: AlertChangeOut[];
+  /** What a rule create or save answers as `changes`. */
+  ruleChanges: AlertChangeOut[];
 }
 
 const NOW = "2026-01-01T00:00:00Z";
@@ -66,6 +68,7 @@ export function emptyAlertsState(): FakeAlertsState {
     channels: {},
     syncAnswers: {},
     alertChangesOnSave: [],
+    ruleChanges: [],
   };
 }
 
@@ -124,7 +127,7 @@ export function alertsRoute(
     if (name === undefined) return coded(404, "unknown_scope", "That project or group no longer exists.");
     const made = ruleOut(ctx.nextId("r"), 1, input, name, "page");
     state.rules.push(made);
-    return json({ rule: made, changes: [] }, 201);
+    return json({ rule: made, changes: state.ruleChanges }, 201);
   }
   if (a === "rules" && b) {
     const found = rule(b);
@@ -139,7 +142,7 @@ export function alertsRoute(
       if (cleanName(input.name, 120) === null) return coded(422, "invalid_rule", NAME_COPY, { field: "name" });
       const made = ruleOut(found.id, found.version + 1, input, found.scope.name, found.origin, found);
       state.rules[state.rules.indexOf(found)] = made;
-      return json({ rule: made, changes: [] });
+      return json({ rule: made, changes: state.ruleChanges });
     }
     if (is("POST", "rules", b, "pause") || is("POST", "rules", b, "resume")) {
       if (c === "pause" && found.targets.some((t) => t.engine === "tool" && !t.leaving)) return coded(409, "tool_rule", TOOL_RULE);
@@ -158,8 +161,12 @@ export function alertsRoute(
       const d = dashboard(String(body.dashboard_id));
       if (!d) return coded(404, "not_found", "That dashboard no longer exists.");
       if (body.base_version !== d.version) return coded(409, "version_conflict", `This dashboard was saved somewhere else since you started (version ${d.version}). Review the differences before saving.`, { current_version: d.version });
+      const out = d.out as { title: string; spec: { panels: { id: string; title: string }[] } };
+      const panel = out.spec.panels.find((p) => p.id === body.panel_id);
+      if (!panel) return coded(422, "invalid_rule", "That panel no longer exists.", { field: "panel" });
       found.origin = "panel";
-      return json({ dashboard: d.out, rule: found });
+      found.panel = { dashboard_id: String(body.dashboard_id), dashboard_title: out.title, panel_id: panel.id, panel_title: panel.title };
+      return json({ dashboard: { ...out, alert_changes: [] }, rule: found });
     }
   }
   if (is("POST", "targets", null, "sync")) {

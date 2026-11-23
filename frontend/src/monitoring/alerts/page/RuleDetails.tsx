@@ -6,19 +6,21 @@
 import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
-import { invalidateMonitoring } from "../../api/hooks";
+import { useProjects } from "../../api/hooks";
 import { escapeCloses } from "../../focus";
 import { DeleteReviewDialog } from "../../DeleteReviewDialog";
 import { closesOnLeave, menuKeys, POPUP, useCloseOutside } from "../../dashboards/page/popover";
 import type { MonitoringView } from "../../shell/tabState";
 import {
-  deleteRule, pauseRule, resumeRule, ruleDeleteReview, syncTarget,
-  type AlertChangeOut, type AlertRequestError, type RuleDeleteReviewOut, type RuleOut, type Severity, type TargetOut, type TargetState,
+  alertsKeys, deleteRule, pauseRule, refreshAlerts, resumeRule, ruleDeleteReview, syncTarget,
+  type AlertChangeOut, type AttachOut, type AlertRequestError, type RuleDeleteReviewOut, type RuleOut, type Severity, type TargetOut, type TargetState,
   type ToolKind,
 } from "../api";
 import { durationWords, STATE_LABEL, stateTone, whereLabel } from "../format";
 import { parseDuration } from "../limits";
 import { lokiFailedWords, TOOL_FAILED, useToolReviews } from "../reviews/useToolReviews";
+import { AttachDialog, attachedWords } from "../rules/AttachDialog";
+import { mixedClusterWarnings } from "../rules/clusterWarning";
 import { RuleChart } from "./RuleChart";
 import { RuleHistory } from "./RuleHistory";
 import { clockTime, labelsText, secondsSince } from "./words";
@@ -229,21 +231,37 @@ export interface RuleDetailsProps {
   onEscape(): void;
   /** Where the keyboard goes after the delete (the next rule's row, else the page's heading). */
   afterDelete(): HTMLElement | null;
+  /** Edit rule: the rule form in this place (a page rule's). */
+  onEdit?(): void;
   id: string;
 }
 
-export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape, afterDelete, id }: RuleDetailsProps) {
+export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape, afterDelete, onEdit, id }: RuleDetailsProps) {
   const client = useQueryClient();
   const reviews = useToolReviews();
+  const projects = useProjects();
   const more = useRef<HTMLButtonElement>(null);
   const restore = useRef<HTMLElement | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [attaching, setAttaching] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [working, setWorking] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     void client.invalidateQueries({ queryKey: ["monitoring", "alerts"], predicate: (q) => q.queryKey[2] !== "dryRun" });
   }, [client]);
+
+  /** Attached: the rule is the panel's now (shown at once), and the dashboard's tool changes queue. */
+  const attached = (out: AttachOut, panelTitle: string) => {
+    client.setQueryData<RuleOut[]>(alertsKeys.rules(), (old) => old?.map((r) => (r.id === out.rule.id ? out.rule : r)));
+    client.setQueryData(alertsKeys.rule(out.rule.id), out.rule);
+    void refreshAlerts(client);
+    restore.current = more.current;
+    setAttaching(false);
+    setNotice(attachedWords(panelTitle));
+    reviews.enqueue(out.dashboard.alert_changes, { focus: more.current });
+  };
 
   const tool = rule.engine === "tool";
   const pauseOrResume = async (resume: boolean) => {
@@ -253,7 +271,7 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
     } catch (err) {
       setProblem(failure(err, "try again"));
     }
-    void invalidateMonitoring(client);
+    void refreshAlerts(client);
   };
 
   /** Review (a cluster change, through the queue) or Retry (Loki is written at once, its own path). */
@@ -291,7 +309,7 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
     rule.paused
       ? { label: "Resume", onSelect: tool ? undefined : () => void pauseOrResume(true), why: TOOL_PAUSE }
       : { label: "Pause", onSelect: tool ? undefined : () => void pauseOrResume(false), why: TOOL_PAUSE },
-    ...(rule.origin === "page" ? [{ label: "Attach to a panel…", why: LATER }] : []),
+    ...(rule.origin === "page" ? [{ label: "Attach to a panel…", onSelect: () => { setNotice(null); setAttaching(true); } }] : []),
     { label: "Delete rule…", onSelect: () => setDeleting(true), danger: true },
   ];
 
@@ -316,6 +334,9 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
     </div>
   );
   const state: TargetState = rule.paused ? "paused" : rule.state;
+  // A project's link that may hold other clusters: every project the rule runs in is checked.
+  const warnings = mixedClusterWarnings(rule.scope, rule.source_type, rule.source_id, projects.data ?? [], [],
+    group ? [...new Set(active.map((t) => t.project_id))] : undefined);
 
   return (
     <section id={id} className={s.details} aria-labelledby={`${id}-name`} onKeyDown={onKeyDown}>
@@ -330,12 +351,14 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
               Edit on its panel
             </button>
           ) : (
-            <button type="button" className={s.button} aria-disabled="true" title={LATER}>Edit rule</button>
+            <button type="button" className={s.button} onClick={onEdit}>Edit rule</button>
           )}
           <MoreActions items={items} buttonRef={more} />
         </div>
       </div>
       {notes.map((n) => <p key={n} className={s.quiet}>{n}</p>)}
+      {notice && <p className={s.quiet} role="status">{notice}</p>}
+      {warnings.map((w) => <p key={w} className={s.toolBar} data-tone="warn" data-cluster-warning="">{w}</p>)}
       {problem && <p className={s.toolBar} data-tone="warn" role="alert">{problem}</p>}
       {bars.map((b) => (
         <div key={b.t.id} className={s.toolBar} data-tone="warn">
@@ -389,6 +412,10 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
       <RuleChart rule={rule} />
       <RuleHistory rule={rule} />
 
+      {attaching && (
+        <AttachDialog rule={rule} restoreFocusTo={restore} onAttached={attached}
+          onCancel={() => { restore.current = more.current; setAttaching(false); }} />
+      )}
       {deleting && (
         <DeleteRuleDialog rule={rule} restoreFocusTo={restore}
           onCancel={() => { restore.current = more.current; setDeleting(false); }}

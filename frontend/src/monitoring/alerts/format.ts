@@ -78,6 +78,9 @@ const SUFFIX: Record<Unit, string> = {
   cores: " cores",
 };
 
+/** What is written after a threshold in `unit`: ` s`, `%`, ` req/s`; "" for a plain count. */
+export const unitSuffix = (unit: Unit): string => SUFFIX[unit];
+
 /** `Alert when any route is above 0.3 s for 5 min`; `the total` when it adds the series up; no
  * wait (`for` 0s) reads `right away`. */
 export function sentence(

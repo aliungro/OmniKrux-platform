@@ -85,8 +85,8 @@ describe("the Alerts page", () => {
     const tabs = within(screen.getByRole("tablist", { name: "Alerts views" })).getAllByRole("tab");
     expect(tabs.map((t) => [t.textContent, t.getAttribute("aria-keyshortcuts")])).toEqual([["Rules1", "1"], ["Silences", "2"], ["Contact points", "3"]]);
     const create = screen.getByRole("button", { name: "New alert rule" });
-    expect(create.getAttribute("aria-disabled")).toBe("true");
-    expect(create.getAttribute("title")).toBe("Comes with the next step of this update.");
+    expect(create.getAttribute("aria-disabled")).toBeNull();
+    expect(create.getAttribute("title")).toBeNull();
     // Firing pinned on top; the first rule is shown.
     await waitFor(() => expect(options().map((o) => o.getAttribute("aria-label"))).toEqual([
       "PodCrashLooping, 12m", "NodeNotReady, ok", "PodCrashLooping, firing", "LatencyHigh, ok",
@@ -209,12 +209,15 @@ describe("the Alerts page", () => {
     const pause = screen.getByRole("menuitem", { name: "Pause" });
     expect(pause.getAttribute("aria-disabled")).toBe("true");
     expect(pause.getAttribute("title")).toBe("This rule runs in the tool, which keeps checking it. Silence it instead.");
-    expect(screen.getByRole("menuitem", { name: "Attach to a panel…" }).getAttribute("title")).toBe("Comes with the next step of this update.");
+    const attach = screen.getByRole("menuitem", { name: "Attach to a panel…" });
+    expect(attach.getAttribute("aria-disabled")).toBeNull();
+    expect(attach.getAttribute("title")).toBeNull();
     await user.click(pause);
     expect(api.requests.some((r) => r.url.endsWith("/pause"))).toBe(false);
-    // The buttons a later step brings say so.
+    // Silence comes with a later step and says so; Edit rule works for a tool's rule too.
     expect(screen.getByRole("button", { name: "Silence" }).getAttribute("aria-keyshortcuts")).toBe("s");
-    expect(screen.getByRole("button", { name: "Edit rule" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("button", { name: "Silence" }).getAttribute("title")).toBe("Comes with the next step of this update.");
+    expect(screen.getByRole("button", { name: "Edit rule" }).getAttribute("aria-disabled")).toBeNull();
   });
 
   it("not applied shows Review and Retry by tool state", async () => {
