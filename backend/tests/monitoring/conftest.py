@@ -19,6 +19,7 @@ from omnikrux.config import Settings
 from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.main import create_app
+from omnikrux.monitoring.alerts.contact_points.store import ContactPointStore
 from omnikrux.monitoring.alerts.store import AlertStore
 from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
@@ -74,6 +75,7 @@ class Stores:
     groups: GroupStore
     dashboards: DashboardStore
     alerts: AlertStore
+    contact_points: ContactPointStore
     sessionmaker: async_sessionmaker[AsyncSession]
 
 
@@ -115,6 +117,7 @@ async def stores(tmp_path, db_path):
         groups=GroupStore(sessionmaker),
         dashboards=DashboardStore(sessionmaker),
         alerts=AlertStore(sessionmaker),
+        contact_points=ContactPointStore(sessionmaker, box),
         sessionmaker=sessionmaker,
     )
     await engine.dispose()

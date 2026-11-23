@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 from fastapi.routing import APIRoute
 
+from omnikrux.monitoring.alerts.contact_points.api import router as contact_points_router
 from omnikrux.monitoring.dashboards.api import router as dashboards_router
 from omnikrux.monitoring.explore.api import router as explore_router
 from omnikrux.monitoring.projects.api import router as projects_router
@@ -60,3 +61,4 @@ adopt(projects_router)
 adopt(query_router)
 adopt(dashboards_router)
 adopt(explore_router)
+adopt(contact_points_router)
