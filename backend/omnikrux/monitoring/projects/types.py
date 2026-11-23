@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Literal
 from omnikrux.monitoring.sources.types import FilterOrigin, ProjectKind
 
 if TYPE_CHECKING:
+    from omnikrux.monitoring.alerts.store import RuleRef
     from omnikrux.monitoring.dashboards.store import DashboardRef
 
 REVIEW_CHANGED = "Something changed since the review. Review it again."
@@ -21,6 +22,15 @@ class ReviewChanged(Exception):
 
     def __init__(self) -> None:
         super().__init__(REVIEW_CHANGED)
+
+
+class RulesInCluster(Exception):
+    """The owner has alert rules applied in a cluster: each has to be removed from it first
+    (through its own review); nothing was changed."""
+
+    def __init__(self, rules: tuple[RuleRef, ...]) -> None:
+        super().__init__(", ".join(r.name for r in rules))
+        self.rules = rules
 
 
 class UnknownProject(KeyError):
@@ -107,6 +117,11 @@ class ProjectDeleteReview:
     groups_left: tuple[GroupRef, ...]
     dashboards: tuple[DashboardRef, ...]  # deleted with the project, by title
     token: str
+    # The rules of the project and its dashboards: they go with it (Loki ruler rules removed
+    # first). By name.
+    alert_rules: tuple[RuleRef, ...] = ()
+    # Rules with a target of this project still applied in a cluster: they block the delete.
+    cluster_rules: tuple[RuleRef, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -115,11 +130,15 @@ class GroupDeleteReview:
     name: str
     dashboards: tuple[DashboardRef, ...]  # deleted with the group, by title
     token: str
+    alert_rules: tuple[RuleRef, ...] = ()  # the group's and its dashboards' rules, by name
+    cluster_rules: tuple[RuleRef, ...] = ()  # of those, the ones applied in a cluster
 
     def accepts(self, token: str | None) -> bool:
         """Whether a delete may go ahead with `token`: one that matches, or none at all for a
-        group without dashboards (nothing to review)."""
-        return token == self.token or (token is None and not self.dashboards)
+        group without dashboards and alert rules (nothing to review)."""
+        return token == self.token or (
+            token is None and not self.dashboards and not self.alert_rules
+        )
 
 
 @dataclass(frozen=True)

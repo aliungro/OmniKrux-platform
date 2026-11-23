@@ -6,6 +6,7 @@ come back only as `has_*` flags. Audit `details` carry names and settings, never
 rules a source must follow (`rules.py`) answer 422 with plain words from the handlers (pydantic
 only checks the shape: `omnikrux/validation.py` replaces its messages)."""
 
+import logging
 from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime
@@ -75,6 +76,7 @@ __all__ = [
 ]
 
 router = APIRouter(prefix="/sources")
+log = logging.getLogger(__name__)
 # Discovery and filter suggestions live beside /sources, not under it.
 finding_router = APIRouter()
 
@@ -509,7 +511,7 @@ async def remove_source(id: str, token: str, request: Request) -> Response:
         request, "source_remove", "source", source.name, await details_of(registry, source)
     )
     try:
-        await services.projects.delete_source(id, token, services.sources)
+        review = await services.projects.delete_source(id, token, services.sources)
     except ReviewChanged:
         await finish_change(request, record, False, REVIEW_CHANGED)
         raise HTTPException(status_code=409, detail=REVIEW_CHANGED) from None
@@ -522,6 +524,17 @@ async def remove_source(id: str, token: str, request: Request) -> Response:
     await finish_change(request, record, True)
     services.health.forget(id)
     services.transports.forget(id)
+    # The projects that linked it: their alert rules read another source of the type, or say
+    # they have none.
+    for project in review.projects:
+        try:
+            await services.alert_sync.reconcile_scope("project", project.id)
+        except Exception as exc:  # noqa: BLE001 (the source is gone; rules converge at start)
+            log.warning(
+                "Bringing the alert rules of project %s up to date failed (%s)",
+                project.id,
+                type(exc).__name__,
+            )
     return Response(status_code=204)
 
 

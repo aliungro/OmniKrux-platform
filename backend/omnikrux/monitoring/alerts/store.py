@@ -501,6 +501,19 @@ class AlertStore:
             )
             return _rule(row) if row is not None else None
 
+    async def rules_for_dashboard(self, dashboard_id: str) -> list[RuleRecord]:
+        """The (not deleted) rules of that dashboard's panels, oldest first."""
+        async with self._sessionmaker() as session:
+            rows = await session.scalars(
+                select(AlertRuleRow)
+                .where(
+                    AlertRuleRow.dashboard_id == dashboard_id,
+                    AlertRuleRow.deleted_at.is_(None),
+                )
+                .order_by(AlertRuleRow.created_at, AlertRuleRow.id)
+            )
+            return [_rule(row) for row in rows]
+
     # -- rules: writing ------------------------------------------------------------------------
 
     async def create_rule(
@@ -575,6 +588,23 @@ class AlertStore:
                 row.panel_id = None
                 row.version = row.version + 1
                 row.updated_at = now()
+            await s.flush()
+            return _rule(row)
+
+    async def attach_rule(
+        self, id: str, dashboard_id: str, panel_id: str, *, session: AsyncSession | None = None
+    ) -> RuleRecord:
+        """The page rule becomes that panel's rule, at its next version. UnknownRule (deleted
+        too); ValueError when it already belongs to a panel."""
+        async with self._locked(session) as s:
+            row = await _live_rule_row(s, id)
+            if row.origin != "page" or row.dashboard_id is not None or row.panel_id is not None:
+                raise ValueError("The rule already belongs to a panel.")
+            row.origin = "panel"
+            row.dashboard_id = dashboard_id
+            row.panel_id = panel_id
+            row.version = row.version + 1
+            row.updated_at = now()
             await s.flush()
             return _rule(row)
 

@@ -5,10 +5,14 @@ Projects are never created automatically: only `POST /setup` creates one, togeth
 sources and its links, in one transaction. Every change is audited before it is made (no audit,
 no change) without a review step; deleting a project, or a group with dashboards, asks first,
 through the review's token, and takes the owner's dashboards with it (one `dashboard_remove`
-record each, begun before the delete).
+record each, begun before the delete) and its alert rules (one `alert_rule_remove` record each;
+their Loki ruler rules are removed before the delete, and a rule still applied in a cluster
+blocks it). Every change to a project's links or a group's members brings the alert rules of
+that project or group up to date (`AlertSync.reconcile_scope`).
 The rules a request must follow answer 422 with plain words from the handlers (pydantic only
 checks the shape)."""
 
+import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from datetime import datetime
@@ -18,6 +22,9 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from omnikrux.clusters.registry import ClusterInfo, ClusterRegistry
+from omnikrux.monitoring.alerts.store import RuleRef, TargetRecord
+from omnikrux.monitoring.alerts.sync import LokiRemovalFailed
+from omnikrux.monitoring.alerts.types import ScopeKind
 from omnikrux.monitoring.audit import begin_change, finish_change
 from omnikrux.monitoring.dashboards.ready_made import TITLES, project_ready_keys, ready_id
 from omnikrux.monitoring.dashboards.schema import OwnerKind
@@ -32,6 +39,7 @@ from omnikrux.monitoring.projects.types import (
     Project,
     ProjectDeleteReview,
     ReviewChanged,
+    RulesInCluster,
     UnknownGroup,
     UnknownProject,
 )
@@ -56,7 +64,12 @@ from omnikrux.monitoring.sources.types import (
 )
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
+RULES_IN_CLUSTER = (
+    "Remove its rules that run in {cluster} first: {names}. Each opens its own review."
+)
+SOME_CLUSTER = "a cluster"
 PROJECT_GONE = "That project doesn't exist anymore. It may have been removed."
 GROUP_GONE = "That group doesn't exist anymore. It may have been removed."
 CHOSEN_PROJECT_GONE = "One of the chosen projects no longer exists. Reload and pick again."
@@ -158,7 +171,15 @@ class DashboardRefOut(BaseModel):
     versions: int
 
 
+class RuleRefOut(BaseModel):
+    id: str
+    name: str
+
+
 class ProjectDeleteReviewOut(BaseModel):
+    """`alert_rules` and `cluster_rules` are left out of the answer when empty (read them as
+    `[]`), as they are left out of the token: a review without them reads as it always did."""
+
     project_id: str
     name: str
     sources_removed: list[SourceRefOut]
@@ -167,13 +188,21 @@ class ProjectDeleteReviewOut(BaseModel):
     groups_left: list[GroupRefOut]
     dashboards: list[DashboardRefOut]  # by title; [] when it has none
     token: str
+    # The rules of the project and its dashboards, by name: they go with it.
+    alert_rules: list[RuleRefOut] = []
+    # Rules still applied in a cluster for this project: each is removed first, by its review.
+    cluster_rules: list[RuleRefOut] = []
 
 
 class GroupDeleteReviewOut(BaseModel):
+    """As `ProjectDeleteReviewOut`: empty alert lists are left out."""
+
     group_id: str
     name: str
     dashboards: list[DashboardRefOut]  # by title
     token: str
+    alert_rules: list[RuleRefOut] = []
+    cluster_rules: list[RuleRefOut] = []
 
 
 class ProjectPatch(BaseModel):
@@ -376,11 +405,17 @@ def _review_out(review: ProjectDeleteReview) -> ProjectDeleteReviewOut:
         groups_left=[GroupRefOut(id=g.id, name=g.name) for g in review.groups_left],
         dashboards=_dashboard_outs(review.dashboards),
         token=review.token,
+        alert_rules=_rule_outs(review.alert_rules),
+        cluster_rules=_rule_outs(review.cluster_rules),
     )
 
 
 def _dashboard_outs(refs: Iterable[DashboardRef]) -> list[DashboardRefOut]:
     return [DashboardRefOut(id=d.id, title=d.title, versions=d.versions) for d in refs]
+
+
+def _rule_outs(refs: Iterable[RuleRef]) -> list[RuleRefOut]:
+    return [RuleRefOut(id=r.id, name=r.name) for r in refs]
 
 
 def _group_review_out(review: GroupDeleteReview) -> GroupDeleteReviewOut:
@@ -389,7 +424,67 @@ def _group_review_out(review: GroupDeleteReview) -> GroupDeleteReviewOut:
         name=review.name,
         dashboards=_dashboard_outs(review.dashboards),
         token=review.token,
+        alert_rules=_rule_outs(review.alert_rules),
+        cluster_rules=_rule_outs(review.cluster_rules),
     )
+
+
+def _in_words(names: Sequence[str]) -> str:
+    """`a`, `a and b`, `a, b and c`."""
+    if len(names) < 2:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+async def _rules_in_cluster(
+    request: Request, rules: Sequence[RuleRef], project_id: str | None = None
+) -> HTTPException:
+    """409: the owner's rules still applied in a cluster have to be removed there first."""
+    clusters = await _services(request).alert_sync.cluster_names(
+        _registry(request), [r.id for r in rules], project_id
+    )
+    message = RULES_IN_CLUSTER.format(
+        cluster=_in_words(clusters) or SOME_CLUSTER, names=", ".join(r.name for r in rules)
+    )
+    return HTTPException(status_code=409, detail=message)
+
+
+async def _begin_rule_removes(
+    request: Request,
+    records: list[int],
+    owner_kind: OwnerKind,
+    owner_name: str,
+    refs: Iterable[RuleRef],
+) -> None:
+    """Begin one `alert_rule_remove` per rule the owner's delete takes (as for dashboards)."""
+    for ref in refs:
+        details = {"scope": owner_kind, "scope_name": owner_name, "with": owner_kind}
+        records.append(
+            await begin_change(request, "alert_rule_remove", "alert_rule", ref.name, details)
+        )
+
+
+async def _remove_from_loki(
+    request: Request, records: list[int], targets: Iterable[TargetRecord]
+) -> None:
+    """Before the owner's delete: its Loki ruler rules go. 502 (nothing deleted) when one
+    can't be removed."""
+    try:
+        await _services(request).alert_sync.remove_from_loki(targets)
+    except LokiRemovalFailed as exc:
+        await _finish_all(request, records, False, exc.message)
+        raise HTTPException(status_code=502, detail=exc.message) from None
+
+
+async def _reconcile(services: MonitoringServices, kind: ScopeKind, id: str) -> None:
+    """Bring the alert rules of the project or group in line with its links or members. The
+    change is already made: a failure is logged, and the next start converges."""
+    try:
+        await services.alert_sync.reconcile_scope(kind, id)
+    except Exception as exc:  # noqa: BLE001 (the change stands; rules converge at start)
+        log.warning(
+            "Bringing the alert rules of %s %s up to date failed (%s)", kind, id, type(exc).__name__
+        )
 
 
 async def _begin_dashboard_removes(
@@ -522,6 +617,7 @@ async def link_source(id: str, source_id: str, body: LinkIn, request: Request) -
         await finish_change(request, record, False, PROJECT_NOT_SAVED)
         raise
     await finish_change(request, record, True)
+    await _reconcile(services, "project", id)
     return _link_out(id, link, source)
 
 
@@ -545,14 +641,15 @@ async def unlink_source(id: str, source_id: str, request: Request) -> Response:
         await finish_change(request, record, False, PROJECT_NOT_SAVED)
         raise
     await finish_change(request, record, True)
+    await _reconcile(services, "project", id)
     return Response(status_code=204)
 
 
-@router.get("/projects/{id}/delete-review")
+@router.get("/projects/{id}/delete-review", response_model_exclude_defaults=True)
 async def project_delete_review(id: str, request: Request) -> ProjectDeleteReviewOut:
     services = _services(request)
     try:
-        review = await services.projects.delete_review(id, services.dashboards)
+        review = await services.projects.delete_review(id, services.dashboards, services.alerts)
     except UnknownProject:
         raise _gone(PROJECT_GONE) from None
     return _review_out(review)
@@ -561,13 +658,16 @@ async def project_delete_review(id: str, request: Request) -> ProjectDeleteRevie
 @router.delete("/projects/{id}", status_code=204)
 async def remove_project(id: str, token: str, request: Request) -> Response:
     """Delete the project as its review showed: the sources only it created and used, its links,
-    its group memberships and its dashboards. 409 (nothing changed) when the review no longer
-    matches."""
+    its group memberships, its dashboards and its alert rules (their Loki ruler rules removed
+    first). 409 (nothing changed) when the review no longer matches, or while a rule of it is
+    still applied in a cluster; 502 (nothing deleted) when a Loki ruler rule can't be removed."""
     services, registry = _services(request), _registry(request)
     try:
-        review = await services.projects.delete_review(id, services.dashboards)
+        review = await services.projects.delete_review(id, services.dashboards, services.alerts)
     except UnknownProject:
         raise _gone(PROJECT_GONE) from None
+    if review.cluster_rules:
+        raise await _rules_in_cluster(request, review.cluster_rules, id)
     details = {
         "sources_removed": [s.name for s in review.sources_removed],
         "groups_left": [g.name for g in review.groups_left],
@@ -594,14 +694,22 @@ async def remove_project(id: str, token: str, request: Request) -> Response:
                 )
             )
         await _begin_dashboard_removes(request, records, "project", review.name, review.dashboards)
+        await _begin_rule_removes(request, records, "project", review.name, review.alert_rules)
     except HTTPException as exc:
         await _finish_all(request, records, False, str(exc.detail))
         raise
+    await _remove_from_loki(request, records, await services.alerts.targets(project_id=id))
     try:
-        await services.projects.delete(id, token, services.sources, services.dashboards)
+        await services.projects.delete(
+            id, token, services.sources, services.dashboards, services.alerts
+        )
     except ReviewChanged:
         await _finish_all(request, records, False, REVIEW_CHANGED)
         raise HTTPException(status_code=409, detail=REVIEW_CHANGED) from None
+    except RulesInCluster as exc:
+        refusal = await _rules_in_cluster(request, exc.rules, id)
+        await _finish_all(request, records, False, str(refusal.detail))
+        raise refusal from None
     except UnknownProject:
         await _finish_all(request, records, False, PROJECT_GONE)
         raise _gone(PROJECT_GONE) from None
@@ -677,15 +785,19 @@ async def change_group(id: str, body: GroupPatch, request: Request) -> GroupOut:
         await finish_change(request, record, False, GROUP_NOT_SAVED)
         raise
     await finish_change(request, record, True)
+    if body.project_ids is not None:
+        # A project that joins gets the group's rules; one that leaves loses them.
+        await _reconcile(services, "group", id)
     return _group_out(updated, await _project_names(services))
 
 
-@router.get("/groups/{id}/delete-review")
+@router.get("/groups/{id}/delete-review", response_model_exclude_defaults=True)
 async def group_delete_review(id: str, request: Request) -> GroupDeleteReviewOut:
-    """What deleting the group would do: the dashboards it takes (its projects stay)."""
+    """What deleting the group would do: the dashboards and alert rules it takes (its projects
+    stay)."""
     services = _services(request)
     try:
-        review = await services.groups.delete_review(id, services.dashboards)
+        review = await services.groups.delete_review(id, services.dashboards, services.alerts)
     except UnknownGroup:
         raise _gone(GROUP_GONE) from None
     return _group_review_out(review)
@@ -693,15 +805,19 @@ async def group_delete_review(id: str, request: Request) -> GroupDeleteReviewOut
 
 @router.delete("/groups/{id}", status_code=204)
 async def remove_group(id: str, request: Request, token: str | None = None) -> Response:
-    """Remove the group and its dashboards; its projects stay as they are. A group with
-    dashboards needs its review's token: 409 (nothing changed) when it is missing or the review
-    no longer matches. A group without dashboards deletes without one."""
+    """Remove the group, its dashboards and its alert rules (their Loki ruler rules removed
+    first); its projects stay as they are. A group with dashboards or alert rules needs its
+    review's token: 409 (nothing changed) when it is missing or the review no longer matches,
+    or while a rule of it is still applied in a cluster. A group without them deletes without
+    one."""
     services = _services(request)
     group = await _group(services, id)
     try:
-        review = await services.groups.delete_review(id, services.dashboards)
+        review = await services.groups.delete_review(id, services.dashboards, services.alerts)
     except UnknownGroup:
         raise _gone(GROUP_GONE) from None
+    if review.cluster_rules:
+        raise await _rules_in_cluster(request, review.cluster_rules)
     names = await _project_names(services)
     projects = [names[p] for p in _in_name_order(group.project_ids, names) if p in names]
     records = [
@@ -713,14 +829,25 @@ async def remove_group(id: str, request: Request, token: str | None = None) -> R
     try:
         # The store deletes exactly what a review with this token shows: these dashboards.
         await _begin_dashboard_removes(request, records, "group", review.name, review.dashboards)
+        await _begin_rule_removes(request, records, "group", review.name, review.alert_rules)
     except HTTPException as exc:
         await _finish_all(request, records, False, str(exc.detail))
         raise
+    targets = [
+        target
+        for ref in review.alert_rules
+        for target in await services.alerts.targets(rule_id=ref.id)
+    ]
+    await _remove_from_loki(request, records, targets)
     try:
-        await services.groups.delete(id, token, services.dashboards)
+        await services.groups.delete(id, token, services.dashboards, services.alerts)
     except ReviewChanged:
         await _finish_all(request, records, False, REVIEW_CHANGED)
         raise HTTPException(status_code=409, detail=REVIEW_CHANGED) from None
+    except RulesInCluster as exc:
+        refusal = await _rules_in_cluster(request, exc.rules)
+        await _finish_all(request, records, False, str(refusal.detail))
+        raise refusal from None
     except UnknownGroup:
         await _finish_all(request, records, False, GROUP_GONE)
         raise _gone(GROUP_GONE) from None
@@ -808,4 +935,5 @@ async def set_up_project(body: SetupIn, request: Request) -> ProjectOut:
         await _finish_all(request, records, False, PROJECT_NOT_SAVED)
         raise
     await _finish_all(request, records, True)
+    await _reconcile(services, "project", project.id)
     return await _project_out(request, project)

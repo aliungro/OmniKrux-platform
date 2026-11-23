@@ -31,6 +31,7 @@ from omnikrux.monitoring.alerts.contact_points.types import (
 )
 from omnikrux.monitoring.alerts.store import RuleRef
 from omnikrux.monitoring.audit import begin_change, finish_change
+from omnikrux.monitoring.dashboards.api import drop_contact_point
 from omnikrux.monitoring.models import now
 from omnikrux.monitoring.projects.types import REVIEW_CHANGED, ReviewChanged
 from omnikrux.monitoring.services import MonitoringServices
@@ -355,4 +356,6 @@ async def remove_contact_point(id: str, token: str, request: Request) -> Respons
         await finish_change(request, record, False, NOT_REMOVED)
         raise
     await finish_change(request, record, True)
+    # Panel alerts name it in their dashboards' documents: those are saved without it.
+    await drop_contact_point(request, id, review.name)
     return Response(status_code=204)

@@ -11,7 +11,9 @@ nothing, sends nothing), so it writes no audit record."""
 
 from __future__ import annotations
 
+import copy
 import re
+import string
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,7 +24,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.monitoring.alerts.contact_points.types import ContactPoint, ContactPointType
 from omnikrux.monitoring.alerts.dry_run import (
     FOR_DURATION,
@@ -43,6 +44,8 @@ from omnikrux.monitoring.alerts.rule_expr import (
     is_log_query,
     parse_duration,
     render_message,
+    substitute,
+    variable_defaults,
 )
 from omnikrux.monitoring.alerts.store import (
     HistoryKind,
@@ -55,14 +58,18 @@ from omnikrux.monitoring.alerts.store import (
     UnknownRule,
 )
 from omnikrux.monitoring.alerts.sync import (
+    CONTACT_POINT_GONE,
     GONE_PROJECT,
     UNKNOWN_CAPABILITY,
     AlertChange,
-    AlertChangeKind,
+    AlertChangeOut,
+    cluster_name,
     where,
 )
+from omnikrux.monitoring.alerts.sync import change_out as _change_out
 from omnikrux.monitoring.alerts.tool.channels import ChannelsUnreadable, read_channels
 from omnikrux.monitoring.alerts.types import (
+    ALERT_PANEL_TYPES,
     EVERY_CHOICES,
     MAX_CHANNEL_LABELS,
     MAX_FOR_SECONDS,
@@ -80,8 +87,23 @@ from omnikrux.monitoring.alerts.types import (
     worst,
 )
 from omnikrux.monitoring.audit import begin_change, finish_change
-from omnikrux.monitoring.dashboards.store import UnknownDashboard
+from omnikrux.monitoring.dashboards.api import (
+    DASHBOARD_GONE,
+    READ_ONLY,
+    DashboardOut,
+    check_document,
+    check_notify,
+    dashboard_error,
+    dashboard_out,
+    owner_of,
+    reconcile_alerts,
+    save_document,
+)
+from omnikrux.monitoring.dashboards.ready_made import parse_ready_id
+from omnikrux.monitoring.dashboards.schema import MAX_QUERIES
+from omnikrux.monitoring.dashboards.store import DashboardRecord, UnknownDashboard, VersionConflict
 from omnikrux.monitoring.models import (
+    AlertRuleRow,
     ContactPointRow,
     GroupRecord,
     ProjectRecord,
@@ -101,7 +123,7 @@ from omnikrux.monitoring.query.series import MAX_QUERY_CHARS
 from omnikrux.monitoring.services import MonitoringServices
 from omnikrux.monitoring.sources.capability import CapabilityUnknown
 from omnikrux.monitoring.sources.transport import SourceUnreachable
-from omnikrux.monitoring.sources.types import QUERYABLE_TYPES
+from omnikrux.monitoring.sources.types import QUERYABLE_TYPES, NameTaken
 
 router = APIRouter(prefix="/alerts")
 
@@ -113,7 +135,6 @@ RuleErrorCode = Literal[
 
 RULE_GONE = "That alert rule no longer exists."
 UNKNOWN_SCOPE = "That project or group no longer exists."
-CONTACT_POINT_GONE = "That contact point no longer exists. Pick another."
 PANEL_RULE = 'This rule belongs to the panel "{panel}" on "{dashboard}". Change it there.'
 TOOL_RULE = "This rule runs in the tool, which keeps checking it. Silence it instead."
 NAME_COPY = "Use 1 to 120 characters, without line breaks."
@@ -135,6 +156,11 @@ TARGETS_BEHIND = (
     "The rule was saved, but where it runs couldn't be brought up to date. "
     "OmniKrux tries again when it restarts."
 )
+OTHER_OWNER = "That panel is on a dashboard of another project or group."
+HAS_ALERT = "That panel already has an alert."
+QUERIES_FULL = "That panel already has 10 queries."
+PANEL_GONE = "That panel no longer exists."
+NO_ALERT_HERE = "A {kind} panel can't have an alert. Use a time series, stat, gauge or bar panel."
 GONE_GROUP = "A removed group"
 PANEL_GONE_TITLE = "a panel that was removed"
 DASHBOARD_GONE_TITLE = "a dashboard that was removed"
@@ -319,16 +345,6 @@ class RuleOut(BaseModel):
     updated_at: datetime
 
 
-class AlertChangeOut(BaseModel):
-    target_id: str
-    rule_id: str
-    rule_name: str
-    project_id: str
-    project_name: str
-    kind: AlertChangeKind
-    message: str | None
-
-
 class RuleChangeOut(BaseModel):
     rule: RuleOut | None
     changes: list[AlertChangeOut]
@@ -408,6 +424,28 @@ class RuleDeleteReviewOut(BaseModel):
 class SourceRefOut(BaseModel):
     id: str
     name: str
+
+
+class AttachIn(BaseModel):
+    """The panel to attach a page rule to, and the dashboard's version it was read at."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dashboard_id: str
+    panel_id: str
+    base_version: int
+
+
+class AttachOut(BaseModel):
+    dashboard: DashboardOut
+    rule: RuleOut
+
+
+class PanelAlertStateOut(BaseModel):
+    rule_id: str
+    name: str
+    state: TargetState
+    since: datetime | None
 
 
 class ChannelOut(BaseModel):
@@ -624,18 +662,6 @@ async def _live_rule(services: MonitoringServices, id: str) -> RuleRecord:
     if rule.deleted_at is not None:
         raise RuleRefused(404, "not_found", RULE_GONE).http()
     return rule
-
-
-def _change_out(change: AlertChange) -> AlertChangeOut:
-    return AlertChangeOut(
-        target_id=change.target_id,
-        rule_id=change.rule_id,
-        rule_name=change.rule_name,
-        project_id=change.project_id,
-        project_name=change.project_name,
-        kind=change.kind,
-        message=change.message,
-    )
 
 
 # -- checking a rule ---------------------------------------------------------------------------
@@ -1039,25 +1065,6 @@ async def resume_rule(id: str, request: Request) -> RuleOut:
 # -- routes: delete ----------------------------------------------------------------------------
 
 
-async def _cluster_name(
-    services: MonitoringServices, registry: ClusterRegistry, target: TargetRecord
-) -> str | None:
-    cluster_id = target.tool_object.cluster_id if target.tool_object is not None else None
-    if cluster_id is None and target.source_id is not None:
-        try:
-            source = await services.sources.get(target.source_id)
-        except KeyError:
-            source = None
-        if source is not None and source.cluster is not None:
-            cluster_id = source.cluster.cluster_id
-    if cluster_id is None:
-        return None
-    try:
-        return (await registry.get(cluster_id)).name
-    except KeyError:
-        return None
-
-
 async def _delete_review(request: Request, rule: RuleRecord) -> RuleDeleteReviewOut:
     """What deleting the rule does: OmniKrux targets (and anything never written to a tool) go
     at once; a Loki ruler rule is removed from the ruler; a `PrometheusRule` in a cluster needs
@@ -1074,7 +1081,7 @@ async def _delete_review(request: Request, rule: RuleRecord) -> RuleDeleteReview
             target_id=target.id,
             project_name=names.project(target.project_id),
             cluster_name=(
-                await _cluster_name(services, registry, target) if kind != "loki_ruler" else None
+                await cluster_name(services, registry, target) if kind != "loki_ruler" else None
             ),
         )
         (loki if kind == "loki_ruler" else cluster).append(ref)
@@ -1102,13 +1109,90 @@ async def rule_delete_review(id: str, request: Request) -> RuleDeleteReviewOut:
     return await _delete_review(request, await _live_rule(_services(request), id))
 
 
+async def _tombstone(services: MonitoringServices, session: AsyncSession, rule: RuleRecord) -> None:
+    """Inside a locked transaction: the rule, still at the version reviewed, is marked deleted
+    and its targets leaving (its reconcile removes them)."""
+    current = await session.get(AlertRuleRow, rule.id)
+    if current is None or current.deleted_at is not None:
+        raise RuleRefused(404, "not_found", RULE_GONE)
+    if current.version != rule.version:
+        raise RuleRefused(409, "rule_changed", REVIEW_CHANGED)
+    await services.alerts.tombstone_rule(rule.id, session=session)
+    await services.alerts.put_targets(rule.id, [], session=session)
+
+
+async def _panel_dashboard(
+    services: MonitoringServices, rule: RuleRecord
+) -> DashboardRecord | None:
+    """The dashboard whose panel still carries the rule's alert, if any."""
+    if rule.origin != "panel" or rule.dashboard_id is None:
+        return None
+    try:
+        board = await services.dashboards.get(rule.dashboard_id)
+    except UnknownDashboard:
+        return None
+    return board if _panel_of(board.spec, rule.panel_id, with_alert=True) is not None else None
+
+
+def _panel_of(doc: dict, panel_id: str | None, *, with_alert: bool = False) -> dict | None:
+    for panel in doc.get("panels", []):
+        if isinstance(panel, dict) and panel.get("id") == panel_id:
+            if with_alert and not isinstance(panel.get("alert"), dict):
+                return None
+            return panel
+    return None
+
+
+async def _remove_panel_alert(request: Request, rule: RuleRecord, board: DashboardRecord) -> None:
+    """Save the rule's dashboard with the panel's `alert: null` (based on its current version,
+    once more on the next one if another save landed meanwhile) and mark the rule deleted, in
+    one transaction. RuleRefused."""
+    services = _services(request)
+
+    async def also(session: AsyncSession) -> None:
+        await _tombstone(services, session, rule)
+
+    for attempt in range(2):
+        doc = copy.deepcopy(board.spec)
+        panel = _panel_of(doc, rule.panel_id, with_alert=True)
+        if panel is None:  # its alert was taken off meanwhile: nothing left to save
+            async with services.sessionmaker.begin() as session:
+                await lock_first(session)
+                await also(session)
+            return
+        panel["alert"] = None
+        owner_name = await _scope_name(services, board.owner_kind, board.owner_id)
+        try:
+            await save_document(request, board, owner_name, doc, also=also)
+            return
+        except VersionConflict:
+            if attempt:
+                raise RuleRefused(409, "rule_changed", REVIEW_CHANGED) from None
+        except UnknownDashboard:
+            pass
+        try:
+            board = await services.dashboards.get(board.id)
+        except UnknownDashboard:  # deleted meanwhile: the rule is a page rule now
+            raise RuleRefused(409, "rule_changed", REVIEW_CHANGED) from None
+    raise RuleRefused(409, "rule_changed", REVIEW_CHANGED)
+
+
+async def _scope_name(services: MonitoringServices, kind: ScopeKind, id: str) -> str:
+    """The owner's name as M2's records write it (empty when it is gone)."""
+    try:
+        if kind == "project":
+            return (await services.projects.get(id)).name
+        return (await services.groups.get(id)).name
+    except (UnknownProject, UnknownGroup):
+        return ""
+
+
 @router.delete("/rules/{id}")
 async def delete_rule(id: str, token: str, request: Request) -> RuleChangeOut:
+    """Delete the rule as its review showed. A panel's rule is part of its dashboard: the
+    dashboard is saved with that panel's alert taken off (`dashboard_save`), and the rule goes."""
     services = _services(request)
     rule = await _live_rule(services, id)
-    if (refusal := await _panel_refusal(services, rule)) is not None:
-        # A panel's alert is part of its dashboard: removing it there saves the dashboard.
-        raise refusal.http()
     review = await _delete_review(request, rule)
     if review.token != token:
         raise RuleRefused(409, "rule_changed", REVIEW_CHANGED).http()
@@ -1125,24 +1209,29 @@ async def delete_rule(id: str, token: str, request: Request) -> RuleChangeOut:
             "loki_removals": [r.project_name for r in review.loki_removals],
         },
     )
+    board = await _panel_dashboard(services, rule)
     try:
-        async with services.sessionmaker.begin() as session:
-            await lock_first(session)
-            current = await services.alerts.get_rule(id)
-            if current.deleted_at is not None or current.version != rule.version:
-                raise RuleRefused(409, "rule_changed", REVIEW_CHANGED)
-            await services.alerts.tombstone_rule(id, session=session)
-            await services.alerts.put_targets(id, [], session=session)
+        if board is not None:
+            await _remove_panel_alert(request, rule, board)
+        else:
+            async with services.sessionmaker.begin() as session:
+                await lock_first(session)
+                await _tombstone(services, session, rule)
     except RuleRefused as exc:
         await finish_change(request, record, False, exc.message)
         raise exc.http() from None
     except UnknownRule:
         await finish_change(request, record, False, RULE_GONE)
         raise RuleRefused(404, "not_found", RULE_GONE).http() from None
+    except HTTPException as exc:  # the dashboard's own record couldn't be written
+        await finish_change(request, record, False, NOT_REMOVED)
+        raise exc from None
     except Exception:
         await finish_change(request, record, False, NOT_REMOVED)
         raise
     changes = await _finish_with_targets(request, record, id, changed=False)
+    if board is not None:
+        await reconcile_alerts(services, board.id)
     try:
         left = await services.alerts.get_rule(id)
     except UnknownRule:
@@ -1150,6 +1239,196 @@ async def delete_rule(id: str, token: str, request: Request) -> RuleChangeOut:
     else:
         out = await _rule_out(services, left, await _names(services))
     return RuleChangeOut(rule=out, changes=[_change_out(c) for c in changes])
+
+
+# -- routes: panels ----------------------------------------------------------------------------
+
+
+def _alert_of(rule: RuleRecord, ref: str) -> dict:
+    """The panel alert that says what the rule says, reading the query `ref`."""
+    cond = rule.condition
+    every = next((k for k, v in EVERY_CHOICES.items() if v == cond.every_seconds), "1m")
+    return {
+        "name": rule.name,
+        "query": ref,
+        "of": cond.of,
+        "op": cond.op,
+        "threshold": cond.threshold,
+        "for": duration_text(cond.for_seconds),
+        "every": every,
+        "severity": rule.severity,
+        "message": rule.message,
+        "notify": list(rule.contact_point_ids),
+        "engine": rule.engine,
+        "channel": (
+            {"receiver": rule.channel.receiver, "labels": dict(rule.channel.labels)}
+            if rule.channel is not None
+            else None
+        ),
+    }
+
+
+def _query_ref(doc: dict, panel: dict, rule: RuleRecord) -> str:
+    """The ref of the panel's query that reads what the rule reads (the same source and the same
+    text, as written or once its variables and built-ins are placed); else the rule's query is
+    added to the panel as the next free ref. RuleRefused when the panel has no room."""
+    queries: list = panel.setdefault("queries", [])
+    wanted = {"type": rule.source_type, "id": rule.source_id}
+    defaults = variable_defaults(doc.get("variables", []))
+    for query in queries:
+        if not isinstance(query, dict) or (query.get("source") or {}) != wanted:
+            continue
+        text = query.get("expr")
+        if text == rule.expr:
+            return query["ref"]
+        try:
+            if substitute(text, defaults, rule.condition.every_seconds) == rule.expr:
+                return query["ref"]
+        except (RuleExprError, TypeError):
+            continue
+    if len(queries) >= MAX_QUERIES:
+        raise _invalid(QUERIES_FULL, "panel")
+    used = {q.get("ref") for q in queries if isinstance(q, dict)}
+    ref = next(c for c in string.ascii_uppercase if c not in used)
+    queries.append(
+        {"ref": ref, "source": dict(wanted), "expr": rule.expr, "legend": "", "hidden": False}
+    )
+    return ref
+
+
+@router.post("/rules/{id}/attach")
+async def attach_rule(id: str, body: AttachIn, request: Request) -> AttachOut:
+    """Make a page rule the alert of a panel of its own project's or group's dashboard: the
+    dashboard is saved (as the editor saves it, from `base_version`) with the alert on that panel,
+    and the rule becomes the panel's, in one transaction."""
+    services = _services(request)
+    rule = await _live_rule(services, id)
+    try:
+        if rule.origin != "page":
+            raise await _panel_refusal(services, rule) or RuleRefused(409, "panel_rule", RULE_GONE)
+    except RuleRefused as exc:
+        raise exc.http() from None
+    if parse_ready_id(body.dashboard_id) is not None:
+        raise dashboard_error(409, "read_only", READ_ONLY)
+    try:
+        board = await services.dashboards.get(body.dashboard_id)
+    except UnknownDashboard:
+        raise dashboard_error(404, "not_found", DASHBOARD_GONE) from None
+    if board.version != body.base_version:
+        conflict = VersionConflict(board.version)
+        raise dashboard_error(409, "version_conflict", str(conflict), current_version=board.version)
+    doc = copy.deepcopy(board.spec)
+    try:
+        if (board.owner_kind, board.owner_id) != (rule.scope_kind, rule.scope_id):
+            raise _invalid(OTHER_OWNER, "panel")
+        panel = _panel_of(doc, body.panel_id)
+        if panel is None:
+            raise _invalid(PANEL_GONE, "panel")
+        kind = panel.get("type")
+        if kind not in ALERT_PANEL_TYPES:
+            raise _invalid(NO_ALERT_HERE.format(kind=kind), "panel")
+        if panel.get("alert") is not None:
+            raise _invalid(HAS_ALERT, "panel")
+        panel["alert"] = _alert_of(rule, _query_ref(doc, panel, rule))
+    except RuleRefused as exc:
+        raise exc.http() from None
+    owner = await owner_of(services, board.owner_kind, board.owner_id)
+    doc = check_document(doc, owner)
+    await check_notify(services, doc)
+    panel_title = panel.get("title") or PANEL_GONE_TITLE
+    record = await begin_change(
+        request,
+        "alert_rule_change",
+        "alert_rule",
+        rule.name,
+        {
+            "scope": rule.scope_kind,
+            "scope_name": owner.name,
+            "attached_to": {"dashboard": board.title, "panel": panel_title},
+        },
+    )
+
+    async def also(session: AsyncSession) -> None:
+        row = await session.get(AlertRuleRow, id)
+        if row is None or row.deleted_at is not None:
+            raise RuleRefused(404, "not_found", RULE_GONE)
+        if row.version != rule.version:
+            raise _stale(row.version)
+        if row.origin != "page":
+            raise RuleRefused(409, "panel_rule", PANEL_RULE.format(panel="", dashboard=""))
+        await services.alerts.attach_rule(id, board.id, body.panel_id, session=session)
+
+    try:
+        saved = await save_document(request, board, owner.name, doc, also=also)
+    except RuleRefused as exc:
+        if exc.code == "panel_rule":
+            exc = await _panel_refusal(services, await services.alerts.get_rule(id)) or exc
+        await finish_change(request, record, False, exc.message)
+        raise exc.http() from None
+    except VersionConflict as exc:
+        await finish_change(request, record, False, str(exc))
+        raise dashboard_error(
+            409, "version_conflict", str(exc), current_version=exc.current
+        ) from None
+    except NameTaken as exc:
+        await finish_change(request, record, False, str(exc))
+        raise dashboard_error(409, "name_taken", str(exc)) from None
+    except UnknownDashboard:
+        await finish_change(request, record, False, DASHBOARD_GONE)
+        raise dashboard_error(404, "not_found", DASHBOARD_GONE) from None
+    except Exception:
+        await finish_change(request, record, False, NOT_SAVED)
+        raise
+    await finish_change(request, record, True)
+    changes = await reconcile_alerts(services, saved.id)
+    attached = await services.alerts.get_rule(id)
+    return AttachOut(
+        dashboard=dashboard_out(saved, owner.name, changes),
+        rule=await _rule_out(services, attached, await _names(services)),
+    )
+
+
+async def _state_since(
+    services: MonitoringServices, rule: RuleRecord, targets: list[TargetRecord], state: TargetState
+) -> datetime | None:
+    """Since when the rule shows `state`: the earliest of its targets that show it (for firing,
+    the earliest firing series)."""
+    if state == "paused":
+        return rule.updated_at
+    staying = [t for t in targets if not t.leaving] or targets
+    times: list[datetime] = []
+    for target in staying:
+        if shown_state(target, rule) != state:
+            continue
+        if state == "firing":
+            firing = [
+                i.fired_at or i.active_since
+                for i in await services.alerts.instances(target.id)
+                if i.state == "firing"
+            ]
+            times += firing or [target.state_since]
+        else:
+            times.append(target.state_since)
+    return min(times, default=None)
+
+
+@router.get("/panel-states")
+async def panel_states(dashboard_id: str, request: Request) -> dict[str, PanelAlertStateOut]:
+    """The state of each panel's alert on the dashboard, by panel id: the worst of its targets."""
+    services = _services(request)
+    out: dict[str, PanelAlertStateOut] = {}
+    for rule in await services.alerts.rules_for_dashboard(dashboard_id):
+        if rule.panel_id is None or rule.panel_id in out:
+            continue
+        targets = await services.alerts.targets(rule_id=rule.id)
+        state = _rule_state(rule, targets)
+        out[rule.panel_id] = PanelAlertStateOut(
+            rule_id=rule.id,
+            name=rule.name,
+            state=state,
+            since=await _state_since(services, rule, targets, state),
+        )
+    return out
 
 
 # -- routes: the overview ----------------------------------------------------------------------

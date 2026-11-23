@@ -18,30 +18,51 @@ carries another project's filter, and a rule never reads another project's sourc
 - a deleted rule is purged once its last target is gone.
 
 Reconciles of one rule never overlap (a lock per rule), so the last one to start reads the newest
-projects and links; the write checks the rule didn't change in between (under `lock_first`)."""
+projects and links; the write checks the rule didn't change in between (under `lock_first`).
+
+`reconcile_dashboard` keeps the rules of a dashboard's panels in step with its document: a panel
+with an alert has its rule (created or updated from the document), a panel whose alert was taken
+off loses its rule, and a rule whose panel (or whole dashboard) is gone stays as a page rule. The
+dashboard write and the rule writes are separate transactions; the reconcile is idempotent and
+runs again at every start (`reconcile_all`), so a crash in between converges."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Iterable, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from omnikrux.monitoring.alerts.engine import no_source_copy
-from omnikrux.monitoring.alerts.rule_expr import condition_expr, eval_expr
+from omnikrux.monitoring.alerts.rule_expr import (
+    RuleExprError,
+    condition_expr,
+    eval_expr,
+    parse_duration,
+    rule_expr,
+)
 from omnikrux.monitoring.alerts.store import (
     RuleRecord,
+    RuleSpec,
     TargetRecord,
     TargetSpec,
     UnknownRule,
     UnknownTarget,
 )
-from omnikrux.monitoring.alerts.types import ScopeKind, ToolKind
-from omnikrux.monitoring.models import AlertRuleRow, ProjectRecord, lock_first, now
+from omnikrux.monitoring.alerts.types import (
+    EVERY_CHOICES,
+    ChannelPick,
+    Condition,
+    ScopeKind,
+    ToolKind,
+)
+from omnikrux.monitoring.dashboards.store import UnknownDashboard
+from omnikrux.monitoring.models import AlertRuleRow, DashboardRow, ProjectRecord, lock_first, now
 from omnikrux.monitoring.projects.types import (
     Link,
     Project,
@@ -54,6 +75,7 @@ from omnikrux.monitoring.sources.connector import AlertingCapability
 from omnikrux.monitoring.sources.types import QUERYABLE_TYPES, SourceConfig
 
 if TYPE_CHECKING:
+    from omnikrux.clusters.registry import ClusterRegistry
     from omnikrux.monitoring.services import MonitoringServices
 
 log = logging.getLogger(__name__)
@@ -62,6 +84,8 @@ AlertChangeKind = Literal["review", "written", "failed", "removed"]
 
 UNKNOWN_CAPABILITY = "Couldn't check whether {source} can run rules: {message}"
 TOOL_FAILED = "OmniKrux couldn't bring this rule up to date in the tool. Try again."
+CONTACT_POINT_GONE = "That contact point no longer exists. Pick another."
+LOKI_REMOVAL_FAILED = 'Couldn\'t remove the rule "{name}" from Loki: {message} Nothing was deleted.'
 GONE_PROJECT = "A removed project"
 WHERE: dict[str, str] = {
     "prometheus_rule": "in Prometheus",
@@ -107,6 +131,127 @@ class AlertChange:
     project_name: str
     kind: AlertChangeKind
     message: str | None
+
+
+class AlertChangeOut(BaseModel):
+    """An `AlertChange` in an answer (a rule's change, a dashboard's save)."""
+
+    target_id: str
+    rule_id: str
+    rule_name: str
+    project_id: str
+    project_name: str
+    kind: AlertChangeKind
+    message: str | None
+
+
+def change_out(change: AlertChange) -> AlertChangeOut:
+    return AlertChangeOut(
+        target_id=change.target_id,
+        rule_id=change.rule_id,
+        rule_name=change.rule_name,
+        project_id=change.project_id,
+        project_name=change.project_name,
+        kind=change.kind,
+        message=change.message,
+    )
+
+
+class LokiRemovalFailed(Exception):
+    """A rule couldn't be removed from a Loki ruler; the owner's delete stops."""
+
+    def __init__(self, name: str, message: str) -> None:
+        super().__init__(LOKI_REMOVAL_FAILED.format(name=name, message=message))
+        self.message = str(self)
+
+
+def in_loki(target: TargetRecord) -> bool:
+    """Whether something of the target is (or may be) in a Loki ruler."""
+    if target.tool_object is not None:
+        return target.tool_object.kind == "loki_ruler"
+    return target.tool_kind == "loki_ruler" and target.applied_version is not None
+
+
+def in_cluster(target: TargetRecord) -> bool:
+    """Whether the target is applied in a cluster (a PrometheusRule)."""
+    return target.tool_kind == "prometheus_rule" and target.applied_version is not None
+
+
+async def cluster_name(
+    services: MonitoringServices, registry: ClusterRegistry, target: TargetRecord
+) -> str | None:
+    """The name of the cluster that holds the target's object (or its source's cluster); None
+    when OmniKrux doesn't know it."""
+    cluster_id = target.tool_object.cluster_id if target.tool_object is not None else None
+    if cluster_id is None and target.source_id is not None:
+        try:
+            source = await services.sources.get(target.source_id)
+        except KeyError:
+            source = None
+        if source is not None and source.cluster is not None:
+            cluster_id = source.cluster.cluster_id
+    if cluster_id is None:
+        return None
+    try:
+        return (await registry.get(cluster_id)).name
+    except KeyError:
+        return None
+
+
+def panel_rule_spec(
+    doc: dict,
+    panel: dict,
+    *,
+    owner_kind: ScopeKind,
+    owner_id: str,
+    dashboard_id: str,
+    contact_points: Iterable[str],
+) -> RuleSpec:
+    """The rule a panel's alert says, scoped to the dashboard's owner and reading the source of
+    the alert's query. Contact points that no longer exist are left out. RuleExprError when the
+    alert's query can't be run as written (a saved document never has one)."""
+    alert = panel["alert"]
+    query = next((q for q in panel.get("queries", []) if q.get("ref") == alert.get("query")), None)
+    if query is None:
+        raise RuleExprError("Use the ref of one of this panel's queries, like A.")
+    source = query.get("source") or {}
+    source_type = source.get("type")
+    if source_type not in ("prometheus", "loki"):
+        raise RuleExprError("The alert's query has no source type.")
+    every = EVERY_CHOICES.get(alert.get("every") or "1m", 60)
+    try:
+        for_seconds = parse_duration(alert.get("for") or "5m")
+    except ValueError:
+        raise RuleExprError("Use a duration from 0s to 24h, like 5m.") from None
+    known = set(contact_points)
+    channel = alert.get("channel")
+    return RuleSpec(
+        name=alert["name"],
+        scope_kind=owner_kind,
+        scope_id=owner_id,
+        source_type=source_type,
+        source_id=source.get("id") if owner_kind == "project" else None,
+        expr=rule_expr(doc, panel),
+        condition=Condition(
+            of=alert.get("of") or "each",
+            op=alert["op"],
+            threshold=float(alert["threshold"]),
+            for_seconds=for_seconds,
+            every_seconds=every,
+        ),
+        severity=alert.get("severity") or "warning",
+        message=alert.get("message") or "",
+        contact_point_ids=tuple(id for id in alert.get("notify") or () if id in known),
+        engine=alert.get("engine") or "omnikrux",
+        channel=(
+            ChannelPick(receiver=channel["receiver"], labels=dict(channel.get("labels") or {}))
+            if isinstance(channel, dict)
+            else None
+        ),
+        origin="panel",
+        dashboard_id=dashboard_id,
+        panel_id=panel["id"],
+    )
 
 
 class ToolSync(Protocol):
@@ -468,6 +613,170 @@ class AlertSync:
             message=message,
         )
 
+    # -- panel alerts --------------------------------------------------------------------------
+
+    def dashboard_lock(self, dashboard_id: str):
+        """Held while the rules of a dashboard's panels are worked out and written, so two
+        reconciles of one dashboard never both create a panel's rule."""
+        return self._lock(f"dashboard:{dashboard_id}")
+
+    async def reconcile_dashboard(
+        self, dashboard_id: str, *, deleted: bool = False, memo: Memo | None = None
+    ) -> list[AlertChange]:
+        """Bring the rules of the dashboard's panels in line with its document as stored now:
+        each panel with an alert has its rule (origin "panel", scoped to the dashboard's owner,
+        the query from `rule_expr`), created or updated, then reconciled; a rule whose panel has
+        no alert any more is deleted (the dashboard's save was the ask); a rule whose panel is
+        gone, or whose dashboard is deleted (`deleted`, or no longer found), is detached and
+        runs on as a page rule. Idempotent."""
+        services = self._services
+        alerts = services.alerts
+        changes: list[AlertChange] = []
+        async with self.dashboard_lock(dashboard_id):
+            record = None
+            if not deleted:
+                try:
+                    record = await services.dashboards.get(dashboard_id)
+                except UnknownDashboard:
+                    record = None
+            rules: dict[str, RuleRecord] = {}
+            extra: list[RuleRecord] = []  # a second rule for one panel (never made; kept safe)
+            for rule in await alerts.rules_for_dashboard(dashboard_id):
+                if rule.panel_id is None or rule.panel_id in rules:
+                    extra.append(rule)
+                else:
+                    rules[rule.panel_id] = rule
+            panels: dict[str, dict] = {}
+            if record is not None:
+                panels = {
+                    p["id"]: p
+                    for p in record.spec.get("panels", [])
+                    if isinstance(p, dict) and isinstance(p.get("id"), str)
+                }
+            touched: list[tuple[str, bool]] = []
+            for rule in extra + [r for pid, r in rules.items() if pid not in panels]:
+                if await self._detach(rule.id):
+                    touched.append((rule.id, False))
+            for panel_id, rule in rules.items():
+                panel = panels.get(panel_id)
+                taken_off = panel is not None and panel.get("alert") is None
+                if taken_off and await self._remove_panel_rule(rule.id):
+                    touched.append((rule.id, False))
+            if record is not None:
+                known = [cp.id for cp in await services.contact_points.list()]
+                for panel in panels.values():
+                    if not isinstance(panel.get("alert"), dict):
+                        continue
+                    try:
+                        spec = panel_rule_spec(
+                            record.spec,
+                            panel,
+                            owner_kind=record.owner_kind,
+                            owner_id=record.owner_id,
+                            dashboard_id=dashboard_id,
+                            contact_points=known,
+                        )
+                    except (RuleExprError, KeyError, TypeError, ValueError) as exc:
+                        log.warning(
+                            "The alert of a panel of dashboard %s can't run (%s)",
+                            dashboard_id,
+                            type(exc).__name__,
+                        )
+                        continue
+                    written = await self._upsert_panel_rule(dashboard_id, spec)
+                    if written is not None:
+                        touched.append(written)
+        for rule_id, changed in touched:
+            changes += await self.reconcile_rule(rule_id, changed=changed, memo=memo)
+        return sorted(changes, key=lambda c: (c.project_name.casefold(), c.rule_name, c.target_id))
+
+    async def _detach(self, rule_id: str) -> bool:
+        try:
+            await self._services.alerts.detach_rule(rule_id)
+        except UnknownRule:
+            return False
+        return True
+
+    async def _remove_panel_rule(self, rule_id: str) -> bool:
+        """Mark the rule deleted and its targets leaving (as `DELETE /alerts/rules/{id}` does);
+        its reconcile removes them."""
+        alerts = self._services.alerts
+        async with self._services.sessionmaker.begin() as session:
+            await lock_first(session)
+            row = await session.get(AlertRuleRow, rule_id)
+            if row is None or row.deleted_at is not None:
+                return False
+            await alerts.tombstone_rule(rule_id, session=session)
+            await alerts.put_targets(rule_id, [], session=session)
+        return True
+
+    async def _upsert_panel_rule(
+        self, dashboard_id: str, spec: RuleSpec
+    ) -> tuple[str, bool] | None:
+        """Write the panel's rule (in one transaction that reads it again under the write lock):
+        (its id, whether an existing rule changed), or None when the dashboard went meanwhile."""
+        alerts = self._services.alerts
+        async with self._services.sessionmaker.begin() as session:
+            await lock_first(session)
+            if await session.get(DashboardRow, dashboard_id) is None:
+                return None
+            row = await session.scalar(
+                select(AlertRuleRow)
+                .where(
+                    AlertRuleRow.dashboard_id == dashboard_id,
+                    AlertRuleRow.panel_id == spec.panel_id,
+                    AlertRuleRow.deleted_at.is_(None),
+                )
+                .order_by(AlertRuleRow.created_at, AlertRuleRow.id)
+                .limit(1)
+            )
+            if row is None:
+                created = await alerts.create_rule(spec, session=session)
+                return created.id, False
+            before = row.version
+            updated = await alerts.update_rule(row.id, spec, base_version=None, session=session)
+            return updated.id, updated.version != before
+
+    # -- owners that go away -------------------------------------------------------------------
+
+    async def remove_from_loki(self, targets: Iterable[TargetRecord]) -> None:
+        """Before an owner's delete: remove from its Loki ruler every target that has (or may
+        have) a rule there. LokiRemovalFailed (with the rule's name and why) at the first that
+        can't be removed; the delete then stops."""
+        alerts = self._services.alerts
+        for target in targets:
+            if not in_loki(target):
+                continue
+            try:
+                rule = await alerts.get_rule(target.rule_id)
+            except UnknownRule:
+                continue
+            try:
+                change = await self.tool_sync.after_change(replace(target, leaving=True), rule)
+            except Exception as exc:  # noqa: BLE001 (reported in words; nothing is deleted)
+                log.warning(
+                    "Removing alert target %s from Loki failed (%s)", target.id, type(exc).__name__
+                )
+                raise LokiRemovalFailed(rule.name, TOOL_FAILED) from None
+            if change is not None and change.kind == "failed":
+                raise LokiRemovalFailed(rule.name, change.message or TOOL_FAILED)
+
+    async def cluster_names(
+        self, registry: ClusterRegistry, rule_ids: Iterable[str], project_id: str | None = None
+    ) -> list[str]:
+        """The clusters where those rules are applied (in `project_id` only, when given), by
+        name; an unknown cluster isn't named."""
+        names: set[str] = set()
+        for rule_id in rule_ids:
+            for target in await self._services.alerts.targets(rule_id=rule_id):
+                if project_id is not None and target.project_id != project_id:
+                    continue
+                if in_cluster(target) and (
+                    name := await cluster_name(self._services, registry, target)
+                ):
+                    names.add(name)
+        return sorted(names, key=str.casefold)
+
     async def reconcile_scope(self, kind: ScopeKind, id: str) -> list[AlertChange]:
         """Every rule of that project or group; for a project, also every rule of a group it is
         in (its target there follows its links too)."""
@@ -489,6 +798,24 @@ class AlertSync:
         others carry on, and nothing in here ever stops the app."""
         try:
             memo: Memo = {}
+            # Panel rules first: a dashboard saved (or deleted) just before a stop gets its rules.
+            boards = [d.id for d in await self._services.dashboards.list()]
+            gone = {
+                r.dashboard_id
+                for r in await self._services.alerts.list_rules()
+                if r.dashboard_id is not None and r.dashboard_id not in boards
+            }
+            for dashboard_id in boards + sorted(gone):
+                try:
+                    await self.reconcile_dashboard(
+                        dashboard_id, deleted=dashboard_id in gone, memo=memo
+                    )
+                except Exception as exc:  # noqa: BLE001 (the others carry on; logged by type)
+                    log.warning(
+                        "Bringing the alerts of dashboard %s up to date failed (%s)",
+                        dashboard_id,
+                        type(exc).__name__,
+                    )
             for rule in await self._services.alerts.list_rules(include_deleted=True):
                 try:
                     await self.reconcile_rule(rule.id, memo=memo)

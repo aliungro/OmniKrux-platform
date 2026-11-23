@@ -3,7 +3,9 @@
 A group only lists projects: joining or leaving one never moves a project or changes its links.
 Deleting a project, or a group with dashboards, goes through a review; the delete recomputes it
 in the same transaction and refuses (`ReviewChanged`) when it no longer matches the token the
-user saw. Either delete takes the owner's dashboards and their versions with it. Writes that read
+user saw. Either delete takes the owner's dashboards and their versions with it, and its alert
+rules (for a project, also its targets in group rules); a rule still applied in a cluster blocks
+the delete (`RulesInCluster`) until it is removed there. Writes that read
 what a delete could remove (a link's project and source, a group's members) take the write lock
 first, so a delete can't land between the read and the write."""
 
@@ -20,6 +22,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnikrux.monitoring.alerts.store import AlertStore
 from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.models import (
     GroupMemberRecord,
@@ -43,6 +46,7 @@ from omnikrux.monitoring.projects.types import (
     ProjectDeleteReview,
     ProjectRef,
     ReviewChanged,
+    RulesInCluster,
     SourceDeleteReview,
     SourceRef,
     UnknownGroup,
@@ -134,6 +138,9 @@ class ProjectStore:
 
     def _dashboards(self, dashboards: DashboardStore | None) -> DashboardStore:
         return dashboards if dashboards is not None else DashboardStore(self._sessionmaker)
+
+    def _alerts(self, alerts: AlertStore | None) -> AlertStore:
+        return alerts if alerts is not None else AlertStore(self._sessionmaker)
 
     # -- reading -------------------------------------------------------------------------------
 
@@ -310,7 +317,11 @@ class ProjectStore:
     # -- reviews and deletes -------------------------------------------------------------------
 
     async def _review(
-        self, session: AsyncSession, id: str, dashboards: DashboardStore | None = None
+        self,
+        session: AsyncSession,
+        id: str,
+        dashboards: DashboardStore | None = None,
+        alerts: AlertStore | None = None,
     ) -> ProjectDeleteReview:
         project = await _project_row(session, id)
         linked = set(
@@ -349,6 +360,9 @@ class ProjectStore:
                 .where(GroupMemberRecord.project_id == id)
             )
         ]
+        alert_rules, cluster_rules = await self._alerts(alerts).rule_refs(
+            "project", id, session=session
+        )
         review = ProjectDeleteReview(
             project_id=id,
             name=project.name,
@@ -360,15 +374,20 @@ class ProjectStore:
                 await self._dashboards(dashboards).owned_refs("project", id, session=session)
             ),
             token="",
+            alert_rules=alert_rules,
+            cluster_rules=cluster_rules,
         )
         return _sealed(review)
 
     async def delete_review(
-        self, id: str, dashboards: DashboardStore | None = None
+        self,
+        id: str,
+        dashboards: DashboardStore | None = None,
+        alerts: AlertStore | None = None,
     ) -> ProjectDeleteReview:
         """What deleting the project would do. UnknownProject if it doesn't exist."""
         async with self._sessionmaker() as session:
-            return await self._review(session, id, dashboards)
+            return await self._review(session, id, dashboards, alerts)
 
     async def delete(
         self,
@@ -376,10 +395,13 @@ class ProjectStore:
         token: str,
         sources: SourceStore,
         dashboards: DashboardStore | None = None,
+        alerts: AlertStore | None = None,
     ) -> ProjectDeleteReview:
         """Delete the project, the sources only it used and created, its links, its group
-        memberships and its dashboards with their versions, in one transaction. ReviewChanged
-        (nothing changed) when the review no longer matches `token`."""
+        memberships, its alert rules (its own and its dashboards', with their targets), its
+        targets in group rules and its dashboards with their versions, in one transaction.
+        ReviewChanged (nothing changed) when the review no longer matches `token`;
+        RulesInCluster (nothing changed) while a rule of it is still applied in a cluster."""
         async with self._sessionmaker.begin() as session:
             # Write first: SQLite then holds the write lock, so nothing can change in between.
             locked = await session.scalar(
@@ -390,9 +412,12 @@ class ProjectStore:
             )
             if locked is None:
                 raise UnknownProject(id)
-            review = await self._review(session, id, dashboards)
+            review = await self._review(session, id, dashboards, alerts)
             if review.token != token:
                 raise ReviewChanged()
+            if review.cluster_rules:
+                raise RulesInCluster(review.cluster_rules)
+            await self._alerts(alerts).delete_owned("project", id, session=session)
             await self._dashboards(dashboards).delete_owned("project", id, session=session)
             for source in review.sources_removed:
                 await sources.delete(source.id, session=session)
@@ -455,6 +480,9 @@ class GroupStore:
 
     def _dashboards(self, dashboards: DashboardStore | None) -> DashboardStore:
         return dashboards if dashboards is not None else DashboardStore(self._sessionmaker)
+
+    def _alerts(self, alerts: AlertStore | None) -> AlertStore:
+        return alerts if alerts is not None else AlertStore(self._sessionmaker)
 
     async def _groups(self, session: AsyncSession, ids: Sequence[str] | None) -> list[Group]:
         query = select(GroupRecord)
@@ -527,34 +555,59 @@ class GroupStore:
         return await self.get(id)
 
     async def _review(
-        self, session: AsyncSession, id: str, dashboards: DashboardStore | None
+        self,
+        session: AsyncSession,
+        id: str,
+        dashboards: DashboardStore | None,
+        alerts: AlertStore | None = None,
     ) -> GroupDeleteReview:
         name = await session.scalar(select(GroupRecord.name).where(GroupRecord.id == id))
         if name is None:
             raise UnknownGroup(id)
         refs = await self._dashboards(dashboards).owned_refs("group", id, session=session)
-        return _sealed(GroupDeleteReview(id, name, tuple(refs), token=""))
+        alert_rules, cluster_rules = await self._alerts(alerts).rule_refs(
+            "group", id, session=session
+        )
+        return _sealed(
+            GroupDeleteReview(
+                id,
+                name,
+                tuple(refs),
+                token="",
+                alert_rules=alert_rules,
+                cluster_rules=cluster_rules,
+            )
+        )
 
     async def delete_review(
-        self, id: str, dashboards: DashboardStore | None = None
+        self, id: str, dashboards: DashboardStore | None = None, alerts: AlertStore | None = None
     ) -> GroupDeleteReview:
-        """What deleting the group would do: the dashboards it takes. UnknownGroup."""
+        """What deleting the group would do: the dashboards and alert rules it takes.
+        UnknownGroup."""
         async with self._sessionmaker() as session:
-            return await self._review(session, id, dashboards)
+            return await self._review(session, id, dashboards, alerts)
 
     async def delete(
-        self, id: str, token: str | None = None, dashboards: DashboardStore | None = None
+        self,
+        id: str,
+        token: str | None = None,
+        dashboards: DashboardStore | None = None,
+        alerts: AlertStore | None = None,
     ) -> GroupDeleteReview:
-        """Remove the group, its member list and its dashboards with their versions, in one
-        transaction; the projects stay as they are. A group with dashboards needs the token of a
-        review that still matches; one without deletes without a token (a token given must
-        still match). UnknownGroup; ReviewChanged (nothing changed)."""
+        """Remove the group, its member list, its alert rules (its own and its dashboards', with
+        their targets) and its dashboards with their versions, in one transaction; the projects
+        stay as they are. A group with dashboards or alert rules needs the token of a review
+        that still matches; one without deletes without a token (a token given must still
+        match). UnknownGroup; ReviewChanged, RulesInCluster (nothing changed)."""
         async with self._sessionmaker.begin() as session:
             # Write first: nothing can change between the recomputed review and the delete.
             await lock_first(session)
-            review = await self._review(session, id, dashboards)
+            review = await self._review(session, id, dashboards, alerts)
             if not review.accepts(token):
                 raise ReviewChanged()
+            if review.cluster_rules:
+                raise RulesInCluster(review.cluster_rules)
+            await self._alerts(alerts).delete_owned("group", id, session=session)
             await self._dashboards(dashboards).delete_owned("group", id, session=session)
             await session.execute(delete(GroupMemberRecord).where(GroupMemberRecord.group_id == id))
             await session.execute(delete(GroupRecord).where(GroupRecord.id == id))

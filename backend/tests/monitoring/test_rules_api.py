@@ -376,9 +376,12 @@ async def test_panel_rules_are_changed_on_their_panel(monitoring_app, linked_pro
     assert refusal(put) == (409, "panel_rule", words)
     review = (await http.get(f"{RULES}/{rule.id}/delete-review")).json()
     assert review["panel"]["panel_title"] == "p95"
+    # Deleting it goes through its dashboard (Task 9, test_panel_alerts.py); this panel's
+    # document carries no alert, so only the rule goes.
     gone = await http.delete(f"{RULES}/{rule.id}", params={"token": review["token"]})
-    assert refusal(gone) == (409, "panel_rule", words)
-    assert (await http.get(f"{RULES}/{rule.id}")).json()["version"] == 1
+    assert gone.status_code == 200, gone.text
+    assert gone.json()["rule"] is None
+    assert (await http.get(f"{RULES}/{rule.id}")).status_code == 404
 
 
 async def test_pause_is_for_omnikrux_rules_only(monitoring_app, linked_project):

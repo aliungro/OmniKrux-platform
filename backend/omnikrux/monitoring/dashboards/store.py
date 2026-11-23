@@ -401,12 +401,18 @@ class DashboardStore:
             updated_at=moment,
         )
 
-    async def save(self, id: str, base_version: int, spec: dict) -> DashboardRecord:
+    async def save(
+        self, id: str, base_version: int, spec: dict, *, session: AsyncSession | None = None
+    ) -> DashboardRecord:
         """Save `spec` as the next version when the dashboard is still at `base_version`.
-        UnknownDashboard, VersionConflict (nothing changed), NameTaken."""
-        async with self._sessionmaker.begin() as session:
-            await lock_first(session)
+        UnknownDashboard, VersionConflict (nothing changed), NameTaken. With `session` (a
+        transaction that already holds the write lock), the save is part of the caller's
+        transaction and commits with it."""
+        if session is not None:
             return await self._advance(session, id, base_version, spec, "saved")
+        async with self._sessionmaker.begin() as own:
+            await lock_first(own)
+            return await self._advance(own, id, base_version, spec, "saved")
 
     async def restore(self, id: str, version: int, base_version: int) -> DashboardRecord:
         """Save an earlier version's document as the next version when the dashboard is still at
