@@ -7,11 +7,15 @@ import pytest
 from omnikrux.monitoring.alerts.silences import (
     BAD_PATTERN,
     ENDS_BEFORE_START,
+    LONG_PATTERN,
+    MAX_MATCHED,
     NO_MATCHERS,
+    SLOW_PATTERN,
     Silence,
     SilenceInvalid,
     UnknownSilence,
     matches,
+    nested_repetition,
     silenced_by,
 )
 from omnikrux.monitoring.models import now
@@ -19,6 +23,7 @@ from omnikrux.monitoring.projects.types import Matcher
 
 T0 = datetime(2026, 11, 19, 10, 0, tzinfo=UTC)
 MIN = timedelta(minutes=1)
+DAY = timedelta(days=1)
 LABELS = {"alertname": "API latency high", "route": "/a", "severity": "warning"}
 
 
@@ -120,3 +125,68 @@ def _store(stores):
     from omnikrux.monitoring.alerts.silences import SilenceStore
 
     return SilenceStore(stores.sessionmaker)
+
+
+@pytest.mark.parametrize(
+    "pattern, slow",
+    [
+        ("(a|a)*", True),
+        ("(a+)+", True),
+        ("(?:a*)*", True),
+        ("((a+))+", True),
+        ("(a|b){2,}", True),
+        ("(x(a|b))+", True),
+        ("(a{2})+", True),
+        ("API.*", False),
+        ("[a-z]+", False),
+        ("(foo|bar)", False),
+        ("foo|bar", False),
+        ("(ab)*", False),
+        ("(a+)?", False),
+        ("[(a+)]+", False),
+        (r"\(a+\)+", False),
+        ("(a{1})+", False),
+    ],
+)
+def test_nested_repetition_is_found(pattern, slow):
+    assert nested_repetition(pattern) is slow
+
+
+async def test_create_refuses_patterns_that_could_stall(stores):
+    store = _store(stores)
+    for value, copy in (
+        ("(a|a)*", SLOW_PATTERN),
+        ("(a+)+b", SLOW_PATTERN),
+        ("a" * 201, LONG_PATTERN.format(label="route")),
+        ("(", BAD_PATTERN.format(label="route")),
+    ):
+        with pytest.raises(SilenceInvalid) as refused:
+            await store.create((Matcher("route", "!~", value),), T0, T0 + MIN, "", "local")
+        assert refused.value.message == copy
+    assert SLOW_PATTERN == "This pattern could take too long to match. Simplify it."
+    assert LONG_PATTERN.format(label="route") == (
+        "The pattern for route is longer than 200 characters. Shorten it."
+    )
+    kept = await store.create((Matcher("route", "=~", "a" * 200),), T0, T0 + MIN, "", "local")
+    assert kept.matchers[0].value == "a" * 200
+
+
+def test_patterns_run_on_bounded_values_and_unusable_ones_never_hold():
+    long_value = "x" * (MAX_MATCHED + 500)
+    assert matches(silence(Matcher("route", "=~", "x+")), {"route": long_value})
+    assert not matches(silence(Matcher("route", "=~", "(a+)+")), {"route": "aaaa"})
+    assert not matches(silence(Matcher("route", "!~", "(a|a)*")), {"route": "b"})
+
+
+async def test_prune_drops_silences_ended_a_week_ago(stores):
+    store = _store(stores)
+    moment = now()
+    old = await store.create((Matcher("a", "=", "1"),), moment - 9 * DAY, moment - 8 * DAY, "", "x")
+    recent = await store.create((Matcher("a", "=", "2"),), moment - 3 * DAY, moment - DAY, "", "x")
+    expired = await store.create((Matcher("a", "=", "3"),), moment - 9 * DAY, moment + DAY, "", "x")
+    await store.expire(expired.id, moment - 8 * DAY)
+    live = await store.create((Matcher("a", "=", "4"),), moment - DAY, moment + DAY, "", "x")
+    assert await stores.alerts.prune(moment) == 2
+    left = await store.list(include_expired_since=moment - 30 * DAY)
+    assert sorted(s.id for s in left) == sorted([recent.id, live.id])
+    assert old.id not in {s.id for s in left}

@@ -4,20 +4,26 @@ reads, the states it stores, when it tells, and how it fails, overlaps, restarts
 import asyncio
 import logging
 
+from sqlalchemy import delete
+
 from omnikrux.monitoring.alerts.engine import (
     NOTE_BEHIND,
     NOTE_DISABLED,
     NOTE_ON_TIME,
+    TOO_MANY_SERIES,
     AlertEngine,
     engine_note,
 )
 from omnikrux.monitoring.alerts.rule_expr import LOG_QUERY_COPY
 from omnikrux.monitoring.alerts.store import RuleSpec, TargetSpec
 from omnikrux.monitoring.alerts.types import Condition
+from omnikrux.monitoring.models import ProjectRecord
+from omnikrux.monitoring.query.series import MAX_SERIES
 from tests.monitoring.alert_env import (
     HOUR,
     MIN,
     NAME,
+    SEC,
     SENT,
     T0,
     closed_port_url,
@@ -36,8 +42,9 @@ async def test_firing_reaches_the_webhook_once(engine_env):
     env.prom.results[SENT] = vector(({"route": "/a"}, 0.4))
     rule, _ = await env.add_rule()
 
-    await env.tick(T0)
-    assert (await env.target(rule)).state == "pending"
+    for minute in range(5):  # checked every minute, as the loop does
+        await env.tick(T0 + minute * MIN)
+        assert (await env.target(rule)).state == "pending"
     assert env.webhook.requests == []
     await env.tick(T0 + 5 * MIN)
     assert [b["status"] for b in env.webhook.bodies()] == ["firing"]
@@ -46,8 +53,8 @@ async def test_firing_reaches_the_webhook_once(engine_env):
 
     # Every query went through the project's filter, at the time of the check.
     sent = env.queries()
-    assert [q.params["query"] for q in sent] == [[SENT]] * 3
-    assert float(sent[1].params["time"][0]) == (T0 + 5 * MIN).timestamp()
+    assert [q.params["query"] for q in sent] == [[SENT]] * 7
+    assert float(sent[5].params["time"][0]) == (T0 + 5 * MIN).timestamp()
 
     [body] = env.webhook.bodies()
     assert body["rule"] == NAME and body["project"] == "Shop" and body["severity"] == "warning"
@@ -391,3 +398,58 @@ async def test_the_loop_survives_exceptions_and_stops_cleanly(engine_env, caplog
     seen = len(calls)
     await asyncio.sleep(0.05)
     assert len(calls) == seen  # stopped: no more ticks
+
+
+async def test_a_resumed_rule_starts_its_pending_timer_over(engine_env):
+    env = engine_env
+    env.prom.results[SENT] = vector(({"route": "/a"}, 0.4))
+    rule, _ = await env.add_rule()  # 5 minutes
+    await env.tick(T0)
+    await env.services.alerts.set_paused(rule.id, True)
+    assert (await env.tick(T0 + 30 * MIN)).evaluated == 0  # paused: not checked
+    await env.services.alerts.set_paused(rule.id, False)
+    await env.tick(T0 + HOUR)
+    [instance] = await env.instances(rule)
+    assert instance.state == "pending" and instance.active_since == T0 + HOUR
+    assert (await env.target(rule)).state == "pending"
+    assert env.webhook.requests == []  # nobody checked while it was paused: nothing fired
+
+
+async def test_a_cut_off_answer_is_an_error(engine_env):
+    env = engine_env
+    env.prom.results[SENT] = vector(({"route": "/a"}, 0.4))
+    rule, _ = await env.add_rule(for_seconds=0)
+    await env.tick(T0)
+    # More series than a query keeps: the first ones come back, /a is cut off.
+    many = [({"route": f"/r{i:04d}"}, 0.1) for i in range(MAX_SERIES)] + [({"route": "/a"}, 0.4)]
+    env.prom.results[SENT] = vector(*many)
+    await env.tick(T0 + MIN)
+    await env.tick(T0 + 2 * MIN)
+    target = await env.target(rule)
+    assert (target.state, target.message, target.failures) == ("error", TOO_MANY_SERIES, 2)
+    assert target.message == (
+        "This rule matches more than 2000 series, so OmniKrux can't check all of them. "
+        "Narrow the query with a label, or alert on the total."
+    )
+    [instance] = await env.instances(rule)
+    assert instance.state == "firing" and instance.labels["route"] == "/a"
+    assert [b["status"] for b in env.webhook.bodies()] == ["firing"]  # nothing resolved
+    assert kinds(await env.services.alerts.history(rule_id=rule.id)) == ["firing"]
+
+
+async def test_an_orphaned_target_is_held_and_not_behind(engine_env):
+    env = engine_env
+    rule, _ = await env.add_rule()
+    await env.tick(T0)
+    # The project goes without its targets (until the fan-out removes them).
+    async with env.services.sessionmaker.begin() as session:
+        await session.execute(delete(ProjectRecord).where(ProjectRecord.id == env.project_id))
+    asked = len(env.queries())
+    await env.engine.tick(T0 + 10 * MIN)  # it can't be checked and is held
+    report = await env.engine.tick(T0 + 10 * MIN + 30 * SEC)
+    assert (report.evaluated, report.behind) == (0, 0)
+    assert env.engine.status(T0).behind == 0
+    report = await env.engine.tick(T0 + 12 * MIN)  # tried again after the hold, held again
+    assert (report.evaluated, report.behind) == (1, 0)
+    assert len(env.queries()) == asked  # it never reached the source
+    assert (await env.target(rule)).last_eval_at == T0

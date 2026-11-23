@@ -41,6 +41,7 @@ from omnikrux.monitoring.models import (
     AlertTargetRow,
     DashboardRow,
     DeliveryRow,
+    SilenceRow,
     lock_first,
     now,
     utc,
@@ -862,8 +863,8 @@ class AlertStore:
 
     async def prune(self, now: datetime) -> int:
         """Drop history older than 7 days, then the oldest beyond 500 per target and beyond
-        20 000 in all; drop deliveries older than 7 days, then the oldest beyond 5000. How many
-        rows went."""
+        20 000 in all; drop deliveries older than 7 days, then the oldest beyond 5000; drop
+        silences that ended (or were expired) more than 7 days ago. How many rows went."""
         cutoff = now - KEEP_FOR
         removed = 0
         async with self._sessionmaker.begin() as session:
@@ -913,6 +914,15 @@ class AlertStore:
                             ),
                             DELIVERIES_TOTAL,
                         )
+                    )
+                ),
+            )
+            removed += await _delete_count(
+                session,
+                delete(SilenceRow).where(
+                    or_(
+                        SilenceRow.expired_at < cutoff,
+                        SilenceRow.expired_at.is_(None) & (SilenceRow.ends_at < cutoff),
                     )
                 ),
             )

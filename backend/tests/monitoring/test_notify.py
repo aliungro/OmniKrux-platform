@@ -1,12 +1,9 @@
 """The notifier: one grouped message per rule and check, repeats, silences, failed and slow
 deliveries, and incident keys that pair up."""
 
-import asyncio
-import time
-
 from omnikrux.monitoring.alerts.notify import REPEAT_SECONDS, dedup_key
 from omnikrux.monitoring.projects.types import Matcher
-from tests.monitoring.alert_env import HOUR, MIN, NAME, SENT, T0, vector
+from tests.monitoring.alert_env import HOUR, MIN, NAME, SENT, T0, until, vector
 
 ROUTING_KEY = "R0utingKeySECRET8abcdefghijklmno"
 
@@ -100,11 +97,13 @@ async def test_a_slow_contact_point_does_not_delay_checks(engine_env):
     env.webhook.mode = "hang"  # the receiver never answers until released
     env.prom.results[SENT] = vector(({"route": "/a"}, 0.4))
     rule, _ = await env.add_rule(for_seconds=0)
-    began = time.monotonic()
     await env.engine.tick(T0)
     await env.engine.tick(T0 + MIN)
-    assert time.monotonic() - began < 1
-    await asyncio.sleep(0.05)
+    # Both checks returned while the receiver still holds the first delivery: nothing answered
+    # and nothing recorded (a check that waited would have seen it time out and be recorded).
+    await until(lambda: len(env.webhook.requests) == 1)
+    assert await env.services.contact_points.deliveries() == []
+    assert (await env.target(rule)).last_eval_at == T0 + MIN
     assert len(env.webhook.requests) == 1  # in flight: the next check doesn't send it again
     env.webhook.release.set()
     assert await env.notifier.drain(10)
@@ -199,3 +198,24 @@ async def test_incident_keys_pair_up(engine_env):
         ("trigger", cant_check),
         ("resolve", cant_check),
     ]
+
+
+async def test_silence_ends_while_it_still_fires(engine_env):
+    env = engine_env
+    env.prom.results[SENT] = vector(({"route": "/a"}, 0.4), ({"route": "/b"}, 0.9))
+    rule, _ = await env.add_rule(for_seconds=0)
+    await env.tick(T0)  # both told
+    await env.services.silences.create(
+        (Matcher("route", "=", "/a"),), T0 + MIN, T0 + 10 * MIN, "Known", "local"
+    )
+    await env.tick(T0 + MIN)
+    a, b = sorted(await env.instances(rule), key=lambda i: i.labels["route"])
+    assert a.silenced and a.last_notified_at is None  # to be told again when the silence ends
+    assert not b.silenced and b.last_notified_at == T0
+    env.prom.results[SENT] = vector(({"route": "/a"}, 0.4))  # /b resolves under the silence
+    await env.tick(T0 + 2 * MIN)
+    assert statuses(env) == ["firing", "resolved"]
+    await env.tick(T0 + 11 * MIN)  # the silence ended while /a still fires: told at once
+    assert statuses(env) == ["firing", "resolved", "firing"]
+    [alert] = env.webhook.bodies()[-1]["alerts"]
+    assert alert["labels"]["route"] == "/a"

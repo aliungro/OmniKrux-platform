@@ -16,6 +16,7 @@ from omnikrux.monitoring.alerts.store import RuleRecord, RuleSpec, TargetRecord,
 from omnikrux.monitoring.alerts.types import Condition, Engine
 
 T0 = datetime(2026, 11, 19, 10, 0, tzinfo=UTC)
+SEC = timedelta(seconds=1)
 MIN = timedelta(minutes=1)
 HOUR = timedelta(hours=1)
 CONTACT_POINTS = "/api/monitoring/alerts/contact-points"

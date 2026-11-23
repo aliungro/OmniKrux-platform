@@ -28,6 +28,13 @@ from omnikrux.monitoring.query.filters import matchers_from_json, matchers_json
 NO_MATCHERS = 'A silence needs at least one matcher, like alertname="API latency high".'
 ENDS_BEFORE_START = "A silence has to end after it starts. Pick a later end."
 BAD_PATTERN = "The pattern for {label} isn't a valid regular expression. Correct it and try again."
+LONG_PATTERN = "The pattern for {label} is longer than 200 characters. Shorten it."
+SLOW_PATTERN = "This pattern could take too long to match. Simplify it."
+
+# Patterns run on every instance at every check, inside the event loop: they are kept short and
+# without nested repetition (which can backtrack for ever), and run on bounded label values.
+MAX_PATTERN = 200
+MAX_MATCHED = 1024
 
 
 class UnknownSilence(KeyError):
@@ -62,12 +69,93 @@ class Silence:
         return self.starts_at <= moment < self.ended_at
 
 
+_COUNT = re.compile(r"\{(\d*)(,(\d*))?\}")
+
+
+def _quantifier(text: str, i: int) -> tuple[bool, int] | None:
+    """When a quantifier starts at `i`: whether it repeats more than once, and where it ends."""
+    c = text[i]
+    if c in "*+":
+        return True, i + 1
+    if c == "?":
+        return False, i + 1
+    if c == "{" and (m := _COUNT.match(text, i)) and (m.group(1) or m.group(3)):
+        low, comma, high = m.group(1), m.group(2), m.group(3)
+        many = int(low) > 1 if comma is None else (not high or int(high) > 1)
+        return many, m.end()
+    return None
+
+
+def nested_repetition(text: str) -> bool:
+    """Whether a group that repeats holds a repetition or an alternation, like `(a+)+` or
+    `(a|a)*`: the shapes that can make a match backtrack for ever. A structural check on the
+    text (escapes and character classes skipped); it may refuse a harmless pattern, never lets
+    such a shape through."""
+    # [repeats inside, alternation inside] for the top level and each open group.
+    stack = [[False, False]]
+    closed: list[bool] | None = None  # the group that just closed, which a quantifier may follow
+    n, i = len(text), 0
+    while i < n:
+        q = _quantifier(text, i) if i else None
+        if q is not None:
+            many, i = q
+            if many and closed is not None and (closed[0] or closed[1]):
+                return True
+            if many:
+                stack[-1][0] = True
+            if i < n and text[i] in "?+":  # lazy or possessive
+                i += 1
+            closed = None
+            continue
+        c, closed = text[i], None
+        if c == "\\":
+            i += 2
+        elif c == "[":
+            j = i + 1
+            if j < n and text[j] == "^":
+                j += 1
+            if j < n and text[j] == "]":
+                j += 1
+            while j < n and text[j] != "]":
+                j += 2 if text[j] == "\\" else 1
+            i = j + 1
+        elif c == "(":
+            stack.append([False, False])
+            i += 2 if i + 1 < n and text[i + 1] == "?" else 1  # `(?` opens an extension
+        elif c == ")":
+            if len(stack) > 1:
+                group = stack.pop()
+                stack[-1][0] = stack[-1][0] or group[0]
+                stack[-1][1] = stack[-1][1] or group[1]
+                closed = group
+            i += 1
+        else:
+            if c == "|":
+                stack[-1][1] = True
+            i += 1
+    return False
+
+
+def pattern_problem(label: str, value: str) -> str | None:
+    """Why a pattern can't be used in a silence, or None."""
+    if len(value) > MAX_PATTERN:
+        return LONG_PATTERN.format(label=label)
+    try:
+        re.compile(value)
+    except re.error:
+        return BAD_PATTERN.format(label=label)
+    if nested_repetition(value):
+        return SLOW_PATTERN
+    return None
+
+
 @lru_cache(maxsize=1024)
 def _pattern(value: str) -> re.Pattern[str] | None:
-    try:
-        return re.compile(value)
-    except re.error:
+    """The compiled pattern; None for one a silence can't use (never stored: `create` refuses
+    it)."""
+    if pattern_problem("", value) is not None:
         return None
+    return re.compile(value)
 
 
 def _holds(matcher: Matcher, labels: Mapping[str, str]) -> bool:
@@ -77,11 +165,9 @@ def _holds(matcher: Matcher, labels: Mapping[str, str]) -> bool:
     if matcher.op == "!=":
         return value != matcher.value
     pattern = _pattern(matcher.value)
-    if (
-        pattern is None
-    ):  # never stored (create refuses it); a matcher that can't be read never holds
+    if pattern is None:  # a matcher that can't be used never holds
         return False
-    found = pattern.fullmatch(value) is not None
+    found = pattern.fullmatch(value[:MAX_MATCHED]) is not None
     return found if matcher.op == "=~" else not found
 
 
@@ -116,8 +202,8 @@ def _check(matchers: Sequence[Matcher], starts_at: datetime, ends_at: datetime) 
     if not matchers:
         raise SilenceInvalid(NO_MATCHERS)
     for m in matchers:
-        if m.op in ("=~", "!~") and _pattern(m.value) is None:
-            raise SilenceInvalid(BAD_PATTERN.format(label=m.label))
+        if m.op in ("=~", "!~") and (problem := pattern_problem(m.label, m.value)):
+            raise SilenceInvalid(problem)
     if ends_at <= starts_at:
         raise SilenceInvalid(ENDS_BEFORE_START)
 

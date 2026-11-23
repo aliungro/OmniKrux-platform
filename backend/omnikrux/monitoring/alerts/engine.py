@@ -16,8 +16,9 @@ A failed query never reads as OK: the target is `unreachable` (the source can't 
 `error` (the rule can't run as written), with the failure's words, and its instances stay as they
 were (nothing resolves). After `CANT_CHECK_AFTER` failures in a row one "can't check" notice goes
 out, repeated every `REPEAT_SECONDS` while it lasts; the first check that works after that sends
-"checking again". A pending timer never counts time nobody checked: after a failure, or after a
-restart that missed checks, pending instances start over."""
+"checking again". A pending timer never counts time nobody checked: after a failure, or when the
+last check was more than two intervals ago (a restart, a pause), pending instances start over.
+An answer cut at MAX_SERIES series is an `error` too: the series it left out never resolve."""
 
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ from omnikrux.monitoring.models import AlertTargetRow, lock_first, utc
 from omnikrux.monitoring.models import now as now_utc
 from omnikrux.monitoring.projects.types import Project, UnknownProject
 from omnikrux.monitoring.query.run import SOURCE_GONE, QueryError, field_words, run_query
-from omnikrux.monitoring.query.series import QueryRequest
+from omnikrux.monitoring.query.series import MAX_SERIES, QueryRequest
 from omnikrux.monitoring.sources import messages
 
 if TYPE_CHECKING:
@@ -77,6 +78,10 @@ ERROR_CODES = frozenset({"bad_query", "bad_request", "not_found", "not_linked"})
 
 NO_SOURCE = "{project} has no {kind} source for this rule. Link one on the project page."
 _SOURCE_WORDS = {"prometheus": "Prometheus-compatible", "loki": "Loki"}
+TOO_MANY_SERIES = (
+    f"This rule matches more than {MAX_SERIES} series, so OmniKrux can't check all of them. "
+    "Narrow the query with a label, or alert on the total."
+)
 CHECK_FAILED = (
     "OmniKrux couldn't check this rule because of a fault of its own. "
     "It tries again at the next check."
@@ -165,8 +170,6 @@ class AlertEngine:
         self._loop_task: asyncio.Task | None = None
         self._running: dict[str, asyncio.Task] = {}
         self._writes: set[asyncio.Task] = set()
-        # Targets checked since this engine started (a restart's first check restores first).
-        self._seen: set[str] = set()
         self._cant_check_at: dict[str, datetime] = {}
         self._hold: dict[str, datetime] = {}
         self._last_tick_at: datetime | None = None
@@ -237,10 +240,14 @@ class AlertEngine:
         behind)."""
         due = await self._services.alerts.due_targets(now)
         await self._count(now)
+        # A held target (its check failed inside OmniKrux, or its project is gone) waits on
+        # purpose: it isn't running late.
         behind = sum(
             1
             for t in due
-            if t.next_eval_at is not None and (now - t.next_eval_at).total_seconds() > LATE_SECONDS
+            if t.id not in self._hold
+            and t.next_eval_at is not None
+            and (now - t.next_eval_at).total_seconds() > LATE_SECONDS
         )
         self._last_tick_at, self._behind = now, behind
         started: list[asyncio.Task] = []
@@ -274,8 +281,13 @@ class AlertEngine:
                 now = fixed if fixed is not None else self._clock()
                 await self._evaluate(target_id, now)
             self._hold.pop(target_id, None)
-        except (UnknownTarget, UnknownRule, UnknownProject):
+        except (UnknownTarget, UnknownRule):
             pass  # removed since it was due; nothing to check
+        except UnknownProject:
+            # Its project is gone and the target not yet removed: wait instead of asking again
+            # every second.
+            moment = fixed if fixed is not None else self._clock()
+            self._hold[target_id] = moment + timedelta(seconds=HOLD_SECONDS)
         except Exception as exc:  # noqa: BLE001 (logged; the target waits HOLD_SECONDS)
             log.warning("Checking alert target %s failed (%s)", target_id, type(exc).__name__)
             moment = fixed if fixed is not None else self._clock()
@@ -302,7 +314,6 @@ class AlertEngine:
         self._targets, self._rules = len(live), len({t.rule_id for t in live})
         self._counted_at = now
         ids = {t.id for t in targets}
-        self._seen &= ids
         for kept in (self._cant_check_at, self._hold):
             for gone in [id for id in kept if id not in ids]:
                 del kept[gone]
@@ -392,6 +403,9 @@ class AlertEngine:
             return _Failure("error", CHECK_FAILED)
         if answer.result_type == "streams":
             return _Failure("error", LOG_QUERY_COPY)
+        if answer.truncated:
+            # Only part of the series came back: what is missing must not read as resolved.
+            return _Failure("error", TOO_MANY_SERIES)
         ours = {
             "alertname": rule.name,
             "severity": rule.severity,
@@ -470,9 +484,11 @@ class AlertEngine:
                     history.append(entry("cant_check", message=outcome.message))
                 state, message = outcome.state, outcome.message
             else:
-                previous = await alerts.instances(target.id)
-                if target.id not in self._seen:
-                    previous = restored(previous, fresh.last_eval_at, every, now)
+                # A pending timer never counts time nobody checked (a restart, a pause, a
+                # long-running check): pending is kept only after a recent check.
+                previous = restored(
+                    await alerts.instances(target.id), fresh.last_eval_at, every, now
+                )
                 if fresh.failures:
                     # Nobody checked during the failures: pending timers start over.
                     previous = [p for p in previous if p.state == "firing"]
@@ -505,7 +521,6 @@ class AlertEngine:
                     await alerts.replace_instances(target.id, result.instances, session=session)
                 await alerts.add_history(history, session=session)
         if result is not None:
-            self._seen.add(target.id)
             self._cant_check_at.pop(target.id, None)
         if cant_check:
             self._cant_check_at[target.id] = now

@@ -264,9 +264,17 @@ class Notifier:
         self, target_id: str, current: Sequence[InstanceRecord], silences: Sequence[Silence]
     ) -> list[InstanceRecord]:
         """Each instance with `silenced` as the active silences say now; written back when that
-        changed (under the instances lock)."""
-        marked = [replace(i, silenced=bool(silenced_by(silences, i.labels))) for i in current]
-        if any(a.silenced != b.silenced for a, b in zip(current, marked, strict=True)):
+        changed (under the instances lock). An instance that becomes silenced forgets when it was
+        told, so it is told again as soon as the silence ends while it still fires (a resolve
+        sent meanwhile may have closed its incident)."""
+        marked = []
+        for i in current:
+            silenced = bool(silenced_by(silences, i.labels))
+            if silenced and not i.silenced:
+                marked.append(replace(i, silenced=True, last_notified_at=None))
+            else:
+                marked.append(replace(i, silenced=silenced))
+        if marked != list(current):
             await self._services.alerts.replace_instances(target_id, marked)
         return marked
 
