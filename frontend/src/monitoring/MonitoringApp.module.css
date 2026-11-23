@@ -1,5 +1,6 @@
 /* The Monitoring app: the sidebar on the left, the tab strip and the open page on the right. */
 .app {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: grid;

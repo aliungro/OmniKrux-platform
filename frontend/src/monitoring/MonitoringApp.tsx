@@ -21,6 +21,7 @@ import { currentOwner, type Owner } from "./dashboards/create/currentOwner";
 import { NewDashboardDialog } from "./dashboards/create/NewDashboardDialog";
 import { pageLetter } from "./dashboards/page/keys";
 import { ALERTS_LATER, ComingLater } from "./pages/ComingLater";
+import { ToolReviewHost } from "./alerts/reviews/ToolReviewHost";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
@@ -345,26 +346,29 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView };
   return (
     <div ref={root} className={s.app}>
-      <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
-        index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} />
-      <div className={s.work}>
-        <MonitoringTabs tabs={tabs} labelFor={names.label} colorFor={names.color}
-          onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
-          onClose={(id) => dispatchTabs({ type: "closeTab", id }) === true}
-          onNew={() => dispatchTabs({ type: "newTab" })} />
-        <div ref={scroller} className={s.page} data-monitoring-page onScroll={(e) => nav.setScroll(e.currentTarget.scrollTop)}>
-          <PageView key={tabId} page={page} onHome={goHome}
-            tree={{ data: tree.data, fetching: tree.isFetching }} sources={{ data: sources.data, fetching: sources.isFetching }} />
+      {/* Cluster reviews of tool-run alert rules, one at a time, for every page of the app. */}
+      <ToolReviewHost>
+        <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
+          index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} />
+        <div className={s.work}>
+          <MonitoringTabs tabs={tabs} labelFor={names.label} colorFor={names.color}
+            onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
+            onClose={(id) => dispatchTabs({ type: "closeTab", id }) === true}
+            onNew={() => dispatchTabs({ type: "newTab" })} />
+          <div ref={scroller} className={s.page} data-monitoring-page onScroll={(e) => nav.setScroll(e.currentTarget.scrollTop)}>
+            <PageView key={tabId} page={page} onHome={goHome}
+              tree={{ data: tree.data, fetching: tree.isFetching }} sources={{ data: sources.data, fetching: sources.isFetching }} />
+          </div>
         </div>
-      </div>
-      {creating && (
-        <NewDashboardDialog owner={creating.owner} restoreFocusTo={createFrom} onCancel={() => setCreating(null)}
-          onCreated={(out) => { setCreating(null); openMade(out, { edit: true }, { tabId, nav: pageNav, openInNewTab }); }} />
-      )}
-      {leaving && (
-        <LeaveDialog title={leaving.title} draftsWork={leaving.draftsWork} restoreFocusTo={returnFocus}
-          onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />
-      )}
+        {creating && (
+          <NewDashboardDialog owner={creating.owner} restoreFocusTo={createFrom} onCancel={() => setCreating(null)}
+            onCreated={(out) => { setCreating(null); openMade(out, { edit: true }, { tabId, nav: pageNav, openInNewTab }); }} />
+        )}
+        {leaving && (
+          <LeaveDialog title={leaving.title} draftsWork={leaving.draftsWork} restoreFocusTo={returnFocus}
+            onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />
+        )}
+      </ToolReviewHost>
     </div>
   );
 }
