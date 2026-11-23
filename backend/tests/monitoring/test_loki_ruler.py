@@ -134,6 +134,8 @@ async def test_loki_write_failure_marks_not_applied_and_retry_writes(
     assert (change["kind"], change["message"]) == ("failed", copy)
     target = await target_of(http, out["rule"]["id"])
     assert target["tool_state"] == "failed" and target["tool_message"] == copy
+    # Never read, but not in its tool either: it says why, never "Loading…".
+    assert target["message"] == copy
     assert target["state"] == "not_applied" and out["rule"]["state"] == "not_applied"
     # A 5xx may have been taken anyway: the group is recorded, so a removal never forgets it.
     stored = await app.state.monitoring.alerts.get_target(target["id"])

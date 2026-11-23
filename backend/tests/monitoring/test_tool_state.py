@@ -144,6 +144,45 @@ async def test_prometheus_state_comes_from_the_rules_api(
     )
 
 
+async def test_a_tool_that_has_not_run_the_rule_yet_keeps_its_firing_alerts(
+    monitoring_app, linked_project, fake_prometheus
+):
+    http, app = monitoring_app
+    reader = app.state.monitoring.tool_state
+    rule, target = await prometheus_target(http, app, linked_project)
+    pid = linked_project.project_id
+    firing = alert(own_labels(rule, pid, route="/a"))
+    fake_prometheus.rule_groups = [group(target["id"], rule, pid, "firing", [firing])]
+    moment = now()
+    await reader.refresh(moment)
+    _, before = await shown(http, rule["id"])
+    [was] = before["instances"]
+
+    # Prometheus restarted: the rule is loaded but not evaluated yet, with no alerts.
+    fake_prometheus.rule_groups = [
+        group(target["id"], rule, pid, "inactive", [], health="unknown", lastError="")
+    ]
+    await reader.refresh(moment + MIN)
+    _, during = await shown(http, rule["id"])
+    assert (during["state"], during["message"]) == ("waiting", "Loading in Prometheus…")
+    assert during["instances"] == [was]  # unknown, not resolved
+    history = (await http.get(f"{RULES}/{rule['id']}/history")).json()
+    assert [h["kind"] for h in history] == ["firing", "applied"]
+
+    # Its first evaluation finds it still firing: it carries on, told once, since unchanged.
+    fake_prometheus.rule_groups = [group(target["id"], rule, pid, "firing", [firing])]
+    await reader.refresh(moment + 2 * MIN)
+    _, after = await shown(http, rule["id"])
+    assert after["state"] == "firing"
+    assert [i["fired_at"] for i in after["instances"]] == [was["fired_at"]]
+    history = (await http.get(f"{RULES}/{rule['id']}/history")).json()
+    assert [h["kind"] for h in history] == ["firing", "applied"]
+    fake_prometheus.rule_groups = [group(target["id"], rule, pid, "inactive", [])]
+    await reader.refresh(moment + 3 * MIN)
+    history = (await http.get(f"{RULES}/{rule['id']}/history")).json()
+    assert [h["kind"] for h in history] == ["resolved", "firing", "applied"]
+
+
 async def test_loading_then_not_loaded(monitoring_app, linked_project, fake_prometheus):
     http, app = monitoring_app
     reader = app.state.monitoring.tool_state

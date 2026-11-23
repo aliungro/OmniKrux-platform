@@ -545,9 +545,12 @@ def shown_state(target: TargetRecord, rule: RuleRecord) -> TargetState:
 
 
 def shown_message(target: TargetRecord, checks_on: bool) -> str | None:
-    """What a target says: a never-read tool target says it is loading, or, with OmniKrux's
-    checks off (nothing reads the tools then), that it isn't checked yet."""
+    """What a target says: a never-read tool target in sync says it is loading, or, with
+    OmniKrux's checks off (nothing reads the tools then), that it isn't checked yet. One that
+    isn't in sync in its tool says why (its tool's words): nothing is loading there."""
     if never_read(target):
+        if target.tool_state != "in_sync":
+            return target.tool_message
         return loading_copy(target.tool_kind) if checks_on else NOT_CHECKED_OFF
     return target.message
 

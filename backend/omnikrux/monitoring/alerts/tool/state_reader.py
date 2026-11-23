@@ -228,8 +228,9 @@ def judge(
     elif "pending" in states or current:
         target_state = "pending"
     elif never_checked:
-        # Loaded but not evaluated yet: never "OK" before the tool has checked it.
-        return _Judged("waiting", loading, current)
+        # Loaded but not evaluated yet (after the tool restarted, say): never "OK" before the
+        # tool has checked it, and what was firing stays as it was (unknown, not resolved).
+        return _Judged("waiting", loading)
     else:
         target_state = "ok"
 
