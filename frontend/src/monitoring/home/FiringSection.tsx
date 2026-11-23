@@ -35,6 +35,7 @@ function FiringRow({ row, project, onOpen }: { row: FiringOut; project: ProjectO
         {row.project_name}
       </span>
       <span className={s.firingSummary}>{row.summary}</span>
+      {row.instances > 0 && row.silenced >= row.instances && <span className={s.chip} data-quiet="">Silenced</span>}
       <span className={s.chip} data-quiet="">{row.where}</span>
       <span className={s.firingActions}>
         <button type="button" className={s.small} aria-label={`Silence ${row.rule_name}`}

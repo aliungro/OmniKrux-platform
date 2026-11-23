@@ -164,6 +164,8 @@ export interface FiringOut {
   severity: Severity;
   since: string;
   instances: number;
+  /** How many of the firing instances a silence mutes: they still fire, nobody is told. */
+  silenced: number;
   summary: string;
   where: string;
 }

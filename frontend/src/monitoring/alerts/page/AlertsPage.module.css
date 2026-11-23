@@ -269,6 +269,17 @@
   font-size: 11px;
 }
 
+/* A firing rule whose alerts are all silenced: still firing, only quieter. */
+.rowTag {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 16px;
+}
+
 /* Pinned rows say how long in their severity's colour; under owners only firing is rose. */
 .rowRight[data-tone="bad"] { color: var(--bad); }
 .rowRight[data-tone="warn"] { color: var(--warn); }

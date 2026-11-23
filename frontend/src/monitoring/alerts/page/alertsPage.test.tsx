@@ -46,7 +46,7 @@ const latency = rule("r3", "LatencyHigh", east);
 
 const firing = (r: RuleOut, minutes: number): FiringOut => ({
   rule_id: r.id, rule_name: r.name, target_id: r.targets[0].id, project_id: r.scope.id, project_name: r.scope.name, severity: r.severity,
-  since: ago(minutes), instances: 1, summary: "", where: "checked by OmniKrux",
+  since: ago(minutes), instances: 1, silenced: 0, summary: "", where: "checked by OmniKrux",
 });
 
 const overview = (f: FiringOut[], engine: Partial<OverviewOut["engine"]> = {}): OverviewOut => ({
@@ -98,6 +98,26 @@ describe("the Alerts page", () => {
     expect(facts.textContent).toContain("Checksevery 1 min · fires after 5 min");
     expect(facts.textContent).toContain("SeverityCritical");
     expect(screen.getByText("rule_t-r1 > 5").tagName).toBe("PRE");
+  });
+
+  it("a silenced firing rule still reads Firing and says it is silenced", async () => {
+    const one = (silenced: boolean, pod: string) => ({ labels: { namespace: "demo", pod }, state: "firing" as const, active_since: ago(12), fired_at: ago(12), value: 7, silenced, message: null });
+    const muted = { ...crash, targets: [{ ...crash.targets[0], instances: [one(true, "a"), one(true, "b")] }] };
+    open({ rules: [muted, nodes, latency], overview: overview([{ ...firing(muted, 12), instances: 2, silenced: 2 }]) });
+    await waitFor(() => expect(options().map((o) => o.getAttribute("aria-label"))).toEqual([
+      "PodCrashLooping, 12m, silenced", "NodeNotReady, ok", "PodCrashLooping, firing, silenced", "LatencyHigh, ok",
+    ]));
+    expect(within(options()[0]).getByText("Silenced")).toBeTruthy();
+    const facts = document.querySelector("dl")!;
+    expect(facts.textContent).toMatch(/StateFiring for 12 min( \d+ s)? · demo\/a · silenced/);
+    cleanup();
+
+    // Some of them: the details count them, the list row carries no tag.
+    const some = { ...crash, targets: [{ ...crash.targets[0], instances: [one(true, "a"), one(false, "b")] }] };
+    open({ rules: [some, nodes, latency], overview: overview([{ ...firing(some, 12), instances: 2, silenced: 1 }]) });
+    await waitFor(() => expect(options()[0].getAttribute("aria-label")).toBe("PodCrashLooping, 12m"));
+    expect(within(options()[0]).queryByText("Silenced")).toBeNull();
+    expect(document.querySelector("dl")!.textContent).toMatch(/· 1 of 2 silenced/);
   });
 
   it("a late or turned-off engine says so in the warn tone", async () => {

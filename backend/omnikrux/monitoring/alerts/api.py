@@ -396,6 +396,7 @@ class FiringOut(BaseModel):
     severity: Severity
     since: datetime
     instances: int
+    silenced: int  # of the firing instances, how many a silence mutes (they still fire)
     summary: str
     where: str
 
@@ -1639,6 +1640,7 @@ async def overview(request: Request) -> OverviewOut:
                     severity=rule.severity,
                     since=since,
                     instances=len(instances),
+                    silenced=sum(1 for i in instances if i.silenced),
                     summary=firing_summary(rule, instances, since, moment),
                     where=where(target),
                 )

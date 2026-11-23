@@ -19,6 +19,8 @@ export interface ListRow {
   tone?: RowTone;
   /** Pinned rows draw a dot in their severity's colour. */
   dot?: boolean;
+  /** Firing, with every firing alert silenced: the row carries a muted "Silenced" tag. */
+  silenced?: boolean;
 }
 
 /** A state as the list says it, in lower case (as the A2 prototype). */
@@ -57,12 +59,19 @@ export function listRows(rules: RuleOut[], overview: OverviewOut | undefined, no
     if (!was) pinned.set(f.rule_id, { name: known.get(f.rule_id)!.name, severity: f.severity, since });
     else if (since < was.since) was.since = since;
   }
+  // A rule is silenced when every firing alert of every project it fires in is silenced.
+  const silenced = new Map<string, boolean>();
+  for (const f of overview?.firing ?? []) {
+    const all = f.instances > 0 && f.silenced >= f.instances;
+    silenced.set(f.rule_id, (silenced.get(f.rule_id) ?? true) && all);
+  }
   if (pinned.size > 0) {
     rows.push({ key: "heading:firing", kind: "heading", label: "Firing" });
     for (const [id, p] of pinned) {
       rows.push({
         key: `firing:${id}`, kind: "rule", label: p.name, ruleId: id, state: "firing",
         right: Number.isFinite(p.since) ? sinceShort((now - p.since) / 1000) : "firing", tone: SEVERITY_TONE[p.severity], dot: true,
+        silenced: silenced.get(id) || undefined,
       });
     }
   }
@@ -80,7 +89,8 @@ export function listRows(rules: RuleOut[], overview: OverviewOut | undefined, no
     rows.push({ key: `heading:${key}`, kind: "heading", label: owner.kind === "group" ? `Group · ${owner.name}` : owner.name });
     for (const r of [...owner.rules].sort((a, b) => byName(a.name, b.name) || byName(a.id, b.id))) {
       const state: TargetState = r.paused ? "paused" : r.state;
-      rows.push({ key: `rule:${key}:${r.id}`, kind: "rule", label: r.name, ruleId: r.id, state, right: LIST_STATE[state], tone: stateTone(state) });
+      const quiet = state === "firing" && silenced.get(r.id) ? true : undefined;
+      rows.push({ key: `rule:${key}:${r.id}`, kind: "rule", label: r.name, ruleId: r.id, state, right: LIST_STATE[state], tone: stateTone(state), silenced: quiet });
     }
   }
   return rows;

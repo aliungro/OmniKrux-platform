@@ -65,12 +65,13 @@ export function RuleList({ rows, activeKey, onPick, onEnter, rowRef, detailsId }
             aria-controls={selected ? detailsId : undefined}
             tabIndex={row.key === tabKey ? 0 : -1}
             className={s.row}
-            aria-label={row.right ? `${row.label}, ${row.right}` : row.label}
+            aria-label={[row.label, row.right, row.silenced ? "silenced" : null].filter(Boolean).join(", ")}
             data-rule-row={row.ruleId}
             onClick={() => onPick(row.key, "click")}
           >
             {row.dot && <span className={s.dot} data-tone={row.tone} aria-hidden="true" />}
             <span className={s.rowName}>{row.label}</span>
+            {row.silenced && <span className={s.rowTag} aria-hidden="true">Silenced</span>}
             <span className={s.rowRight} data-tone={row.tone}>{row.right}</span>
           </div>
         );

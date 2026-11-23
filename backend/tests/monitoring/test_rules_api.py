@@ -511,6 +511,46 @@ async def test_overview_lists_firing_with_summary(monitoring_app, linked_project
     assert instance["message"] == "p95 for /a is 0.4" and instance["value"] == 0.4
 
 
+async def test_overview_counts_silenced_firing_instances(monitoring_app, linked_project):
+    """A silence mutes notifications only: the rule still fires (and is counted), and the
+    overview says how many of its firing instances are silenced."""
+    http, app = monitoring_app
+    alerts = app.state.monitoring.alerts
+    pid = linked_project.project_id
+    rule = (await add_rule(http, rule_body(pid)))["rule"]
+    [target] = rule["targets"]
+    at = datetime.now(UTC)
+    await alerts.set_eval(
+        target["id"], state="firing", message=None, at=at, next_eval_at=None, failures=0
+    )
+
+    def instance(fingerprint: str, silenced: bool) -> InstanceRecord:
+        return InstanceRecord(
+            target_id=target["id"],
+            fingerprint=fingerprint,
+            labels={"route": fingerprint},
+            state="firing",
+            active_since=at - timedelta(minutes=5),
+            fired_at=at - timedelta(minutes=4),
+            value=0.4,
+            last_notified_at=None,
+            silenced=silenced,
+        )
+
+    await alerts.replace_instances(target["id"], [instance("/a", True), instance("/b", False)])
+    overview = (await http.get(f"{ALERTS}/overview")).json()
+    [firing] = overview["firing"]
+    assert (firing["instances"], firing["silenced"]) == (2, 1)
+    assert overview["counts"]["firing"] == 1 and overview["by_project"] == {pid: 1}
+
+    await alerts.replace_instances(target["id"], [instance("/a", True), instance("/b", True)])
+    [firing] = (await http.get(f"{ALERTS}/overview")).json()["firing"]
+    assert (firing["instances"], firing["silenced"]) == (2, 2)
+    got = (await http.get(f"{RULES}/{rule['id']}")).json()
+    assert got["state"] == "firing"
+    assert [i["silenced"] for i in got["targets"][0]["instances"]] == [True, True]
+
+
 async def test_channels_without_alertmanager_say_where_notifications_go(
     monitoring_app, linked_project
 ):

@@ -45,7 +45,7 @@ function seedHealthy(extra: Partial<FakeMonitoringState> = {}, clusters: unknown
 
 const firingRow = (over: Partial<FiringOut> = {}): FiringOut => ({
   rule_id: "r1", rule_name: "PodCrashLooping", target_id: "t1", project_id: "p1", project_name: "Dev cluster", severity: "critical",
-  since: T, instances: 2, summary: "2 pods are restarting", where: "checked by OmniKrux", ...over,
+  since: T, instances: 2, silenced: 0, summary: "2 pods are restarting", where: "checked by OmniKrux", ...over,
 });
 const overviewOf = (over: Partial<OverviewOut> = {}, counts: Partial<OverviewOut["counts"]> = {}): OverviewOut => ({
   counts: { rules: 3, firing: 0, pending: 0, cant_check: 0, not_applied: 0, ...counts }, firing: [], by_project: {}, by_group: {},
@@ -138,6 +138,18 @@ describe("Monitoring Home", () => {
     expect(screen.queryByText(/All quiet/)).toBeNull();
     fireEvent.click(within(rows[1]).getByRole("button", { name: "Open DiskFull" }));
     expect(await screen.findByRole("button", { name: "New alert rule" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Alerts, 2 firing" })).toBeTruthy();
+  });
+
+  it("a firing row whose alerts are all silenced carries a muted Silenced tag", async () => {
+    seedHealthy({ overview: overviewOf({ firing: [firingRow({ silenced: 2 }), firingRow({ rule_id: "r2", target_id: "t2", rule_name: "DiskFull", silenced: 1 })] }, { firing: 2 }) });
+    renderMonitoringApp();
+    const section = await screen.findByRole("region", { name: "Firing" });
+    const rows = within(section).getAllByRole("listitem");
+    const tag = within(rows[0]).getByText("Silenced");
+    expect(tag.hasAttribute("data-quiet")).toBe(true);
+    expect(within(rows[1]).queryByText("Silenced")).toBeNull();
+    // Still firing: the count is unchanged.
     expect(screen.getByRole("button", { name: "Alerts, 2 firing" })).toBeTruthy();
   });
 

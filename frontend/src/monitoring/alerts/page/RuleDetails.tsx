@@ -23,7 +23,7 @@ import { AttachDialog, attachedWords } from "../rules/AttachDialog";
 import { mixedClusterWarnings } from "../rules/clusterWarning";
 import { RuleChart } from "./RuleChart";
 import { RuleHistory } from "./RuleHistory";
-import { clockTime, labelsText, secondsSince } from "./words";
+import { clockTime, labelsText, secondsSince, silencedWords } from "./words";
 import s from "./AlertsPage.module.css";
 
 /** Silence, when the rule is not checked anywhere yet. */
@@ -78,8 +78,21 @@ function stateWords(rule: RuleOut, now: number): string {
     const instance = active.flatMap((t) => t.instances).find((i) => i.state === "firing");
     const labels = labelsText(instance?.labels);
     if (labels) text += ` · ${labels}`;
+    const muted = silencedWords(active.flatMap((t) => t.instances));
+    if (muted) text += ` · ${muted}`;
   }
   if ((state === "unreachable" || state === "waiting" || state === "error") && holder?.message) text += ` · ${holder.message}`;
+  return text;
+}
+
+/** One place's state: its label, why it can't be checked or is waiting, and what is silenced. */
+function targetStateWords(t: TargetOut): string {
+  let text = STATE_LABEL[t.state];
+  if (t.message && (t.state === "unreachable" || t.state === "waiting" || t.state === "error")) text += ` · ${t.message}`;
+  if (t.state === "firing") {
+    const muted = silencedWords(t.instances);
+    if (muted) text += ` · ${muted}`;
+  }
   return text;
 }
 
@@ -401,7 +414,7 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
                   <td>{whereLabel(t)}</td>
                   <td>
                     <span className={s.stateValue} data-tone={p ? "warn" : stateTone(t.state)}>
-                      {p ? p.text : `${STATE_LABEL[t.state]}${t.message && (t.state === "unreachable" || t.state === "waiting" || t.state === "error") ? ` · ${t.message}` : ""}`}
+                      {p ? p.text : targetStateWords(t)}
                     </span>
                   </td>
                   <td>{p && fixButton(t, p)}</td>

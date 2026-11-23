@@ -13,7 +13,7 @@ const rule = (id: string, name: string, scope: { kind: "project" | "group"; id: 
 
 const firing = (r: RuleOut, severity: FiringOut["severity"], minutes: number): FiringOut => ({
   rule_id: r.id, rule_name: r.name, target_id: `t-${r.id}`, project_id: r.scope.id, project_name: r.scope.name, severity,
-  since: ago(minutes), instances: 1, summary: "", where: "in Prometheus",
+  since: ago(minutes), instances: 1, silenced: 0, summary: "", where: "in Prometheus",
 });
 
 const overviewOf = (f: FiringOut[]): OverviewOut => ({
