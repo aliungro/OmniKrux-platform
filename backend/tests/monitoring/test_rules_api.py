@@ -9,6 +9,7 @@ from omnikrux.monitoring.alerts.store import InstanceRecord, RuleSpec, ToolObjec
 from omnikrux.monitoring.alerts.types import Condition
 from omnikrux.monitoring.sources.connector import NO_OPERATOR, AlertingCapability
 from tests.fakekube import prometheus_operator
+from tests.monitoring.conftest import new_source
 
 API = "/api/monitoring"
 ALERTS = f"{API}/alerts"
@@ -558,3 +559,44 @@ async def test_no_audit_no_rule(monitoring_app, linked_project, monkeypatch):
     assert r.status_code == 503
     assert (await http.get(RULES)).json() == []
     assert await app.state.monitoring.alerts.targets() == []
+
+
+async def test_fix_round_refusals_and_empty_rules(monitoring_app, linked_project):
+    http, app = monitoring_app
+    pid = linked_project.project_id
+    long = await http.post(RULES, json=rule_body(pid, expr="x" * 10001))
+    assert long.status_code == 422
+    assert long.json()["detail"] == {
+        "code": "invalid_rule",
+        "message": "Write a query of 1 to 10000 characters.",
+        "field": "query",
+    }
+    empty = await http.post(RULES, json=rule_body(pid, expr=""))
+    assert empty.json()["detail"]["message"] == "Write a query of 1 to 10000 characters."
+
+    # A group without projects is checked nowhere: never "ok".
+    group = await add_group(http, "Empty", [])
+    rule = (await add_rule(http, rule_body(group, scope={"kind": "group", "id": group})))["rule"]
+    assert rule["targets"] == [] and rule["state"] == "no_data"
+
+    other = await app.state.monitoring.sources.create(new_source(name="Not linked"))
+    caps = await http.get(
+        f"{ALERTS}/capabilities",
+        params={
+            "scope_kind": "project",
+            "scope_id": pid,
+            "source_type": "prometheus",
+            "source_id": other.id,
+        },
+    )
+    assert refusal(caps) == (404, "not_found", "This source isn't linked to that project.")
+    linked = await http.get(
+        f"{ALERTS}/capabilities",
+        params={
+            "scope_kind": "project",
+            "scope_id": pid,
+            "source_type": "prometheus",
+            "source_id": linked_project.source_id,
+        },
+    )
+    assert [c["source_id"] for c in linked.json()] == [linked_project.source_id]

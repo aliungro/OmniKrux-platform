@@ -217,7 +217,7 @@ class RuleIn(BaseModel):
     name: str
     scope: ScopeIn
     source: SourceRefIn
-    expr: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
+    expr: str  # 1 to 10000 characters, refused in words by `_spec`
     condition: ConditionIn
     severity: Severity = "warning"
     message: str = ""
@@ -473,10 +473,11 @@ def shown_state(target: TargetRecord, rule: RuleRecord) -> TargetState:
 
 def _rule_state(rule: RuleRecord, targets: list[TargetRecord]) -> TargetState:
     """The worst state of the targets that still belong to the rule (all of them while it is
-    being removed)."""
+    being removed). A rule without targets (a group without projects, or targets not worked out
+    yet) is checked nowhere: "no data", never "ok"."""
     staying = [t for t in targets if not t.leaving] or targets
-    if not staying and rule.paused:
-        return "paused"
+    if not staying:
+        return "paused" if rule.paused else "no_data"
     return worst(shown_state(t, rule) for t in staying)
 
 
@@ -689,6 +690,8 @@ async def _spec(services: MonitoringServices, body: RuleIn) -> RuleSpec:
         for_seconds = -1
     if not 0 <= for_seconds <= MAX_FOR_SECONDS:
         raise _invalid(FOR_DURATION, "for")
+    if not 1 <= len(body.expr) <= MAX_QUERY_CHARS:
+        raise _invalid(QUERY_LENGTH, "query")
     if body.source.type == "loki" and is_log_query(body.expr):
         raise _invalid(LOG_QUERY_COPY, "query")
     try:
@@ -1269,6 +1272,12 @@ async def capabilities(
             await services.groups.get(scope_id)
     except (UnknownProject, UnknownGroup):
         raise RuleRefused(404, "unknown_scope", UNKNOWN_SCOPE).http() from None
+    if source_id is not None:
+        if scope_kind == "group":
+            raise _invalid(GROUP_SOURCE, "source").http()
+        project = await services.projects.get(scope_id)
+        if not any(link.source_id == source_id for link in project.links):
+            raise RuleRefused(404, "not_found", NOT_LINKED).http()
     projects = await sync.scope_projects(scope_kind, scope_id)
     probe = _probe_rule(scope_kind, scope_id, source_type, source_id)
     out: list[CapabilityOut] = []

@@ -261,10 +261,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
             discovery.start()
-            # Every rule's targets follow its scope's projects and links as they are now, before
-            # the alert engine checks any of them.
-            await monitoring.alert_sync.reconcile_all()
-            monitoring.engine.start()  # nothing starts with OMNIKRUX_ALERT_ENGINE=false
+            # Every rule's targets follow its scope's projects and links as they are now (waited
+            # for at most 15 s), then the alert engine starts (nothing starts with
+            # OMNIKRUX_ALERT_ENGINE=false).
+            await monitoring.start_alerts()
             yield
         finally:
             await discovery.close()

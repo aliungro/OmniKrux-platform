@@ -18,6 +18,7 @@ from fnmatch import fnmatchcase
 from typing import Literal, cast
 
 from aiohttp.http_exceptions import HttpProcessingError
+from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.clusters.registry import SOURCE_CLOUD, ClusterInfo, ClusterRegistry
 from omnikrux.kube.connections import ClusterConnections, cloud_kube_error, kube_error_message
@@ -337,10 +338,45 @@ class KubeClusterProbe(ClusterProbe):
         except (*KUBE_ERRORS, KeyError, OSError, ValueError, HttpProcessingError) as exc:
             log.info("Couldn't read whether a cluster serves %s (%s)", plural, type(exc).__name__)
             return False
-        resources = data.get("resources") if isinstance(data, dict) else None
-        return isinstance(resources, list) and any(
-            isinstance(r, dict) and r.get("name") == plural for r in resources
-        )
+        return _lists(data, plural)
+
+    async def check(self, group: str, version: str, plural: str) -> bool:
+        """Like `serves`, with three outcomes: True or False only when the cluster answered (a
+        404 for the group version is a "no"); ProbeFailed when it didn't (unreachable, timed out,
+        refused, an unreadable answer), so a cluster that can't be asked never reads as "no"."""
+        try:
+            async with (
+                asyncio.timeout(self._timeout),
+                self._connections.api(self._cluster_id) as api,
+            ):
+                data = await call_json(
+                    api, "GET", f"/apis/{group}/{version}", timeout=self._timeout
+                )
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            log.info("Couldn't read whether a cluster serves %s (HTTP %s)", plural, exc.status)
+            raise ProbeFailed(timed_out=False) from None
+        except (*KUBE_ERRORS, KeyError, OSError, ValueError, HttpProcessingError) as exc:
+            log.info("Couldn't read whether a cluster serves %s (%s)", plural, type(exc).__name__)
+            raise ProbeFailed(timed_out=isinstance(exc, TimeoutError)) from None
+        return _lists(data, plural)
+
+
+class ProbeFailed(Exception):
+    """The cluster couldn't be asked what it serves (`KubeClusterProbe.check`)."""
+
+    def __init__(self, *, timed_out: bool) -> None:
+        super().__init__("The cluster couldn't be asked what it serves.")
+        self.timed_out = timed_out
+
+
+def _lists(data: object, plural: str) -> bool:
+    """Whether a `/apis/{group}/{version}` answer lists `plural`."""
+    resources = data.get("resources") if isinstance(data, dict) else None
+    return isinstance(resources, list) and any(
+        isinstance(r, dict) and r.get("name") == plural for r in resources
+    )
 
 
 # --- Discovery ---------------------------------------------------------------------------------

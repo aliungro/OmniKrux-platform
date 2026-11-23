@@ -2,7 +2,9 @@
 
 A capability is read again after `ttl` seconds, or at once when the source was edited (its
 `updated_at` moved). A check that fails is never remembered: the next ask tries again, and the
-caller gets `CapabilityUnknown` with words it can show."""
+caller gets `CapabilityUnknown` with words it can show. A cluster that can't be asked what it
+serves is such a failure too, never a "no" (a passing outage must not move rules out of their
+tool)."""
 
 import time
 from collections.abc import Callable
@@ -17,7 +19,7 @@ from omnikrux.monitoring.sources.connector import (
     QueryRejected,
     UnknownSourceType,
 )
-from omnikrux.monitoring.sources.discovery import Discovery
+from omnikrux.monitoring.sources.discovery import PROBE_FAILED, Discovery, ProbeFailed
 from omnikrux.monitoring.sources.transport import SourceUnreachable, TransportFactory
 from omnikrux.monitoring.sources.types import SourceConfig
 
@@ -37,6 +39,17 @@ class _Entry:
     capability: AlertingCapability
     updated_at: datetime  # the source's, so an edited source is read again
     at: float  # monotonic time of the read
+
+
+class _Strict:
+    """A cluster probe whose `serves` raises `ProbeFailed` when the cluster can't be asked,
+    instead of answering "no"."""
+
+    def __init__(self, probe) -> None:
+        self._probe = probe
+
+    async def serves(self, group: str, version: str, plural: str) -> bool:
+        return await self._probe.check(group, version, plural)
 
 
 class CapabilityCache:
@@ -74,17 +87,22 @@ class CapabilityCache:
         except UnknownSourceType as exc:
             raise CapabilityUnknown(exc.message) from None
         probe: ClusterProbe | None = None
+        cluster_name = ""
         if source.reach == "cluster" and source.cluster is not None:
             try:
-                await self._registry.get(source.cluster.cluster_id)
+                cluster_name = (await self._registry.get(source.cluster.cluster_id)).name
             except KeyError:  # a cluster OmniKrux no longer knows serves nothing
                 pass
             else:
-                probe = self._discovery.probe(source.cluster.cluster_id)
+                probe = _Strict(self._discovery.probe(source.cluster.cluster_id))
         try:
             capability = await connector.alerting(
                 self._transports.for_source(source), cluster=probe
             )
+        except ProbeFailed as exc:
+            self._entries.pop(source.id, None)
+            message = PROBE_FAILED.format(name=cluster_name or "the cluster")
+            raise CapabilityUnknown(message, 504 if exc.timed_out else 502) from None
         except SourceUnreachable as exc:
             self._entries.pop(source.id, None)
             raise CapabilityUnknown(exc.message, 504 if exc.code == "timeout" else 502) from None

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -32,6 +34,12 @@ if TYPE_CHECKING:
     from omnikrux.monitoring.alerts.notify import Notifier
     from omnikrux.monitoring.alerts.sync import AlertSync
 
+log = logging.getLogger(__name__)
+
+# The longest the app's startup waits for the rules' targets to be brought up to date; the rest
+# carries on in the background while the engine runs.
+STARTUP_RECONCILE_SECONDS = 15.0
+
 
 @dataclass
 class MonitoringServices:
@@ -55,13 +63,36 @@ class MonitoringServices:
     notifier: Notifier = field(init=False)
     engine: AlertEngine = field(init=False)
     alert_sync: AlertSync = field(init=False)
+    # The startup pass of `alert_sync.reconcile_all` (`start_alerts`), while it runs.
+    startup_reconcile: asyncio.Task | None = field(default=None, init=False)
+
+    async def start_alerts(self, wait: float | None = None) -> None:
+        """Bring every rule's targets up to date in the background, wait for that at most
+        `wait` seconds (STARTUP_RECONCILE_SECONDS; it isn't cancelled when the time is up), then
+        start the engine. Never raises: `reconcile_all` logs its own failures."""
+        limit = STARTUP_RECONCILE_SECONDS if wait is None else wait
+        task = asyncio.create_task(self.alert_sync.reconcile_all(), name="omnikrux-alert-reconcile")
+        self.startup_reconcile = task
+        await asyncio.wait({task}, timeout=limit)
+        if not task.done():
+            log.info(
+                "Alert rules are still being brought up to date after %g s; "
+                "the engine starts and that carries on.",
+                limit,
+            )
+        self.engine.start()
 
     async def close(self) -> None:
         """Release what the services hold, before the database engine is disposed: the alert
         engine stops (checks in flight end, their writes finish), the notifier's queued
         deliveries get up to 15 s and the rest are cancelled; then the catalog builds in flight
         (cancelled), then the transports' and the senders' HTTP sessions (the stores share the
-        app's engine)."""
+        app's engine). A startup reconcile still running is cancelled first; a rule whose
+        targets it is writing finishes handing them over before it stops."""
+        task, self.startup_reconcile = self.startup_reconcile, None
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await self.engine.stop()
         await self.notifier.drain()
         await self.notifier.close()

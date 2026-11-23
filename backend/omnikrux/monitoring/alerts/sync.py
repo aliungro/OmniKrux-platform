@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -50,6 +50,7 @@ from omnikrux.monitoring.projects.types import (
 )
 from omnikrux.monitoring.query.filters import FilterError, inject_logql, inject_promql
 from omnikrux.monitoring.sources.capability import CapabilityUnknown
+from omnikrux.monitoring.sources.connector import AlertingCapability
 from omnikrux.monitoring.sources.types import QUERYABLE_TYPES, SourceConfig
 
 if TYPE_CHECKING:
@@ -69,6 +70,23 @@ WHERE: dict[str, str] = {
 WHERE_OMNIKRUX = "checked by OmniKrux"
 # How often a reconcile reads again when the rule changed while it worked out the targets.
 ATTEMPTS = 3
+
+
+# Capabilities read in one pass over many rules (`reconcile_all`): each source is asked at most
+# once, failures included, so one unreachable source costs one timeout per pass.
+Memo = dict[str, "AlertingCapability | CapabilityUnknown"]
+_AGAIN = object()
+
+
+async def _uncancelled[T](work: Awaitable[T]) -> T:
+    """Run `work` to its end even when the caller is cancelled meanwhile (the caller's
+    cancellation is raised once it has finished)."""
+    task = asyncio.ensure_future(work)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait({task})
+        raise
 
 
 def where(target: TargetRecord) -> str:
@@ -191,7 +209,11 @@ class AlertSync:
         return None
 
     async def desired(
-        self, rule: RuleRecord, current: Sequence[TargetRecord] | None = None
+        self,
+        rule: RuleRecord,
+        current: Sequence[TargetRecord] | None = None,
+        *,
+        memo: Memo | None = None,
     ) -> list[TargetSpec]:
         """One spec per project of the rule's scope (none for a deleted rule). `current` (the
         rule's targets now; read when not given) keeps a tool target in its tool while the tool's
@@ -203,11 +225,32 @@ class AlertSync:
         now_at = {t.project_id: t for t in current if not t.leaving}
         specs: list[TargetSpec] = []
         for project in await self.scope_projects(rule.scope_kind, rule.scope_id):
-            specs.append(await self._spec(rule, project, now_at.get(project.id)))
+            specs.append(await self._spec(rule, project, now_at.get(project.id), memo))
         return specs
 
+    async def _capability(self, source: SourceConfig, memo: Memo | None) -> AlertingCapability:
+        """The source's capability; CapabilityUnknown. With `memo`, asked once per pass."""
+        if memo is not None and source.id in memo:
+            known = memo[source.id]
+            if isinstance(known, CapabilityUnknown):
+                raise known
+            return known
+        try:
+            capability = await self._services.capabilities.get(source)
+        except CapabilityUnknown as exc:
+            if memo is not None:
+                memo[source.id] = exc
+            raise
+        if memo is not None:
+            memo[source.id] = capability
+        return capability
+
     async def _spec(
-        self, rule: RuleRecord, project: Project, existing: TargetRecord | None
+        self,
+        rule: RuleRecord,
+        project: Project,
+        existing: TargetRecord | None,
+        memo: Memo | None = None,
     ) -> TargetSpec:
         cond = rule.condition
         checked = eval_expr(rule.expr, cond.of)
@@ -236,7 +279,7 @@ class AlertSync:
                 note = problem
             else:
                 try:
-                    capability = await self._services.capabilities.get(source)
+                    capability = await self._capability(source, memo)
                 except CapabilityUnknown as exc:
                     if (
                         existing is not None
@@ -277,44 +320,56 @@ class AlertSync:
                 del self._waiting[rule_id]
                 del self._locks[rule_id]
 
-    async def reconcile_rule(self, rule_id: str, *, changed: bool = False) -> list[AlertChange]:
+    async def reconcile_rule(
+        self, rule_id: str, *, changed: bool = False, memo: Memo | None = None
+    ) -> list[AlertChange]:
         """Bring the rule's targets in line with `desired` and hand tool work to the ToolSync.
         `changed`: what the rule says changed (a save), so every target in a tool is handed over
-        too, even one whose own fields stayed the same. Nothing for a rule that is gone."""
-        async with self._lock(rule_id):
-            return await self._reconcile(rule_id, changed)
+        too, even one whose own fields stayed the same. Nothing for a rule that is gone.
 
-    async def _reconcile(self, rule_id: str, changed: bool) -> list[AlertChange]:
+        Cancelling it never lands between writing the targets and handing them to the tool
+        sync: that part runs to its end first."""
+        async with self._lock(rule_id):
+            alerts = self._services.alerts
+            for attempt in range(ATTEMPTS):
+                try:
+                    rule = await alerts.get_rule(rule_id)
+                except UnknownRule:
+                    return []
+                specs = await self.desired(rule, await alerts.targets(rule_id=rule_id), memo=memo)
+                last = attempt == ATTEMPTS - 1
+                done = await _uncancelled(self._write(rule, specs, changed=changed, last=last))
+                if done is not _AGAIN:
+                    return done
+            return []
+
+    async def _write(self, rule: RuleRecord, specs: list[TargetSpec], *, changed: bool, last: bool):
+        """Write the targets (or `_AGAIN` when the rule changed meanwhile and this isn't the last
+        try; the last one writes what it worked out: the specs don't depend on anything that
+        changes without a reconcile of its own), then remove, mark and hand over what that
+        changed."""
         services = self._services
         alerts = services.alerts
-        diff = None
-        for attempt in range(ATTEMPTS):
-            try:
-                rule = await alerts.get_rule(rule_id)
-            except UnknownRule:
+        rule_id = rule.id
+        async with services.sessionmaker.begin() as session:
+            await lock_first(session)
+            row = await session.get(AlertRuleRow, rule_id)
+            if row is None:
                 return []
-            specs = await self.desired(rule, await alerts.targets(rule_id=rule_id))
-            async with services.sessionmaker.begin() as session:
-                await lock_first(session)
-                row = await session.get(AlertRuleRow, rule_id)
-                if row is None:
-                    return []
-                moved = row.version != rule.version or (row.deleted_at is None) != (
-                    rule.deleted_at is None
-                )
-                if moved and attempt < ATTEMPTS - 1:
-                    continue  # changed meanwhile: work it out again from what it is now
-                if row.deleted_at is not None:
-                    specs = []
-                # A project deleted meanwhile gets no target.
-                ids = [s.project_id for s in specs]
-                alive = set(
-                    await session.scalars(select(ProjectRecord.id).where(ProjectRecord.id.in_(ids)))
-                )
-                specs = [s for s in specs if s.project_id in alive]
-                diff = await alerts.put_targets(rule_id, specs, session=session)
-            break
-        assert diff is not None
+            moved = row.version != rule.version or (row.deleted_at is None) != (
+                rule.deleted_at is None
+            )
+            if moved and not last:
+                return _AGAIN  # changed meanwhile: work it out again from what it is now
+            if row.deleted_at is not None:
+                specs = []
+            # A project deleted meanwhile gets no target.
+            ids = [s.project_id for s in specs]
+            alive = set(
+                await session.scalars(select(ProjectRecord.id).where(ProjectRecord.id.in_(ids)))
+            )
+            specs = [s for s in specs if s.project_id in alive]
+            diff = await alerts.put_targets(rule_id, specs, session=session)
         try:
             rule = await alerts.get_rule(rule_id)
         except UnknownRule:  # its owner was deleted meanwhile, with its targets
@@ -429,14 +484,19 @@ class AlertSync:
 
     async def reconcile_all(self) -> None:
         """Every rule, deleted ones still removing their targets included (at startup, after the
-        migrations, before the engine starts). A rule that fails is logged and left for the next
-        start; the others carry on."""
-        for rule in await self._services.alerts.list_rules(include_deleted=True):
-            try:
-                await self.reconcile_rule(rule.id)
-            except Exception as exc:  # noqa: BLE001 (startup goes on; logged by type)
-                log.warning(
-                    "Bringing alert rule %s's targets up to date failed (%s)",
-                    rule.id,
-                    type(exc).__name__,
-                )
+        migrations; see `MonitoringServices.start_alerts`). Each source's capability is asked at
+        most once in the pass. A rule that fails is logged and left for the next start, the
+        others carry on, and nothing in here ever stops the app."""
+        try:
+            memo: Memo = {}
+            for rule in await self._services.alerts.list_rules(include_deleted=True):
+                try:
+                    await self.reconcile_rule(rule.id, memo=memo)
+                except Exception as exc:  # noqa: BLE001 (the others carry on; logged by type)
+                    log.warning(
+                        "Bringing alert rule %s's targets up to date failed (%s)",
+                        rule.id,
+                        type(exc).__name__,
+                    )
+        except Exception as exc:  # noqa: BLE001 (startup goes on; logged by type)
+            log.warning("Bringing alert rules up to date failed (%s)", type(exc).__name__)

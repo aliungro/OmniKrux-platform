@@ -2,22 +2,30 @@
 filter, targets that follow the projects, tool targets that don't flap, and the capability
 cache."""
 
+import asyncio
+import logging
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 
+import yaml
 from fastapi.testclient import TestClient
 
+from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
 from omnikrux.main import create_app
-from omnikrux.monitoring.alerts.engine import no_source_copy
-from omnikrux.monitoring.alerts.store import HistoryRecord, RuleSpec
-from omnikrux.monitoring.alerts.sync import UNKNOWN_CAPABILITY
+from omnikrux.monitoring import services as services_module
+from omnikrux.monitoring.alerts.engine import AlertEngine, no_source_copy
+from omnikrux.monitoring.alerts.store import AlertStore, HistoryRecord, RuleSpec
+from omnikrux.monitoring.alerts.sync import UNKNOWN_CAPABILITY, AlertSync
 from omnikrux.monitoring.alerts.types import Condition, Engine
 from omnikrux.monitoring.projects.types import Matcher
 from omnikrux.monitoring.sources.capability import CapabilityCache, CapabilityUnknown
 from omnikrux.monitoring.sources.connector import AlertingCapability, ConnectorRegistry
+from omnikrux.monitoring.sources.discovery import Discovery
 from omnikrux.monitoring.sources.transport import SourceUnreachable
+from tests.fakekube import kubeconfig_for, prometheus_operator
 from tests.monitoring.conftest import new_source
 
 
@@ -246,3 +254,218 @@ def test_startup_reconciles_every_rule(tmp_path):
         assert target.rule_id == rule.id and 'cluster="a"' in target.rule_text
         rules = client.portal.call(partial(services.alerts.list_rules, include_deleted=True))
         assert [r.id for r in rules] == [rule.id]
+
+
+OPERATOR_GROUP = "monitoring.coreos.com"
+
+
+async def _cluster_rule_setup(http, app, fake_api, cluster_id: str, fake_prometheus) -> dict:
+    """A Prometheus reached through the cluster (the Operator served), a project "Apps" on it
+    and a group "Ops" holding it; answers their ids."""
+    prometheus_operator(fake_api)
+    fake_api.service_backends[("monitoring", "kps-prometheus:9090")] = fake_prometheus.url
+    source = await http.post(
+        "/api/monitoring/sources",
+        json={
+            "type": "prometheus",
+            "reach": "cluster",
+            "cluster_id": cluster_id,
+            "namespace": "monitoring",
+            "service": "kps-prometheus",
+            "port": "9090",
+            "name": "In cluster",
+        },
+    )
+    assert source.status_code == 201, source.text
+    project = await http.post(
+        "/api/monitoring/setup",
+        json={
+            "name": "Apps",
+            "kind": "custom",
+            "sources": [{"source_id": source.json()["id"], "filter": 'cluster="c"'}],
+        },
+    )
+    assert project.status_code == 201, project.text
+    services = app.state.monitoring
+    group = await services.groups.create("Ops", [project.json()["id"]])
+    return {"source": source.json()["id"], "project": project.json()["id"], "group": group.id}
+
+
+def _quick_probes(app, seconds: float = 0.3) -> CapabilityCache:
+    """A fresh capability cache whose cluster probes give up after `seconds`."""
+    state, services = app.state, app.state.monitoring
+    discovery = Discovery(
+        state.connections,
+        state.registry,
+        services.transports,
+        services.connectors,
+        services.sources,
+        probe_seconds=seconds,
+    )
+    services.capabilities = CapabilityCache(
+        services.connectors, services.transports, discovery, state.registry
+    )
+    return services.capabilities
+
+
+def _operator_asks(fake_api) -> int:
+    return sum(1 for p in fake_api.paths if p == f"/apis/{OPERATOR_GROUP}/v1")
+
+
+async def test_an_unreachable_cluster_never_moves_a_rule(
+    monitoring_app, fake_api, kube_cluster, fake_prometheus
+):
+    http, app = monitoring_app
+    services = app.state.monitoring
+    ids = await _cluster_rule_setup(http, app, fake_api, kube_cluster, fake_prometheus)
+    rule = await services.alerts.create_rule(spec("group", ids["group"], engine="tool"))
+    await services.alert_sync.reconcile_rule(rule.id)
+    [target] = await services.alerts.targets(rule_id=rule.id)
+    assert target.engine == "tool" and target.tool_kind == "prometheus_rule"
+
+    # The cluster stops answering: that is "can't tell", never "no Operator".
+    fake_api.hanging_groups.add(OPERATOR_GROUP)
+    cache = _quick_probes(app)
+    source = await services.sources.get(ids["source"])
+    cluster = await app.state.registry.get(kube_cluster)
+    try:
+        for _ in range(2):
+            try:
+                await cache.get(source)
+            except CapabilityUnknown as exc:
+                assert exc.status == 504
+                assert exc.message == f"Couldn't check {cluster.name}. Try again."
+            else:
+                raise AssertionError("an unanswered probe must raise")
+        assert _operator_asks(fake_api) == 2 + 1  # nothing unknown was remembered
+
+        await services.alert_sync.reconcile_rule(rule.id, changed=True)
+        [kept] = await services.alerts.targets(rule_id=rule.id)
+        assert kept.id == target.id and kept.engine == "tool"
+        assert kept.tool_kind == "prometheus_rule" and kept.engine_note is None
+    finally:
+        fake_api.release.set()
+
+    # A cluster that answers 503 for the group can't tell either.
+    fake_api.hanging_groups.clear()
+    fake_api.broken_groups.add(OPERATOR_GROUP)
+    try:
+        await _quick_probes(app).get(source)
+    except CapabilityUnknown as exc:
+        assert exc.status == 502
+    else:
+        raise AssertionError("a refused probe must raise")
+    # And a cluster that answers without the Operator's group is a real "no".
+    fake_api.broken_groups.clear()
+    fake_api.resources = [r for r in fake_api.resources if r.group != OPERATOR_GROUP]
+    answer = await _quick_probes(app).get(source)
+    assert answer.tool_engine is None and answer.reason is not None
+
+
+async def test_one_pass_asks_each_source_once(
+    monitoring_app, fake_api, kube_cluster, fake_prometheus
+):
+    http, app = monitoring_app
+    services = app.state.monitoring
+    ids = await _cluster_rule_setup(http, app, fake_api, kube_cluster, fake_prometheus)
+    for name in ("One", "Two", "Three"):
+        await services.alerts.create_rule(spec("group", ids["group"], engine="tool", name=name))
+    fake_api.hanging_groups.add(OPERATOR_GROUP)
+    _quick_probes(app)
+    before = _operator_asks(fake_api)
+    try:
+        await services.alert_sync.reconcile_all()
+    finally:
+        fake_api.release.set()
+    assert _operator_asks(fake_api) - before == 1
+    # Nothing could tell whether the tool runs rules, and nothing was there before: OmniKrux
+    # checks them, and says why.
+    for target in await services.alerts.targets():
+        assert target.engine == "omnikrux"
+        assert target.engine_note.startswith("Couldn't check whether In cluster can run rules")
+
+
+async def test_startup_never_waits_long_on_an_unreachable_cluster(
+    tmp_path, fake_api, fake_prometheus, monkeypatch
+):
+    settings = Settings(
+        data_dir=tmp_path,
+        kubeconfig="",
+        in_container=False,
+        rewrite_loopback=False,
+        alert_engine=False,
+    )
+    import httpx
+
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        [info] = await app.state.registry.upsert_from_kubeconfig(
+            yaml.safe_dump(kubeconfig_for(fake_api)), rewrite_loopback=False, source=SOURCE_UPLOAD
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http:
+            ids = await _cluster_rule_setup(http, app, fake_api, info.id, fake_prometheus)
+        await app.state.monitoring.alerts.create_rule(spec("group", ids["group"], engine="tool"))
+
+    fake_api.hanging_groups.add(OPERATOR_GROUP)
+    monkeypatch.setattr(services_module, "STARTUP_RECONCILE_SECONDS", 0.5)
+    started: list[bool] = []
+    monkeypatch.setattr(AlertEngine, "start", lambda self: started.append(True))
+    app = create_app(settings)
+    began = time.monotonic()
+    try:
+        async with app.router.lifespan_context(app):
+            # The probe takes 5 s; startup waited 0.5 s and started the engine.
+            assert time.monotonic() - began < 4
+            assert started == [True]
+            task = app.state.monitoring.startup_reconcile
+            assert task is not None and not task.done()
+        assert task.done()  # closing the app ended it
+    finally:
+        fake_api.release.set()
+
+
+def test_a_failing_startup_reconcile_never_stops_the_app(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+
+    async def broken(self, **kwargs):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(AlertStore, "list_rules", broken)
+    settings = Settings(data_dir=tmp_path, kubeconfig="", in_container=False, alert_engine=False)
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/monitoring/sources").status_code == 200
+    assert "Bringing alert rules up to date failed (RuntimeError)" in caplog.text
+    assert "the database went away" not in caplog.text
+
+
+async def test_a_reconcile_cancelled_while_writing_finishes_the_hand_over(
+    monitoring_app, two_projects_on_one_source
+):
+    _, app = monitoring_app
+    services = app.state.monitoring
+    pair = two_projects_on_one_source
+    group = await services.groups.create("Both", [pair.a, pair.b])
+    handed: list[str] = []
+    gate = asyncio.Event()
+
+    class Slow:
+        async def after_change(self, target, rule):
+            gate.set()
+            await asyncio.sleep(0.2)
+            handed.append(target.project_id)
+
+    async def get(source, *, refresh=False):
+        return AlertingCapability(True, "prometheus_rule", None)
+
+    services.capabilities.get = get
+    sync = AlertSync(services, tool_sync=Slow())
+    rule = await services.alerts.create_rule(spec("group", group.id, engine="tool"))
+    task = asyncio.create_task(sync.reconcile_rule(rule.id))
+    await gate.wait()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert task.cancelled()
+    # Both targets were written, and both were handed to the tool sync before it stopped.
+    assert sorted(handed) == sorted([pair.a, pair.b])
+    assert len(await services.alerts.targets(rule_id=rule.id)) == 2
