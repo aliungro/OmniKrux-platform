@@ -42,9 +42,8 @@ async def test_firing_reaches_the_webhook_once(engine_env):
     env.prom.results[SENT] = vector(({"route": "/a"}, 0.4))
     rule, _ = await env.add_rule()
 
-    for minute in range(5):  # checked every minute, as the loop does
-        await env.tick(T0 + minute * MIN)
-        assert (await env.target(rule)).state == "pending"
+    await env.tick(T0)
+    assert (await env.target(rule)).state == "pending"
     assert env.webhook.requests == []
     await env.tick(T0 + 5 * MIN)
     assert [b["status"] for b in env.webhook.bodies()] == ["firing"]
@@ -53,8 +52,8 @@ async def test_firing_reaches_the_webhook_once(engine_env):
 
     # Every query went through the project's filter, at the time of the check.
     sent = env.queries()
-    assert [q.params["query"] for q in sent] == [[SENT]] * 7
-    assert float(sent[5].params["time"][0]) == (T0 + 5 * MIN).timestamp()
+    assert [q.params["query"] for q in sent] == [[SENT]] * 3
+    assert float(sent[1].params["time"][0]) == (T0 + 5 * MIN).timestamp()
 
     [body] = env.webhook.bodies()
     assert body["rule"] == NAME and body["project"] == "Shop" and body["severity"] == "warning"
@@ -453,3 +452,18 @@ async def test_an_orphaned_target_is_held_and_not_behind(engine_env):
     assert (report.evaluated, report.behind) == (1, 0)
     assert len(env.queries()) == asked  # it never reached the source
     assert (await env.target(rule)).last_eval_at == T0
+
+
+async def test_late_checks_keep_the_pending_timer(engine_env):
+    env = engine_env
+    env.prom.results[SENT] = vector(({"route": "/a"}, 0.4))
+    rule, _ = await env.add_rule(for_seconds=120, every=30)
+    late = 70 * SEC  # every 30 s, each check 40 s late (a busy engine)
+    await env.tick(T0)
+    await env.tick(T0 + late)
+    [instance] = await env.instances(rule)
+    assert instance.state == "pending" and instance.active_since == T0
+    await env.tick(T0 + 2 * late)  # 140 s since it started: past `for`, on time
+    [instance] = await env.instances(rule)
+    assert instance.state == "firing" and instance.fired_at == T0 + 2 * late
+    assert [b["status"] for b in env.webhook.bodies()] == ["firing"]

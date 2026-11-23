@@ -34,7 +34,10 @@ SLOW_PATTERN = "This pattern could take too long to match. Simplify it."
 # Patterns run on every instance at every check, inside the event loop: they are kept short and
 # without nested repetition (which can backtrack for ever), and run on bounded label values.
 MAX_PATTERN = 200
-MAX_MATCHED = 1024
+MAX_MATCHED = 256
+# Unbounded quantifiers (`*`, `+`, `{n,}`) one pattern may hold: side by side they backtrack
+# polynomially (`.*.*.*.*x` on 1024 characters takes tens of seconds).
+MAX_UNBOUNDED = 2
 
 
 class UnknownSilence(KeyError):
@@ -72,25 +75,37 @@ class Silence:
 _COUNT = re.compile(r"\{(\d*)(,(\d*))?\}")
 
 
-def _quantifier(text: str, i: int) -> tuple[bool, int] | None:
-    """When a quantifier starts at `i`: whether it repeats more than once, and where it ends."""
+def _quantifier(text: str, i: int) -> tuple[bool, bool, int] | None:
+    """When a quantifier starts at `i`: whether it repeats more than once, whether it has no
+    upper bound, and where it ends."""
     c = text[i]
     if c in "*+":
-        return True, i + 1
+        return True, True, i + 1
     if c == "?":
-        return False, i + 1
+        return False, False, i + 1
     if c == "{" and (m := _COUNT.match(text, i)) and (m.group(1) or m.group(3)):
         low, comma, high = m.group(1), m.group(2), m.group(3)
         many = int(low) > 1 if comma is None else (not high or int(high) > 1)
-        return many, m.end()
+        return many, comma is not None and not high, m.end()
     return None
 
 
 def nested_repetition(text: str) -> bool:
     """Whether a group that repeats holds a repetition or an alternation, like `(a+)+` or
-    `(a|a)*`: the shapes that can make a match backtrack for ever. A structural check on the
-    text (escapes and character classes skipped); it may refuse a harmless pattern, never lets
-    such a shape through."""
+    `(a|a)*`: the nested shapes that can make a match backtrack for ever. A structural check on
+    the text (escapes and character classes skipped); it may refuse a harmless pattern. Side by
+    side repetitions are `unbounded_count`'s to bound."""
+    return _scan(text)[0]
+
+
+def unbounded_count(text: str) -> int:
+    """How many quantifiers without an upper bound (`*`, `+`, `{n,}`) the pattern holds."""
+    return _scan(text)[1]
+
+
+def _scan(text: str) -> tuple[bool, int]:
+    """(nested repetition found, unbounded quantifiers counted)."""
+    unbounded = 0
     # [repeats inside, alternation inside] for the top level and each open group.
     stack = [[False, False]]
     closed: list[bool] | None = None  # the group that just closed, which a quantifier may follow
@@ -98,9 +113,10 @@ def nested_repetition(text: str) -> bool:
     while i < n:
         q = _quantifier(text, i) if i else None
         if q is not None:
-            many, i = q
+            many, endless, i = q
+            unbounded += endless
             if many and closed is not None and (closed[0] or closed[1]):
-                return True
+                return True, unbounded
             if many:
                 stack[-1][0] = True
             if i < n and text[i] in "?+":  # lazy or possessive
@@ -133,7 +149,7 @@ def nested_repetition(text: str) -> bool:
             if c == "|":
                 stack[-1][1] = True
             i += 1
-    return False
+    return False, unbounded
 
 
 def pattern_problem(label: str, value: str) -> str | None:
@@ -144,7 +160,7 @@ def pattern_problem(label: str, value: str) -> str | None:
         re.compile(value)
     except re.error:
         return BAD_PATTERN.format(label=label)
-    if nested_repetition(value):
+    if nested_repetition(value) or unbounded_count(value) > MAX_UNBOUNDED:
         return SLOW_PATTERN
     return None
 

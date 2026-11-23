@@ -17,6 +17,7 @@ from omnikrux.monitoring.alerts.silences import (
     matches,
     nested_repetition,
     silenced_by,
+    unbounded_count,
 )
 from omnikrux.monitoring.models import now
 from omnikrux.monitoring.projects.types import Matcher
@@ -157,6 +158,8 @@ async def test_create_refuses_patterns_that_could_stall(stores):
     for value, copy in (
         ("(a|a)*", SLOW_PATTERN),
         ("(a+)+b", SLOW_PATTERN),
+        (".*.*.*.*x", SLOW_PATTERN),
+        ("a+b+c+", SLOW_PATTERN),
         ("a" * 201, LONG_PATTERN.format(label="route")),
         ("(", BAD_PATTERN.format(label="route")),
     ):
@@ -169,6 +172,8 @@ async def test_create_refuses_patterns_that_could_stall(stores):
     )
     kept = await store.create((Matcher("route", "=~", "a" * 200),), T0, T0 + MIN, "", "local")
     assert kept.matchers[0].value == "a" * 200
+    two = await store.create((Matcher("alertname", "=~", ".*foo.*"),), T0, T0 + MIN, "", "local")
+    assert two.matchers[0].value == ".*foo.*"
 
 
 def test_patterns_run_on_bounded_values_and_unusable_ones_never_hold():
@@ -190,3 +195,19 @@ async def test_prune_drops_silences_ended_a_week_ago(stores):
     left = await store.list(include_expired_since=moment - 30 * DAY)
     assert sorted(s.id for s in left) == sorted([recent.id, live.id])
     assert old.id not in {s.id for s in left}
+
+
+@pytest.mark.parametrize(
+    "pattern, count",
+    [
+        (".*.*.*.*x", 4),
+        (".*foo.*", 2),
+        ("a{2,}b+c*", 3),
+        ("a{2}b{1,3}c?", 0),
+        ("[.*+]x", 0),
+        (r"\*\*\*", 0),
+        ("a+?b*+", 2),
+    ],
+)
+def test_unbounded_quantifiers_are_counted(pattern, count):
+    assert unbounded_count(pattern) == count

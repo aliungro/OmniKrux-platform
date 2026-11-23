@@ -17,7 +17,8 @@ A failed query never reads as OK: the target is `unreachable` (the source can't 
 were (nothing resolves). After `CANT_CHECK_AFTER` failures in a row one "can't check" notice goes
 out, repeated every `REPEAT_SECONDS` while it lasts; the first check that works after that sends
 "checking again". A pending timer never counts time nobody checked: after a failure, or when the
-last check was more than two intervals ago (a restart, a pause), pending instances start over.
+first check after a restart or a change of the rule (a pause and resume) comes more than two
+intervals after the last one, pending instances start over; a check that is merely late keeps them.
 An answer cut at MAX_SERIES series is an `error` too: the series it left out never resolve."""
 
 from __future__ import annotations
@@ -170,6 +171,8 @@ class AlertEngine:
         self._loop_task: asyncio.Task | None = None
         self._running: dict[str, asyncio.Task] = {}
         self._writes: set[asyncio.Task] = set()
+        # Targets checked since this engine started: a restart's first check restores first.
+        self._seen: set[str] = set()
         self._cant_check_at: dict[str, datetime] = {}
         self._hold: dict[str, datetime] = {}
         self._last_tick_at: datetime | None = None
@@ -314,6 +317,7 @@ class AlertEngine:
         self._targets, self._rules = len(live), len({t.rule_id for t in live})
         self._counted_at = now
         ids = {t.id for t in targets}
+        self._seen &= ids
         for kept in (self._cant_check_at, self._hold):
             for gone in [id for id in kept if id not in ids]:
                 del kept[gone]
@@ -484,11 +488,15 @@ class AlertEngine:
                     history.append(entry("cant_check", message=outcome.message))
                 state, message = outcome.state, outcome.message
             else:
-                # A pending timer never counts time nobody checked (a restart, a pause, a
-                # long-running check): pending is kept only after a recent check.
-                previous = restored(
-                    await alerts.instances(target.id), fresh.last_eval_at, every, now
-                )
+                previous = await alerts.instances(target.id)
+                # A pending timer never counts time nobody checked. Where checks may have been
+                # missed (the first check since a restart; the rule changed since the last
+                # check, like a pause and resume) pending is kept only after a recent check. An
+                # ordinary late check keeps it: a busy engine must not keep restarting `for`.
+                # Both `updated_at` are written by the store's own clock, so they compare.
+                missed = target.id not in self._seen or rule.updated_at > fresh.updated_at
+                if missed:
+                    previous = restored(previous, fresh.last_eval_at, every, now)
                 if fresh.failures:
                     # Nobody checked during the failures: pending timers start over.
                     previous = [p for p in previous if p.state == "firing"]
@@ -521,6 +529,7 @@ class AlertEngine:
                     await alerts.replace_instances(target.id, result.instances, session=session)
                 await alerts.add_history(history, session=session)
         if result is not None:
+            self._seen.add(target.id)
             self._cant_check_at.pop(target.id, None)
         if cant_check:
             self._cant_check_at[target.id] = now
