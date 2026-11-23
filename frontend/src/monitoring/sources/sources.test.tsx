@@ -7,7 +7,7 @@ import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SourceForm } from "./SourceForm";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
-import { sourceTypeLabel, whereLabel } from "./sourceLabels";
+import { isQueryable, sourceTypeLabel, whereLabel } from "./sourceLabels";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -50,6 +50,24 @@ describe("Sources page", () => {
     expect(await screen.findByText("Used by Dev")).toBeTruthy();
     expect(screen.getByText("Not used by a project")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: /^Delete/ })).toHaveLength(2);
+  });
+
+  it("an Alertmanager source can be added by hand", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({}, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    await user.selectOptions(screen.getByLabelText("Type"), "alertmanager");
+    const address = screen.getByLabelText("Address") as HTMLInputElement;
+    expect(address.placeholder).toBe("http://alertmanager.example:9093");
+    expect((screen.getByLabelText("Name") as HTMLInputElement).placeholder).toBe("Alertmanager · address");
+    await user.type(address, "http://alertmanager.example:9093");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(api.state.sources).toHaveLength(1));
+    expect(api.state.sources[0].type).toBe("alertmanager");
+    expect(sourceTypeLabel("alertmanager")).toBe("Alertmanager");
+    expect(isQueryable("alertmanager")).toBe(false);
+    expect(isQueryable("loki") && isQueryable("prometheus")).toBe(true);
   });
 
   it("adding a source by hand sends no secret back into the page", async () => {

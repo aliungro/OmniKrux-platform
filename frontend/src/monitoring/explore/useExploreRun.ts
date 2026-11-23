@@ -19,6 +19,7 @@ import { buildPanelRun, mergePanelResults, runRequests, type ChartLogLine, type 
 import { GRID_COLUMNS, newPanel, type PanelSpec } from "../dashboards/schema";
 import { stepFor } from "../dashboards/time";
 import { LINES_LIMIT } from "./logLinks";
+import { isQueryable } from "../sources/sourceLabels";
 
 export const EXPLORE_DEBOUNCE_MS = 300;
 
@@ -101,7 +102,7 @@ export function explorePanel(id: string, expr: string, source: Pick<LinkOut, "so
   panel.queries[0] = {
     ...panel.queries[0],
     expr,
-    source: { type: source?.source_type ?? (kind === "logs" ? "loki" : "prometheus"), id: source?.source_id ?? null },
+    source: { type: source && isQueryable(source.source_type) ? source.source_type : (kind === "logs" ? "loki" : "prometheus"), id: source?.source_id ?? null },
   };
   return panel;
 }

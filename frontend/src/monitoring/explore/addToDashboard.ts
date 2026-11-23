@@ -8,6 +8,7 @@ import {
 } from "../dashboards/api";
 import { appendPanel, type NewPanel } from "../dashboards/layout";
 import { DEFAULT_SIZES, emptyDashboard, newPanel, type DashboardSpec, type OwnerKind, type PanelSpec, type PanelType, type Unit } from "../dashboards/schema";
+import { isQueryable } from "../sources/sourceLabels";
 
 export const CHANGED_TWICE = "That dashboard changed twice while adding. Try again.";
 
@@ -57,7 +58,7 @@ export function explorePanel(
     title: input.title,
     queries: [{
       ref: "A",
-      source: { type: input.source.source_type, id: ownerKind === "group" ? null : input.source.source_id },
+      source: { type: isQueryable(input.source.source_type) ? input.source.source_type : "prometheus", id: ownerKind === "group" ? null : input.source.source_id },
       expr: input.expr,
       legend: "",
       hidden: false,

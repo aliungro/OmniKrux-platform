@@ -3,6 +3,7 @@
 // once; the run leaves 300 ms after the typing stops, or at once with Ctrl+Enter (F7).
 import { useId, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 import { pressed } from "../../../features/chrome/shortcuts";
+import { isQueryable } from "../../sources/sourceLabels";
 import { PANEL_COPY } from "../grid/PanelState";
 import type { DashboardOwner, PanelData } from "../runPanel";
 import { MAX_QUERIES, type OwnerKind, type PanelSpec, type QuerySpec, type SourceRef } from "../schema";
@@ -31,7 +32,7 @@ export function sourceChoices(owner: DashboardOwner | null, ownerKind: OwnerKind
       const first = links.find((l) => l.source_type === type);
       if (first) out.push({ value: type, label: `First ${WORDS[type]} source (${first.source_name})`, source: { type, id: null } });
     }
-    for (const l of links) out.push({ value: `id:${l.source_id}`, label: l.source_name, source: { type: l.source_type, id: l.source_id } });
+    for (const l of links) if (isQueryable(l.source_type)) out.push({ value: `id:${l.source_id}`, label: l.source_name, source: { type: l.source_type, id: l.source_id } });
   }
   // What the panel uses, even when the project no longer has it: never shown as something else.
   // While the project is still loading its links aren't known, so nothing is called missing yet.

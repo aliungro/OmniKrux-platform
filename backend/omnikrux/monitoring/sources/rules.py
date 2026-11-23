@@ -37,7 +37,7 @@ from omnikrux.monitoring.sources.types import (
 )
 
 MAX_HEADERS = 20
-LABELS = {"prometheus": "Prometheus", "loki": "Loki"}
+LABELS = {"prometheus": "Prometheus", "loki": "Loki", "alertmanager": "Alertmanager"}
 CLUSTER_ONLY = (
     "A source reached through its cluster uses the cluster's connection; "
     "it takes no other authentication."

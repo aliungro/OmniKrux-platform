@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import userEvent from "@testing-library/user-event";
 import type { QueryResponse } from "../api/types";
 import { recordRecent } from "../home/recent";
-import { gate, intercept, linkedProject, seedDashboard, spec } from "../test/dashboardSeeds";
+import { gate, intercept, linkedProject, linkTo, seedDashboard, spec } from "../test/dashboardSeeds";
 import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeQueryAnswer } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import type { ExploreView } from "../shell/tabState";
@@ -338,6 +338,24 @@ describe("Explore", () => {
     expect(await screen.findByText("Explore reads the sources of a project. Set up a project first.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Set up a project" }));
     expect(await screen.findByRole("heading", { level: 1, name: "New project" })).toBeTruthy();
+  });
+
+  it("Explore never offers an Alertmanager", async () => {
+    installFakeMonitoringApi({
+      projects: [{ ...linkedProject("p1", "Shop", "s1"), links: [linkTo("am", "alertmanager"), linkTo("s1")] }],
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "am" });
+    const source = await screen.findByRole("combobox", { name: "Source" }) as HTMLSelectElement;
+    expect(within(source).queryByRole("option", { name: /Alertmanager/ })).toBeNull();
+    expect(within(source).getAllByRole("option")).toHaveLength(1);
+    expect(source.value).toBe("s1");
+  });
+
+  it("a project with only an Alertmanager has nothing to explore", async () => {
+    installFakeMonitoringApi({ projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("am", "alertmanager")] }] }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1" });
+    expect(await screen.findByText("Shop has no source Explore can query. Add a Prometheus-compatible or Loki source on the project page.")).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Source" })).toBeNull();
   });
 
   it("a project without sources says where to add one", async () => {

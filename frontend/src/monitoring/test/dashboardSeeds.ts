@@ -10,7 +10,7 @@ import { seedProject } from "./renderMonitoringApp";
 const T = "2026-01-01T00:00:00Z";
 
 /** A Prometheus (or Loki) source linked to a project. */
-export const linkTo = (sourceId: string, type: "prometheus" | "loki" = "prometheus"): LinkOut => ({
+export const linkTo = (sourceId: string, type: LinkOut["source_type"] = "prometheus"): LinkOut => ({
   source_id: sourceId, source_name: `${sourceId} name`, source_type: type, filter: "", filter_origin: "none", created_by_project: false,
 });
 

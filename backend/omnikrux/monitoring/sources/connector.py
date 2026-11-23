@@ -28,7 +28,7 @@ from omnikrux.monitoring.sources.transport import (
 )
 from omnikrux.monitoring.sources.types import SourceType
 
-QueryLanguage = Literal["promql", "logql"]
+QueryLanguage = Literal["promql", "logql", "none"]
 QueryRejectedCode = Literal["bad_query", "tool_error", "unauthorized"]
 
 MAX_TOOL_MESSAGE = 300
@@ -230,12 +230,14 @@ class ConnectorRegistry:
 
 def default_connectors() -> ConnectorRegistry:
     # Imported here: the connectors import this module for the shapes above.
+    from omnikrux.monitoring.sources.alertmanager import AlertmanagerConnector
     from omnikrux.monitoring.sources.loki import LokiConnector
     from omnikrux.monitoring.sources.prometheus import PrometheusConnector
 
     registry = ConnectorRegistry()
     registry.register(PrometheusConnector())
     registry.register(LokiConnector())
+    registry.register(AlertmanagerConnector())
     return registry
 
 

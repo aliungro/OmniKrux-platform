@@ -13,7 +13,7 @@ import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/Pro
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
 import { SourceForm } from "../sources/SourceForm";
-import { sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
+import { isQueryable, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
 import { FilterField, validFilter } from "./FilterField";
 import { ProjectDeleteReview } from "./ProjectDeleteReview";
 import s from "./ProjectPage.module.css";
@@ -128,10 +128,12 @@ function LinkRow({ project, link, health, onUnlinked }: {
           </button>
         </div>
         <div className={s.rowActions}>
-          <button type="button" className={s.quiet} aria-label={`Check data for ${link.source_name}`}
-            aria-disabled={check === "busy" || undefined} onClick={() => void runCheck()}>
-            {check === "busy" ? "Checking…" : "Check data"}
-          </button>
+          {isQueryable(link.source_type) && (
+            <button type="button" className={s.quiet} aria-label={`Check data for ${link.source_name}`}
+              aria-disabled={check === "busy" || undefined} onClick={() => void runCheck()}>
+              {check === "busy" ? "Checking…" : "Check data"}
+            </button>
+          )}
           <button type="button" className={s.quiet} aria-label={`Unlink ${link.source_name}`}
             aria-disabled={unlinking || undefined} onClick={() => void unlink()}>Unlink</button>
         </div>

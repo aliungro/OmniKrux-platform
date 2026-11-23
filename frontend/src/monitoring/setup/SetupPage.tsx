@@ -10,7 +10,7 @@ import type { MonitoringPageProps } from "../MonitoringApp";
 import { FilterField } from "../projects/FilterField";
 import { DOT } from "../sidebar/Sidebar";
 import { SourceForm } from "../sources/SourceForm";
-import { sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
+import { autoTypeName, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
 import {
   blockedBy, foundDetail, foundKey, inUse, picksFromDiscovery, setupBody, TOOL_NAMES,
   type SetupDraft, type SetupPick, type SetupStep,
@@ -415,7 +415,7 @@ function SetupFlow({ view, nav, onOpenSettings }: MonitoringPageProps) {
 
   const collect = (body: SourceIn) => {
     const n = ++handCount.current;
-    const label = body.name?.trim() || `${body.type === "loki" ? "Loki" : "Prometheus"} · ${hostOf(body.url) || "address"}`;
+    const label = body.name?.trim() || `${autoTypeName(body.type)} · ${hostOf(body.url) || "address"}`;
     setDraftState((d) => ({
       ...d, picks: [...d.picks, { key: `hand:${n}`, label, detail: body.url ?? "", use: true, source: { new: body }, filter: "", origin: "none", reason: null }],
     }));

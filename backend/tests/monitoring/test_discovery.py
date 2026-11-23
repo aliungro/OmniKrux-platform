@@ -433,7 +433,7 @@ RULE_CASES = [
     ("grafana", {}, "grafana"),
     ("kps-grafana", {}, "grafana"),
     ("prometheus-node-exporter", {}, None),
-    ("alertmanager", {}, None),
+    ("alertmanager", {}, "alertmanager"),
     # A Loki's gossip ring is never a tool, whatever its ports.
     ("loki-memberlist", {"app.kubernetes.io/name": "loki"}, None),
     ("ring", {"app.kubernetes.io/name": "loki", "app.kubernetes.io/part-of": "memberlist"}, None),

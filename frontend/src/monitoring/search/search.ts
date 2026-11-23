@@ -1,4 +1,5 @@
 import type { MonitoringView } from "../shell/tabState";
+import { sourceTypeLabel } from "../sources/sourceLabels";
 import type { ProjectKind, SourceOut, TreeDashboard, TreeOut } from "../api/types";
 
 export type SearchEntry = {
@@ -37,7 +38,7 @@ export function buildSearchIndex(input: { tree: TreeOut; sources: SourceOut[]; c
     for (const d of g.dashboards) entries.push(dashboardEntry(d, g.name));
   }
   for (const s of sources) {
-    entries.push({ kind: "source", id: s.id, name: s.name, subtitle: s.type === "loki" ? "Loki" : "Prometheus-compatible", view: { page: "source", id: s.id } });
+    entries.push({ kind: "source", id: s.id, name: s.name, subtitle: sourceTypeLabel(s.type), view: { page: "source", id: s.id } });
   }
   return entries;
 }

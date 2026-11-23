@@ -10,6 +10,7 @@ import type {
 import type { CatalogOut } from "../catalog/api";
 import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut } from "../dashboards/api";
 import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem } from "../dashboards/schema";
+import { autoTypeName } from "../sources/sourceLabels";
 
 /** A seeded answer to a query: a success (whatever is left out is filled in) or a refusal. */
 export type FakeQueryAnswer = Partial<QueryResponse> | { error: { code: QueryErrorCode; message: string }; status: number };
@@ -138,7 +139,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
   const syncGroupIds = () => state.projects.forEach((p) => { p.group_ids = state.groups.filter((g) => g.project_ids.includes(p.id)).map((g) => g.id); });
 
   function addSource(body: SourceIn, createdBy: string | null): SourceOut | Response {
-    const name = body.name == null ? (body.type === "loki" ? "Loki" : "Prometheus") : cleanName(body.name);
+    const name = body.name == null ? (autoTypeName(body.type)) : cleanName(body.name);
     if (name === null) return refuse(NAME_RULE, 422);
     if (state.sources.some((s) => sameName(s.name, name))) return taken("source", name);
     const source: SourceOut = {

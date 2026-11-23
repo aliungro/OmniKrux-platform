@@ -40,6 +40,9 @@ from omnikrux.monitoring.sources.types import SourceConfig, SourceType
 if TYPE_CHECKING:
     from omnikrux.monitoring.services import MonitoringServices
 
+# The sources whose contents a catalog lists; an Alertmanager holds alerts, not metrics or logs.
+QUERYABLE_TYPES: frozenset[str] = frozenset({"prometheus", "loki"})
+
 CATALOG_TTL = 300.0
 CATALOG_ERROR_TTL = 30.0
 CATALOG_REFRESH_GAP = 10.0
@@ -228,6 +231,8 @@ async def project_catalog(
             source = await services.sources.get(link.source_id)
         except KeyError:
             return None
+        if source.type not in QUERYABLE_TYPES:
+            return None  # an Alertmanager holds no metrics or logs
         try:
             key = catalog_key(project_id, link, source)
         except FilterError as exc:

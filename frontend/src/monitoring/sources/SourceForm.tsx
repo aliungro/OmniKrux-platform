@@ -5,7 +5,7 @@ import { createSource, testNewSource, testSource, updateSource } from "../api/cl
 import { invalidateMonitoring } from "../api/hooks";
 import type { AuthIn, AuthType, HeaderIn, SourceIn, SourceOut, SourcePatch, SourceType, TestOut } from "../api/types";
 import { escapeCloses } from "../focus";
-import { sourceTypeLabel } from "./sourceLabels";
+import { ADDRESS_EXAMPLE, autoTypeName, sourceTypeLabel } from "./sourceLabels";
 import s from "./SourceForm.module.css";
 
 const MAX_HEADERS = 20;
@@ -111,7 +111,7 @@ export function SourceForm(props: SourceFormProps) {
 
   const setSecret = (k: keyof Secrets) => (v: string) => setSecrets((cur) => ({ ...cur, [k]: v }));
   const sameType = stored?.type === authType;
-  const autoName = `${type === "loki" ? "Loki" : "Prometheus"} · ${hostOf(url) || "address"}`;
+  const autoName = `${autoTypeName(type)} · ${hostOf(url) || "address"}`;
 
   /** The source as entered, or the words for what is missing. */
   function build(): { body: SourceIn; patch: SourcePatch } | string {
@@ -201,6 +201,7 @@ export function SourceForm(props: SourceFormProps) {
         <select id={`${ids}-type`} className={s.input} value={type} onChange={(e) => setType(e.target.value as SourceType)}>
           <option value="prometheus">{sourceTypeLabel("prometheus")}</option>
           <option value="loki">{sourceTypeLabel("loki")}</option>
+          <option value="alertmanager">{sourceTypeLabel("alertmanager")}</option>
         </select>
       </div>
       {byCluster ? (
@@ -209,7 +210,7 @@ export function SourceForm(props: SourceFormProps) {
         <div className={s.field}>
           <label htmlFor={`${ids}-url`}>Address</label>
           <input id={`${ids}-url`} ref={address} className={s.input} type="text" inputMode="url" autoComplete="off" spellCheck={false}
-            placeholder="http://prometheus.example:9090" value={url} onChange={(e) => setUrl(e.target.value)} />
+            placeholder={ADDRESS_EXAMPLE[type]} value={url} onChange={(e) => setUrl(e.target.value)} />
         </div>
       )}
       <div className={s.field}>

@@ -3,9 +3,10 @@ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import type { GroupOut } from "../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { linkedProject, linkTo, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { DashboardSpec, PanelSpec } from "../schema";
+import { sourceChoices } from "./QueryTab";
 import { editSessions } from "./useDashboardEditor";
 
 // The chart chunk as a stub.
@@ -125,6 +126,12 @@ describe("The panel side panel", () => {
     await user.keyboard("{Enter}");
     await user.click(within(settings()).getByRole("button", { name: "Close panel settings" }));
     expect(document.activeElement).toBe(tile("Requests"));
+  });
+
+  it("the Query tab never offers an Alertmanager", () => {
+    const project = { ...linkedProject("p1", "Shop", "s1"), links: [linkTo("s1"), linkTo("am", "alertmanager")] };
+    const choices = sourceChoices({ kind: "project", project }, "project", { type: "prometheus", id: null });
+    expect(choices.map((c) => c.label)).toEqual(["First Prometheus-compatible source (s1 name)", "s1 name"]);
   });
 
   it("group source choices are per project", async () => {

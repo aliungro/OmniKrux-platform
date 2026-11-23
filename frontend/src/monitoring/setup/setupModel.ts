@@ -1,6 +1,6 @@
 // The setup page's draft and the rules around it. Nothing here is stored or cached: the draft can
 // hold secrets typed for a new source, so it lives in the page's state until "Create project".
-import type { DiscoveryOut, FilterOrigin, FoundTool, ProjectKind, SetupIn, SetupSourceIn, SourceIn, SourceOut } from "../api/types";
+import type { DiscoveryOut, FilterOrigin, FoundTool, ProjectKind, SetupIn, SetupSourceIn, SourceIn, SourceOut, SourceType } from "../api/types";
 import { validFilter } from "../projects/FilterField";
 
 /** Step 3 (import) comes in a later update, so the page skips it. */
@@ -28,7 +28,7 @@ export type SetupDraft = {
   name: string;
 };
 
-export const TOOL_NAMES: Record<FoundTool["type"], string> = { prometheus: "Prometheus", loki: "Loki", grafana: "Grafana" };
+export const TOOL_NAMES: Record<FoundTool["type"], string> = { prometheus: "Prometheus", loki: "Loki", grafana: "Grafana", alertmanager: "Alertmanager" };
 
 export const foundKey = (t: FoundTool): string => `found:${t.type}:${t.namespace ?? ""}/${t.service ?? ""}`;
 
@@ -39,7 +39,7 @@ export function foundDetail(t: FoundTool): string {
 }
 
 /**
- * The Prometheus and Loki found in a cluster as picks: a reachable one is in use, one that can't
+ * The Prometheus, Loki and Alertmanager found in a cluster as picks: a reachable one is in use, one that can't
  * be reached is not, and one that is already a source is reused rather than added again.
  */
 export function picksFromDiscovery(d: DiscoveryOut, existing: SourceOut[]): SetupPick[] {
@@ -47,7 +47,7 @@ export function picksFromDiscovery(d: DiscoveryOut, existing: SourceOut[]): Setu
   return d.found
     .filter((t) => t.type !== "grafana" && t.state !== "missing")
     .map((t) => {
-      const type = t.type as "prometheus" | "loki";
+      const type = t.type as SourceType;
       const known = t.existing_source_id;
       const source: SetupPick["source"] = known
         ? { existingId: known }

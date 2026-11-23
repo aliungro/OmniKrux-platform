@@ -300,6 +300,10 @@
   color: var(--warn);
 }
 
+.badge[data-type="alertmanager"] {
+  color: var(--kind);
+}
+
 .badge[data-type="grafana"] {
   color: var(--oke);
 }

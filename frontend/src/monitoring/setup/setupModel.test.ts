@@ -32,6 +32,15 @@ const pick = (over: Partial<SetupPick>): SetupPick => ({
 const draft = (over: Partial<SetupDraft>): SetupDraft => ({ step: 2, kind: "kubernetes", clusterId: "c1", picks: [], name: "", ...over });
 
 describe("setup model", () => {
+  it("picksFromDiscovery uses a reachable Alertmanager", () => {
+    const [am] = picksFromDiscovery(discovery(tool("alertmanager", "reachable", { port: "9093" })), []);
+    expect(am.use).toBe(true);
+    expect(am.label).toBe("Alertmanager");
+    expect(am.source).toEqual({
+      new: { type: "alertmanager", reach: "cluster", cluster_id: "c1", namespace: "monitoring", service: "alertmanager-server", port: "9093", scheme: "http" },
+    });
+  });
+
   it("picksFromDiscovery uses reachable tools and reuses existing sources", () => {
     const picks = picksFromDiscovery(discovery(
       tool("prometheus", "reachable"),

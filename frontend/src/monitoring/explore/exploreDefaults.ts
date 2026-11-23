@@ -1,5 +1,6 @@
 // What Explore opens on when its view doesn't say: the project, the source and the time range.
 
+import { isQueryable } from "../sources/sourceLabels";
 import type { LinkOut, ProjectOut, TreeOut } from "../api/types";
 import type { TimeSpec } from "../dashboards/schema";
 import { resolveTime } from "../dashboards/time";
@@ -19,7 +20,7 @@ export function defaultExploreProject(view: Pick<ExploreView, "project">, tree: 
 
 /** The view's source when the project links it; else the first Prometheus-compatible link; else the first Loki link. */
 export function defaultExploreSource(project: ProjectOut, sourceId?: string): LinkOut | null {
-  const named = sourceId ? project.links.find((l) => l.source_id === sourceId) : undefined;
+  const named = sourceId ? project.links.find((l) => l.source_id === sourceId && isQueryable(l.source_type)) : undefined;
   return named ?? project.links.find((l) => l.source_type === "prometheus") ?? project.links.find((l) => l.source_type === "loki") ?? null;
 }
 

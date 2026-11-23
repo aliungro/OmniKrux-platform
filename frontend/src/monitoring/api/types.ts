@@ -1,14 +1,14 @@
 // TypeScript mirrors of the backend's pydantic models for `/api/monitoring/*`, named as they are
 // there. Secrets are write-only: they appear in the `*In` shapes and never in an `*Out`.
 
-export type SourceType = "prometheus" | "loki";
+export type SourceType = "prometheus" | "loki" | "alertmanager";
 export type Reach = "url" | "cluster";
 export type AuthType = "none" | "basic" | "bearer" | "api_key" | "mtls";
 export type ProjectKind = "kubernetes" | "docker" | "servers" | "custom";
 export type FilterOrigin = "auto" | "user" | "none";
 export type HealthState = "up" | "down" | "unknown";
 export type Scheme = "http" | "https";
-export type FoundType = "prometheus" | "loki" | "grafana";
+export type FoundType = "prometheus" | "loki" | "grafana" | "alertmanager";
 export type FoundState = "reachable" | "unreachable" | "missing";
 export type TreeColor = "aks" | "eks" | "gke" | "oke" | "kind" | "onprem" | "custom";
 

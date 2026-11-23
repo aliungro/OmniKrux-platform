@@ -24,6 +24,7 @@ import type { PanelSpec, TimeSpec } from "../dashboards/schema";
 import { resolveTime, timeLabel } from "../dashboards/time";
 import { readRecent } from "../home/recent";
 import type { MonitoringPageProps } from "../MonitoringApp";
+import { isQueryable } from "../sources/sourceLabels";
 import { keyboardIsFree } from "../pages/Gone";
 import { equalMonitoringView, type ExploreView, type MonitoringView } from "../shell/tabState";
 import { DEFAULT_EXPLORE_TIME, defaultExploreProject, defaultExploreSource, exploreTime } from "./exploreDefaults";
@@ -43,7 +44,7 @@ const ChartView = lazy(() => import("../charts"));
 
 /** A run that answered and whose text stayed this long goes into the trail. */
 const TRAIL_SETTLE_MS = 2000;
-const SOURCE_WORDS = { prometheus: "Prometheus-compatible", loki: "Loki" } as const;
+const SOURCE_WORDS = { prometheus: "Prometheus-compatible", loki: "Loki", alertmanager: "Alertmanager" } as const;
 /** Under this width the list folds away behind a button. */
 const NARROW_QUERY = "(max-width: 959px)";
 const ADD_FIRST = "Run a query first.";
@@ -457,7 +458,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
 
   // --- the page ------------------------------------------------------------------------------
   const noProjects = tree.data !== undefined && tree.data.projects.length === 0;
-  const noSources = projectOut !== null && projectOut.links.length === 0;
+  const queryable = projectOut ? projectOut.links.filter((l) => isQueryable(l.source_type)) : [];
+  const noSources = projectOut !== null && queryable.length === 0;
   const working = projectOut !== null && !noSources;
   const shown = trail.slice(-TRAIL_SHOWN);
   const current = source ? trailKey({ expr, sourceId: source.source_id }) : "";
@@ -485,7 +487,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
               <label className={s.field}>
                 <span className={s.fieldLabel}>Source</span>
                 <select className={s.select} value={source?.source_id ?? ""} onChange={(e) => { setSourceId(e.target.value); setBuilder(EMPTY_BUILDER); }}>
-                  {projectOut.links.map((l) => (
+                  {queryable.map((l) => (
                     <option key={l.source_id} value={l.source_id}>{`${l.source_name} · ${SOURCE_WORDS[l.source_type]}`}</option>
                   ))}
                 </select>
@@ -542,7 +544,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
 
       {noSources && projectOut && (
         <div className={s.empty}>
-          <p className={s.emptyText}>{`${projectOut.name} has no sources yet. Add one on the project page.`}</p>
+          <p className={s.emptyText}>{projectOut.links.length === 0 ? `${projectOut.name} has no sources yet. Add one on the project page.` : `${projectOut.name} has no source Explore can query. Add a Prometheus-compatible or Loki source on the project page.`}</p>
           <button type="button" className={s.primary} onClick={() => nav.navigate({ page: "project", id: projectOut.id }, "push")}>
             {`Open ${projectOut.name}`}
           </button>

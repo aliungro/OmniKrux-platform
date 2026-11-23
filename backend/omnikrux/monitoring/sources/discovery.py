@@ -41,7 +41,7 @@ from omnikrux.monitoring.sources.types import ClusterTarget, SourceConfig, Sourc
 
 log = logging.getLogger(__name__)
 
-FoundType = Literal["prometheus", "loki", "grafana"]
+FoundType = Literal["prometheus", "loki", "grafana", "alertmanager"]
 FoundState = Literal["reachable", "unreachable", "missing"]
 Scheme = Literal["http", "https"]
 
@@ -89,14 +89,26 @@ PROMETHEUS_NAMES = (
 LOKI_COMPONENTS = frozenset({"single-binary", "read", "gateway", "query-frontend"})
 LOKI_NAMES = ("loki", "loki-gateway", "loki-read", "loki-query-frontend")
 GRAFANA_NAMES = ("grafana", "*-grafana")
+ALERTMANAGER_LABELS = (
+    ("app.kubernetes.io/name", "alertmanager"),
+    ("app", "alertmanager"),
+    ("operated-alertmanager", "true"),
+)
+ALERTMANAGER_NAMES = (
+    "alertmanager",
+    "alertmanager-main",
+    "alertmanager-operated",
+    "*-alertmanager",
+)
 
 PORT_NAMES = ("http", "http-web", "web", "http-query", "http-metrics", "service")
 PORT_NUMBERS: dict[FoundType, tuple[int, ...]] = {
     "prometheus": (9090, 8481, 8080),
     "loki": (3100, 80),
     "grafana": (3000, 80),
+    "alertmanager": (9093,),
 }
-TYPE_ORDER: tuple[FoundType, ...] = ("prometheus", "loki", "grafana")
+TYPE_ORDER: tuple[FoundType, ...] = ("prometheus", "loki", "grafana", "alertmanager")
 # A tool with no candidate gets one "missing" entry; Grafana is only ever reported when found.
 REPORTED_MISSING: tuple[FoundType, ...] = ("prometheus", "loki")
 
@@ -115,6 +127,8 @@ def tool_type(name: str, labels: Mapping[str, str]) -> FoundType | None:
     gossip ring of a Loki)."""
     if name.endswith("-memberlist") or labels.get("app.kubernetes.io/part-of") == "memberlist":
         return None
+    if any(labels.get(k) == v for k, v in ALERTMANAGER_LABELS) or _named(name, ALERTMANAGER_NAMES):
+        return "alertmanager"
     may_be_prometheus = _component(labels) not in NEVER_PROMETHEUS
     if may_be_prometheus and any(labels.get(k) == v for k, v in PROMETHEUS_LABELS):
         return "prometheus"

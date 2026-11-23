@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
-SourceType = Literal["prometheus", "loki"]
+SourceType = Literal["prometheus", "loki", "alertmanager"]
 Reach = Literal["url", "cluster"]
 AuthType = Literal["none", "basic", "bearer", "api_key", "mtls"]
 ProjectKind = Literal["kubernetes", "docker", "servers", "custom"]
