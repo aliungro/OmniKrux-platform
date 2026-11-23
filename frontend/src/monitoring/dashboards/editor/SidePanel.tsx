@@ -151,7 +151,8 @@ export function SidePanel({
         {tab === "alert" && (
           <AlertTab panel={panel} update={update} owner={owner} ownerKind={ownerKind} panelData={panelData} spec={state.draft}
             dashboardId={state.dashboardId} saved={state.base.panels.find((p) => p.id === id)?.alert ?? null}
-            saveProblems={saveProblems} onDryRun={onDryRun} onOpenRule={onOpenRule} focusRef={alertFocus} />
+            saveProblems={saveProblems} onDryRun={onDryRun} onOpenRule={onOpenRule} focusRef={alertFocus}
+            thresholdText={state.alertText?.[id]} onThresholdText={(text) => dispatch({ type: "alertText", id, text })} />
         )}
       </div>
     </aside>

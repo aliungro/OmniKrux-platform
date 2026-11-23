@@ -33,6 +33,11 @@ export interface EditingState {
   writer: string;
   /** The suggestions rail (D2): open for a draft with no panels. Opening or closing it isn't a draft edit. */
   suggestions: "open" | "closed";
+  /**
+   * By panel id: an alert threshold as typed that isn't a number (the draft keeps the last number
+   * that was). Like JSON text that doesn't apply, it is unsaved work, and Save is refused while any.
+   */
+  alertText?: Record<string, string>;
 }
 
 export type EditorState = { mode: "view" } | EditingState;
@@ -51,6 +56,8 @@ export type EditorAction =
   | { type: "select"; id: string | null }
   | { type: "suggestions"; open: boolean }
   | { type: "sideTab"; tab: SideTab }
+  /** A panel alert's threshold as typed: `text` when it isn't a number, null once it is. Not a draft edit. */
+  | { type: "alertText"; id: string; text: string | null }
   | { type: "setJson"; text: string; ownerKind: OwnerKind }
   | { type: "setDashboard"; update: (d: DashboardSpec) => DashboardSpec }
   /** `sent`: the draft the save sent. A draft that differs from it now stays in edit mode on the new base. */
@@ -82,7 +89,22 @@ export function isDirty(state: EditorState): boolean {
  * answer all ask this one question.
  */
 export function hasUnsavedWork(state: EditorState): boolean {
-  return state.mode === "edit" && (state.jsonText !== null || !sameJson(state.draft, state.base));
+  return state.mode === "edit" && (state.jsonText !== null || badAlertText(state).length > 0 || !sameJson(state.draft, state.base));
+}
+
+/** The panels (in draft order) whose alert threshold, as typed, isn't a number. */
+export function badAlertText(state: EditorState): string[] {
+  if (state.mode !== "edit" || !state.alertText) return [];
+  const text = state.alertText;
+  return state.draft.panels.filter((p) => p.alert !== null && Object.hasOwn(text, p.id)).map((p) => p.id);
+}
+
+/** `text` without `id`'s entry (the same object when it has none). */
+function withoutText(text: Record<string, string> | undefined, ids: readonly string[]): Record<string, string> | undefined {
+  if (!text || !ids.some((id) => Object.hasOwn(text, id))) return text;
+  const out = { ...text };
+  for (const id of ids) delete out[id];
+  return out;
 }
 
 /** Panels whose JSON differs between the two documents, plus panels only `next` has. */
@@ -174,7 +196,10 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (next === panels[at] || sameJson(next, panels[at])) return state;
       const list = panels.slice();
       list[at] = next;
-      return withDraft(state, { ...state.draft, panels: list }, [action.id]);
+      // The alert went, or its threshold was set from elsewhere (Apply): the text typed is replaced.
+      const replaced = next.alert === null || (panels[at].alert !== null && next.alert.threshold !== panels[at].alert!.threshold);
+      const alertText = replaced ? withoutText(state.alertText, [action.id]) : state.alertText;
+      return withDraft(state, { ...state.draft, panels: list }, [action.id], { alertText });
     }
     case "addPanel": {
       const size = DEFAULT_SIZES[action.panelType];
@@ -194,7 +219,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const rest = compact(panels.filter((p) => p.id !== action.id));
       const changes = { ...state.changes };
       delete changes[action.id];
-      const out = withPanels({ ...state, changes }, rest, []);
+      const out = withPanels({ ...state, changes, alertText: withoutText(state.alertText, [action.id]) }, rest, []);
       return { ...out, selected: state.selected === action.id ? null : state.selected };
     }
     case "place": {
@@ -217,6 +242,12 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
     case "sideTab":
       return action.tab === state.sideTab ? state : { ...state, sideTab: action.tab };
+    case "alertText": {
+      const had = state.alertText?.[action.id];
+      if (action.text === null) return had === undefined ? state : { ...state, alertText: withoutText(state.alertText, [action.id]) };
+      if (had === action.text || !panels.some((p) => p.id === action.id && p.alert !== null)) return state;
+      return { ...state, alertText: { ...state.alertText, [action.id]: action.text } };
+    }
     case "setJson": {
       const result = parseDashboardJson(action.text, action.ownerKind);
       if (!result.ok) return { ...state, jsonText: action.text, jsonProblems: result.problems };
@@ -227,7 +258,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "saved":
       // Changed while the save was on its way (JSON text typed that doesn't apply included): keep
       // editing over the version just saved, so nothing typed meanwhile is dropped.
-      if (action.sent !== undefined && (state.jsonText !== null || !sameJson(action.sent, state.draft))) {
+      if (action.sent !== undefined && (state.jsonText !== null || badAlertText(state).length > 0 || !sameJson(action.sent, state.draft))) {
         return { ...state, baseVersion: action.version, base: action.spec };
       }
       return VIEW;
@@ -248,5 +279,11 @@ function applyDocument(state: EditingState, next: DashboardSpec): EditingState {
   const touched = changedPanelIds(state.draft, doc);
   const ids = new Set(panels.map((p) => p.id));
   const selected = state.selected !== null && ids.has(state.selected) ? state.selected : null;
-  return withDraft(state, doc, touched, { selected });
+  // A document that changes a panel's alert (or drops the panel) replaces the threshold typed there.
+  const before = new Map(state.draft.panels.map((p) => [p.id, p.alert]));
+  const stale = Object.keys(state.alertText ?? {}).filter((id) => {
+    const now = panels.find((p) => p.id === id);
+    return now === undefined || now.alert === null || !sameJson(now.alert, before.get(id));
+  });
+  return withDraft(state, doc, touched, { selected, alertText: withoutText(state.alertText, stale) });
 }

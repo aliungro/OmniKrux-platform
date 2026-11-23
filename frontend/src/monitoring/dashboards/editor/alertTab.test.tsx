@@ -9,7 +9,9 @@ import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeMonitoringSt
 import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import { newAlert, type DashboardSpec, type PanelAlert, type PanelSpec } from "../schema";
-import { BAND_NOTE, roundUp2, savedWithWords } from "./AlertTab";
+import { mixedClustersWords } from "../../alerts/rules/clusterWarning";
+import { BAND_NOTE, roundUp2, savedWithWords, startThreshold } from "./AlertTab";
+import { ALERT_SAVE_REFUSED } from "./useDashboardEditor";
 import { hasUnsavedWork } from "./editorState";
 import { editSessions } from "./useDashboardEditor";
 
@@ -114,6 +116,13 @@ describe("The Alert tab", () => {
     const session = editSessions.get("start0")!;
     expect(hasUnsavedWork(session)).toBe(true);
     expect(session.mode === "edit" && JSON.parse(JSON.stringify(session.draft)).panels[0].alert.threshold).toBe(0.32);
+    // Only the query the new alert reads (the first visible) sets where it starts.
+    const two = { ...panel("p-9", "Two", "up"), queries: [panel("x", "", "up").queries[0], { ...panel("x", "", "errors").queries[0], ref: "B" }] } as PanelSpec;
+    const data = { state: "ready" as const, logs: [], problems: [], summary: { series: 2, points: 4, tookMs: 1 }, editId: 0, series: [
+      { key: "a", name: "a", labels: {}, queryRef: "A", projectName: null, points: [[1, 0.312]] as [number, number | null][] },
+      { key: "b", name: "b", labels: {}, queryRef: "B", projectName: null, points: [[1, 5]] as [number, number | null][] },
+    ] };
+    expect(startThreshold(two, data)).toBe(0.32);
     expect(roundUp2(0.312)).toBe(0.32);
     expect(roundUp2(1234)).toBe(1300);
     expect(roundUp2(0.3)).toBe(0.3);
@@ -204,6 +213,55 @@ describe("The Alert tab", () => {
     const view = app.current().tabs[0].view;
     expect(view).toEqual({ page: "dashboard", id: "d1" });
     expect(app.current().tabs[0].back).toHaveLength(0);
+  });
+
+  it("a threshold that isn't a number is never saved as another number", async () => {
+    const api = shop(doc((p) => withAlert(p)));
+    const { user, app } = await openedOnAlert();
+    await waitFor(() => expect(document.activeElement).toBe(threshold()));
+    await user.clear(threshold());
+    await user.type(threshold(), "1,5");
+    // The draft holds the last number typed ("1"); the text stays with the session.
+    expect(draftPanel("p-1").alert!.threshold).toBe(1);
+    await user.click(tabNamed("Query"));
+    await user.click(tabNamed("Alert"));
+    expect(threshold().value).toBe("1,5");
+
+    // Save is refused: nothing is sent, the edit bar says why, and the keyboard is on Threshold.
+    const puts = () => api.requests.filter((r) => r.method === "PUT");
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    expect(await screen.findByText(ALERT_SAVE_REFUSED)).toBeTruthy();
+    expect(puts()).toHaveLength(0);
+    await waitFor(() => expect(document.activeElement).toBe(threshold()));
+    expect(screen.getByText("Editing")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show in JSON" })).toBeNull();
+
+    // It is unsaved work: leaving asks first.
+    app.navigate({ page: "home" }, "push");
+    const leave = await screen.findByRole("alertdialog", { name: 'Leave "API latency" with unsaved changes?' });
+    fireEvent.click(within(leave).getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    // A number again: the refusal goes, and Save writes what the field shows.
+    await user.clear(threshold());
+    await user.type(threshold(), "1.5");
+    expect(screen.queryByText(ALERT_SAVE_REFUSED)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect((puts()[0].body as { spec: DashboardSpec }).spec.panels[0].alert!.threshold).toBe(1.5);
+    await waitFor(() => expect(screen.queryByText("Editing")).toBeNull());
+  });
+
+  it("the warn-harder warning shows when the owner's link may mix clusters", async () => {
+    const project = { ...linkedProject("p1", "Shop", "s1"), kind: "kubernetes" as const, cluster_id: "c1" };
+    shop(doc((p) => withAlert(p)), { projects: [project] });
+    await openedOnAlert();
+    const warning = await waitFor(() => {
+      const el = settings().querySelector("[data-cluster-warning]");
+      if (!el) throw new Error("no warning yet");
+      return el;
+    });
+    expect(warning.textContent).toBe(mixedClustersWords("Shop", "s1 name"));
   });
 
   it("a threshold that would fire often recommends a calmer one", async () => {

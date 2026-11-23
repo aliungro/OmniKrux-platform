@@ -55,6 +55,14 @@ export function durationWords(seconds: number): string {
   return parts.length ? parts.join(" ") : "0 s";
 }
 
+/** A state read earlier that a later refresh couldn't confirm: never shown as current. */
+export const STATE_UNKNOWN = "Unknown";
+/** `Couldn't refresh. Last known: Firing at 14:02:11.` (`atMs`: when it was read, ms since the epoch). */
+export function notRefreshedWords(label: string, atMs: number): string {
+  const d = new Date(atMs);
+  return `Couldn't refresh. Last known: ${label} at ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}.`;
+}
+
 /** `45s`, `12m`, `3h`, `2d`: the largest whole unit, for a list. */
 export function sinceShort(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));

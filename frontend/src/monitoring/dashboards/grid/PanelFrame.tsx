@@ -6,7 +6,7 @@
 // the corner (the worst of its targets); in edit mode a changed alert says it isn't saved yet.
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { usePanelStates } from "../../alerts/api";
-import { STATE_LABEL, stateTone } from "../../alerts/format";
+import { notRefreshedWords, STATE_LABEL, STATE_UNKNOWN, stateTone } from "../../alerts/format";
 import type { ResolvedVars } from "../interpolate";
 import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun } from "../runPanel";
 import { sameJson } from "../sameJson";
@@ -44,8 +44,6 @@ interface Props {
 }
 
 export const NOT_SAVED_YET = "Alert: not saved yet";
-/** The panel states couldn't be read: the badge says so rather than guess. */
-export const STATE_UNKNOWN = "Unknown";
 export const badgeLabel = (name: string, label: string) => `Alert "${name}": ${label}`;
 
 /** A panel alert's state in the corner: a pill, and a way to its rule on the Alerts page. */
@@ -61,16 +59,25 @@ function AlertBadge({ dashboardId, panelId, alert, changed, openRule }: {
     return <span className={s.badge} data-tone="muted" role="img" aria-label={badgeLabel(alert.name, "not saved yet")}><span aria-hidden="true">● </span>{NOT_SAVED_YET}</span>;
   }
   const state = states.data?.[panelId];
-  if (!state) {
-    // Never shown as OK while it isn't known: waiting while it is read, unknown when it couldn't be.
+  // Never shown as OK while it isn't known: waiting while it is read; unknown when the last read
+  // failed, even with an earlier answer kept (its state and time are said, never shown as current).
+  if (!state || states.isError) {
     const label = states.isError ? STATE_UNKNOWN : STATE_LABEL.waiting;
-    return <span className={s.badge} data-tone="muted" role="img" aria-label={badgeLabel(alert.name, label)}><span aria-hidden="true">● </span>{label}</span>;
+    const stale = state && states.isError ? notRefreshedWords(STATE_LABEL[state.state], states.dataUpdatedAt) : null;
+    return (
+      <span className={s.badge} data-tone="muted" role="img" title={stale ?? undefined}
+        aria-label={`${badgeLabel(state?.name ?? alert.name, label)}${stale ? `. ${stale}` : ""}`}>
+        <span aria-hidden="true">● </span>{label}
+      </span>
+    );
   }
   const label = STATE_LABEL[state.state];
   const open = (e: MouseEvent<HTMLButtonElement>) => openRule?.(state.rule_id, e.ctrlKey || e.metaKey);
+  // Ctrl+Enter opens it in a new workspace tab, as a dashboard link in a project's list does.
   const keys = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
+    e.stopPropagation();
     openRule?.(state.rule_id, true);
   };
   return (

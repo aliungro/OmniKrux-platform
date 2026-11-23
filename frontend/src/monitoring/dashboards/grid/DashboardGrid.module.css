@@ -68,8 +68,9 @@
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 18%, transparent);
 }
 
+/* Only the light's halo fades; a border a refresh changes (a failed run) changes at once. */
 .panel:not(.tile) {
-  transition: border-color 0.4s ease-out, box-shadow 0.4s ease-out;
+  transition: box-shadow 0.4s ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

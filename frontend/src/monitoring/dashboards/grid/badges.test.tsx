@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { PanelAlertStateOut } from "../../alerts/api";
+import { alertsKeys, type PanelAlertStateOut } from "../../alerts/api";
 import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
 import { intercept, linkedProject, panel, seedDashboard, serverFailure, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
@@ -77,6 +77,25 @@ describe("Panel alert badges", () => {
     const unknown = await screen.findByRole("img", { name: 'Alert "Requests": Unknown' });
     expect(unknown.textContent).toBe("● Unknown");
     expect(screen.queryByText("● OK")).toBeNull();
+  });
+
+  it("a refresh that fails turns a known state into unknown, with what was known when", async () => {
+    shop();
+    let fail = false;
+    intercept((url) => (fail && url.startsWith("/api/monitoring/alerts/panel-states") ? serverFailure(500, "bad_request", "The console's database didn't answer.") : null));
+    const app = renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    await screen.findByRole("button", { name: 'Alert "Slow requests": Firing' });
+    fail = true;
+    await act(() => app.client.refetchQueries({ queryKey: alertsKeys.panelStates("d1") }));
+    const unknown = await within(frame("p-1")).findByRole("img", { name: /^Alert "Slow requests": Unknown\. Couldn't refresh\. Last known: Firing at \d\d:\d\d:\d\d\.$/ });
+    expect(unknown.textContent).toBe("● Unknown");
+    expect(unknown.getAttribute("title")).toMatch(/^Couldn't refresh\. Last known: Firing at/);
+    expect(screen.queryByText("● Firing")).toBeNull();
+    expect(screen.queryByText("● OK")).toBeNull();
+    // Read again: the state is current once more.
+    fail = false;
+    await act(() => app.client.refetchQueries({ queryKey: alertsKeys.panelStates("d1") }));
+    expect(await screen.findByRole("button", { name: 'Alert "Slow requests": Firing' })).toBeTruthy();
   });
 
   it("a changed draft alert says not saved yet", async () => {

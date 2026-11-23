@@ -12,7 +12,7 @@ import { dashboardKey, DashboardRequestError, saveDashboard, useDashboardMutatio
 import { removeDraft, type StoredDraft } from "../drafts/draftStore";
 import { useDraft } from "../drafts/useDraft";
 import type { DashboardSpec, OwnerKind } from "../schema";
-import { editorReducer, hasUnsavedWork, isDirty, newWriter, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
+import { badAlertText, editorReducer, hasUnsavedWork, isDirty, newWriter, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
 
 export { isDirty };
 
@@ -21,6 +21,8 @@ export const editSessions = new Map<string /* tab id */, EditorState>();
 
 /** Save refused because the JSON tab holds text that doesn't apply (no PUT is sent). */
 export const JSON_SAVE_REFUSED = "The JSON has a problem. Fix it or discard it before saving.";
+/** Save refused because a panel alert's threshold, as typed, isn't a number (no PUT is sent). */
+export const ALERT_SAVE_REFUSED = "An alert's threshold isn't a number. Fix it or discard it before saving.";
 
 export interface DashboardEditor {
   state: EditorState;
@@ -42,6 +44,11 @@ export interface DashboardEditor {
   draftsWork: boolean;
   /** The last save's answer (set with the save's own state change, before the dashboard query updates). */
   lastSaved: DashboardOut | null;
+  /**
+   * Save was refused for a panel alert's threshold that isn't a number: that panel (its Alert tab
+   * takes the keyboard to Threshold); `seq` rises with each refused save. Null once fixed.
+   */
+  alertRefused: { panelId: string; seq: number } | null;
 }
 
 const sessionFor = (tabId: string, dashboardId: string): EditorState => {
@@ -71,6 +78,8 @@ export function useDashboardEditor(dashboardId: string, tabId: string, options: 
   const [conflict, setConflict] = useState<number | null>(null);
   /** Save was pressed while the JSON text didn't apply; the notice lasts while it still doesn't. */
   const [jsonRefused, setJsonRefused] = useState(false);
+  /** Save was pressed while an alert threshold wasn't a number: how many times (0: not refused). */
+  const [alertRefusals, setAlertRefusals] = useState(0);
   const [lastSaved, setLastSaved] = useState<DashboardOut | null>(null);
   const mutation = useDashboardMutation((v: { id: string; baseVersion: number; spec: DashboardSpec }) => saveDashboard(v.id, v.baseVersion, v.spec));
   const busy = useRef(false);
@@ -95,6 +104,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string, options: 
       setConflict(null);
     }
     if (next.mode === "view" || next.jsonText === null) setJsonRefused(false);
+    if (badAlertText(next).length === 0) setAlertRefusals(0);
     setState(next);
     return next;
   }, [tabId, dashboardId]);
@@ -115,6 +125,14 @@ export function useDashboardEditor(dashboardId: string, tabId: string, options: 
       setJsonRefused(true);
       return;
     }
+    // A threshold typed that isn't a number: saving would write the last number it had, not what
+    // the field shows. No PUT; the edit bar says so and the panel's Alert tab takes the keyboard.
+    if (badAlertText(s).length > 0) {
+      setSaveError(null);
+      setConflict(null);
+      setAlertRefusals((n) => n + 1);
+      return;
+    }
     if (rebase) {
       dispatch({ type: "rebase", version: rebase.version, base: rebase.base });
       s = current.current;
@@ -123,6 +141,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string, options: 
     busy.current = true;
     setSaveError(null);
     setJsonRefused(false);
+    setAlertRefusals(0);
     try {
       const out: DashboardOut = await mutation.mutateAsync({ id: s.dashboardId, baseVersion, spec: s.draft });
       client.setQueryData(dashboardKey(out.id), out);
@@ -190,8 +209,20 @@ export function useDashboardEditor(dashboardId: string, tabId: string, options: 
     [jsonRefused, state],
   );
 
+  // Said like the JSON refusal (without Show in JSON: the JSON holds the last number, not the text).
+  // The same objects while the same panels are refused, so typing doesn't move the keyboard.
+  const badPanels = badAlertText(state).join("\u0000");
+  const alertRefused = useMemo(
+    () => (alertRefusals > 0 && badPanels !== "" ? { panelId: badPanels.split("\u0000")[0], seq: alertRefusals } : null),
+    [alertRefusals, badPanels],
+  );
+  const alertError = useMemo(
+    () => (alertRefused ? new DashboardRequestError(0, "invalid_dashboard", ALERT_SAVE_REFUSED) : null),
+    [alertRefused],
+  );
+
   return {
-    state, dispatch, save, saveOver, discard, restore, saving: mutation.isPending, saveError: jsonError ?? saveError, conflict,
-    draftsWork: keeper.works, lastSaved,
+    state, dispatch, save, saveOver, discard, restore, saving: mutation.isPending, saveError: jsonError ?? alertError ?? saveError, conflict,
+    draftsWork: keeper.works, lastSaved, alertRefused,
   };
 }

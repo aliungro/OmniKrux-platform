@@ -468,6 +468,16 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     // Once per refusal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refusal]);
+  // Save refused because an alert's threshold isn't a number: that panel's Alert tab, keyboard on
+  // Threshold (each press of Save brings it back there).
+  const alertRefused = editor.alertRefused;
+  useEffect(() => {
+    if (alertRefused === null || editor.state.mode !== "edit") return;
+    alertArrival.current = alertRefused.panelId;
+    setAlertSeq((n) => n + 1);
+    // Once per refused save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertRefused]);
   const ownerView = { page: dashboard.owner_kind, id: dashboard.owner_id } as const;
   const openOwner = (e: MouseEvent<HTMLAnchorElement>) => openPage(ownerView, e);
   const [asking, setAsking] = useState<"copy" | "delete" | null>(null);

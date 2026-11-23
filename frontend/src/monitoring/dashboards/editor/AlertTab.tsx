@@ -13,16 +13,17 @@ import {
   useCapabilities, useChannels, useContactPoints, usePanelStates,
   type ContactPointOut, type DryRunIn, type DryRunOut, type PanelAlertStateOut, type ScopeKind,
 } from "../../alerts/api";
-import { durationWords, seriesWord, STATE_LABEL, stateTone } from "../../alerts/format";
+import { durationWords, notRefreshedWords, seriesWord, STATE_LABEL, STATE_UNKNOWN, stateTone } from "../../alerts/format";
 import { ALERT_PANEL_TYPES } from "../../alerts/limits";
 import { ruleExpr } from "../../alerts/ruleExpr";
 import { mixedClusterWarnings } from "../../alerts/rules/clusterWarning";
 import { adviceFor, DryRunLine, thresholdText } from "../../alerts/rules/DryRunLine";
 import { RuleDetailsFields, type DetailsValue } from "../../alerts/rules/RuleDetailsFields";
-import { RuleSentence, seriesWordOf, type SentenceValue } from "../../alerts/rules/RuleSentence";
+import { parseThreshold, RuleSentence, seriesWordOf, type SentenceValue } from "../../alerts/rules/RuleSentence";
 import { WhereItRuns } from "../../alerts/rules/WhereItRuns";
 import r from "../../alerts/rules/RuleForm.module.css";
 import { registerRecommendationRule, RULES, type RecommendationRule } from "../../build/recommend";
+import { sameJson } from "../sameJson";
 import type { DashboardOwner, PanelData } from "../runPanel";
 import { newAlert, validateDashboard, type DashboardSpec, type OwnerKind, type PanelAlert, type PanelSpec, type Problem } from "../schema";
 import type { PanelUpdate } from "./SidePanel";
@@ -58,13 +59,13 @@ export function roundUp2(x: number): number {
   return Number((Math.ceil(q) * step).toPrecision(2));
 }
 
-/** The panel data's current maximum (its visible series), rounded up; 0 without data. */
+/** The current maximum of the query a new alert reads (`newAlert`'s), rounded up; 0 without data. */
 export function startThreshold(panel: PanelSpec, data: PanelData | null): number {
   if (data === null || (data.state !== "ready" && data.state !== "partial")) return 0;
-  const visible = new Set(panel.queries.filter((q) => !q.hidden).map((q) => q.ref));
+  const ref = (panel.queries.find((q) => !q.hidden) ?? panel.queries[0])?.ref;
   let max = -Infinity;
   for (const series of data.series) {
-    if (visible.size > 0 && !visible.has(series.queryRef)) continue;
+    if (series.queryRef !== ref) continue;
     for (const [, y] of series.points) if (y !== null && Number.isFinite(y) && y > max) max = y;
   }
   return max === -Infinity ? 0 : roundUp2(max);
@@ -147,6 +148,13 @@ export function alertProblems(problems: readonly Problem[], index: number): Part
 
 // --- the tab ----------------------------------------------------------------------------------
 
+const NO_PROBLEMS: readonly Problem[] = [];
+/** The alert value a refused path (`alert.<key>…`) is about. */
+const FIELD_KEY: Record<string, keyof PanelAlert> = {
+  name: "name", query: "query", of: "of", op: "op", threshold: "threshold", for: "for", every: "every", severity: "severity",
+  message: "message", notify: "notify", engine: "engine", channel: "channel",
+};
+
 const VAR_USE = (name: string) => new RegExp(String.raw`\$(?:\{${name}(?:[:}])|${name}(?![A-Za-z0-9_]))|\[\[${name}\]\]`);
 
 /** `name = All`, `name = prod`, `name = a or b` for each variable the query uses. */
@@ -183,6 +191,10 @@ export interface AlertTabProps {
   saved: PanelAlert | null;
   /** A save's refusal (422), for problems the browser can't see (a contact point that's gone). */
   saveProblems?: readonly Problem[];
+  /** The threshold as typed when it isn't a number (kept with the edit session), else undefined. */
+  thresholdText?: string;
+  /** The threshold as typed: `text` while it isn't a number, null once it is. */
+  onThresholdText?(text: string | null): void;
   /** The last dry run of the alert as written (with `alertRunKey` of the panel it answered for), or null while there is none. */
   onDryRun?(run: AlertDryRun | null, key: string): void;
   /** Opens the Alerts page on the rule (a new workspace tab with Ctrl). */
@@ -226,7 +238,8 @@ export function AlertTab(props: AlertTabProps) {
 }
 
 function AlertForm({
-  panel, update, owner, ownerKind, spec, dashboardId, saved, saveProblems = [], onDryRun, onOpenRule, focusRef, alert, thresholdRef, onRemoved,
+  panel, update, owner, ownerKind, spec, dashboardId, saved, saveProblems = NO_PROBLEMS, onDryRun, onOpenRule, focusRef, alert, thresholdRef, onRemoved,
+  thresholdText, onThresholdText,
 }: AlertTabProps & { alert: PanelAlert; thresholdRef: MutableRefObject<HTMLInputElement | null>; onRemoved(): void }) {
   const id = useId();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -241,17 +254,22 @@ function AlertForm({
 
   const set = (patch: Partial<PanelAlert>) => update((p) => (p.alert === null ? p : { ...p, alert: { ...p.alert, ...patch } }));
 
-  // Problems: the document walker's on the draft, and a save's refusal for this panel's alert.
-  // A refused contact point stops being a problem once no contact point the alert names is gone.
+  // Problems: the document walker's on the draft, and a save's refusal for this panel's alert. A
+  // refused field's words go once that field changes (the refusal was about what it held then).
   const index = spec.panels.findIndex((p) => p.id === panel.id);
-  const contactsKnown = contactPoints.data;
-  const namesGone = contactsKnown === undefined || alert.notify.some((cp) => !contactsKnown.some((k) => k.id === cp));
+  const [refusedFor, setRefusedFor] = useState({ problems: saveProblems, alert });
+  if (refusedFor.problems !== saveProblems) setRefusedFor({ problems: saveProblems, alert });
   const problems = useMemo(() => {
     const checked = validateDashboard(spec, ownerKind);
     const walker = checked.ok ? [] : checked.problems;
-    const refused = namesGone ? saveProblems : saveProblems.filter((p) => !/\.alert\.notify(?:\[|$)/.test(p.path));
+    const prefix = `panels[${index}].alert.`;
+    const refused = refusedFor.problems.filter((p) => {
+      if (!p.path.startsWith(prefix)) return true;
+      const key = FIELD_KEY[p.path.slice(prefix.length).split(/[.[]/)[0]];
+      return key === undefined || sameJson(alert[key], refusedFor.alert[key]);
+    });
     return alertProblems([...walker, ...refused], index);
-  }, [spec, ownerKind, saveProblems, index, namesGone]);
+  }, [spec, ownerKind, refusedFor, index, alert]);
   const first = (f: ProblemField) => problems[f]?.[0] ?? null;
 
   // The dry run: for the dashboard's owner, on the query's source as written, the query as the
@@ -289,7 +307,8 @@ function AlertForm({
   if (focusRef) {
     focusRef.current = () => {
       const order: ProblemField[] = ["name", "query", "threshold", "for", "contact_point_ids", "channel", "message"];
-      const field = order.find((f) => problems[f]?.length) ?? "threshold";
+      // A threshold that isn't a number comes first: it is why a save was refused.
+      const field = thresholdText !== undefined ? "threshold" : order.find((f) => problems[f]?.length) ?? "threshold";
       const el = fieldEl(field);
       awaited.current = el === null ? field : null;
       (el ?? thresholdRef.current)?.focus();
@@ -360,6 +379,7 @@ function AlertForm({
       <div className={s.alertSentence}>
         <RuleSentence idPrefix={`${id}-cond`} value={sentenceValue} seriesWord={word} unit={unit}
           onChange={(v) => set(v)} thresholdRef={thresholdRef} forRef={forRef}
+          initialText={thresholdText} onText={(t) => onThresholdText?.(parseThreshold(t) === null ? t : null)}
           errors={{ threshold: first("threshold"), for: first("for") }} />
         <p className={s.alertNote}>{BAND_NOTE}</p>
       </div>
@@ -401,11 +421,21 @@ function NowLine({ dashboardId, panelId, onOpenRule }: { dashboardId: string; pa
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
+  // A refresh that failed never leaves the last state on as current: unknown, with what was known when.
+  if (states.isError) {
+    return (
+      <div className={s.alertNow} data-tone="muted">
+        <p className={s.alertNowText}>Now: {STATE_UNKNOWN}</p>
+        {state && <p className={s.alertNote}>{notRefreshedWords(STATE_LABEL[state.state], states.dataUpdatedAt)}</p>}
+      </div>
+    );
+  }
   if (!state) return null;
   const open = (e: MouseEvent<HTMLButtonElement>) => onOpenRule?.(state.rule_id, e.ctrlKey || e.metaKey);
   const keys = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
+    e.stopPropagation();
     onOpenRule?.(state.rule_id, true);
   };
   return (
