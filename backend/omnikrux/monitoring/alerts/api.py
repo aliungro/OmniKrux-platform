@@ -158,6 +158,7 @@ TARGETS_BEHIND = (
 )
 OTHER_OWNER = "That panel is on a dashboard of another project or group."
 HAS_ALERT = "That panel already has an alert."
+ON_A_PANEL = "This rule already belongs to a panel."
 QUERIES_FULL = "That panel already has 10 queries."
 PANEL_GONE = "That panel no longer exists."
 NO_ALERT_HERE = "A {kind} panel can't have an alert. Use a time series, stat, gauge or bar panel."
@@ -1146,7 +1147,16 @@ def _panel_of(doc: dict, panel_id: str | None, *, with_alert: bool = False) -> d
 async def _remove_panel_alert(request: Request, rule: RuleRecord, board: DashboardRecord) -> None:
     """Save the rule's dashboard with the panel's `alert: null` (based on its current version,
     once more on the next one if another save landed meanwhile) and mark the rule deleted, in
-    one transaction. RuleRefused."""
+    one transaction. RuleRefused. Holds the dashboard's alert lock, so a reconcile of an earlier
+    save of it can't work from a document read before this write."""
+    services = _services(request)
+    async with services.alert_sync.dashboard_lock(board.id):
+        await _remove_panel_alert_locked(request, rule, board)
+
+
+async def _remove_panel_alert_locked(
+    request: Request, rule: RuleRecord, board: DashboardRecord
+) -> None:
     services = _services(request)
 
     async def also(session: AsyncSession) -> None:
@@ -1305,7 +1315,7 @@ async def attach_rule(id: str, body: AttachIn, request: Request) -> AttachOut:
     rule = await _live_rule(services, id)
     try:
         if rule.origin != "page":
-            raise await _panel_refusal(services, rule) or RuleRefused(409, "panel_rule", RULE_GONE)
+            raise await _panel_refusal(services, rule) or RuleRefused(409, "panel_rule", ON_A_PANEL)
     except RuleRefused as exc:
         raise exc.http() from None
     if parse_ready_id(body.dashboard_id) is not None:
@@ -1355,11 +1365,14 @@ async def attach_rule(id: str, body: AttachIn, request: Request) -> AttachOut:
         if row.version != rule.version:
             raise _stale(row.version)
         if row.origin != "page":
-            raise RuleRefused(409, "panel_rule", PANEL_RULE.format(panel="", dashboard=""))
+            raise RuleRefused(409, "panel_rule", ON_A_PANEL)
         await services.alerts.attach_rule(id, board.id, body.panel_id, session=session)
 
     try:
-        saved = await save_document(request, board, owner.name, doc, also=also)
+        # The dashboard's alert lock: a reconcile of an earlier save can't work from a document
+        # read before this write (and detach or delete the rule just attached).
+        async with services.alert_sync.dashboard_lock(board.id):
+            saved = await save_document(request, board, owner.name, doc, also=also)
     except RuleRefused as exc:
         if exc.code == "panel_rule":
             exc = await _panel_refusal(services, await services.alerts.get_rule(id)) or exc

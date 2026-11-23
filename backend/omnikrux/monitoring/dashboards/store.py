@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -414,24 +415,49 @@ class DashboardStore:
             await lock_first(own)
             return await self._advance(own, id, base_version, spec, "saved")
 
-    async def restore(self, id: str, version: int, base_version: int) -> DashboardRecord:
-        """Save an earlier version's document as the next version when the dashboard is still at
-        `base_version`. UnknownDashboard, VersionConflict, UnknownVersion, NameTaken."""
-        async with self._sessionmaker.begin() as session:
-            await lock_first(session)
-            current = (await _current(session, id))[2]
-            if current != base_version:
-                raise VersionConflict(current)
-            old = await session.scalar(
-                select(DashboardVersionRow.spec).where(
-                    DashboardVersionRow.dashboard_id == id, DashboardVersionRow.version == version
-                )
+    async def restore(
+        self,
+        id: str,
+        version: int,
+        base_version: int,
+        *,
+        session: AsyncSession | None = None,
+        transform: Callable[[dict], dict] | None = None,
+    ) -> DashboardRecord:
+        """Save an earlier version's document (passed through `transform`, when given) as the
+        next version when the dashboard is still at `base_version`. UnknownDashboard,
+        VersionConflict, UnknownVersion, NameTaken. With `session` (a transaction that already
+        holds the write lock), the restore commits with the caller's transaction."""
+        if session is not None:
+            return await self._restore(session, id, version, base_version, transform)
+        async with self._sessionmaker.begin() as own:
+            await lock_first(own)
+            return await self._restore(own, id, version, base_version, transform)
+
+    async def _restore(
+        self,
+        session: AsyncSession,
+        id: str,
+        version: int,
+        base_version: int,
+        transform: Callable[[dict], dict] | None,
+    ) -> DashboardRecord:
+        current = (await _current(session, id))[2]
+        if current != base_version:
+            raise VersionConflict(current)
+        old = await session.scalar(
+            select(DashboardVersionRow.spec).where(
+                DashboardVersionRow.dashboard_id == id, DashboardVersionRow.version == version
             )
-            if old is None:
-                raise UnknownVersion(version)
-            return await self._advance(
-                session, id, base_version, json.loads(old), "restored", restored_from=version
-            )
+        )
+        if old is None:
+            raise UnknownVersion(version)
+        spec = json.loads(old)
+        if transform is not None:
+            spec = transform(spec)
+        return await self._advance(
+            session, id, base_version, spec, "restored", restored_from=version
+        )
 
     async def delete(self, id: str, version: int) -> None:
         """Delete the dashboard and all its versions when it is still at `version`.

@@ -6,6 +6,7 @@ until it is removed there."""
 from omnikrux.monitoring.alerts.engine import no_source_copy
 from omnikrux.monitoring.alerts.store import ToolObject
 from omnikrux.monitoring.alerts.sync import AlertChange
+from omnikrux.monitoring.projects.types import ReviewChanged
 from tests.monitoring.test_rules_api import (
     add_group,
     add_rule,
@@ -228,24 +229,58 @@ async def test_group_delete_waits_for_cluster_rules(monitoring_app, two_projects
 
 
 class _Loki:
-    """A ToolSync whose Loki ruler answers as told."""
+    """A ToolSync whose Loki ruler answers as told: removals (leaving copies) fail from the
+    `fail_from`-th on (counting from 1) with `fail`; writes always succeed."""
 
-    def __init__(self, fail: str | None) -> None:
+    def __init__(self, fail: str | None, fail_from: int = 1) -> None:
         self.fail = fail
+        self.fail_from = fail_from
         self.asked: list[str] = []
+        self.written: list[str] = []
 
     async def after_change(self, target, rule):
-        self.asked.append(target.id)
-        assert target.leaving
+        if not target.leaving:
+            self.written.append(target.id)
+            kind, message = "written", None
+        else:
+            self.asked.append(target.id)
+            failing = self.fail is not None and len(self.asked) >= self.fail_from
+            kind, message = ("failed", self.fail) if failing else ("removed", None)
         return AlertChange(
             target_id=target.id,
             rule_id=rule.id,
             rule_name=rule.name,
             project_id=target.project_id,
             project_name="Shop",
-            kind="failed" if self.fail else "removed",
-            message=self.fail,
+            kind=kind,
+            message=message,
         )
+
+
+async def loki_rule(http, services, shop, name: str) -> dict:
+    """A Loki rule of the project whose ruler rule is written (as Task 11 records it)."""
+    rule = (
+        await add_rule(
+            http,
+            rule_body(
+                shop.project_id,
+                name=name,
+                source={"type": "loki", "id": None},
+                expr='sum(count_over_time({app="api"} |= "error" [5m]))',
+                engine="tool",
+            ),
+        )
+    )["rule"]
+    [target] = rule["targets"]
+    assert target["tool"] == "loki_ruler"
+    await services.alerts.set_tool(
+        target["id"],
+        tool_state="in_sync",
+        tool_message=None,
+        tool_object=ToolObject("loki_ruler", shop.loki_source_id, None, "omnikrux", "g"),
+        applied_version=1,
+    )
+    return rule
 
 
 async def test_a_loki_removal_that_fails_stops_the_project_delete(
@@ -331,3 +366,77 @@ async def test_a_deleted_source_leaves_its_projects_rules_without_one(
     [target] = (await http.get(f"{RULES}/{rule['id']}")).json()["targets"]
     assert target["state"] == "error"
     assert target["message"] == no_source_copy("Shop", "prometheus")
+
+
+async def test_rules_taken_out_of_loki_are_written_back_when_the_delete_stops(
+    monitoring_app, linked_project_with_loki, monkeypatch
+):
+    http, app = monitoring_app
+    services = app.state.monitoring
+    shop = linked_project_with_loki
+    pid = shop.project_id
+    as_tool(app, "loki_ruler")
+    first = await loki_rule(http, services, shop, "Errors")
+    second = await loki_rule(http, services, shop, "Warnings")
+    loki = _Loki("Loki answered HTTP 500.", fail_from=2)
+    services.alert_sync.tool_sync = loki
+    review = (await http.get(f"{API}/projects/{pid}/delete-review")).json()
+
+    refused = await http.delete(f"{API}/projects/{pid}", params={"token": review["token"]})
+    assert refused.status_code == 502
+    assert refused.json() == {
+        "detail": (
+            'Couldn\'t remove the rule "Warnings" from Loki: Loki answered HTTP 500. '
+            "Nothing was deleted. "
+            "1 alert rule had been taken out of Loki and is being written back."
+        )
+    }
+    first_target = first["targets"][0]["id"]
+    assert loki.asked == [first_target, second["targets"][0]["id"]]
+    # Taken out, so never "in sync" again until it is written back: and it is handed back.
+    [target] = (await http.get(f"{RULES}/{first['id']}")).json()["targets"]
+    assert target["tool_state"] == "needs_review" and target["state"] == "not_applied"
+    assert loki.written == [first_target]
+    [kept] = (await http.get(f"{RULES}/{second['id']}")).json()["targets"]
+    assert kept["tool_state"] == "in_sync"
+    assert (await http.get(f"{API}/projects/{pid}")).status_code == 200
+
+    # The review changes between the removals and the delete's transaction: the same, in its
+    # own words.
+    async def changed_meanwhile(*args, **kwargs):
+        raise ReviewChanged()
+
+    monkeypatch.setattr(services.projects, "delete", changed_meanwhile)
+    loki.fail, loki.asked, loki.written = None, [], []
+    await services.alerts.set_tool(
+        target["id"],
+        tool_state="in_sync",
+        tool_message=None,
+        tool_object=ToolObject("loki_ruler", shop.loki_source_id, None, "omnikrux", "g"),
+        applied_version=1,
+    )
+    stale = await http.delete(f"{API}/projects/{pid}", params={"token": review["token"]})
+    assert stale.status_code == 409
+    assert stale.json() == {
+        "detail": (
+            "Something changed since the review. Review it again. Nothing was deleted. "
+            "2 alert rules had been taken out of Loki and are being written back."
+        )
+    }
+    assert sorted(loki.written) == sorted([first_target, second["targets"][0]["id"]])
+
+
+async def test_setting_up_a_project_brings_its_rules_up_to_date(monitoring_app, monkeypatch):
+    http, app = monitoring_app
+    sync = app.state.monitoring.alert_sync
+    asked: list[tuple[str, str]] = []
+    real = sync.reconcile_scope
+
+    async def reconcile_scope(kind, id):
+        asked.append((kind, id))
+        return await real(kind, id)
+
+    monkeypatch.setattr(sync, "reconcile_scope", reconcile_scope)
+    made = await http.post(f"{API}/setup", json={"name": "Fresh", "kind": "custom"})
+    assert made.status_code == 201, made.text
+    assert asked == [("project", made.json()["id"])]

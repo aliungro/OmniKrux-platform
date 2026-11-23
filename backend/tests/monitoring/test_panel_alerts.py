@@ -3,11 +3,13 @@ off, detached when the panel or the dashboard goes, never copied, back with a re
 version), a page rule can be attached to a panel, and deleting a panel's rule (or a contact
 point it names) saves the dashboard as a new version."""
 
+import asyncio
 import copy
 from datetime import UTC, datetime, timedelta
 
 from omnikrux.monitoring.alerts.rule_expr import rule_expr
 from omnikrux.monitoring.alerts.store import InstanceRecord
+from omnikrux.monitoring.dashboards.store import VersionConflict
 from tests.monitoring.test_rules_api import (
     as_tool,
     monitoring_records,
@@ -553,3 +555,126 @@ async def test_a_crash_between_the_save_and_the_rules_converges_at_start(
         ("page", None),
         ("panel", "B"),
     ]
+
+
+async def add_contact_point(http, fake_webhook, name: str = "Ops hook") -> str:
+    cp = await http.post(
+        CONTACT_POINTS,
+        json={"name": name, "type": "webhook", "secrets": {"url": f"{fake_webhook.url}/h"}},
+    )
+    assert cp.status_code == 201, cp.text
+    return cp.json()["id"]
+
+
+async def delete_contact_point(http, cp_id: str) -> None:
+    review = (await http.get(f"{CONTACT_POINTS}/{cp_id}/delete-review")).json()
+    gone = await http.delete(f"{CONTACT_POINTS}/{cp_id}", params={"token": review["token"]})
+    assert gone.status_code == 204, gone.text
+
+
+async def test_restore_leaves_out_contact_points_deleted_since(
+    monitoring_app, linked_project, fake_webhook
+):
+    http, _ = monitoring_app
+    cp_id = await add_contact_point(http, fake_webhook)
+    made = await create(
+        http, linked_project.project_id, board(panel(alert=ALERT | {"notify": [cp_id]}))
+    )
+    without = await save(http, made, board(panel()))
+    await delete_contact_point(http, cp_id)
+
+    restored = await http.post(
+        f"{DASHBOARDS}/{made['id']}/versions/1/restore", json={"base_version": without["version"]}
+    )
+    assert restored.status_code == 200, restored.text
+    body = restored.json()
+    assert body["version"] == 3
+    assert body["spec"]["panels"][0]["alert"]["notify"] == []
+    [rule] = await rules(http)
+    assert rule["contact_points"] == []
+    [record] = [r for r in await monitoring_records(http) if r["action"] == "dashboard_restore"]
+    assert record["outcome"] == "succeeded"
+    assert record["details"] == {
+        "from_version": 1,
+        "version": 3,
+        "removed_contact_point": [cp_id],
+    }
+    # The editor's next save of what it holds now goes through.
+    await save(http, body, body["spec"])
+
+
+async def test_deleting_a_contact_point_retries_a_dashboard_that_changed_meanwhile(
+    monitoring_app, linked_project, fake_webhook, monkeypatch
+):
+    http, app = monitoring_app
+    dashboards = app.state.monitoring.dashboards
+    cp_id = await add_contact_point(http, fake_webhook)
+    made = await create(
+        http, linked_project.project_id, board(panel(alert=ALERT | {"notify": [cp_id]}))
+    )
+    real_save = dashboards.save
+    lost = {"times": 1}
+
+    async def save_losing_first(id, base_version, spec, *, session=None):
+        if lost["times"]:
+            lost["times"] -= 1
+            raise VersionConflict(base_version)
+        return await real_save(id, base_version, spec, session=session)
+
+    monkeypatch.setattr(dashboards, "save", save_losing_first)
+    await delete_contact_point(http, cp_id)
+    now = (await http.get(f"{DASHBOARDS}/{made['id']}")).json()
+    assert now["version"] == 2 and now["spec"]["panels"][0]["alert"]["notify"] == []
+    saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
+    assert [r["outcome"] for r in saves] == ["failed", "succeeded"]
+
+    # Lost twice: the dashboard keeps the id, and the audit log says why.
+    other = await add_contact_point(http, fake_webhook, "Other hook")
+    await save(http, now, board(panel(alert=ALERT | {"notify": [other]})))
+    lost["times"] = 2
+    await delete_contact_point(http, other)
+    kept = (await http.get(f"{DASHBOARDS}/{made['id']}")).json()
+    assert kept["version"] == 3 and kept["spec"]["panels"][0]["alert"]["notify"] == [other]
+    saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
+    assert [r["outcome"] for r in saves][-2:] == ["failed", "failed"]
+    assert (await http.get(CONTACT_POINTS)).json() == []
+
+
+async def test_an_explore_save_carries_its_panels_alert(monitoring_app, linked_project):
+    http, _ = monitoring_app
+    made = await create(http, linked_project.project_id, board(panel()))
+    spec = board(panel(), panel("p-2", "from Explore", x=6, alert=ALERT))
+    saved = await http.put(
+        f"{DASHBOARDS}/{made['id']}",
+        json={"base_version": 1, "spec": spec, "origin": "explore"},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["alert_changes"] == []
+    [rule] = await rules(http)
+    assert rule["origin"] == "panel" and rule["panel"]["panel_title"] == "from Explore"
+    [record] = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
+    assert record["details"]["from"] == "explore"
+    assert record["details"]["added_panels"] == ["from Explore"]
+
+
+async def test_attach_waits_for_a_reconcile_of_its_dashboard(monitoring_app, linked_project):
+    http, app = monitoring_app
+    sync = app.state.monitoring.alert_sync
+    pid = linked_project.project_id
+    made = await create(http, pid, board())
+    rule = (await http.post(RULES, json=rule_body(pid, expr="rate(x[4m])"))).json()["rule"]
+
+    async with sync.dashboard_lock(made["id"]):
+        attach = asyncio.create_task(
+            http.post(
+                f"{RULES}/{rule['id']}/attach",
+                json={"dashboard_id": made["id"], "panel_id": "p-1", "base_version": 1},
+            )
+        )
+        await asyncio.sleep(0.3)
+        assert not attach.done()
+        assert (await http.get(f"{DASHBOARDS}/{made['id']}")).json()["version"] == 1
+    attached = await attach
+    assert attached.status_code == 200, attached.text
+    [after] = await rules(http)
+    assert after["id"] == rule["id"] and after["origin"] == "panel"

@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict
 
 from omnikrux.clusters.registry import ClusterInfo, ClusterRegistry
 from omnikrux.monitoring.alerts.store import RuleRef, TargetRecord
-from omnikrux.monitoring.alerts.sync import LokiRemovalFailed
+from omnikrux.monitoring.alerts.sync import LokiRemovalFailed, written_back_copy
 from omnikrux.monitoring.alerts.types import ScopeKind
 from omnikrux.monitoring.audit import begin_change, finish_change
 from omnikrux.monitoring.dashboards.ready_made import TITLES, project_ready_keys, ready_id
@@ -70,6 +70,7 @@ RULES_IN_CLUSTER = (
     "Remove its rules that run in {cluster} first: {names}. Each opens its own review."
 )
 SOME_CLUSTER = "a cluster"
+NOTHING_DELETED = "Nothing was deleted."
 PROJECT_GONE = "That project doesn't exist anymore. It may have been removed."
 GROUP_GONE = "That group doesn't exist anymore. It may have been removed."
 CHOSEN_PROJECT_GONE = "One of the chosen projects no longer exists. Reload and pick again."
@@ -465,15 +466,35 @@ async def _begin_rule_removes(
 
 
 async def _remove_from_loki(
-    request: Request, records: list[int], targets: Iterable[TargetRecord]
-) -> None:
-    """Before the owner's delete: its Loki ruler rules go. 502 (nothing deleted) when one
-    can't be removed."""
+    request: Request,
+    records: list[int],
+    targets: Iterable[TargetRecord],
+    kind: ScopeKind,
+    id: str,
+) -> list[TargetRecord]:
+    """Before the owner's delete: its Loki ruler rules go; the targets taken out. 502 (nothing
+    deleted) when one can't be removed: those already taken out are written back."""
+    sync = _services(request).alert_sync
     try:
-        await _services(request).alert_sync.remove_from_loki(targets)
+        return await sync.remove_from_loki(targets)
     except LokiRemovalFailed as exc:
-        await _finish_all(request, records, False, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from None
+        message = exc.message
+        if exc.removed:
+            await sync.write_back_loki(exc.removed, kind, id)
+            message = f"{message} {written_back_copy(len(exc.removed))}"
+        await _finish_all(request, records, False, message)
+        raise HTTPException(status_code=502, detail=message) from None
+
+
+async def _written_back(
+    request: Request, removed: Sequence[TargetRecord], kind: ScopeKind, id: str, detail: str
+) -> str:
+    """A delete that stopped after its Loki ruler rules were taken out: they are written back,
+    and the refusal says so."""
+    if not removed:
+        return detail
+    await _services(request).alert_sync.write_back_loki(removed, kind, id)
+    return f"{detail} {NOTHING_DELETED} {written_back_copy(len(removed))}"
 
 
 async def _reconcile(services: MonitoringServices, kind: ScopeKind, id: str) -> None:
@@ -698,22 +719,27 @@ async def remove_project(id: str, token: str, request: Request) -> Response:
     except HTTPException as exc:
         await _finish_all(request, records, False, str(exc.detail))
         raise
-    await _remove_from_loki(request, records, await services.alerts.targets(project_id=id))
+    loki = await _remove_from_loki(
+        request, records, await services.alerts.targets(project_id=id), "project", id
+    )
     try:
         await services.projects.delete(
             id, token, services.sources, services.dashboards, services.alerts
         )
     except ReviewChanged:
-        await _finish_all(request, records, False, REVIEW_CHANGED)
-        raise HTTPException(status_code=409, detail=REVIEW_CHANGED) from None
+        detail = await _written_back(request, loki, "project", id, REVIEW_CHANGED)
+        await _finish_all(request, records, False, detail)
+        raise HTTPException(status_code=409, detail=detail) from None
     except RulesInCluster as exc:
         refusal = await _rules_in_cluster(request, exc.rules, id)
-        await _finish_all(request, records, False, str(refusal.detail))
-        raise refusal from None
-    except UnknownProject:
+        detail = await _written_back(request, loki, "project", id, str(refusal.detail))
+        await _finish_all(request, records, False, detail)
+        raise HTTPException(status_code=409, detail=detail) from None
+    except UnknownProject:  # deleted meanwhile, with its targets
         await _finish_all(request, records, False, PROJECT_GONE)
         raise _gone(PROJECT_GONE) from None
     except Exception:
+        await _written_back(request, loki, "project", id, PROJECT_NOT_REMOVED)
         await _finish_all(request, records, False, PROJECT_NOT_REMOVED)
         raise
     await _finish_all(request, records, True)
@@ -838,20 +864,23 @@ async def remove_group(id: str, request: Request, token: str | None = None) -> R
         for ref in review.alert_rules
         for target in await services.alerts.targets(rule_id=ref.id)
     ]
-    await _remove_from_loki(request, records, targets)
+    loki = await _remove_from_loki(request, records, targets, "group", id)
     try:
         await services.groups.delete(id, token, services.dashboards, services.alerts)
     except ReviewChanged:
-        await _finish_all(request, records, False, REVIEW_CHANGED)
-        raise HTTPException(status_code=409, detail=REVIEW_CHANGED) from None
+        detail = await _written_back(request, loki, "group", id, REVIEW_CHANGED)
+        await _finish_all(request, records, False, detail)
+        raise HTTPException(status_code=409, detail=detail) from None
     except RulesInCluster as exc:
         refusal = await _rules_in_cluster(request, exc.rules)
-        await _finish_all(request, records, False, str(refusal.detail))
-        raise refusal from None
-    except UnknownGroup:
+        detail = await _written_back(request, loki, "group", id, str(refusal.detail))
+        await _finish_all(request, records, False, detail)
+        raise HTTPException(status_code=409, detail=detail) from None
+    except UnknownGroup:  # deleted meanwhile, with its rules
         await _finish_all(request, records, False, GROUP_GONE)
         raise _gone(GROUP_GONE) from None
     except Exception:
+        await _written_back(request, loki, "group", id, GROUP_NOT_REMOVED)
         await _finish_all(request, records, False, GROUP_NOT_REMOVED)
         raise
     await _finish_all(request, records, True)

@@ -158,11 +158,20 @@ def change_out(change: AlertChange) -> AlertChangeOut:
 
 
 class LokiRemovalFailed(Exception):
-    """A rule couldn't be removed from a Loki ruler; the owner's delete stops."""
+    """A rule couldn't be removed from a Loki ruler; the owner's delete stops. `removed`: the
+    targets whose ruler rules were taken out before it (they have to be written back)."""
 
-    def __init__(self, name: str, message: str) -> None:
+    def __init__(self, name: str, message: str, removed: Sequence[TargetRecord] = ()) -> None:
         super().__init__(LOKI_REMOVAL_FAILED.format(name=name, message=message))
         self.message = str(self)
+        self.removed = tuple(removed)
+
+
+def written_back_copy(n: int) -> str:
+    """What a refused delete adds when it had already taken `n` rules out of Loki."""
+    if n == 1:
+        return "1 alert rule had been taken out of Loki and is being written back."
+    return f"{n} alert rules had been taken out of Loki and are being written back."
 
 
 def in_loki(target: TargetRecord) -> bool:
@@ -739,11 +748,20 @@ class AlertSync:
 
     # -- owners that go away -------------------------------------------------------------------
 
-    async def remove_from_loki(self, targets: Iterable[TargetRecord]) -> None:
+    async def remove_from_loki(self, targets: Iterable[TargetRecord]) -> list[TargetRecord]:
         """Before an owner's delete: remove from its Loki ruler every target that has (or may
-        have) a rule there. LokiRemovalFailed (with the rule's name and why) at the first that
-        can't be removed; the delete then stops."""
+        have) a rule there; the targets whose rules were taken out. LokiRemovalFailed (with the
+        rule's name and why, and the targets already taken out) at the first that can't be
+        removed; the delete then stops, and the caller writes those back (`write_back_loki`).
+
+        The ToolSync contract this relies on (Task 11's `LokiRuler`): `after_change` on a copy
+        of the target with `leaving=True` removes its rule from the ruler (a 404 counts as
+        removed) and answers `kind="removed"` (or None); when it can't, it answers
+        `kind="failed"` with a message in words, or raises. It never deletes the stored target:
+        the owner's delete does, in its own transaction. Called on a target that isn't leaving,
+        it writes the rule to the ruler (`write_back_loki` relies on that)."""
         alerts = self._services.alerts
+        removed: list[TargetRecord] = []
         for target in targets:
             if not in_loki(target):
                 continue
@@ -757,9 +775,46 @@ class AlertSync:
                 log.warning(
                     "Removing alert target %s from Loki failed (%s)", target.id, type(exc).__name__
                 )
-                raise LokiRemovalFailed(rule.name, TOOL_FAILED) from None
+                raise LokiRemovalFailed(rule.name, TOOL_FAILED, removed) from None
             if change is not None and change.kind == "failed":
-                raise LokiRemovalFailed(rule.name, change.message or TOOL_FAILED)
+                raise LokiRemovalFailed(rule.name, change.message or TOOL_FAILED, removed)
+            removed.append(target)
+        return removed
+
+    async def write_back_loki(
+        self, targets: Sequence[TargetRecord], kind: ScopeKind, id: str
+    ) -> None:
+        """After an owner's delete stopped once some of its Loki ruler rules were taken out:
+        those targets no longer read "in sync" (one small transaction marks them not applied,
+        with nothing in the tool), and their rules are handed to the ToolSync again, which
+        writes them back. A failure here is logged; the targets stay "not applied" and the next
+        start writes them."""
+        if not targets:
+            return
+        alerts = self._services.alerts
+        rule_ids: list[str] = []
+        try:
+            async with self._services.sessionmaker.begin() as session:
+                for target in targets:
+                    try:
+                        await alerts.set_tool(
+                            target.id,
+                            tool_state="needs_review",
+                            tool_message=None,
+                            tool_object=None,
+                            applied_version=None,
+                            session=session,
+                        )
+                    except UnknownTarget:
+                        continue
+                    rule_ids.append(target.rule_id)
+            await self.reconcile_scope(kind, id)
+            for rule_id in dict.fromkeys(rule_ids):
+                # `changed`: the targets' own fields didn't change, but their tool has to be
+                # written again.
+                await self.reconcile_rule(rule_id, changed=True)
+        except Exception as exc:  # noqa: BLE001 (they read "not applied"; the next start retries)
+            log.warning("Writing Loki ruler rules back failed (%s)", type(exc).__name__)
 
     async def cluster_names(
         self, registry: ClusterRegistry, rule_ids: Iterable[str], project_id: str | None = None
@@ -816,9 +871,20 @@ class AlertSync:
                         dashboard_id,
                         type(exc).__name__,
                     )
+            # A Loki target with nothing in its ruler (never written, or taken out by a delete
+            # that then stopped) is handed to the ToolSync again, which writes it.
+            unwritten = {
+                t.rule_id
+                for t in await self._services.alerts.targets()
+                if t.engine == "tool"
+                and t.tool_kind == "loki_ruler"
+                and not t.leaving
+                and t.tool_object is None
+                and t.applied_version is None
+            }
             for rule in await self._services.alerts.list_rules(include_deleted=True):
                 try:
-                    await self.reconcile_rule(rule.id, memo=memo)
+                    await self.reconcile_rule(rule.id, changed=rule.id in unwritten, memo=memo)
                 except Exception as exc:  # noqa: BLE001 (the others carry on; logged by type)
                     log.warning(
                         "Bringing alert rule %s's targets up to date failed (%s)",

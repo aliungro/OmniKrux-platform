@@ -22,6 +22,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnikrux.monitoring.alerts.sync import CONTACT_POINT_GONE, AlertChangeOut, change_out
@@ -57,7 +58,7 @@ from omnikrux.monitoring.dashboards.store import (
     VersionConflict,
     VersionRecord,
 )
-from omnikrux.monitoring.models import lock_first
+from omnikrux.monitoring.models import ContactPointRow, lock_first
 from omnikrux.monitoring.projects.types import Project, UnknownGroup, UnknownProject
 from omnikrux.monitoring.services import MonitoringServices
 from omnikrux.monitoring.sources.connector import QueryRejected
@@ -510,6 +511,22 @@ async def save_document(
     return saved
 
 
+def _without_unknown_contact_points(doc: dict, known: set[str]) -> tuple[dict, list[str]]:
+    """The document with every panel alert's `notify` id that isn't in `known` left out, and
+    those ids (each once, in document order)."""
+    out = copy.deepcopy(doc)
+    gone: list[str] = []
+    for panel in out.get("panels", []):
+        alert = panel.get("alert") if isinstance(panel, dict) else None
+        if not isinstance(alert, dict) or not isinstance(alert.get("notify"), list):
+            continue
+        for cp_id in alert["notify"]:
+            if cp_id not in known and cp_id not in gone:
+                gone.append(cp_id)
+        alert["notify"] = [cp_id for cp_id in alert["notify"] if cp_id in known]
+    return out, gone
+
+
 def _without_contact_point(doc: dict, cp_id: str) -> dict | None:
     """The document without `cp_id` in any panel alert's `notify`; None when none names it."""
     out = copy.deepcopy(doc)
@@ -813,11 +830,26 @@ async def restore_version(id: str, v: str, request: Request) -> DashboardOut:
     services = _services(request)
     body = await _body(request, RestoreIn)
     current = await _dashboard(services, id)
-    old, _ = await _version(services, id, v)
-    details = {"from_version": old.version, "version": body.base_version + 1}
+    old, old_spec = await _version(services, id, v)
+    details: dict = {"from_version": old.version, "version": body.base_version + 1}
+    # A panel alert of that version may name a contact point deleted since: it is left out (the
+    # record names its id), so the editor's next save isn't refused for an id nobody touched.
+    known = {cp.id for cp in await services.contact_points.list()}
+    gone = _without_unknown_contact_points(old_spec, known)[1]
+    if gone:
+        details["removed_contact_point"] = gone
     record = await begin_change(request, "dashboard_restore", "dashboard", old.title, details)
     try:
-        restored = await services.dashboards.restore(id, old.version, body.base_version)
+        async with services.sessionmaker.begin() as session:
+            await lock_first(session)
+            known_now = set(await session.scalars(select(ContactPointRow.id)))
+            restored = await services.dashboards.restore(
+                id,
+                old.version,
+                body.base_version,
+                session=session,
+                transform=lambda spec: _without_unknown_contact_points(spec, known_now)[0],
+            )
     except VersionConflict as exc:
         await finish_change(request, record, False, str(exc))
         raise _conflict(exc) from None
