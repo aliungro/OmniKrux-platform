@@ -16,14 +16,21 @@ describe("rankOnlyLabels", () => {
     expect(shown).toEqual(["namespace", "pod", "container", "job", "instance", "uid"]);
   });
 
-  it("puts chosen labels first, then the ones Loki also has", () => {
-    const shown = rankOnlyLabels(KSM, { only: { app_kubernetes_io_name: "x" }, split: null, loki: ["container", "uid"] });
-    expect(shown).toEqual(["app_kubernetes_io_name", "container", "uid", "namespace", "pod", "job"]);
+  it("puts the labels Loki also has first", () => {
+    const shown = rankOnlyLabels(KSM, { only: {}, split: null, loki: ["container", "uid"] });
+    expect(shown).toEqual(["container", "uid", "namespace", "pod", "job", "instance"]);
   });
 
-  it("a chosen label past the cap can still be turned off", () => {
+  it("choosing a value never moves a label", () => {
+    const plain = rankOnlyLabels(KSM, { only: {}, split: null, loki: [] });
+    expect(rankOnlyLabels(KSM, { only: { pod: "a" }, split: null, loki: [] })).toEqual(plain);
+    expect(rankOnlyLabels(KSM, { only: { pod: "a", job: "b" }, split: null, loki: [] })).toEqual(plain);
+  });
+
+  it("a chosen label past the cap stays, after the others, so it can be turned off", () => {
+    const plain = rankOnlyLabels(KSM, { only: {}, split: null, loki: [] });
     const shown = rankOnlyLabels(KSM, { only: { helm_sh_chart: "a" }, split: null, loki: [] });
-    expect(shown[0]).toBe("helm_sh_chart");
+    expect(shown).toEqual([...plain, "helm_sh_chart"]);
   });
 
   it("the split label is never an Only chip", () => {

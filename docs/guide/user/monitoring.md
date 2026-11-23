@@ -251,7 +251,7 @@ The list on the left shows **Metrics** for a Prometheus-compatible source, or **
 Chips under the query shape it:
 
 - **Split by** groups the result by one label.
-- **Only** keeps one value of a label (`label=value`). It offers up to six labels: the ones you already chose, then the ones Loki also has, then common labels such as `namespace`, `pod` and `container`, and chart labels such as `app_kubernetes_io_*` last. A label with more than eight values has a **more…** popover with a **Filter values** box. For logs the values come from the log streams.
+- **Only** keeps one value of a label (`label=value`). It offers six labels: the ones Loki also has, then common labels such as `namespace`, `pod` and `container`, and chart labels such as `app_kubernetes_io_*` last. A label you chose a value of always stays, so you can turn it off, and choosing never moves a row. A label with more than eight values has a **more…** popover with a **Filter values** box. For logs the values come from the log streams.
 
 Clicking a chip rewrites the query and runs it. If you edit the query by hand, Explore says "You edited the query by hand. Clicking a chip writes it again from the chips." and leaves your text alone until you click a chip. You can always write the query yourself; the list and chips are only a way to start.
 

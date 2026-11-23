@@ -24,10 +24,11 @@ const PREFERRED = [...WELL_KNOWN, ...SPLIT_LABELS, ...STATUS_LABELS, ...LEVEL_LA
 const LAST = /^(app_kubernetes_io_|helm_sh_|label_)|_kubernetes_io_/;
 
 /**
- * Which labels get Only chips, best first: labels already chosen (so a value can always be turned
- * off), labels the project's Loki streams also have (they link the log lines), the well-known
- * labels, the split, status and level labels, then the rest alphabetically with chart and object
- * labels last. The split label is never an Only chip.
+ * Which labels get Only chips, best first: labels the project's Loki streams also have (they link
+ * the log lines), the well-known labels, the split, status and level labels, then the rest
+ * alphabetically with chart and object labels last. The split label is never an Only chip.
+ * Choosing a value never reorders the rows (a moved row would drop the keyboard): a label with a
+ * chosen value past the first `max` is shown too, in its place after them, so it can be turned off.
  */
 export function rankOnlyLabels(
   labels: string[],
@@ -39,17 +40,20 @@ export function rankOnlyLabels(
     const at = PREFERRED.indexOf(l);
     return at !== -1 ? at : PREFERRED.length + (LAST.test(l) ? 1 : 0);
   };
-  const tier = (l: string) => (Object.hasOwn(only, l) ? 0 : inLoki.has(l) ? 1 : 2);
+  const tier = (l: string) => (inLoki.has(l) ? 0 : 1);
   const order = (a: string, b: string) =>
     tier(a) - tier(b) || base(a) - base(b) || (a < b ? -1 : a > b ? 1 : 0);
-  return labels.filter((l) => l !== split).sort(order).slice(0, max);
+  return labels
+    .filter((l) => l !== split)
+    .sort(order)
+    .filter((l, i) => i < max || Object.hasOwn(only, l));
 }
 
 export interface LabelChipsProps {
   builder: ExploreBuilder;
   /** The labels to split by (the metric's, or the stream labels), already writable. */
   labels: string[];
-  /** The labels the project's Loki streams have: they rank first under Only. */
+  /** The labels the project's Loki streams have: they come first under Only. */
   loki: string[];
   /** Logs: each label's values from the catalog. Metrics: `null`, the values are read from the source. */
   known: Record<string, string[]> | null;

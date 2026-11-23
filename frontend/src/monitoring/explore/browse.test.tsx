@@ -143,6 +143,30 @@ describe("Browse metrics and log streams", () => {
     expect(query().value).toBe('sum(rate(kube_pod_container_status_restarts_total{namespace="demo"}[$__rate_interval]))');
   });
 
+  it("choosing and un-choosing a value leaves its row where it is, with the keyboard on its chip", async () => {
+    prom(catalogOf("p1", source("s1", {
+      built_at: BUILT,
+      metrics: [metric("kube_pod_info", { type: "gauge", labels: ["container", "namespace", "pod"] })],
+    })), { labelValues: { "p1|namespace": ["demo"], "p1|pod": ["a", "b"], "p1|container": ["c"] } });
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "kube_pod_info");
+    const only = await screen.findByRole("group", { name: "Only" });
+    const order = () => [...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label);
+    const before = order();
+    expect(before).toEqual(["namespace", "pod", "container"]);
+    // The second label's chip, pressed and then un-pressed.
+    const chip = await within(only).findByRole("button", { name: "pod=b" });
+    await user.click(chip);
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    expect(order()).toEqual(before);
+    expect(document.activeElement).toBe(chip);
+    await user.click(chip);
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+    expect(order()).toEqual(before);
+    expect(document.activeElement).toBe(chip);
+  });
+
   it("Split by another label rewrites the query", async () => {
     prom();
     const user = userEvent.setup();
