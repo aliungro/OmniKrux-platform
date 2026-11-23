@@ -584,7 +584,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
               }}
               onLeave={leaveQuery} />
             {chipsShown && (
-              <LabelChips builder={builder} labels={chipLabels} known={known} read={read}
+              <LabelChips builder={builder} labels={chipLabels} loki={lokiLabels} known={known} read={read}
                 onSplit={(label) => applyBuilder({ type: "split", label })}
                 onOnly={(label, value) => applyBuilder({ type: "only", label, value })} />
             )}

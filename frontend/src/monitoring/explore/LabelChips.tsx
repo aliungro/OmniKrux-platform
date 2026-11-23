@@ -6,6 +6,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { failure } from "../../api/http";
+import { LEVEL_LABELS, type Only, SPLIT_LABELS, STATUS_LABELS } from "../build/writeQuery";
 import { labelValues } from "../dashboards/api";
 import { escapeCloses } from "../focus";
 import type { ExploreBuilder } from "./builderState";
@@ -16,10 +17,40 @@ export const MAX_ONLY_LABELS = 6;
 const POPOVER_VALUES = 100;
 export const DETACHED_LINE = "You edited the query by hand. Clicking a chip writes it again from the chips.";
 
+/** The labels people narrow by most, in this order, ahead of the alphabet. */
+const WELL_KNOWN = ["namespace", "pod", "container", "job", "instance", "service", "node"];
+const PREFERRED = [...WELL_KNOWN, ...SPLIT_LABELS, ...STATUS_LABELS, ...LEVEL_LABELS];
+/** Chart and Kubernetes object labels (often one value each) go after every other label. */
+const LAST = /^(app_kubernetes_io_|helm_sh_|label_)|_kubernetes_io_/;
+
+/**
+ * Which labels get Only chips, best first: labels already chosen (so a value can always be turned
+ * off), labels the project's Loki streams also have (they link the log lines), the well-known
+ * labels, the split, status and level labels, then the rest alphabetically with chart and object
+ * labels last. The split label is never an Only chip.
+ */
+export function rankOnlyLabels(
+  labels: string[],
+  { only, split, loki }: { only: Only; split: string | null; loki: string[] },
+  max = MAX_ONLY_LABELS,
+): string[] {
+  const inLoki = new Set(loki);
+  const base = (l: string) => {
+    const at = PREFERRED.indexOf(l);
+    return at !== -1 ? at : PREFERRED.length + (LAST.test(l) ? 1 : 0);
+  };
+  const tier = (l: string) => (Object.hasOwn(only, l) ? 0 : inLoki.has(l) ? 1 : 2);
+  const order = (a: string, b: string) =>
+    tier(a) - tier(b) || base(a) - base(b) || (a < b ? -1 : a > b ? 1 : 0);
+  return labels.filter((l) => l !== split).sort(order).slice(0, max);
+}
+
 export interface LabelChipsProps {
   builder: ExploreBuilder;
   /** The labels to split by (the metric's, or the stream labels), already writable. */
   labels: string[];
+  /** The labels the project's Loki streams have: they rank first under Only. */
+  loki: string[];
   /** Logs: each label's values from the catalog. Metrics: `null`, the values are read from the source. */
   known: Record<string, string[]> | null;
   /** Metrics: where and what to read values of. */
@@ -30,10 +61,10 @@ export interface LabelChipsProps {
 
 type Values = { values: string[]; loading: boolean; error: string | null };
 
-export function LabelChips({ builder, labels, known, read, onSplit, onOnly }: LabelChipsProps) {
-  const onlyLabels = labels.filter((l) => l !== builder.split).slice(0, MAX_ONLY_LABELS);
+export function LabelChips({ builder, labels, loki, known, read, onSplit, onOnly }: LabelChipsProps) {
+  const onlyLabels = rankOnlyLabels(labels, { only: builder.only, split: builder.split, loki });
   // In logs the label picked from the list is the stream: splitting by it is not offered.
-  const splitLabels = builder.stream ? labels.filter((l) => !(l in builder.only)) : labels;
+  const splitLabels = builder.stream ? labels.filter((l) => !Object.hasOwn(builder.only, l)) : labels;
   // Logs know their values from the catalog and read nothing; a metric reads one label per query.
   const reads = useQueries({
     queries: known !== null || read === null ? [] : onlyLabels.map((label) => ({
@@ -88,7 +119,7 @@ export function LabelChips({ builder, labels, known, read, onSplit, onOnly }: La
           <span className={s.label} aria-hidden="true">Only</span>
           {onlyLabels.map((label, i) => {
             const { values, error } = all[i];
-            const chosen = builder.only[label];
+            const chosen = Object.hasOwn(builder.only, label) ? builder.only[label] : undefined;
             const first = values.slice(0, SHOWN_VALUES);
             // A value picked from the popover stays in view as a chip of its own.
             const shown = chosen !== undefined && !first.includes(chosen) ? [...first, chosen] : first;

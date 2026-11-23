@@ -122,6 +122,27 @@ describe("Browse metrics and log streams", () => {
     expect(query().value).toBe("sum by (route) (rate(http_requests_total[$__rate_interval]))");
   });
 
+  it("Only offers namespace, pod and container ahead of kube-state-metrics' chart labels", async () => {
+    const ksm = [
+      "app_kubernetes_io_component", "app_kubernetes_io_instance", "app_kubernetes_io_managed_by",
+      "app_kubernetes_io_name", "app_kubernetes_io_part_of", "app_kubernetes_io_version",
+      "container", "helm_sh_chart", "namespace", "pod", "uid",
+    ];
+    prom(catalogOf("p1", source("s1", {
+      built_at: BUILT,
+      metrics: [metric("kube_pod_container_status_restarts_total", { type: "counter", labels: ksm })],
+    })), { labelValues: { "p1|namespace": ["demo", "kube-system"], "p1|pod": ["a"], "p1|container": ["c"] } });
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "kube_pod_container_status_restarts_total");
+    const only = await screen.findByRole("group", { name: "Only" });
+    const shown = [...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label);
+    expect(shown.slice(0, 3)).toEqual(["namespace", "pod", "container"]);
+    expect(shown).toHaveLength(6);
+    await user.click(await within(only).findByRole("button", { name: "namespace=demo" }));
+    expect(query().value).toBe('sum(rate(kube_pod_container_status_restarts_total{namespace="demo"}[$__rate_interval]))');
+  });
+
   it("Split by another label rewrites the query", async () => {
     prom();
     const user = userEvent.setup();
