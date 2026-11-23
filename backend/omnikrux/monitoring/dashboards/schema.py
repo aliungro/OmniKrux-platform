@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Literal
 
 from omnikrux.monitoring.alerts.rule_expr import (
+    LOG_QUERY_COPY,
     RuleExprError,
     is_log_query,
     parse_duration,
@@ -653,11 +654,7 @@ def _alert_query(w: _Walk, raw: object, path: str, queries: list, variables: lis
     if expr is None:
         return ref
     if (query["source"] or {}).get("type") == "loki" and is_log_query(expr):
-        w.add(
-            path,
-            "A Loki alert needs a metric query, like "
-            'sum(count_over_time({app="api"} |= "error" [5m])).',
-        )
+        w.add(path, LOG_QUERY_COPY)
         return ref
     try:
         substitute(expr, variable_defaults(variables), every)

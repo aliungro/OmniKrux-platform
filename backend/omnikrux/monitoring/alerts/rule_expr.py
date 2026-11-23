@@ -27,6 +27,9 @@ _REGEX_SPECIAL = re.compile(r"[\\.^$|?*+()\[\]{}]")
 _TEMPLATE = re.compile(r"\{\{(value|[A-Za-z_][A-Za-z0-9_]*)\}\}")
 
 RANGE_COPY = "An alert can't use $__range; write the window into the query, like [5m]."
+LOG_QUERY_COPY = (
+    'A Loki alert needs a metric query, like sum(count_over_time({app="api"} |= "error" [5m])).'
+)
 
 
 def no_default_copy(name: str) -> str:
@@ -34,6 +37,10 @@ def no_default_copy(name: str) -> str:
         f"Uses ${name}, which has no default value. "
         "Alerts use each variable's default, so give it one."
     )
+
+
+def not_a_variable_copy(name: str) -> str:
+    return f"Uses ${name}, which isn't a variable here. Write the value into the query."
 
 
 def refused_copy(name: str) -> str:
@@ -113,11 +120,14 @@ def _render(name: str, variables: Defaults, quote: str | None) -> str | None:
     return text
 
 
-def substitute(text: str, variables: Defaults, every_seconds: int) -> str:
+def substitute(
+    text: str, variables: Defaults, every_seconds: int, *, unknown_refused: bool = False
+) -> str:
     """`text` with the built-ins from the interval and variables from their defaults.
 
     Raises RuleExprError for $__range, a single-value variable without a default, and any value
-    that can't be placed where its variable sits.
+    that can't be placed where its variable sits. A `$name` that isn't a variable stays as
+    written, or, with `unknown_refused`, is refused too.
     """
     out: list[str] = []
     quote: str | None = None
@@ -147,6 +157,8 @@ def substitute(text: str, variables: Defaults, every_seconds: int) -> str:
                     rendered = duration_text(max(4 * every_seconds, RATE_INTERVAL_FLOOR))
                 elif name == "__range":
                     raise RuleExprError(RANGE_COPY)
+                elif unknown_refused and name not in variables:
+                    raise RuleExprError(not_a_variable_copy(name))
                 else:
                     rendered = _render(name, variables, quote)
                     if rendered is not None and placed is None:
@@ -171,6 +183,13 @@ def substitute(text: str, variables: Defaults, every_seconds: int) -> str:
     if lone_return and placed is not None:
         raise RuleExprError(lone_return_copy(placed))
     return "".join(out)
+
+
+def expr_without_document(text: str, every_seconds: int) -> str:
+    """A query written on its own (a page rule, a dry run), ready to run at the interval: the
+    built-ins placed as `rule_expr` places them; any other `$name` is refused, since no document
+    gives it a value. Raises RuleExprError."""
+    return substitute(text, {}, every_seconds, unknown_refused=True)
 
 
 def variable_defaults(variables: list) -> dict[str, tuple[bool, "str | list[str]"]]:

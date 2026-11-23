@@ -1,58 +1,24 @@
 """Every route under /api/monitoring. The feature routers' routes are added here."""
 
 from fastapi import APIRouter, Depends
-from fastapi.routing import APIRoute
 
-from omnikrux.monitoring.alerts.contact_points.api import router as contact_points_router
+from omnikrux.monitoring.alerts.router import router as alerts_router
 from omnikrux.monitoring.dashboards.api import router as dashboards_router
 from omnikrux.monitoring.explore.api import router as explore_router
 from omnikrux.monitoring.projects.api import router as projects_router
 from omnikrux.monitoring.query.api import router as query_router
 from omnikrux.monitoring.sources.api import finding_router
 from omnikrux.monitoring.sources.api import router as sources_router
+from omnikrux.monitoring.web import adopt as adopt_routes
 from omnikrux.monitoring.web import refuse_cross_origin
 
 router = APIRouter(prefix="/api/monitoring", dependencies=[Depends(refuse_cross_origin)])
 
-# What `add_api_route` takes that an `APIRoute` keeps under the same name. A route's
-# `dependencies` already hold its own router's (FastAPI merges them when the route is added).
-_CARRIED = (
-    "response_model",
-    "status_code",
-    "tags",
-    "dependencies",
-    "summary",
-    "description",
-    "response_description",
-    "responses",
-    "deprecated",
-    "operation_id",
-    "response_model_include",
-    "response_model_exclude",
-    "response_model_by_alias",
-    "response_model_exclude_unset",
-    "response_model_exclude_defaults",
-    "response_model_exclude_none",
-    "include_in_schema",
-    "response_class",
-    "name",
-    "callbacks",
-    "openapi_extra",
-    "generate_unique_id_function",
-    "strict_content_type",
-)
-
 
 def adopt(feature: APIRouter, into: APIRouter = router) -> None:
-    """Add a feature router's routes to `into`, under its prefix and behind its dependencies,
-    keeping every setting of each route. Not `include_router`: FastAPI keeps a nested include as
-    one opaque entry whose routes carry only their own short paths, which hides them from walks
-    over `app.routes`."""
-    for route in feature.routes:
-        if type(route) is not APIRoute:
-            raise TypeError(f"Only plain API routes can be adopted, not {route!r}")
-        settings = {key: getattr(route, key) for key in _CARRIED if hasattr(route, key)}
-        into.add_api_route(route.path, route.endpoint, methods=sorted(route.methods), **settings)
+    """Add a feature router's routes to `into` (the Monitoring router by default); see
+    `web.adopt`."""
+    adopt_routes(feature, into)
 
 
 adopt(sources_router)
@@ -61,4 +27,4 @@ adopt(projects_router)
 adopt(query_router)
 adopt(dashboards_router)
 adopt(explore_router)
-adopt(contact_points_router)
+adopt(alerts_router)
