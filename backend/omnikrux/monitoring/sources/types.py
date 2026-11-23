@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import Literal
 
 SourceType = Literal["prometheus", "loki", "alertmanager"]
+# The types whose sources hold metrics or logs; an Alertmanager holds alerts and silences.
+QUERYABLE_TYPES: frozenset[str] = frozenset({"prometheus", "loki"})
 Reach = Literal["url", "cluster"]
 AuthType = Literal["none", "basic", "bearer", "api_key", "mtls"]
 ProjectKind = Literal["kubernetes", "docker", "servers", "custom"]

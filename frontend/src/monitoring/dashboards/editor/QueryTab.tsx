@@ -38,7 +38,8 @@ export function sourceChoices(owner: DashboardOwner | null, ownerKind: OwnerKind
   // While the project is still loading its links aren't known, so nothing is called missing yet.
   if (!out.some((c) => c.value === valueOf(current))) {
     const loading = ownerKind === "project" && owner === null;
-    const label = current.id === null
+    const held = current.id !== null && owner?.kind === "project" && owner.project.links.some((l) => l.source_id === current.id);
+    const label = held ? "A linked source that can't run queries" : current.id === null
       ? `First ${WORDS[current.type]} source${loading ? "" : " (none linked)"}`
       : loading ? "The linked source" : "A source that isn't linked any more";
     out.push({ value: valueOf(current), label, source: current });

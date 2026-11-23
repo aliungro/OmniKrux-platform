@@ -3,6 +3,7 @@
 from omnikrux.monitoring.query.run import NO_FILTER_RULE
 from omnikrux.monitoring.sources.alertmanager import AlertmanagerConnector
 from omnikrux.monitoring.sources.connector import SourceCatalog
+from omnikrux.monitoring.sources.transport import TransportResponse
 from tests.fakekube import service
 from tests.monitoring.test_discovery import BASE, by_type, seed, tcp
 
@@ -24,9 +25,26 @@ async def test_alertmanager_test_refuses_something_else(fake_prometheus, direct)
     t = direct(fake_prometheus.url, type="alertmanager", name="Alerts")
     result = await AlertmanagerConnector().test(t, "Alerts")
     assert result.ok is False
-    assert result.message is not None and (
-        "Alerts answered" in result.message or "Alerts" in result.message
-    )
+    assert result.message == "Alerts answered HTTP 404. Try again, or check the tool."
+
+
+class _Answers:
+    """A transport that answers every request with a 200 and this body."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    async def request(self, method, path, **kwargs):
+        return TransportResponse(200, self.body, "application/json")
+
+
+async def test_alertmanager_test_refuses_json_that_is_not_an_alertmanager():
+    for body in (b'{"status": "success"}', b"not json", b'{"versionInfo": {}}'):
+        result = await AlertmanagerConnector().test(_Answers(body), "Alerts")
+        assert (result.ok, result.message) == (
+            False,
+            "Alerts answered, but not like an Alertmanager. Check the address and its path.",
+        )
 
 
 async def _alertmanager_source(http, url: str, name: str = "Alerts") -> str:

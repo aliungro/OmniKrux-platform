@@ -35,13 +35,10 @@ from omnikrux.monitoring.sources.connector import (
 )
 from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE
 from omnikrux.monitoring.sources.transport import SourceUnreachable
-from omnikrux.monitoring.sources.types import SourceConfig, SourceType
+from omnikrux.monitoring.sources.types import QUERYABLE_TYPES, SourceConfig, SourceType
 
 if TYPE_CHECKING:
     from omnikrux.monitoring.services import MonitoringServices
-
-# The sources whose contents a catalog lists; an Alertmanager holds alerts, not metrics or logs.
-QUERYABLE_TYPES: frozenset[str] = frozenset({"prometheus", "loki"})
 
 CATALOG_TTL = 300.0
 CATALOG_ERROR_TTL = 30.0

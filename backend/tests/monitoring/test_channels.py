@@ -83,3 +83,140 @@ async def test_read_channels_from_the_status(fake_alertmanager, direct):
     assert caught.value.message == (
         "Alerts's configuration couldn't be read, so its channels can't be listed."
     )
+
+
+def shapes(config: str):
+    return [(c.receiver, c.usable, c.reason) for c in parse_channels(config)]
+
+
+SHADOW = "An earlier route catches these alerts first, so they never reach this one."
+
+
+def test_a_catch_all_sibling_shadows_everything_after_it_and_the_default():
+    got = shapes(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: all
+    - receiver: later
+      matchers: ['team="a"']
+"""
+    )
+    assert got == [("root", False, SHADOW), ("all", True, None), ("later", False, SHADOW)]
+
+
+def test_an_equal_or_broader_earlier_sibling_shadows():
+    got = shapes(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: first
+      matchers: ['team="a"']
+    - receiver: second
+      matchers: ['team="a"', 'severity="page"']
+    - receiver: third
+      match: {team: a}
+"""
+    )
+    assert got == [
+        ("root", True, None),
+        ("first", True, None),
+        ("second", False, SHADOW),
+        ("third", False, SHADOW),
+    ]
+
+
+def test_continue_stops_the_shadow():
+    got = shapes(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: first
+      continue: true
+      matchers: ['team="a"']
+    - receiver: second
+      matchers: ['team="a"', 'severity="page"']
+    - receiver: all
+      continue: true
+    - receiver: last
+      matchers: ['team="z"']
+"""
+    )
+    assert [u for _, u, _ in got] == [True] * 5
+
+
+def test_a_narrower_earlier_sibling_does_not_shadow():
+    got = shapes(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: narrow
+      matchers: ['team="a"', 'severity="page"']
+    - receiver: broad
+      matchers: ['team="a"']
+"""
+    )
+    assert [u for _, u, _ in got] == [True, True, True]
+
+
+def test_a_shadowed_routes_children_are_unusable_too():
+    got = shapes(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: all
+    - receiver: later
+      routes:
+        - receiver: deep
+          matchers: ['x="1"']
+"""
+    )
+    assert [(r, u) for r, u, _ in got] == [
+        ("root", False),
+        ("all", True),
+        ("later", False),
+        ("deep", False),
+    ]
+    assert got[3][2] == SHADOW
+
+
+def test_a_usable_channel_wins_over_an_unusable_duplicate():
+    channels = parse_channels(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: ops
+      matchers: ['team="ops"', 'env=~"p.*"']
+    - receiver: ops
+      match: {team: ops}
+"""
+    )
+    ops = [c for c in channels if c.receiver == "ops"]
+    assert len(ops) == 1 and ops[0].usable and ops[0].path == "routes[1]"
+
+
+def test_contradicting_labels_and_unreadable_matchers_have_their_own_reasons():
+    channels = parse_channels(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: a
+      matchers: ['team="a"']
+      routes:
+        - receiver: b
+          matchers: ['team="b"']
+    - receiver: c
+      matchers: ['not a matcher']
+"""
+    )
+    by = {c.receiver: c for c in channels}
+    assert by["b"].reason == "Its labels contradict the routes above it, so no alert can reach it."
+    assert by["c"].reason == "OmniKrux couldn't read this route's matchers."
+    assert not by["b"].usable and not by["c"].usable
