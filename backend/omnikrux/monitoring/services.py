@@ -17,6 +17,7 @@ from omnikrux.monitoring.alerts.store import AlertStore
 from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.explore.catalog import CatalogCache
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
+from omnikrux.monitoring.sources.capability import CapabilityCache
 from omnikrux.monitoring.sources.connector import ConnectorRegistry, default_connectors
 from omnikrux.monitoring.sources.discovery import Discovery
 from omnikrux.monitoring.sources.health import HealthCache
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     # these services.
     from omnikrux.monitoring.alerts.engine import AlertEngine
     from omnikrux.monitoring.alerts.notify import Notifier
+    from omnikrux.monitoring.alerts.sync import AlertSync
 
 
 @dataclass
@@ -48,9 +50,11 @@ class MonitoringServices:
     silences: SilenceStore
     audit: AuditLog
     sessionmaker: async_sessionmaker[AsyncSession]
+    capabilities: CapabilityCache
     # Set by `build_services` (they need the services themselves).
     notifier: Notifier = field(init=False)
     engine: AlertEngine = field(init=False)
+    alert_sync: AlertSync = field(init=False)
 
     async def close(self) -> None:
         """Release what the services hold, before the database engine is disposed: the alert
@@ -80,10 +84,12 @@ def build_services(
     and nothing else that would run in its loop starts either."""
     from omnikrux.monitoring.alerts.engine import AlertEngine
     from omnikrux.monitoring.alerts.notify import Notifier
+    from omnikrux.monitoring.alerts.sync import AlertSync
 
     sources = SourceStore(sessionmaker, box)
     transports = TransportFactory(connections, registry)
     connectors = default_connectors()
+    discovery = Discovery(connections, registry, transports, connectors, sources)
     services = MonitoringServices(
         sources=sources,
         projects=ProjectStore(sessionmaker),
@@ -92,7 +98,7 @@ def build_services(
         transports=transports,
         connectors=connectors,
         health=HealthCache(sources, transports, connectors, registry),
-        discovery=Discovery(connections, registry, transports, connectors, sources),
+        discovery=discovery,
         catalogs=CatalogCache(),
         alerts=AlertStore(sessionmaker),
         contact_points=ContactPointStore(sessionmaker, box),
@@ -100,7 +106,9 @@ def build_services(
         silences=SilenceStore(sessionmaker),
         audit=audit,
         sessionmaker=sessionmaker,
+        capabilities=CapabilityCache(connectors, transports, discovery, registry),
     )
     services.notifier = Notifier(services)
     services.engine = AlertEngine(services, enabled=alert_engine)
+    services.alert_sync = AlertSync(services)
     return services

@@ -20,7 +20,8 @@ from omnikrux.monitoring.projects.types import REVIEW_CHANGED, ReviewChanged, Un
 from omnikrux.monitoring.query.filters import render_matchers
 from omnikrux.monitoring.query.suggest import suggest_filter
 from omnikrux.monitoring.services import MonitoringServices
-from omnikrux.monitoring.sources.connector import ClusterProbe, QueryRejected
+from omnikrux.monitoring.sources.capability import CapabilityUnknown
+from omnikrux.monitoring.sources.connector import QueryRejected
 from omnikrux.monitoring.sources.discovery import (
     CLUSTER_GONE,
     FoundState,
@@ -556,22 +557,14 @@ async def source_fields(id: str, project: str, request: Request) -> FieldCatalog
 
 @router.get("/{id}/alerting")
 async def source_alerting(id: str, request: Request) -> AlertingOut:
+    """What the source's tool can run, read now (the answer refreshes the rules' cache)."""
     services = _services(request)
     source = await _source(services, id)
     _readable(source)
-    connector = services.connectors.get(source.type)
-    probe: ClusterProbe | None = None
-    if source.reach == "cluster" and source.cluster is not None:
-        try:
-            await _registry(request).get(source.cluster.cluster_id)
-        except KeyError:  # a cluster OmniKrux no longer knows serves nothing
-            pass
-        else:
-            probe = services.discovery.probe(source.cluster.cluster_id)
     try:
-        capability = await connector.alerting(services.transports.for_source(source), cluster=probe)
-    except (SourceUnreachable, QueryRejected) as exc:
-        raise _unreachable(exc) from None
+        capability = await services.capabilities.get(source, refresh=True)
+    except CapabilityUnknown as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from None
     return AlertingOut(
         omnikrux_engine=capability.omnikrux_engine,
         tool_engine=capability.tool_engine,

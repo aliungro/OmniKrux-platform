@@ -261,8 +261,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
             discovery.start()
-            # Task 8 hook: `await monitoring.alert_sync.reconcile_all()` goes here, before the
-            # alert engine starts.
+            # Every rule's targets follow its scope's projects and links as they are now, before
+            # the alert engine checks any of them.
+            await monitoring.alert_sync.reconcile_all()
             monitoring.engine.start()  # nothing starts with OMNIKRUX_ALERT_ENGINE=false
             yield
         finally:
