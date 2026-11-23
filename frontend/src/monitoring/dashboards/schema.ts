@@ -8,6 +8,8 @@
 //
 // Only dashboard code imports this module; it must stay out of the startup bundle.
 
+import { VariableError, interpolate, type ResolvedVars } from "./interpolate";
+
 export type OwnerKind = "project" | "group";
 export type PanelType = "timeseries" | "stat" | "gauge" | "bar" | "table" | "logs";
 export type Unit =
@@ -138,7 +140,25 @@ interface PanelBase {
   description: string;
   layout: Layout;
   queries: QuerySpec[];
-  alert: null;
+  alert: AlertSpec | null;
+}
+export interface AlertChannel {
+  receiver: string;
+  labels: Record<string, string>;
+}
+export interface AlertSpec {
+  name: string;
+  query: string;
+  of: "each" | "total";
+  op: "above" | "below";
+  threshold: number;
+  for: string;
+  every: "30s" | "1m" | "5m";
+  severity: "critical" | "warning" | "info";
+  message: string;
+  notify: string[];
+  engine: "omnikrux" | "tool";
+  channel: AlertChannel | null;
 }
 export type PanelSpec =
   | (PanelBase & { type: "timeseries"; options: TimeseriesOptions })
@@ -798,6 +818,241 @@ function queries(
   return items.map((item, i) => query(w, item, at(path, i), refs, defined));
 }
 
+// --- the alert on a panel -----------------------------------------------------------------
+
+const ALERT_PANEL_TYPES: readonly PanelType[] = ["timeseries", "stat", "gauge", "bar"];
+const SEVERITIES = ["critical", "warning", "info"] as const;
+const EVERY_SECONDS: Record<string, number> = { "30s": 30, "1m": 60, "5m": 300 };
+const MAX_FOR_SECONDS = 86400;
+const MAX_NOTIFY = 10;
+const MAX_CHANNEL_LABELS = 10;
+const CONTACT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const DURATION = /^(0|[1-9][0-9]*)(s|m|h)$/;
+const DURATION_UNIT: Record<string, number> = { s: 1, m: 60, h: 3600 };
+// Python's str.strip(): every character str.isspace() accepts.
+const PY_SPACE = String.fromCharCode(
+  0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a,
+  0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0x85, 0xa0,
+);
+const LOG_QUERY = new RegExp(String.raw`^[\t\n\v\f\r\x1c-\x20${PY_SPACE}]*\{`);
+
+const ALERT_RANGE_COPY = "An alert can't use $__range; write the window into the query, like [5m].";
+const alertNoDefaultCopy = (name: string) =>
+  `Uses $${name}, which has no default value. Alerts use each variable's default, so give it one.`;
+
+class AlertQueryRefused extends Error {}
+
+/**
+ * Why an alert can't run this query text, or null. Runs the dashboard's own `interpolate` with
+ * each variable's default; a single-value variable without one and `$__range` stop the scan at
+ * the place they are read, so the first refusal is the same one the server gives.
+ */
+function alertQueryProblem(expr: string, variables: unknown[], everySeconds: number): string | null {
+  const vars: ResolvedVars = Object.create(null);
+  for (const v of variables) {
+    if (!isObject(v) || typeof v.name !== "string" || Object.hasOwn(vars, v.name)) continue;
+    const name = v.name;
+    const multi = v.multi === true;
+    const def = v.default;
+    const value =
+      def === "all" ? "all" : Array.isArray(def) ? def.filter((d): d is string => typeof d === "string") : [];
+    if (!multi && value !== "all" && value.length === 0) {
+      Object.defineProperty(vars, name, {
+        enumerable: true,
+        get() {
+          throw new AlertQueryRefused(alertNoDefaultCopy(name));
+        },
+      });
+    } else {
+      Object.defineProperty(vars, name, { enumerable: true, value: { multi, value } });
+    }
+  }
+  const builtins = {
+    stepSeconds: everySeconds,
+    get rangeSeconds(): number {
+      throw new AlertQueryRefused(ALERT_RANGE_COPY);
+    },
+  };
+  try {
+    interpolate(expr, vars, builtins);
+  } catch (err) {
+    if (err instanceof AlertQueryRefused || err instanceof VariableError) return err.message;
+    throw err;
+  }
+  return null;
+}
+
+function alertQuery(
+  w: Walk,
+  raw: unknown,
+  path: string,
+  qs: unknown[],
+  variables: unknown[],
+  every: number,
+): string | null {
+  const ref = text(w, raw, path);
+  if (ref === null) return null;
+  const q = qs.find((x) => isObject(x) && x.ref === ref) as Obj | undefined;
+  if (q === undefined) {
+    w.add(path, "Use the ref of one of this panel's queries, like A.");
+    return null;
+  }
+  const expr = q.expr;
+  if (typeof expr !== "string") return ref;
+  const src = q.source;
+  if (isObject(src) && src.type === "loki" && LOG_QUERY.test(expr)) {
+    w.add(
+      path,
+      'A Loki alert needs a metric query, like sum(count_over_time({app="api"} |= "error" [5m])).',
+    );
+    return ref;
+  }
+  const problem = alertQueryProblem(expr, variables, every);
+  if (problem !== null) w.add(path, problem);
+  return ref;
+}
+
+function alertChannel(w: Walk, raw: unknown, path: string, engine: string | null): unknown {
+  if (raw === null) return null;
+  const obj = object(w, raw, path);
+  if (obj === null) return null;
+  if (engine !== null && engine !== "tool") {
+    w.add(path, "A channel is only for alerts that run in the tool.");
+  }
+  const receiverRaw = required(w, obj, path, "receiver");
+  let receiver: string | null = null;
+  if (receiverRaw !== MISSING) {
+    receiver = text(w, receiverRaw, at(path, "receiver"));
+    if (receiver !== null && (points(receiver) < 1 || points(receiver) > 200)) {
+      w.add(at(path, "receiver"), "Use 1 to 200 characters.");
+      receiver = null;
+    }
+  }
+  const labels: Obj = {};
+  if (hasOwn(obj, "labels")) {
+    const lp = at(path, "labels");
+    const items = object(w, obj.labels, lp);
+    if (items !== null) {
+      const keys = Object.keys(items).sort(compareCodePoints);
+      if (keys.length > MAX_CHANNEL_LABELS) w.add(lp, "At most 10 labels.");
+      for (const key of keys) {
+        if (!LABEL.test(key)) {
+          w.add(at(lp, key), "Use a label name: letters, digits and _, not starting with a digit.");
+          continue;
+        }
+        labels[key] = longText(w, items[key], at(lp, key), 200, "Use at most 200 characters.");
+      }
+    }
+  }
+  unknownKeys(w, obj, path, ["receiver", "labels"]);
+  return { receiver, labels };
+}
+
+function alertNotify(w: Walk, raw: unknown, path: string): string[] {
+  const items = list(w, raw, path);
+  if (items === null) return [];
+  if (items.length > MAX_NOTIFY) w.add(path, "At most 10 contact points.");
+  const out: string[] = [];
+  items.forEach((item, i) => {
+    const p = at(path, i);
+    const t = text(w, item, p);
+    if (t === null) return;
+    if (!CONTACT_ID.test(t)) w.add(p, "Use a contact point id.");
+    else if (out.includes(t)) w.add(p, "Each contact point only once.");
+    else out.push(t);
+  });
+  return out;
+}
+
+function alertDuration(w: Walk, raw: unknown, path: string): string | null {
+  const t = text(w, raw, path);
+  if (t === null) return null;
+  const m = DURATION.exec(t);
+  const seconds = m === null ? -1 : Number(m[1]) * DURATION_UNIT[m[2]];
+  if (!(seconds >= 0 && seconds <= MAX_FOR_SECONDS)) {
+    w.add(path, "Use a duration from 0s to 24h, like 5m.");
+    return null;
+  }
+  return t;
+}
+
+function alert(
+  w: Walk,
+  raw: unknown,
+  path: string,
+  kind: PanelType | null,
+  qs: unknown[],
+  variables: unknown[],
+): unknown {
+  if (kind !== null && !ALERT_PANEL_TYPES.includes(kind)) {
+    w.add(path, `A ${kind} panel can't have an alert. Use a time series, stat, gauge or bar panel.`);
+    return null;
+  }
+  const obj = object(w, raw, path);
+  if (obj === null) return null;
+  const nameRaw = required(w, obj, path, "name");
+  const name =
+    nameRaw === MISSING
+      ? null
+      : shortText(w, nameRaw, at(path, "name"), 1, "Use 1 to 120 characters, without line breaks.");
+  const everyRaw = hasOwn(obj, "every") ? obj.every : "1m";
+  const every =
+    typeof everyRaw === "string" && Object.hasOwn(EVERY_SECONDS, everyRaw)
+      ? EVERY_SECONDS[everyRaw]
+      : 60;
+  const queryRaw = required(w, obj, path, "query");
+  const query =
+    queryRaw === MISSING ? null : alertQuery(w, queryRaw, at(path, "query"), qs, variables, every);
+  const of = optEnum(w, obj, path, "of", ["each", "total"] as const);
+  const opRaw = required(w, obj, path, "op");
+  const op = opRaw === MISSING ? null : enumOf(w, opRaw, at(path, "op"), ["above", "below"] as const);
+  const thresholdRaw = required(w, obj, path, "threshold");
+  const threshold = thresholdRaw === MISSING ? null : number(w, thresholdRaw, at(path, "threshold"));
+  const forText = hasOwn(obj, "for") ? alertDuration(w, obj.for, at(path, "for")) : "5m";
+  const everyText = hasOwn(obj, "every")
+    ? enumOf(w, obj.every, at(path, "every"), ["30s", "1m", "5m"] as const, "Use 30s, 1m or 5m.")
+    : "1m";
+  const severity = hasOwn(obj, "severity")
+    ? enumOf(w, obj.severity, at(path, "severity"), SEVERITIES)
+    : "warning";
+  const message = hasOwn(obj, "message")
+    ? longText(w, obj.message, at(path, "message"), 500, "Use at most 500 characters.")
+    : "";
+  const notify = hasOwn(obj, "notify") ? alertNotify(w, obj.notify, at(path, "notify")) : [];
+  const engine = optEnum(w, obj, path, "engine", ["omnikrux", "tool"] as const);
+  const channel = hasOwn(obj, "channel")
+    ? alertChannel(w, obj.channel, at(path, "channel"), engine)
+    : null;
+  unknownKeys(w, obj, path, [
+    "name",
+    "query",
+    "of",
+    "op",
+    "threshold",
+    "for",
+    "every",
+    "severity",
+    "message",
+    "notify",
+    "engine",
+    "channel",
+  ]);
+  return {
+    name,
+    query,
+    of,
+    op,
+    threshold,
+    for: forText,
+    every: everyText,
+    severity,
+    message,
+    notify,
+    engine,
+    channel,
+  };
+}
+
 function panel(
   w: Walk,
   raw: unknown,
@@ -805,6 +1060,7 @@ function panel(
   ids: Set<string>,
   placed: Placed[],
   defined: Map<string, number>,
+  variables: unknown[],
 ): unknown {
   const obj = object(w, raw, path);
   if (obj === null) return null;
@@ -855,9 +1111,10 @@ function panel(
   } else {
     opts = options(w, {}, at(path, "options"), kind);
   }
-  if (hasOwn(obj, "alert") && obj.alert !== null) {
-    w.add(at(path, "alert"), 'Panel alerts arrive in a later update; leave "alert" as null.');
-  }
+  const alertSpec =
+    hasOwn(obj, "alert") && obj.alert !== null
+      ? alert(w, obj.alert, at(path, "alert"), kind, qs, variables)
+      : null;
   unknownKeys(w, obj, path, [
     "id",
     "type",
@@ -876,7 +1133,7 @@ function panel(
     layout: lay,
     queries: qs,
     options: opts,
-    alert: null,
+    alert: alertSpec,
   };
 }
 
@@ -958,7 +1215,7 @@ function documentOf(w: Walk, raw: unknown): Obj {
   if (panelItems.length > MAX_PANELS) w.add("panels", "A dashboard has at most 100 panels.");
   const ids = new Set<string>();
   const placed: Placed[] = [];
-  const panels = panelItems.map((item, i) => panel(w, item, at("panels", i), ids, placed, defined));
+  const panels = panelItems.map((item, i) => panel(w, item, at("panels", i), ids, placed, defined, variables));
   unknownKeys(w, obj, "", [
     "schemaVersion",
     "title",

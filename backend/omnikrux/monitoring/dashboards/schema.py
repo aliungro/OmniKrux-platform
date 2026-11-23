@@ -688,7 +688,7 @@ def _channel(w: _Walk, raw: object, path: str, engine: str | None):
         if items is not None:
             if len(items) > MAX_CHANNEL_LABELS:
                 w.add(lp, "At most 10 labels.")
-            for key, value in items.items():
+            for key, value in sorted(items.items()):
                 if not _LABEL.fullmatch(key):
                     w.add(
                         _at(lp, key),
