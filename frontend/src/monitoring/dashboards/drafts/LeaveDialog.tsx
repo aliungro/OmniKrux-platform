@@ -5,9 +5,11 @@ import { useId, useRef, type RefObject } from "react";
 import { DialogShell } from "../../../features/dock/ConfirmDialog";
 import s from "./Drafts.module.css";
 
-export function LeaveDialog({ title, draftsWork, onStay, onDiscard, onKeep, restoreFocusTo }: {
+export function LeaveDialog({ title, draftsWork, onStay, onDiscard, onKeep, restoreFocusTo, body }: {
   title: string;
   draftsWork: boolean;
+  /** What leaving does, when it isn't a dashboard's draft (an alert rule being written). */
+  body?: string;
   onStay(): void;
   onDiscard(): void;
   onKeep(): void;
@@ -20,9 +22,9 @@ export function LeaveDialog({ title, draftsWork, onStay, onDiscard, onKeep, rest
       restoreFocusTo={restoreFocusTo} labelledBy={`${id}-t`} describedBy={`${id}-b`} className={s.dialog}>
       <h2 id={`${id}-t`} className={s.dialogTitle}>Leave "{title}" with unsaved changes?</h2>
       <p id={`${id}-b`} className={s.dialogBody}>
-        {draftsWork
+        {body ?? (draftsWork
           ? "Your changes stay saved as a draft in this browser and are offered back when you open the dashboard again."
-          : "This browser can't keep drafts, so leaving loses these changes."}
+          : "This browser can't keep drafts, so leaving loses these changes.")}
       </p>
       <div className={s.dialogActions}>
         <button ref={stay} type="button" className={s.secondary} onClick={onStay}>Stay</button>

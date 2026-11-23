@@ -7,9 +7,11 @@ import { installFakeMonitoringApi } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../../test/renderMonitoringApp";
 import { newAlert } from "../../dashboards/schema";
 import type { RuleOut } from "../api";
+import { endRuleForm, ruleFormSessions } from "./formSessions";
 
 afterEach(() => {
   cleanup();
+  for (const id of [...ruleFormSessions.keys()]) endRuleForm(id);
   vi.unstubAllGlobals();
 });
 

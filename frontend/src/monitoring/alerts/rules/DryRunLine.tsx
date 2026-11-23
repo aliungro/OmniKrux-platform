@@ -37,12 +37,8 @@ export function adviceFor(out: DryRunOut, op: Op, threshold: number): { threshol
 
 /** The line's words for a finished run. */
 export function dryRunWords(out: DryRunOut, body: DryRunIn, now: number): string {
-  const text = dryRunSentence(out, now);
-  if (body.scope.kind !== "group") return text;
-  const counted = out.projects.filter((p) => p.error === null).length;
-  // " (across 3 projects)" closes the first sentence: before its full stop.
-  const at = text.indexOf(".");
-  return `${text.slice(0, at)} (across ${counted} project${counted === 1 ? "" : "s"})${text.slice(at)}`;
+  if (body.scope.kind !== "group") return dryRunSentence(out, now);
+  return dryRunSentence(out, now, undefined, out.projects.filter((p) => p.error === null).length);
 }
 
 export interface DryRunLineProps {

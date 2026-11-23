@@ -69,6 +69,9 @@ describe("alert words", () => {
       "Over the last 6 hours this would have fired once (yesterday 18:42, 9 min).",
     );
     expect(dryRunSentence(dry({}), now)).toBe("Over the last 6 hours this would not have fired.");
+    // A group says how many projects it counted, at the end of the first sentence.
+    expect(dryRunSentence(dry({ firing_now: true }), now, "6 hours", 2)).toBe("Over the last 6 hours this would not have fired (across 2 projects). It is firing now.");
+    expect(dryRunSentence(dry({}), now, "6 hours", 1)).toBe("Over the last 6 hours this would not have fired (across 1 project).");
     const today = at(2026, 3, 10, 7, 5);
     const older = at(2026, 3, 1, 23, 0);
     expect(

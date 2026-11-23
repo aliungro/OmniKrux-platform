@@ -604,6 +604,8 @@ export const useChannels = (projectId: string | null): Result<ChannelsOut> =>
 export const useDryRun = (body: DryRunIn | null): Result<DryRunOut> =>
   useQuery<DryRunOut, AlertRequestError>({
     queryKey: alertsKeys.dryRun(body), queryFn: ({ signal }) => dryRunAlert(body as DryRunIn, signal), enabled: body !== null, retry: false,
+    // Six hours replayed again only when the rule changes, not when the window gets focus back.
+    refetchOnWindowFocus: false, refetchOnReconnect: false,
   });
 
 // --- Mutations (none of these bodies holds a secret) ------------------------------------------

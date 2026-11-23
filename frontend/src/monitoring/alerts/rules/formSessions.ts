@@ -1,0 +1,91 @@
+// The rule form open in each Monitoring tab, kept outside the page (as M2's `editSessions` keep a
+// dashboard's edit): switching tabs, or leaving Monitoring and coming back, finds the form as it was.
+// A form with changes holds every way out of its tab (closing it, going elsewhere, Back, Forward)
+// through MonitoringApp's leave check, and a reload or a closed browser tab asks first too.
+//
+// Small and free of the form's code, so MonitoringApp can read it without loading the Alerts page.
+
+import type { AppTabs } from "../../../features/shell/workspace";
+import { holdUnload } from "../../dashboards/drafts/useDraft";
+import type { MonitoringTabAction, MonitoringView } from "../../shell/tabState";
+import type { RuleOut, ScopeKind } from "../api";
+
+/** Which form is open: a new rule (for a scope at first) or the edit of a rule. */
+export type RuleFormOpen = { mode: "new"; scope?: { kind: ScopeKind; id: string } } | { mode: "edit"; rule: RuleOut };
+
+/** What the form had when its page went away: given back when the page shows again. */
+export interface RuleFormKept {
+  /** The rule the form edits now (after Open it again, the one read then). */
+  base: RuleOut | undefined;
+  draft: unknown;
+  start: unknown;
+  /** The threshold as typed, which may not be a number yet. */
+  thresholdText: string;
+}
+
+export interface RuleFormSession {
+  open: RuleFormOpen;
+  /** Names the form's mount: a new one starts fresh. */
+  key: number;
+  kept: RuleFormKept | null;
+  /** Something would be lost: the draft moved from its start, or the threshold isn't a number. */
+  changed: boolean;
+  /** Its name for the leave question. */
+  title: string;
+}
+
+/** By Monitoring tab id. */
+export const ruleFormSessions = new Map<string, RuleFormSession>();
+
+const unloadKey = (tabId: string) => `rule:${tabId}`;
+
+export function startRuleForm(tabId: string, open: RuleFormOpen, key: number): void {
+  ruleFormSessions.set(tabId, { open, key, kept: null, changed: false, title: open.mode === "edit" ? open.rule.name : NEW_TITLE });
+  holdUnload(unloadKey(tabId), false);
+}
+
+export function keepRuleForm(tabId: string, kept: RuleFormKept, changed: boolean, title: string): void {
+  const session = ruleFormSessions.get(tabId);
+  if (!session) return;
+  ruleFormSessions.set(tabId, { ...session, kept, changed, title });
+  holdUnload(unloadKey(tabId), changed);
+}
+
+/** The form is closed (saved, cancelled, discarded) or its tab is gone. */
+export function endRuleForm(tabId: string): void {
+  ruleFormSessions.delete(tabId);
+  holdUnload(unloadKey(tabId), false);
+}
+
+/** Tabs that are gone take their forms with them. */
+export function pruneRuleForms(tabs: AppTabs<MonitoringView>): void {
+  if (ruleFormSessions.size === 0) return;
+  const ids = new Set(tabs.tabs.map((t) => t.id));
+  for (const id of [...ruleFormSessions.keys()]) if (!ids.has(id)) endRuleForm(id);
+}
+
+export const NEW_TITLE = "New alert rule";
+export const RULE_LEAVE_BODY = "Leaving loses what you wrote in this rule.";
+
+/**
+ * The tab an action would leave with a rule form that has changes, else null: closing that tab;
+ * navigating it to another page (the Alerts page itself is no way out: the form stays); Back or
+ * Forward in it to another page.
+ */
+export function heldRuleLeave(
+  action: MonitoringTabAction,
+  tabs: AppTabs<MonitoringView>,
+  sessions: ReadonlyMap<string, RuleFormSession> = ruleFormSessions,
+): { tabId: string; title: string } | null {
+  if (action.type !== "closeTab" && action.type !== "navigate" && action.type !== "back" && action.type !== "forward") return null;
+  const session = sessions.get(action.id);
+  if (!session || !session.changed) return null;
+  const held = { tabId: action.id, title: session.title };
+  if (action.type === "closeTab") return held;
+  const tab = tabs.tabs.find((t) => t.id === action.id);
+  if (!tab) return null;
+  if (action.type === "navigate") return action.view.page === "alerts" ? null : held;
+  const history = action.type === "back" ? tab.back : tab.forward;
+  if (history.length === 0) return null;
+  return history[history.length - 1].page === "alerts" ? null : held;
+}

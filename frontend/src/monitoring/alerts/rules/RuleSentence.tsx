@@ -3,7 +3,7 @@
 // whole sentence, so a screen reader hears what the rule says before its parts. The Alerts page's
 // rule form and a panel's Alert tab both use it.
 
-import { useEffect, useId, useState, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import type { PanelAlert, Unit } from "../../dashboards/schema";
 import { durationWords, sentence, unitSuffix } from "../format";
 import { parseDuration } from "../limits";
@@ -44,19 +44,30 @@ export interface RuleSentenceProps {
   forRef?: Ref<HTMLSelectElement>;
   /** Whether the threshold as typed is a number (the value keeps the last one that was). */
   onValidity?(ok: boolean): void;
+  /** The threshold as typed when the sentence was last shown (it may not be a number yet). */
+  initialText?: string;
+  /** The threshold as typed, each time it changes. */
+  onText?(text: string): void;
 }
 
-export function RuleSentence({ value, seriesWord, unit, onChange, idPrefix, errors, thresholdRef, forRef, onValidity }: RuleSentenceProps) {
+export function RuleSentence({ value, seriesWord, unit, onChange, idPrefix, errors, thresholdRef, forRef, onValidity, initialText, onText }: RuleSentenceProps) {
   const local = useId();
   const id = `${idPrefix}${local}`;
-  const [text, setText] = useState(() => String(value.threshold));
-  const [bad, setBadState] = useState(false);
+  const [text, setTextState] = useState(() => initialText ?? String(value.threshold));
+  const setText = (next: string) => {
+    setTextState(next);
+    onText?.(next);
+  };
+  const [bad, setBadState] = useState(() => parseThreshold(text) === null);
   const setBad = (next: boolean) => {
     setBadState(next);
     onValidity?.(!next);
   };
   // A threshold set from outside (Use 0.5) replaces what was typed; what was typed stays otherwise.
+  const shown = useRef(value.threshold);
   useEffect(() => {
+    if (shown.current === value.threshold) return;
+    shown.current = value.threshold;
     if (parseThreshold(text) !== value.threshold) {
       setText(String(value.threshold));
       setBad(false);

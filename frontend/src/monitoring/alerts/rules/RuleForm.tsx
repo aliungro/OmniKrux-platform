@@ -19,7 +19,8 @@ import { ThresholdChart, type ChartInput } from "../page/RuleChart";
 import { mixedClusterWarnings } from "./clusterWarning";
 import { DryRunLine } from "./DryRunLine";
 import { RuleDetailsFields, type DetailsValue } from "./RuleDetailsFields";
-import { RuleSentence, seriesWordOf, type SentenceValue } from "./RuleSentence";
+import { NEW_TITLE, keepRuleForm, ruleFormSessions, type RuleFormKept } from "./formSessions";
+import { RuleSentence, parseThreshold, seriesWordOf, type SentenceValue } from "./RuleSentence";
 import { useSettled } from "./useRuleDryRun";
 import { WhereItRuns } from "./WhereItRuns";
 import s from "./RuleForm.module.css";
@@ -52,15 +53,21 @@ const ownerKey = (o: Owner | null) => (o ? `${o.kind}:${o.id}` : "");
 const sourceKey = (p: SourcePick | null) => (p ? `${p.type}:${p.id ?? ""}` : "");
 
 /** The sources a rule of `owner` can read: a project's linked queryable sources, or for a group each
- * project's first of a type. */
-function sourceChoices(owner: Owner | null, projects: readonly ProjectOut[]): { pick: SourcePick; label: string }[] {
+ * project's first of a type. `first`: a project rule written as "the first source of this type"
+ * keeps that choice, named by the link it reads now. */
+function sourceChoices(owner: Owner | null, projects: readonly ProjectOut[], first?: SourceType | null): { pick: SourcePick; label: string }[] {
   if (owner === null) return [];
   if (owner.kind === "group") return QUERYABLE.map((type) => ({ pick: { type, id: null }, label: `Each project's ${SOURCE_WORDS[type]} source` }));
   const project = projects.find((p) => p.id === owner.id);
-  return (project?.links ?? [])
-    .filter((l): l is typeof l & { source_type: SourceType } => QUERYABLE.includes(l.source_type as SourceType))
-    .map((l) => ({ pick: { type: l.source_type, id: l.source_id }, label: `${l.source_name} (${SOURCE_WORDS[l.source_type]})` }));
+  const links = (project?.links ?? []).filter((l): l is typeof l & { source_type: SourceType } => QUERYABLE.includes(l.source_type as SourceType));
+  const named = links.map((l) => ({ pick: { type: l.source_type, id: l.source_id } as SourcePick, label: `${l.source_name} (${SOURCE_WORDS[l.source_type]})` }));
+  if (!first) return named;
+  const now = links.find((l) => l.source_type === first);
+  return [{ pick: { type: first, id: null }, label: firstSourceWords(first, now?.source_name ?? null) }, ...named];
 }
+
+export const firstSourceWords = (type: SourceType, now: string | null) =>
+  `The first ${SOURCE_WORDS[type]} source${now ? ` (now ${now})` : ""}`;
 
 /** The source a new choice of owner starts on: the same type if it has one, else its first. */
 function defaultSource(owner: Owner | null, projects: readonly ProjectOut[], wanted?: SourceType): SourcePick | null {
@@ -68,18 +75,16 @@ function defaultSource(owner: Owner | null, projects: readonly ProjectOut[], wan
   return (choices.find((c) => c.pick.type === wanted) ?? choices[0])?.pick ?? null;
 }
 
-/** A project rule that reads "the first of the type" shows (and keeps) the link it reads now. */
-function initialSource(rule: RuleOut, projects: readonly ProjectOut[]): SourcePick {
-  if (rule.scope.kind === "group" || rule.source_id !== null) return { type: rule.source_type, id: rule.source_id };
-  const first = projects.find((p) => p.id === rule.scope.id)?.links.find((l) => l.source_type === rule.source_type);
-  return { type: rule.source_type, id: first?.source_id ?? null };
+/** The source as the rule names it: a project rule that reads "the first of the type" keeps `null`. */
+function initialSource(rule: RuleOut): SourcePick {
+  return { type: rule.source_type, id: rule.source_id };
 }
 
 function draftOf(rule: RuleOut | undefined, owner: Owner | null, projects: readonly ProjectOut[]): Draft {
   if (rule) {
     return {
       owner: { kind: rule.scope.kind, id: rule.scope.id },
-      source: initialSource(rule, projects),
+      source: initialSource(rule),
       expr: rule.expr,
       cond: { ...rule.condition, every: rule.condition.every as SentenceValue["every"] },
       details: {
@@ -130,11 +135,15 @@ export interface RuleFormProps {
   headingRef?: RefObject<HTMLHeadingElement | null>;
   /** The Contact points tab (asks about changes first). */
   onOpenContactPoints?(): void;
+  /** The Monitoring tab the form is kept for (formSessions): its draft survives the page going away. */
+  tabId?: string;
 }
 
 /** The form; "Open it again" after a stale save starts it over from the rule as saved now. */
 export const RuleForm = forwardRef<RuleFormHandle, RuleFormProps>(function RuleForm(props, ref) {
-  const [base, setBase] = useState(props.initial);
+  // A form kept for this tab comes back as it was (only on the first mount; Open it again starts over).
+  const [kept] = useState(() => (props.tabId ? ruleFormSessions.get(props.tabId)?.kept ?? null : null));
+  const [base, setBase] = useState(kept?.base ?? props.initial);
   const [generation, setGeneration] = useState(0);
   const [reloadError, setReloadError] = useState<string | null>(null);
   const reopen = async () => {
@@ -147,11 +156,16 @@ export const RuleForm = forwardRef<RuleFormHandle, RuleFormProps>(function RuleF
       setReloadError((err as AlertRequestError).code === "not_found" ? RULE_GONE : failure(err, "try again"));
     }
   };
-  return <RuleFormBody key={generation} {...props} ref={ref} initial={base} onReopen={reopen} reloadError={reloadError} />;
+  return (
+    <RuleFormBody key={generation} {...props} ref={ref} initial={base} onReopen={reopen} reloadError={reloadError}
+      kept={generation === 0 ? kept : null} />
+  );
 });
 
-const RuleFormBody = forwardRef<RuleFormHandle, RuleFormProps & { onReopen(): void; reloadError: string | null }>(function RuleFormBody(
-  { initial, scope, onSaved, onCancel, headingRef, onOpenContactPoints, onReopen, reloadError }, ref,
+type BodyProps = RuleFormProps & { onReopen(): void; reloadError: string | null; kept: RuleFormKept | null };
+
+const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody(
+  { initial, scope, onSaved, onCancel, headingRef, onOpenContactPoints, onReopen, reloadError, kept, tabId }, ref,
 ) {
   const id = useId();
   const projects = useProjects();
@@ -166,27 +180,34 @@ const RuleFormBody = forwardRef<RuleFormHandle, RuleFormProps & { onReopen(): vo
   ], [projectList, groupList]);
 
   // The draft, and the draft as it started: a form whose draft is still the start is unchanged.
-  const [draft, setDraft] = useState<Draft>(() => draftOf(initial, scope ?? null, projectList));
-  const [start, setStart] = useState<Draft>(draft);
+  const [draft, setDraft] = useState<Draft>(() => (kept?.draft as Draft | undefined) ?? draftOf(initial, scope ?? null, projectList));
+  const [start, setStart] = useState<Draft>(() => (kept?.start as Draft | undefined) ?? draft);
   // What the page fills in once projects and groups are read is part of the start, not a change.
-  const filled = useRef(initial !== undefined && projects.data !== undefined);
+  const filled = useRef(kept !== null || initial !== undefined);
   useEffect(() => {
     if (filled.current || projects.data === undefined || (groups.data === undefined && !groups.isError)) return;
     filled.current = true;
     const owner = initial ? { kind: initial.scope.kind, id: initial.scope.id }
       : scope && owners.some((o) => ownerKey(o.owner) === ownerKey(scope)) ? scope : owners[0]?.owner ?? null;
     // Only who it is for and the source are filled in: anything typed meanwhile stays a change.
-    const fill = { owner, source: initial ? initialSource(initial, projectList) : defaultSource(owner, projectList) };
+    const fill = { owner, source: initial ? initialSource(initial) : defaultSource(owner, projectList) };
     setDraft((d) => ({ ...d, ...fill }));
     setStart((d) => ({ ...d, ...fill }));
   }, [projects.data, groups.data, groups.isError, owners, initial, scope, projectList]);
-  const changed = JSON.stringify(draft) !== JSON.stringify(start);
+  const [thresholdText, setThresholdText] = useState(() => kept?.thresholdText ?? String(draft.cond.threshold));
+  const [thresholdOk, setThresholdOk] = useState(() => parseThreshold(thresholdText) !== null);
+  // Something would be lost: the draft moved, or the threshold as typed isn't a number yet.
+  const changed = JSON.stringify(draft) !== JSON.stringify(start) || !thresholdOk;
+  const leaveTitle = draft.details.name.trim() || (initial ? initial.name : NEW_TITLE);
+  // Kept for the tab as it changes, so the page can go away and come back without losing it.
+  useEffect(() => {
+    if (tabId) keepRuleForm(tabId, { base: initial, draft, start, thresholdText }, changed, leaveTitle);
+  }, [tabId, initial, draft, start, thresholdText, changed, leaveTitle]);
 
   const [errors, setErrors] = useState<Partial<Record<Field, string>>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [stale, setStale] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [thresholdOk, setThresholdOk] = useState(true);
   const [asking, setAsking] = useState<null | (() => void)>(null);
   const [focusField, setFocusField] = useState<Field | "stale" | null>(null);
 
@@ -202,8 +223,13 @@ const RuleFormBody = forwardRef<RuleFormHandle, RuleFormProps & { onReopen(): vo
   const staleRef = useRef<HTMLButtonElement>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
 
-  // The form opens with the keyboard on Name.
+  // The form opens with the keyboard on Name: at once, and again once the effects of what it replaced
+  // have run (a dialog closing as it opens gives the keyboard back to where it was asked from).
   useLayoutEffect(() => { nameRef.current?.focus({ preventScroll: true }); }, []);
+  useEffect(() => {
+    const el = document.activeElement;
+    if (el === null || el === document.body || !el.isConnected || !el.closest("[data-rule-form]")) nameRef.current?.focus({ preventScroll: true });
+  }, []);
   useLayoutEffect(() => {
     if (focusField === null) return;
     const target = {
@@ -231,7 +257,11 @@ const RuleFormBody = forwardRef<RuleFormHandle, RuleFormProps & { onReopen(): vo
 
   const owner = draft.owner;
   const source = draft.source;
-  const choices = sourceChoices(owner, projectList);
+  // "The first source of the type" stays a choice for a project rule written that way.
+  const firstType = owner?.kind !== "project" ? null
+    : source?.id === null ? source.type
+      : initial?.scope.kind === "project" && initial.source_id === null ? initial.source_type : null;
+  const choices = sourceChoices(owner, projectList, firstType);
   const ownerProjects = projectsOf(owner, projectList, groupList);
   const capabilities = useCapabilities(owner && source ? { scope: owner, sourceType: source.type, sourceId: source.id } : null);
   const channels = useChannels(owner?.kind === "project" && draft.details.engine === "tool" ? owner.id : null);
@@ -382,10 +412,14 @@ const RuleFormBody = forwardRef<RuleFormHandle, RuleFormProps & { onReopen(): vo
 
       <RuleSentence idPrefix={`${id}-cond`} value={draft.cond} seriesWord={seriesWordOf(draft.expr)} unit="none"
         onChange={(cond) => { clearError("threshold", "for"); edit({ cond }); }}
-        onValidity={setThresholdOk}
+        onValidity={setThresholdOk} initialText={thresholdText} onText={setThresholdText}
         errors={{ threshold: err("threshold"), for: err("for") }} thresholdRef={thresholdRef} forRef={forRef} />
 
-      <DryRunLine body={body} onAdvice={(threshold) => edit({ cond: { ...draft.cond, threshold } })} />
+      <DryRunLine body={body} onAdvice={(threshold) => {
+        edit({ cond: { ...draft.cond, threshold } });
+        // The advice goes as the run starts again: the keyboard goes to what it changed.
+        setFocusField("threshold");
+      }} />
 
       {chart && "problem" in chart
         ? <p className={s.chartProblem} data-tone="warn">{chart.problem}</p>

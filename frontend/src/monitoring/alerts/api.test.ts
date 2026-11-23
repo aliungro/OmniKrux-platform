@@ -10,7 +10,7 @@ import { emptyAlertsState, type FakeRefusal } from "../test/fakeAlertsApi";
 import {
   AlertRequestError, alertOverview, createContactPoint, createRule, deleteRule, dryRunAlert, expireSilence, getRule, listContactPoints,
   listRules, ruleDeleteReview, ruleRefs, saveRule, syncTarget, testUnsavedContactPoint, updateContactPoint, useAlertOverview, useCreateRule,
-  useDryRun, useRules, type DryRunIn, type RuleIn, type RuleOut, type TargetOut,
+  alertsKeys, refreshAlerts, useDryRun, useRules, type DryRunIn, type RuleIn, type RuleOut, type TargetOut,
 } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -172,5 +172,24 @@ describe("contact points", () => {
     expect(caches).not.toContain(secret);
     // The fake records what it was sent; the answers hold only the names.
     expect(JSON.stringify(api.state.contactPoints)).not.toContain(secret);
+  });
+});
+
+describe("refreshing after an alerts change", () => {
+  it("reads Monitoring and the audit log again, but leaves an open dry run alone", async () => {
+    const client = newClient();
+    const body: DryRunIn = {
+      scope: { kind: "project", id: "p1" }, source: { type: "prometheus", id: null }, expr: "up", of: "each", op: "above",
+      threshold: 1, for: "5m", every: "1m",
+    };
+    client.setQueryData(alertsKeys.dryRun(body), { fired: 0 });
+    client.setQueryData(alertsKeys.rules(), []);
+    client.setQueryData(["monitoring", "tree"], {});
+    client.setQueryData(["audit", "list"], []);
+    await refreshAlerts(client);
+    expect(client.getQueryState(alertsKeys.dryRun(body))?.isInvalidated).toBe(false);
+    expect(client.getQueryState(alertsKeys.rules())?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["monitoring", "tree"])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["audit", "list"])?.isInvalidated).toBe(true);
   });
 });

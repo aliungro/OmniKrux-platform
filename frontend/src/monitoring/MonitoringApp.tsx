@@ -21,6 +21,7 @@ import { currentOwner, type Owner } from "./dashboards/create/currentOwner";
 import { NewDashboardDialog } from "./dashboards/create/NewDashboardDialog";
 import { pageLetter } from "./dashboards/page/keys";
 import { ToolReviewHost } from "./alerts/reviews/ToolReviewHost";
+import { endRuleForm, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY } from "./alerts/rules/formSessions";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
@@ -145,6 +146,8 @@ interface Leaving {
   proceed(): void;
   /** Where the keyboard was: Stay returns it there. */
   from: HTMLElement | null;
+  /** An alert rule being written, not a dashboard: no draft is kept, Discard ends the form. */
+  rule?: boolean;
 }
 
 /**
@@ -163,6 +166,7 @@ function pruneSessions(tabs: AppTabs<MonitoringView>) {
 
 export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings }: MonitoringAppProps) {
   pruneSessions(tabs);
+  pruneRuleForms(tabs);
   const root = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const tree = useMonitoringTree();
@@ -211,13 +215,23 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   const returnFocus = useRef<HTMLElement | null>(null);
   const ask = useCallback((action: MonitoringTabAction, proceed: () => void): boolean => {
     const held = heldLeave(action, latest.current.tabs, editSessions);
-    if (!held) return false;
+    // An alert rule being written with changes holds its tab the same way.
+    const rule = held ? null : heldRuleLeave(action, latest.current.tabs);
+    if (!held && !rule) return false;
     // Already asking: the first question stands.
     if (asking.current) return true;
     asking.current = true;
     returnFocus.current = null;
-    const session = editSessions.get(held.tabId);
     const active = document.activeElement;
+    if (rule) {
+      setLeaving({
+        tabId: rule.tabId, dashboardId: "", title: rule.title, draftsWork: false, rule: true, proceed,
+        from: active instanceof HTMLElement && active !== document.body ? active : null,
+      });
+      return true;
+    }
+    if (!held) return false;
+    const session = editSessions.get(held.tabId);
     setLeaving({
       ...held, proceed, draftsWork: draftsWork(),
       title: (session?.mode === "edit" && session.base.title) || "this dashboard",
@@ -246,6 +260,16 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       returnFocus.current = l.from?.isConnected ? l.from : (root.current?.closest("main") ?? null);
       asking.current = false;
       setLeaving(null);
+      return;
+    }
+    if (l.rule) {
+      // The form ends first, so the action goes through when performed again.
+      endRuleForm(l.tabId);
+      returnFocus.current = root.current?.closest("main") ?? null;
+      focusMainFrom(root.current);
+      asking.current = false;
+      setLeaving(null);
+      l.proceed();
       return;
     }
     const session = editSessions.get(l.tabId);
@@ -360,6 +384,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
         )}
         {leaving && (
           <LeaveDialog title={leaving.title} draftsWork={leaving.draftsWork} restoreFocusTo={returnFocus}
+            body={leaving.rule ? RULE_LEAVE_BODY : undefined}
             onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />
         )}
       </ToolReviewHost>

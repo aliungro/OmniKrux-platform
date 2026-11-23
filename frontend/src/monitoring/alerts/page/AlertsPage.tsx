@@ -6,7 +6,9 @@
 // fails says so and is never shown as current. New alert rule and Edit rule open the rule form in
 // the details' place; picking another rule or leaving asks first about a form with changes.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type RefObject } from "react";
+import {
+  useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MutableRefObject, type RefObject,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { pageKey, pressed } from "../../../features/chrome/shortcuts";
@@ -15,8 +17,9 @@ import { keyboardIsFree } from "../../pages/Gone";
 import type { AlertsView, MonitoringView } from "../../shell/tabState";
 import {
   alertsKeys, listRules, refreshAlerts, useAlertOverview,
-  type AlertChangeOut, type AlertRequestError, type OverviewOut, type RuleChangeOut, type RuleOut, type ScopeKind,
+  type AlertChangeOut, type AlertRequestError, type OverviewOut, type RuleChangeOut, type RuleOut,
 } from "../api";
+import { endRuleForm, ruleFormSessions, startRuleForm, type RuleFormOpen } from "../rules/formSessions";
 import { RuleForm, type RuleFormHandle } from "../rules/RuleForm";
 import { useToolReviews } from "../reviews/useToolReviews";
 import { escapeCloses } from "../../focus";
@@ -59,7 +62,7 @@ function useNarrow(): boolean {
   return narrow;
 }
 
-export default function AlertsPage({ view, nav }: MonitoringPageProps) {
+export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
   const alerts: AlertsView = view.page === "alerts" ? view : { page: "alerts" };
   const tab: Tab = alerts.tab ?? "rules";
   const ids = useId();
@@ -92,12 +95,23 @@ export default function AlertsPage({ view, nav }: MonitoringPageProps) {
 
   // 1 2 3: the views. The keyboard goes to the view's tab, so it never stays on a list that went.
   const focusTab = useRef<Tab | null>(null);
+  // Another view leaves an open rule form: it asks first when the form has changes.
+  const leaveForm = useRef<((then: () => void) => void) | null>(null);
   const showTab = useCallback((next: Tab, viaKey: boolean) => {
-    if (viaKey) focusTab.current = next;
-    if (next !== (written.current.tab ?? "rules")) write({ tab: next });
-    else if (viaKey) tabRefs.current[next]?.focus();
+    if (next === (written.current.tab ?? "rules")) {
+      if (viaKey) tabRefs.current[next]?.focus();
+      return;
+    }
+    const go = () => {
+      if (viaKey) focusTab.current = next;
+      write({ tab: next });
+    };
+    if (leaveForm.current) leaveForm.current(go);
+    else go();
   }, [write]);
-  useLayoutEffect(() => {
+  // After the commit's other effects: a question closing as the view changes hands the keyboard back
+  // to where it was asked from, and the view's tab takes it after that.
+  useEffect(() => {
     if (focusTab.current === tab) {
       focusTab.current = null;
       tabRefs.current[tab]?.focus();
@@ -164,7 +178,7 @@ export default function AlertsPage({ view, nav }: MonitoringPageProps) {
             refetchOverview={() => void overview.refetch()}
             overviewSettled={overview.data !== undefined || overview.isError} pageHeading={heading}
             newAsk={newAsk} onNewTaken={() => setNewAsk(null)} newButton={newButton}
-            openContactPoints={() => write({ tab: "contacts" })} />
+            openContactPoints={() => write({ tab: "contacts" })} tabId={tabId} leaveForm={leaveForm} />
         ) : (
           <p className={s.later}>{tab === "silences" ? "Silences" : "Contact points"}: {LATER}</p>
         )}
@@ -191,13 +205,17 @@ interface RulesViewProps {
   onNewTaken(): void;
   newButton: RefObject<HTMLButtonElement | null>;
   openContactPoints(): void;
+  /** The Monitoring tab: its open rule form is kept for it while the page is away. */
+  tabId: string;
+  /** Set to the way out of an open form, for the page's views. */
+  leaveForm: MutableRefObject<((then: () => void) => void) | null>;
 }
 
-type FormState = { mode: "new"; scope?: { kind: ScopeKind; id: string } } | { mode: "edit"; rule: RuleOut };
+type FormState = RuleFormOpen;
 
 function RulesView({
   alerts, write, open, overview, overviewStaleAt, refetchOverview, overviewSettled, pageHeading, newAsk, onNewTaken, newButton,
-  openContactPoints,
+  openContactPoints, tabId, leaveForm: leaveFormRef,
 }: RulesViewProps) {
   const client = useQueryClient();
   const reviews = useToolReviews();
@@ -247,16 +265,36 @@ function RulesView({
   const want = useRef<"details" | "row" | "new" | null>(null);
 
   // The rule form, in the details' place. A form with changes is asked about before it goes.
-  const [form, setForm] = useState<FormState | null>(null);
-  const [formKey, setFormKey] = useState(0);
+  // The form open in this tab is kept for it (formSessions): it comes back when the page does.
+  const [form, setFormState] = useState<FormState | null>(() => ruleFormSessions.get(tabId)?.open ?? null);
+  const [formKey, setFormKey] = useState(() => ruleFormSessions.get(tabId)?.key ?? 0);
   const formRef = useRef<RuleFormHandle>(null);
+  const closeForm = () => {
+    setFormState(null);
+    endRuleForm(tabId);
+  };
   const leaveForm = (then: () => void) => {
-    if (form && formRef.current) formRef.current.requestClose(() => { setForm(null); then(); });
+    if (form && formRef.current) formRef.current.requestClose(() => { closeForm(); then(); });
     else then();
   };
+  leaveFormRef.current = form ? leaveForm : null;
+  const shownForm = useRef({ form, formKey });
+  shownForm.current = { form, formKey };
+  useEffect(() => {
+    // Mounted again (StrictMode, or a page shown again) with its form: it is kept again.
+    const { form: f, formKey: k } = shownForm.current;
+    if (f && !ruleFormSessions.has(tabId)) startRuleForm(tabId, f, k);
+    return () => {
+      leaveFormRef.current = null;
+      // The page goes away: a form with nothing to lose goes with it; one with changes stays kept.
+      if (ruleFormSessions.get(tabId)?.changed === false) endRuleForm(tabId);
+    };
+  }, [tabId, leaveFormRef]);
   const openForm = (next: FormState) => leaveForm(() => {
-    setForm(next);
-    setFormKey((k) => k + 1);
+    const key = formKey + 1;
+    startRuleForm(tabId, next, key);
+    setFormState(next);
+    setFormKey(key);
     if (narrow) setShowDetails(true);
   });
   // The changes a save hands on: queued once the saved rule's details have the keyboard.
@@ -356,13 +394,13 @@ function RulesView({
   }, [newAsk]);
 
   const cancelForm = () => {
-    setForm(null);
+    closeForm();
     want.current = rule ? "details" : "new";
     if (narrow && !rule) setShowDetails(false);
   };
   const saved = (change: RuleChangeOut) => {
     const made = change.rule;
-    setForm(null);
+    closeForm();
     if (!made) return;
     // Shown at once (the list is read again too), selected, with the keyboard on its name.
     client.setQueryData<RuleOut[]>(alertsKeys.rules(), (old) =>
@@ -398,8 +436,8 @@ function RulesView({
   if (form) {
     details = (
       <RuleForm key={formKey} ref={formRef} initial={form.mode === "edit" ? form.rule : undefined}
-        scope={form.mode === "new" ? form.scope : undefined} headingRef={detailsHeading}
-        onSaved={saved} onCancel={cancelForm} onOpenContactPoints={() => { setForm(null); openContactPoints(); }} />
+        scope={form.mode === "new" ? form.scope : undefined} headingRef={detailsHeading} tabId={tabId}
+        onSaved={saved} onCancel={cancelForm} onOpenContactPoints={() => { closeForm(); openContactPoints(); }} />
     );
   } else if (rule) {
     details = (

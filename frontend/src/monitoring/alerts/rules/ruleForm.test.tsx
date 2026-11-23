@@ -6,9 +6,11 @@ import { intercept } from "../../test/dashboardSeeds";
 import { installFakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../../test/renderMonitoringApp";
 import type { CapabilityOut, ContactPointOut, RuleIn, RuleOut, TargetOut } from "../api";
+import { endRuleForm, ruleFormSessions } from "./formSessions";
 
 afterEach(() => {
   cleanup();
+  for (const id of [...ruleFormSessions.keys()]) endRuleForm(id);
   vi.unstubAllGlobals();
 });
 
@@ -248,5 +250,91 @@ describe("a source that may hold other clusters", () => {
     await waitFor(() => expect(details().textContent).toBe("LatencyHigh"));
     await screen.findByText("up > 5");
     expect(screen.queryByText(/may include other clusters/)).toBeNull();
+  });
+});
+
+describe("the rule form, fix round 1", () => {
+  it("Use moves the keyboard to the threshold it set", async () => {
+    const user = userEvent.setup();
+    open({
+      dryRun: {
+        start: 0, end: 21600, step: 60, fired: 5, firing_now: false, periods: [{ start: 100, end: 200, ongoing: false }], projects: [],
+        candidates: [{ threshold: 0.8, fired: 1 }], took_ms: 2,
+      },
+    });
+    await newRule(user);
+    await user.type(screen.getByLabelText("Query"), "up");
+    const use = await screen.findByRole("button", { name: "Use 0.8" }, { timeout: 3000 });
+    await user.click(use);
+    const threshold = screen.getByLabelText("Threshold") as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(threshold));
+    expect(threshold.value).toBe("0.8");
+  });
+
+  it("Discard from New alert rule lands on Name of the new form", async () => {
+    const user = userEvent.setup();
+    open();
+    await newRule(user);
+    await user.type(screen.getByLabelText("Name"), "Half");
+    await user.click(screen.getByRole("button", { name: "New alert rule" }));
+    await user.click(within(await screen.findByRole("alertdialog", { name: "Discard this rule?" })).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    const name = screen.getByLabelText("Name") as HTMLInputElement;
+    expect(name.value).toBe("");
+    await waitFor(() => expect(document.activeElement).toBe(name));
+  });
+
+  it("a threshold that isn't a number yet counts as a change", async () => {
+    const user = userEvent.setup();
+    open();
+    await newRule(user);
+    const threshold = screen.getByLabelText("Threshold");
+    await user.clear(threshold);
+    await user.type(threshold, "abc");
+    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("alertdialog", { name: "Discard this rule?" })).toBeTruthy();
+  });
+
+  it("an edit keeps a project rule on the first source of its type", async () => {
+    const user = userEvent.setup();
+    const { api } = open();
+    await waitFor(() => expect(details().textContent).toBe("LatencyHigh"));
+    await user.click(screen.getByRole("button", { name: "Edit rule" }));
+    const source = await screen.findByLabelText("Source") as HTMLSelectElement;
+    await waitFor(() => expect(source.selectedOptions[0]?.textContent).toBe("The first Prometheus-compatible source (now Prometheus)"));
+    expect([...source.options].map((o) => o.textContent)).toEqual([
+      "The first Prometheus-compatible source (now Prometheus)", "Prometheus (Prometheus-compatible)", "Logs (Loki)",
+    ]);
+    await user.type(screen.getByLabelText("Name"), "!");
+    await user.click(screen.getByRole("button", { name: "Save rule" }));
+    const put = await waitFor(() => {
+      const found = api.requests.find((r) => r.method === "PUT" && r.url.endsWith("/alerts/rules/rA"));
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect((put.body as RuleIn).source).toEqual({ type: "prometheus", id: null });
+  });
+
+  it("the Alerts views ask about a form with changes, and not about one without", async () => {
+    const user = userEvent.setup();
+    const { app } = open();
+    await newRule(user);
+    // Untouched: Silences goes at once.
+    await user.click(screen.getByRole("tab", { name: "Silences" }));
+    await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "alerts", tab: "silences", rule: "rA" }));
+    await user.click(screen.getByRole("tab", { name: /^Rules/ }));
+    await newRule(user);
+    await user.type(screen.getByLabelText("Name"), "Half");
+    // With changes: a click, and the 2 key from the form's own buttons, both ask first.
+    await user.click(screen.getByRole("tab", { name: "Silences" }));
+    const ask = await screen.findByRole("alertdialog", { name: "Discard this rule?" });
+    expect(app.current().tabs[0].view).toEqual({ page: "alerts", rule: "rA" });
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Half");
+    screen.getByRole("tab", { name: /^Rules/ }).focus();
+    await user.keyboard("{ArrowRight}");
+    await user.click(within(await screen.findByRole("alertdialog", { name: "Discard this rule?" })).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "alerts", tab: "silences", rule: "rA" }));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Silences" }));
   });
 });

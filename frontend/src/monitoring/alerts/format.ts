@@ -119,13 +119,15 @@ function periodWords(p: PeriodOut): string {
   return p.ongoing ? "still going" : durationWords(p.end - p.start);
 }
 
-/** What the dry run found, in a sentence. `now` is seconds since the epoch, like `out.start`. */
-export function dryRunSentence(out: DryRunOut, now: number, windowLabel = "6 hours"): string {
+/** What the dry run found, in a sentence. `now` is seconds since the epoch, like `out.start`.
+ * `across`: a group's projects that were counted, said at the end of the first sentence. */
+export function dryRunSentence(out: DryRunOut, now: number, windowLabel = "6 hours", across?: number): string {
   const lead = `Over the last ${windowLabel} this would`;
+  const where = across === undefined ? "" : ` (across ${across} project${across === 1 ? "" : "s"})`;
   const firingNow = out.firing_now ? " It is firing now." : "";
-  if (out.fired === 0 || out.periods.length === 0) return `${lead} not have fired.${firingNow}`;
+  if (out.fired === 0 || out.periods.length === 0) return `${lead} not have fired${where}.${firingNow}`;
   const last = out.periods.reduce((a, b) => (b.start > a.start ? b : a));
   const detail = `${whenWords(last.start, now)}, ${periodWords(last)}`;
-  if (out.fired === 1) return `${lead} have fired once (${detail}).${firingNow}`;
-  return `${lead} have fired ${out.fired} times (last ${detail}).${firingNow}`;
+  if (out.fired === 1) return `${lead} have fired once (${detail})${where}.${firingNow}`;
+  return `${lead} have fired ${out.fired} times (last ${detail})${where}.${firingNow}`;
 }
