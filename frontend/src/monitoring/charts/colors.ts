@@ -7,10 +7,10 @@ import type { Threshold, ThresholdColor } from "../dashboards/schema";
 
 /**
  * In the order series take them: neighbours far apart in hue (lavender, orange, green, blue, grey,
- * sky), and `--ok` and `--warn` last, since stat, gauge, bar and threshold lines use them for Good
- * and Warning. Never `--bad`: rose means a breached threshold, not "series 4".
+ * sky, orchid, lime). Never `--ok`, `--warn` or `--bad`: stat, gauge, bar and threshold lines use
+ * them for Good, Warning and a breached threshold, so a series never looks like one.
  */
-export const SERIES_COLORS = ["--focus", "--eks", "--gke", "--aks", "--onprem", "--kind", "--ok", "--warn"] as const;
+export const SERIES_COLORS = ["--focus", "--eks", "--gke", "--aks", "--onprem", "--kind", "--series-7", "--series-8"] as const;
 
 type Colored = Pick<ChartSeries, "key" | "labels" | "queryRef" | "projectName">;
 

@@ -4,9 +4,9 @@ import { SERIES_COLORS, seriesColors, thresholdColor } from "./colors";
 const s = (key: string, labels: Record<string, string>, queryRef = "A", projectName: string | null = null) => ({ key, labels, queryRef, projectName });
 
 describe("series colours", () => {
-  it("come from the Territories tokens, never rose, with Good and Warning last", () => {
-    expect(SERIES_COLORS).toEqual(["--focus", "--eks", "--gke", "--aks", "--onprem", "--kind", "--ok", "--warn"]);
-    expect(SERIES_COLORS).not.toContain("--bad");
+  it("come from the Territories tokens, never the Good, Warning or Bad ones", () => {
+    expect(SERIES_COLORS).toEqual(["--focus", "--eks", "--gke", "--aks", "--onprem", "--kind", "--series-7", "--series-8"]);
+    for (const status of ["--ok", "--warn", "--bad"]) expect(SERIES_COLORS).not.toContain(status);
     expect(new Set(SERIES_COLORS).size).toBe(SERIES_COLORS.length);
   });
 
@@ -14,10 +14,9 @@ describe("series colours", () => {
     const five = Array.from({ length: 5 }, (_, i) => s(`k${i}`, { node: `n${i}` }));
     const colors = seriesColors(five);
     expect(new Set(colors.values()).size).toBe(5);
-    // Up to six series, none borrows the threshold colours.
-    const six = seriesColors(Array.from({ length: 6 }, (_, i) => s(`k${i}`, { node: `n${i}` })));
-    expect([...six.values()]).not.toContain("--ok");
-    expect([...six.values()]).not.toContain("--warn");
+    // No series ever borrows the threshold colours.
+    const eight = seriesColors(Array.from({ length: 8 }, (_, i) => s(`k${i}`, { node: `n${i}` })));
+    for (const status of ["--ok", "--warn", "--bad"]) expect([...eight.values()]).not.toContain(status);
     const nine = seriesColors(Array.from({ length: 9 }, (_, i) => s(`k${i}`, { node: `n${i}` })));
     expect(new Set([...nine.values()].slice(0, 8)).size).toBe(8);
     expect([...nine.values()][8]).toBe(SERIES_COLORS[0]);
