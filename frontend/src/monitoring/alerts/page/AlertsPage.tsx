@@ -19,13 +19,16 @@ import {
   alertsKeys, listRules, refreshAlerts, useAlertOverview,
   type AlertChangeOut, type AlertRequestError, type OverviewOut, type RuleChangeOut, type RuleOut,
 } from "../api";
+import { ContactPointsTab } from "../contacts/ContactPointsTab";
+import { SilencesTab, type SilenceAsk } from "../silences/SilencesTab";
+import { silencePrefill, type SilencePrefill } from "../silences/SilenceForm";
 import { endRuleForm, ruleFormSessions, startRuleForm, type RuleFormOpen } from "../rules/formSessions";
 import { RuleForm, type RuleFormHandle } from "../rules/RuleForm";
 import { useToolReviews } from "../reviews/useToolReviews";
 import { escapeCloses } from "../../focus";
 import { EngineNote } from "./EngineNote";
 import { listRows } from "./listModel";
-import { RuleDetails, LATER } from "./RuleDetails";
+import { RuleDetails } from "./RuleDetails";
 import { RuleList } from "./RuleList";
 import { clockTime, staleWords } from "./words";
 import s from "./AlertsPage.module.css";
@@ -72,6 +75,9 @@ export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
   const newButton = useRef<HTMLButtonElement>(null);
   // New alert rule, asked: the Rules view opens the form once it is there (and says so).
   const [newAsk, setNewAsk] = useState<number | null>(null);
+  // Silence, asked from a rule: the Silences view opens its form prefilled, once.
+  const [silenceAsk, setSilenceAsk] = useState<SilenceAsk | null>(null);
+  const takeSilenceAsk = useCallback(() => setSilenceAsk(null), []);
 
   // The view as last written: a second write before the tab re-renders builds on the first.
   const navRef = useRef(nav);
@@ -178,9 +184,15 @@ export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
             refetchOverview={() => void overview.refetch()}
             overviewSettled={overview.data !== undefined || overview.isError} pageHeading={heading}
             newAsk={newAsk} onNewTaken={() => setNewAsk(null)} newButton={newButton}
-            openContactPoints={() => write({ tab: "contacts" })} tabId={tabId} leaveForm={leaveForm} />
+            openContactPoints={() => write({ tab: "contacts" })} tabId={tabId} leaveForm={leaveForm}
+            onSilence={(prefill) => {
+              setSilenceAsk((a) => ({ n: (a?.n ?? 0) + 1, prefill }));
+              write({ tab: "silences" });
+            }} />
+        ) : tab === "silences" ? (
+          <SilencesTab ask={silenceAsk} onAskTaken={takeSilenceAsk} leaveRef={leaveForm} />
         ) : (
-          <p className={s.later}>{tab === "silences" ? "Silences" : "Contact points"}: {LATER}</p>
+          <ContactPointsTab leaveRef={leaveForm} />
         )}
       </div>
     </div>
@@ -209,13 +221,15 @@ interface RulesViewProps {
   tabId: string;
   /** Set to the way out of an open form, for the page's views. */
   leaveForm: MutableRefObject<((then: () => void) => void) | null>;
+  /** Silence on the shown rule: the Silences view with this silence prefilled. */
+  onSilence(prefill: SilencePrefill): void;
 }
 
 type FormState = RuleFormOpen;
 
 function RulesView({
   alerts, write, open, overview, overviewStaleAt, refetchOverview, overviewSettled, pageHeading, newAsk, onNewTaken, newButton,
-  openContactPoints, tabId, leaveForm: leaveFormRef,
+  openContactPoints, tabId, leaveForm: leaveFormRef, onSilence,
 }: RulesViewProps) {
   const client = useQueryClient();
   const reviews = useToolReviews();
@@ -418,6 +432,21 @@ function RulesView({
     return (next ? rowEls.current.get(next.key) : undefined) ?? pageHeading.current;
   };
 
+  // Silence: the rule's first place it is checked in (a group rule's other projects can be edited in the form).
+  const silenceTarget = rule ? (rule.targets.find((t) => !t.leaving) ?? rule.targets[0]) : undefined;
+  const silenceRule = rule && silenceTarget ? () => onSilence(silencePrefill(rule, silenceTarget)) : undefined;
+  const silenceRef = useRef(silenceRule);
+  silenceRef.current = form ? undefined : silenceRule;
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!pageKeyHere(e) || !pressed("alertSilence", e) || !silenceRef.current) return;
+      e.preventDefault();
+      if (!e.repeat) silenceRef.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   let list;
   if (!data) {
     list = rules.isError ? (
@@ -443,7 +472,7 @@ function RulesView({
     details = (
       <RuleDetails key={rule.id} id={detailsId} rule={rule} now={now} headingRef={detailsHeading} onOpen={open} onEscape={escape}
         afterDelete={() => afterDelete(rule)} onDeleted={(changes, restore) => deleted(rule, changes, restore)}
-        onEdit={rule.origin === "page" ? () => openForm({ mode: "edit", rule }) : undefined} />
+        onEdit={rule.origin === "page" ? () => openForm({ mode: "edit", rule }) : undefined} onSilence={silenceRule} />
     );
   } else if (data && alerts.rule) {
     details = <p className={s.detailsNote} data-alerts-gone="">{RULE_GONE}</p>;

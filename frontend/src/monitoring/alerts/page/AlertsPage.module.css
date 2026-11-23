@@ -160,13 +160,6 @@
   min-height: 0;
 }
 
-.later {
-  margin: 0;
-  padding: 24px 16px;
-  color: var(--ink-3);
-  font-size: 13px;
-}
-
 /* --- list and details ------------------------------------------------------------------------ */
 
 .split {

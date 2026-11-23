@@ -1,0 +1,53 @@
+/* The question before a form with changes goes away. Territories tokens only. */
+.dialog {
+  display: grid;
+  gap: 12px;
+  width: min(440px, calc(100vw - 32px));
+  padding: 18px 20px 16px;
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.dialogBody {
+  margin: 0;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.dialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.secondary,
+.danger {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.danger {
+  border: 0;
+  background: var(--bad);
+  color: var(--bg);
+}
+
+.secondary:focus-visible,
+.danger:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

@@ -26,8 +26,8 @@ import { RuleHistory } from "./RuleHistory";
 import { clockTime, labelsText, secondsSince } from "./words";
 import s from "./AlertsPage.module.css";
 
-/** Buttons whose work comes with a later step of this update (F31). */
-export const LATER = "Comes with the next step of this update.";
+/** Silence, when the rule is not checked anywhere yet. */
+export const NOTHING_TO_SILENCE = "This rule hasn't been checked yet. Silence it once it has.";
 export const TOOL_PAUSE = "This rule runs in the tool, which keeps checking it. Silence it instead.";
 const SEVERITY_WORDS: Record<Severity, string> = { critical: "Critical", warning: "Warning", info: "Info" };
 
@@ -233,10 +233,12 @@ export interface RuleDetailsProps {
   afterDelete(): HTMLElement | null;
   /** Edit rule: the rule form in this place (a page rule's). */
   onEdit?(): void;
+  /** Silence: the Silences view with this rule's silence prefilled; absent when nothing checks it yet. */
+  onSilence?(): void;
   id: string;
 }
 
-export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape, afterDelete, onEdit, id }: RuleDetailsProps) {
+export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape, afterDelete, onEdit, onSilence, id }: RuleDetailsProps) {
   const client = useQueryClient();
   const reviews = useToolReviews();
   const projects = useProjects();
@@ -344,7 +346,8 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
         <h2 id={`${id}-name`} ref={headingRef} tabIndex={-1} className={s.ruleName}>{rule.name}</h2>
         {wherePlaces(rule).map((w) => <span key={w} className={s.where}>{w}</span>)}
         <div className={s.detailsActions}>
-          <button type="button" className={s.button} aria-keyshortcuts="s" aria-disabled="true" title={LATER}>Silence</button>
+          <button type="button" className={s.button} aria-keyshortcuts="s" aria-disabled={onSilence ? undefined : true}
+            title={onSilence ? undefined : NOTHING_TO_SILENCE} onClick={onSilence}>Silence</button>
           {rule.origin === "panel" && rule.panel ? (
             <button type="button" className={s.button}
               onClick={() => onOpen({ page: "dashboard", id: rule.panel!.dashboard_id, panel: rule.panel!.panel_id, editAlert: true })}>

@@ -214,9 +214,10 @@ describe("the Alerts page", () => {
     expect(attach.getAttribute("title")).toBeNull();
     await user.click(pause);
     expect(api.requests.some((r) => r.url.endsWith("/pause"))).toBe(false);
-    // Silence comes with a later step and says so; Edit rule works for a tool's rule too.
+    // Silence is ready (its own tests are with the silences); Edit rule works for a tool's rule too.
     expect(screen.getByRole("button", { name: "Silence" }).getAttribute("aria-keyshortcuts")).toBe("s");
-    expect(screen.getByRole("button", { name: "Silence" }).getAttribute("title")).toBe("Comes with the next step of this update.");
+    expect(screen.getByRole("button", { name: "Silence" }).getAttribute("aria-disabled")).toBeNull();
+    expect(screen.getByRole("button", { name: "Silence" }).getAttribute("title")).toBeNull();
     expect(screen.getByRole("button", { name: "Edit rule" }).getAttribute("aria-disabled")).toBeNull();
   });
 
