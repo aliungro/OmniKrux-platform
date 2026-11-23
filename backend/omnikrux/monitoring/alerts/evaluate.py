@@ -29,6 +29,13 @@ def breaches(value: float | None, cond: Condition) -> bool:
     return value > cond.threshold if cond.op == "above" else value < cond.threshold
 
 
+def shown(value: float | None) -> float | None:
+    """The value an instance keeps: a finite number, else None. ±Inf still breaches (it was
+    compared before this); the instance's state says why it is pending or firing, and its value
+    never carries a number JSON, the store or a message can't hold."""
+    return value if value is not None and math.isfinite(value) else None
+
+
 @dataclass(frozen=True)
 class Sample:
     """One series' value at the check."""
@@ -60,8 +67,9 @@ def step(
 
     Per series: breaching and new is pending from now (firing at once when `for` is 0);
     breaching and pending for at least `for` fires now; not breaching, or gone, drops (a firing
-    one is resolved). Values follow every check. The target is firing when any series fires,
-    else pending when any is pending, else no data when nothing was read, else OK.
+    one is resolved). Values follow every check, as `shown` keeps them (None when not finite).
+    The target is firing when any series fires, else pending when any is pending, else no data
+    when no sample carries a value (none read, or every one None or NaN), else OK.
     """
     before = {r.fingerprint: r for r in previous}
     hold = timedelta(seconds=cond.for_seconds)
@@ -78,7 +86,7 @@ def step(
         old = before.get(fp)
         if not breaches(sample.value, cond):
             if old is not None and old.state == "firing":
-                resolved.append(replace(old, target_id=target_id, value=sample.value))
+                resolved.append(replace(old, target_id=target_id, value=shown(sample.value)))
             continue
         labels = dict(sample.labels)
         if old is None:
@@ -90,7 +98,7 @@ def step(
                 state="firing" if firing else "pending",
                 active_since=now,
                 fired_at=now if firing else None,
-                value=sample.value,
+                value=shown(sample.value),
                 last_notified_at=None,
             )
             if firing:
@@ -102,11 +110,11 @@ def step(
                 labels=labels,
                 state="firing",
                 fired_at=now,
-                value=sample.value,
+                value=shown(sample.value),
             )
             fired.append(record)
         else:
-            record = replace(old, target_id=target_id, labels=labels, value=sample.value)
+            record = replace(old, target_id=target_id, labels=labels, value=shown(sample.value))
         instances.append(record)
 
     for fp, old in before.items():
@@ -117,7 +125,7 @@ def step(
         state: TargetState = "firing"
     elif instances:
         state = "pending"
-    elif not samples:
+    elif not any(s.value is not None and not math.isnan(s.value) for s in samples):
         state = "no_data"
     else:
         state = "ok"

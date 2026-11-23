@@ -57,6 +57,10 @@ MAX_RUNNING = 4  # project queries running at once
 # The most points one project's answer may hold for a dry run (series × points). Each candidate
 # threshold replays them all again, so this bounds the work of one request per project.
 MAX_PROJECT_POINTS = 200_000
+# The most points one request may replay, every project together (a group's projects add up).
+MAX_REQUEST_POINTS = 600_000
+# How long the replays of one request may take; they stop between series once it has passed.
+REPLAY_SECONDS = 10.0
 
 PROJECT_GONE = "That project doesn't exist anymore. It may have been removed."
 GROUP_GONE = "That group doesn't exist anymore. It may have been removed."
@@ -65,6 +69,14 @@ GROUP_SOURCE = (
 )
 FOR_DURATION = "Use a duration from 0s to 24h, like 5m."
 DRY_RUN_FAILED = "Something went wrong running this query. Try again."
+TOO_MANY_TOGETHER = (
+    "This group's projects return too many points together to replay over this window. "
+    "Narrow the query with a label, alert on the total, or use a shorter window."
+)
+REPLAY_TOO_LONG = (
+    "The dry run took too long to replay. "
+    "Narrow the query with a label, ask for fewer thresholds, or use a shorter window."
+)
 _SOURCE_WORDS = {"prometheus": "Prometheus-compatible", "loki": "Loki"}
 
 
@@ -81,6 +93,10 @@ def too_many_points_copy(series: int | str) -> str:
         f"This query returns {series} series, too many to replay over this window. "
         "Narrow it with a label, alert on the total, or use a shorter window."
     )
+
+
+class ReplayTooLong(Exception):
+    """The replay's deadline passed before it finished; nothing it found so far is answered."""
 
 
 class DryRunRefused(Exception):
@@ -151,7 +167,13 @@ def _merged(intervals: list[tuple[float, float, bool]]) -> list[tuple[float, flo
 
 
 def replay(
-    series: Sequence[Series], cond: Condition, start: float, end: float
+    series: Sequence[Series],
+    cond: Condition,
+    start: float,
+    end: float,
+    *,
+    lookback: float = 0.0,
+    deadline: float | None = None,
 ) -> tuple[list[Episode], list[tuple[float, float, bool]]]:
     """How the condition would have fired over `[start, end]`, checked at every point.
 
@@ -159,12 +181,24 @@ def replay(
     breaks it); the run fires from its first point at least `for` after its start for as long as
     it lasts. Returns each series' episodes, and the rule's periods: every series' firing merged
     where they overlap or touch, `ongoing` when one reaches the last point.
+
+    Points from `lookback` seconds before `start` are read too, so a breach that began before the
+    window keeps the `for` it had already served (as the live checks would have); what fired is
+    then clipped to `[start, end]`. With a `deadline` (a `time.monotonic()` value), the replay
+    stops between series once it has passed, raising ReplayTooLong.
     """
+    since = start - lookback
     episodes: list[Episode] = []
     for s in series:
-        points = sorted((p for p in s.points if start <= p[0] <= end), key=lambda p: p[0])
+        if deadline is not None and time.monotonic() > deadline:
+            raise ReplayTooLong
+        points = sorted((p for p in s.points if since <= p[0] <= end), key=lambda p: p[0])
         for a, b, ongoing in _episodes(points, cond, end):
-            episodes.append(Episode(start=a, end=b, ongoing=ongoing, labels=dict(s.labels)))
+            if b < start:
+                continue
+            episodes.append(
+                Episode(start=max(a, start), end=b, ongoing=ongoing, labels=dict(s.labels))
+            )
     episodes.sort(key=lambda e: (e.start, e.end, sorted(e.labels.items())))
     periods = _merged([(e.start, e.end, e.ongoing) for e in episodes])
     return episodes, periods
@@ -187,20 +221,26 @@ def _two_digits(value: float, rounding: str) -> float:
     return float(exact.quantize(step, rounding=rounding))
 
 
-def candidate_thresholds(series: Sequence[Series], op: Op) -> list[float]:
+def candidate_thresholds(
+    series: Sequence[Series], op: Op, *, calmer_than: float | None = None
+) -> list[float]:
     """Calmer thresholds read off the data. Above: the 0.9, 0.95 and 0.99 quantiles of every
     value and 10% past the largest, rounded up to 2 significant digits, distinct, ascending.
-    Below: the mirror (0.1, 0.05, 0.01 and 10% under the smallest, rounded down, descending)."""
+    Below: the mirror (0.1, 0.05, 0.01 and 10% under the smallest, rounded down, descending).
+    With `calmer_than` (the rule's threshold), only those that would fire less are kept: above
+    it for `above`, below it for `below`."""
     values = sorted(v for s in series for _, v in s.points if v is not None and math.isfinite(v))
     if not values:
         return []
     if op == "above":
         top = values[-1]
         raw = [_quantile(values, q) for q in (0.9, 0.95, 0.99)] + [top + abs(top) * 0.1]
-        return sorted({_two_digits(v, ROUND_CEILING) for v in raw})
+        found = sorted({_two_digits(v, ROUND_CEILING) for v in raw})
+        return [t for t in found if calmer_than is None or t > calmer_than]
     bottom = values[0]
     raw = [_quantile(values, q) for q in (0.1, 0.05, 0.01)] + [bottom - abs(bottom) * 0.1]
-    return sorted({_two_digits(v, ROUND_FLOOR) for v in raw}, reverse=True)
+    found = sorted({_two_digits(v, ROUND_FLOOR) for v in raw}, reverse=True)
+    return [t for t in found if calmer_than is None or t < calmer_than]
 
 
 # --- the request and the answer ---------------------------------------------------------------
@@ -423,14 +463,42 @@ async def _read(
     return _Read(project, answer.series, None)
 
 
+def _within_budget(reads: list[_Read]) -> list[_Read]:
+    """The reads, in project order, with every project past `MAX_REQUEST_POINTS` (all projects
+    together) turned into its own `too_large` error: it is never counted as quiet."""
+    used = 0
+    out: list[_Read] = []
+    for read in reads:
+        if read.series is not None:
+            points = sum(len(s.points) for s in read.series)
+            if used + points > MAX_REQUEST_POINTS:
+                error = DryRunError(code="too_large", message=TOO_MANY_TOGETHER)
+                out.append(_Read(read.project, None, error))
+                continue
+            used += points
+        out.append(read)
+    return out
+
+
+def _in_window(series: list[Series], start: float) -> list[Series]:
+    return [Series(labels=s.labels, points=[p for p in s.points if p[0] >= start]) for s in series]
+
+
 def _periods(periods: list[tuple[float, float, bool]]) -> list[PeriodOut]:
     return [PeriodOut(start=a, end=b, ongoing=o) for a, b, o in periods]
 
 
 def _replay_all(
-    reads: list[_Read], body: DryRunIn, cond: Condition, start: float, end: float
+    reads: list[_Read],
+    body: DryRunIn,
+    cond: Condition,
+    start: float,
+    end: float,
+    lookback: float,
 ) -> tuple[list[DryRunProjectOut], list[tuple[float, float, bool]], list[CandidateOut]]:
-    """The CPU part: every project's replay, the merged periods, and each candidate's count."""
+    """The CPU part: every project's replay, the merged periods, and each candidate's count.
+    ReplayTooLong when it takes longer than `REPLAY_SECONDS`."""
+    deadline = time.monotonic() + REPLAY_SECONDS
     projects: list[DryRunProjectOut] = []
     every_period: list[tuple[float, float, bool]] = []
     data: list[Series] = []
@@ -448,9 +516,9 @@ def _replay_all(
                 )
             )
             continue
-        _, periods = replay(read.series, cond, start, end)
+        _, periods = replay(read.series, cond, start, end, lookback=lookback, deadline=deadline)
         every_period.extend(periods)
-        data.extend(read.series)
+        data.extend(_in_window(read.series, start))
         projects.append(
             DryRunProjectOut(
                 project_id=read.project.id,
@@ -466,7 +534,7 @@ def _replay_all(
 
     thresholds = list(body.candidates)
     if body.suggest:
-        thresholds += candidate_thresholds(data, body.op)
+        thresholds += candidate_thresholds(data, body.op, calmer_than=body.threshold)
     seen: set[float] = set()
     candidates: list[CandidateOut] = []
     for threshold in thresholds:
@@ -478,7 +546,9 @@ def _replay_all(
         found: list[tuple[float, float, bool]] = []
         for read in reads:
             if read.series is not None:
-                found.extend(replay(read.series, other, start, end)[1])
+                found.extend(
+                    replay(read.series, other, start, end, lookback=lookback, deadline=deadline)[1]
+                )
         candidates.append(CandidateOut(threshold=threshold, fired=len(_merged(found))))
     return projects, merged, candidates
 
@@ -495,10 +565,15 @@ async def dry_run(services: MonitoringServices, body: DryRunIn, now: float) -> D
 
     end = math.floor(now / every) * every
     start = math.floor((now - body.window_seconds) / every) * every
+    # A breach already under way at the window's start has served part of its `for` before it:
+    # read that far back too, so the replay starts its timer where the live checks would have.
+    since = math.floor((start - cond.for_seconds) / every) * every
     running = asyncio.Semaphore(MAX_RUNNING)
-    reads = list(
-        await asyncio.gather(
-            *(_read(services, p, text, start, end, every, running) for p in planned)
+    reads = _within_budget(
+        list(
+            await asyncio.gather(
+                *(_read(services, p, text, since, end, every, running) for p in planned)
+            )
         )
     )
     failed = [r for r in reads if r.error is not None]
@@ -507,9 +582,12 @@ async def dry_run(services: MonitoringServices, body: DryRunIn, now: float) -> D
         assert first is not None
         raise DryRunRefused(502, first.code, first.message)
 
-    projects, merged, candidates = await asyncio.to_thread(
-        _replay_all, reads, body, cond, start, end
-    )
+    try:
+        projects, merged, candidates = await asyncio.to_thread(
+            _replay_all, reads, body, cond, start, end, start - since
+        )
+    except ReplayTooLong:
+        raise DryRunRefused(504, "timeout", REPLAY_TOO_LONG) from None
     return DryRunOut(
         start=start,
         end=end,

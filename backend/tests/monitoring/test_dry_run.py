@@ -1,6 +1,7 @@
 """The dry run: replaying a condition over past data, candidate thresholds, and the route."""
 
 import math
+import random
 import socket
 import time
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from omnikrux.monitoring.alerts.dry_run import (
     candidate_thresholds,
     replay,
 )
+from omnikrux.monitoring.alerts.evaluate import Sample, step
 from omnikrux.monitoring.alerts.rule_expr import LOG_QUERY_COPY, RANGE_COPY
 from omnikrux.monitoring.alerts.types import Condition
 from omnikrux.monitoring.query.series import Series
@@ -527,3 +529,148 @@ async def test_a_cut_answer_is_not_counted(monitoring_app, fake_prometheus, link
     status, code, message = refusal(r)
     assert (status, code) == (502, "too_large")
     assert message.startswith("This query returns more than 2000 series, too many to replay")
+
+
+# --- fix round 1 ------------------------------------------------------------------------------
+
+
+def constant(start: float, end: float, value: float = 0.5, step_s: int = 60) -> Series:
+    return Series(labels={}, points=[(t, value) for t in range(int(start), int(end) + 1, step_s)])
+
+
+def test_a_breach_from_before_the_window_keeps_the_for_it_served():
+    start, end = at(13, 0), at(19, 0)
+    day = Condition("each", "above", 0.3, 86400, 60)
+    data = constant(start - 86400, end)
+    assert replay([data], day, start, end, lookback=86400)[1] == [(start, end, True)]
+    # without the look back, the timer would start again at the window's start
+    assert replay([data], day, start, end)[1] == []
+
+    hour = Condition("each", "above", 0.3, 3600, 60)
+    data = constant(start - 3600, end)
+    episodes, periods = replay([data], hour, start, end, lookback=3600)
+    assert periods == [(start, end, True)] and episodes[0].start == start
+    # a firing that ended before the window isn't counted
+    early = Series(labels={}, points=[(start - 600 + 60 * i, 0.5) for i in range(5)])
+    assert replay([early], Condition("each", "above", 0.3, 0, 60), start, end, lookback=600) == (
+        [],
+        [],
+    )
+
+
+async def test_dry_run_reads_back_by_for(monitoring_app, fake_prometheus, linked_project):
+    http, _ = monitoring_app
+    end = window_end()
+    points = [(t, 0.5) for t in range(int(end - 30 * HOUR), int(end) + 1, 60)]
+    fake_prometheus.results['errors_ratio{cluster="a"}'] = matrix(({"route": "/a"}, points))
+    r = await http.post(DRY_RUN, json=body(linked_project.project_id, **{"for": "24h"}))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    [sent] = [q for q in fake_prometheus.requests if q.path == "/api/v1/query_range"]
+    assert float(sent.params["start"][0]) <= out["start"] - 86400
+    assert out["fired"] == 1 and out["firing_now"] is True
+    assert out["periods"] == [{"start": out["start"], "end": out["end"], "ongoing": True}]
+
+    r = await http.post(DRY_RUN, json=body(linked_project.project_id, **{"for": "1h"}))
+    assert r.json()["periods"][0]["start"] == r.json()["start"]
+
+
+async def test_a_group_has_one_budget_for_all_its_projects(
+    monitoring_app, fake_prometheus, two_projects_on_one_source, monkeypatch
+):
+    http, _ = monitoring_app
+    two = two_projects_on_one_source
+    group = await add_group(http, "Pair", [two.a, two.b])
+    end = window_end()
+    points = six_hours(end - HOUR, end)
+    for cluster in ("a", "b"):
+        fake_prometheus.results[f'errors_ratio{{cluster="{cluster}"}}'] = matrix(({}, points))
+    monkeypatch.setattr(dry_run_module, "MAX_REQUEST_POINTS", len(points) + 10)
+    r = await http.post(DRY_RUN, json=body(group, scope={"kind": "group", "id": group}))
+    assert r.status_code == 200, r.text
+    team_a, team_b = r.json()["projects"]
+    assert team_a["error"] is None and team_a["fired"] == 1
+    assert team_b["error"] == {"code": "too_large", "message": dry_run_module.TOO_MANY_TOGETHER}
+    assert team_b["fired"] == 0
+
+
+async def test_a_replay_past_its_time_limit_says_so(
+    monitoring_app, fake_prometheus, linked_project, monkeypatch
+):
+    http, _ = monitoring_app
+    end = window_end()
+    fake_prometheus.results['errors_ratio{cluster="a"}'] = matrix(({}, six_hours(end, end)))
+    monkeypatch.setattr(dry_run_module, "REPLAY_SECONDS", -1.0)
+    r = await http.post(DRY_RUN, json=body(linked_project.project_id))
+    assert refusal(r) == (504, "timeout", dry_run_module.REPLAY_TOO_LONG)
+    with pytest.raises(dry_run_module.ReplayTooLong):
+        replay([constant(0, 600)], Condition("each", "above", 0, 0, 60), 0, 600, deadline=0.0)
+
+
+def test_suggested_thresholds_are_only_calmer():
+    values = Series(labels={}, points=[(float(i), i / 100) for i in range(1, 101)])
+    assert candidate_thresholds([values], "above", calmer_than=0.95) == [0.96, 1.0, 1.1]
+    assert candidate_thresholds([values], "above", calmer_than=2) == []
+    low = Series(labels={}, points=[(float(i), float(i)) for i in range(100, 201)])
+    assert candidate_thresholds([low], "below", calmer_than=105) == [100.0, 90.0]
+
+
+async def test_dry_run_suggests_only_calmer_thresholds(
+    monitoring_app, fake_prometheus, linked_project
+):
+    http, _ = monitoring_app
+    end = window_end()
+    points = six_hours(end - 3 * HOUR, end - 2 * HOUR, value=0.5)
+    fake_prometheus.results['errors_ratio{cluster="a"}'] = matrix(({}, points))
+    r = await http.post(DRY_RUN, json=body(linked_project.project_id, threshold=0.5, suggest=True))
+    assert [c["threshold"] for c in r.json()["candidates"]] == [0.55]
+    r = await http.post(
+        DRY_RUN,
+        json=body(linked_project.project_id, op="below", threshold=0.1, suggest=True),
+    )
+    assert r.json()["candidates"] == [{"threshold": 0.09, "fired": 0}]
+
+
+def _folded(series: Series, cond: Condition, start: float, end: float):
+    """The live checks, one per step from `start` to `end`, as (fired at, last firing, ongoing)."""
+    by_time = dict(series.points)
+    previous: list = []
+    out = []
+    opened = last = None
+    t = start
+    while t <= end:
+        samples = [Sample(series.labels, by_time[t])] if t in by_time else []
+        r = step("t", previous, samples, cond, datetime.fromtimestamp(t, UTC))
+        if r.fired:
+            opened = t
+        if any(i.state == "firing" for i in r.instances):
+            last = t
+        elif opened is not None:
+            out.append((opened, last, False))
+            opened = None
+        previous = list(r.instances)
+        t += cond.every_seconds
+    if opened is not None:
+        out.append((opened, last, last == end))
+    return out
+
+
+def test_replay_agrees_with_the_live_checks():
+    rng = random.Random(20261119)
+    for case in range(60):
+        every = rng.choice((30, 60, 300))
+        cond = Condition(
+            "each", rng.choice(("above", "below")), 0.5, every * rng.randint(0, 5), every
+        )
+        start = 1_800_000_000 - 1_800_000_000 % every
+        end = start + every * rng.randint(5, 80)
+        points = []
+        for t in range(start, end + 1, every):
+            roll = rng.random()
+            if roll < 0.08:
+                continue  # missing point
+            value = None if roll < 0.12 else math.nan if roll < 0.15 else rng.random()
+            points.append((float(t), value))
+        series = Series(labels={"case": str(case)}, points=points)
+        _, periods = replay([series], cond, start, end)
+        assert periods == _folded(series, cond, start, end), case

@@ -107,7 +107,31 @@ def test_nan_and_none_never_breach():
     below = Condition("each", "below", 0.3, 0, 60)
     assert not breaches(None, below) and not breaches(math.nan, below)
     r = step("t", [], [Sample({"route": "/a"}, None), Sample({"route": "/b"}, math.nan)], C, T0)
-    assert r.state == "ok" and not r.instances
+    assert not r.instances
+
+
+def test_only_missing_values_is_no_data():
+    nothing = [Sample({"route": "/a"}, None), Sample({"route": "/b"}, math.nan)]
+    assert step("t", [], nothing, C, T0).state == "no_data"
+    one = [Sample({"route": "/a"}, None), Sample({"route": "/b"}, 0.1)]
+    assert step("t", [], one, C, T0).state == "ok"
+    # a firing series whose value turns into NaN (0/0) resolves, and the target has no data
+    now0 = Condition("each", "above", 0.3, 0, 60)
+    r1 = step("t", [], [Sample({"route": "/a"}, 0.4)], now0, T0)
+    r2 = step("t", r1.instances, [Sample({"route": "/a"}, math.nan)], now0, T0)
+    assert r2.state == "no_data" and len(r2.resolved) == 1
+
+
+def test_an_instance_never_keeps_a_value_that_isnt_a_number():
+    now0 = Condition("each", "above", 0.3, 0, 60)
+    r1 = step("t", [], [Sample({"route": "/a"}, math.inf)], now0, T0)
+    assert r1.state == "firing" and r1.instances[0].value is None
+    assert r1.fired[0].value is None
+    r2 = step("t", r1.instances, [Sample({"route": "/a"}, math.nan)], now0, T0)
+    assert r2.resolved[0].value is None
+    below = Condition("each", "below", 0.3, 0, 60)
+    r3 = step("t", [], [Sample({"route": "/a"}, -math.inf)], below, T0)
+    assert r3.state == "firing" and r3.instances[0].value is None
 
 
 def test_total_and_each_share_the_rules():
