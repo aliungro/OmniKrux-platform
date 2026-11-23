@@ -74,7 +74,13 @@ export const plural = (n: number) => `${n} alert${n === 1 ? "" : "s"}`;
 export const previewWords = (p: SilencePreviewOut) =>
   `Silences ${plural(p.affects)} now${p.rules.length > 0 ? `: ${p.rules.join(", ")}` : ""}.`;
 
-export function SilenceForm({ prefill, onDone, leaveRef }: { prefill?: SilencePrefill; onDone(): void; leaveRef?: LeaveRef }) {
+export function SilenceForm({ prefill, onDone, leaveRef, tabId }: {
+  prefill?: SilencePrefill;
+  onDone(): void;
+  leaveRef?: LeaveRef;
+  /** The Monitoring tab the form is in: its other ways out ask while the form has changes. */
+  tabId?: string;
+}) {
   const ids = useId();
   const projects = useProjects();
   const create = useCreateSilence();
@@ -134,7 +140,7 @@ export function SilenceForm({ prefill, onDone, leaveRef }: { prefill?: SilencePr
     && preview.error.code === "invalid_silence" && (preview.error.field === null || preview.error.field === "matchers") ? preview.error.message : null;
 
   const changed = matchers !== (prefill?.matchers ?? "") || comment !== "" || lasts !== "1h" || until !== "" || picked !== null;
-  const guard = useLeaveGuard(leaveRef, changed, saving);
+  const guard = useLeaveGuard(leaveRef, changed, saving, tabId === undefined ? undefined : { tabId, title: "New silence", tab: "silences" });
 
   useLayoutEffect(() => { (prefill ? commentRef : matchersRef).current?.focus({ preventScroll: true }); }, [prefill]);
   useLayoutEffect(() => {

@@ -21,7 +21,9 @@ import { currentOwner, type Owner } from "./dashboards/create/currentOwner";
 import { NewDashboardDialog } from "./dashboards/create/NewDashboardDialog";
 import { pageLetter } from "./dashboards/page/keys";
 import { ToolReviewHost } from "./alerts/reviews/ToolReviewHost";
-import { endRuleForm, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY } from "./alerts/rules/formSessions";
+import {
+  clearAlertForms, endRuleForm, FORM_LEAVE_BODY, heldFormLeave, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY,
+} from "./alerts/rules/formSessions";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
@@ -29,7 +31,8 @@ import SetupPage from "./setup/SetupPage";
 import { buildSearchIndex } from "./search/search";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
 import {
-  equalMonitoringView, MONITORING_HOME, monitoringTabLabel, setMonitoringLeaveCheck, type MonitoringTabAction, type MonitoringView,
+  equalMonitoringView, MONITORING_HOME, monitoringTabLabel, setMonitoringLeaveCheck, setMonitoringSwitchCheck, type MonitoringTabAction,
+  type MonitoringView,
 } from "./shell/tabState";
 import { DOT, Sidebar } from "./sidebar/Sidebar";
 import s from "./MonitoringApp.module.css";
@@ -148,6 +151,8 @@ interface Leaving {
   from: HTMLElement | null;
   /** An alert rule being written, not a dashboard: no draft is kept, Discard ends the form. */
   rule?: boolean;
+  /** A Silences or Contact points form: no draft is kept, Discard lets the page take it away. */
+  form?: boolean;
 }
 
 /**
@@ -217,7 +222,9 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     const held = heldLeave(action, latest.current.tabs, editSessions);
     // An alert rule being written with changes holds its tab the same way.
     const rule = held ? null : heldRuleLeave(action, latest.current.tabs);
-    if (!held && !rule) return false;
+    // So does a Silences or Contact points form with changes (switching tabs included).
+    const form = held || rule ? null : heldFormLeave(action, latest.current.tabs);
+    if (!held && !rule && !form) return false;
     // Already asking: the first question stands.
     if (asking.current) return true;
     asking.current = true;
@@ -226,6 +233,13 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     if (rule) {
       setLeaving({
         tabId: rule.tabId, dashboardId: "", title: rule.title, draftsWork: false, rule: true, proceed,
+        from: active instanceof HTMLElement && active !== document.body ? active : null,
+      });
+      return true;
+    }
+    if (form) {
+      setLeaving({
+        tabId: form.tabId, dashboardId: "", title: form.title, draftsWork: false, form: true, proceed,
         from: active instanceof HTMLElement && active !== document.body ? active : null,
       });
       return true;
@@ -250,7 +264,11 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       else d(action);
     };
     setMonitoringLeaveCheck((action) => ask(action, again(action)));
-    return () => setMonitoringLeaveCheck(null);
+    setMonitoringSwitchCheck((action) => ask(action, again(action)));
+    return () => {
+      setMonitoringLeaveCheck(null);
+      setMonitoringSwitchCheck(null);
+    };
   }, [ask]);
 
   const answer = useCallback((how: "stay" | "discard" | "keep") => {
@@ -262,9 +280,10 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       setLeaving(null);
       return;
     }
-    if (l.rule) {
+    if (l.rule || l.form) {
       // The form ends first, so the action goes through when performed again.
-      endRuleForm(l.tabId);
+      if (l.rule) endRuleForm(l.tabId);
+      else clearAlertForms(l.tabId);
       returnFocus.current = root.current?.closest("main") ?? null;
       focusMainFrom(root.current);
       asking.current = false;
@@ -384,7 +403,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
         )}
         {leaving && (
           <LeaveDialog title={leaving.title} draftsWork={leaving.draftsWork} restoreFocusTo={returnFocus}
-            body={leaving.rule ? RULE_LEAVE_BODY : undefined}
+            body={leaving.rule ? RULE_LEAVE_BODY : leaving.form ? FORM_LEAVE_BODY : undefined}
             onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />
         )}
       </ToolReviewHost>

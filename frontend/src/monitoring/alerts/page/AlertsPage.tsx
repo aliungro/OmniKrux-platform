@@ -190,9 +190,9 @@ export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
               write({ tab: "silences" });
             }} />
         ) : tab === "silences" ? (
-          <SilencesTab ask={silenceAsk} onAskTaken={takeSilenceAsk} leaveRef={leaveForm} />
+          <SilencesTab ask={silenceAsk} onAskTaken={takeSilenceAsk} leaveRef={leaveForm} tabId={tabId} />
         ) : (
-          <ContactPointsTab leaveRef={leaveForm} />
+          <ContactPointsTab leaveRef={leaveForm} tabId={tabId} />
         )}
       </div>
     </div>

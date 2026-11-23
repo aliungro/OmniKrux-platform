@@ -31,7 +31,7 @@ function lastWords(p: ContactPointOut, now: number): { text: string; failed: boo
     : { text: `Last send failed ${when}${d.message ? `: ${d.message}` : ""}`, failed: true };
 }
 
-export function ContactPointsTab({ leaveRef }: { leaveRef: LeaveRef }) {
+export function ContactPointsTab({ leaveRef, tabId }: { leaveRef: LeaveRef; tabId?: string }) {
   const refresh = useRefreshAfterContactPoint();
   const query = useQuery<ContactPointOut[], AlertRequestError>({
     queryKey: alertsKeys.contactPoints, queryFn: () => listContactPoints(), retry: false,
@@ -100,7 +100,7 @@ export function ContactPointsTab({ leaveRef }: { leaveRef: LeaveRef }) {
           if (open?.mode === "edit" && open.id === p.id) {
             return (
               <li key={p.id} className={s.editing}>
-                <ContactPointForm initial={p} leaveRef={leaveRef} onDone={() => close(p.id)} />
+                <ContactPointForm initial={p} leaveRef={leaveRef} tabId={tabId} onDone={() => close(p.id)} />
               </li>
             );
           }
@@ -157,7 +157,7 @@ export function ContactPointsTab({ leaveRef }: { leaveRef: LeaveRef }) {
           Add a contact point
         </button>
       </div>
-      {open?.mode === "new" && <ContactPointForm leaveRef={leaveRef} onDone={() => close()} />}
+      {open?.mode === "new" && <ContactPointForm leaveRef={leaveRef} tabId={tabId} onDone={() => close()} />}
       {body}
       {deleting && (
         <ContactPointDeleteDialog point={deleting} restoreFocusTo={restore}

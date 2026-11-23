@@ -121,11 +121,26 @@ export function setMonitoringLeaveCheck(check: MonitoringLeaveCheck | null): voi
   leaveCheck = check;
 }
 
+let switchCheck: MonitoringLeaveCheck | null = null;
+
 /**
- * Whether the app holds this action. Only a way out of a page is asked about (closing a tab,
- * navigating, Back and Forward); opening, switching and scrolling tabs never are.
+ * The check for opening and switching tabs. Those keep every page that keeps its work (a
+ * dashboard's edit, a rule form), so only a form that keeps nothing outside its page holds them
+ * (the Alerts page's Silences and Contact points forms with changes).
+ */
+export function setMonitoringSwitchCheck(check: MonitoringLeaveCheck | null): void {
+  switchCheck = check;
+}
+
+/**
+ * Whether the app holds this action. A way out of a page is asked about (closing a tab,
+ * navigating, Back and Forward); opening and switching tabs only through the switch check
+ * (`setMonitoringSwitchCheck`); scrolling never is.
  */
 export function monitoringLeaveHeld(action: MonitoringTabAction): boolean {
+  if (action.type === "newTab" || action.type === "activateTab" || action.type === "nextTab" || action.type === "previousTab") {
+    return switchCheck !== null && switchCheck(action);
+  }
   if (!leaveCheck) return false;
   if (action.type !== "closeTab" && action.type !== "navigate" && action.type !== "back" && action.type !== "forward") return false;
   return leaveCheck(action);

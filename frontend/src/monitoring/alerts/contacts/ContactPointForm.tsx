@@ -60,9 +60,11 @@ export interface ContactPointFormProps {
   /** Saved (the stored contact point) or cancelled (nothing). */
   onDone(saved?: ContactPointOut): void;
   leaveRef?: LeaveRef;
+  /** The Monitoring tab the form is in: its other ways out ask while the form has changes. */
+  tabId?: string;
 }
 
-export function ContactPointForm({ initial, onDone, leaveRef }: ContactPointFormProps) {
+export function ContactPointForm({ initial, onDone, leaveRef, tabId }: ContactPointFormProps) {
   const ids = useId();
   const refresh = useRefreshAfterContactPoint();
   const start = useRef(plainOf(initial)).current;
@@ -87,7 +89,8 @@ export function ContactPointForm({ initial, onDone, leaveRef }: ContactPointForm
   const edit = (patch: Partial<Plain>) => { setPlain((p) => ({ ...p, ...patch })); setErrors({}); };
   const typedSecret = Object.values(secrets).some((v) => v !== "") || Object.values(removed).some(Boolean);
   const changed = typedSecret || JSON.stringify(plain) !== JSON.stringify(start);
-  const guard = useLeaveGuard(leaveRef, changed, busy);
+  const guard = useLeaveGuard(leaveRef, changed, busy,
+    tabId === undefined ? undefined : { tabId, title: initial ? initial.name : "New contact point", tab: "contacts" });
 
   useLayoutEffect(() => { (initial ? fields.current.get("name") : fields.current.get("type"))?.focus({ preventScroll: true }); }, [initial]);
   useLayoutEffect(() => {

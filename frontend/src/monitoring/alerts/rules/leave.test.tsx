@@ -13,7 +13,7 @@ import type { MonitoringView } from "../../shell/tabState";
 import { installFakeMonitoringApi } from "../../test/fakeMonitoringApi";
 import { seedProject } from "../../test/renderMonitoringApp";
 import type { RuleOut } from "../api";
-import { endRuleForm, keepRuleForm, ruleFormSessions, startRuleForm } from "./formSessions";
+import { alertFormMarks, clearAlertForms, endRuleForm, keepRuleForm, markAlertForm, ruleFormSessions, startRuleForm } from "./formSessions";
 
 // The chart chunk as a stub.
 vi.mock("../../charts", async () => {
@@ -153,6 +153,87 @@ describe("leaving an alert rule being written", () => {
     keepRuleForm("m9", { base: undefined, draft: {}, start: {}, thresholdText: "1" }, true, "Half written");
     expect(unload()).toBe(true);
     endRuleForm("m9");
+    expect(unload()).toBe(false);
+  });
+});
+
+// The Silences and Contact points forms keep nothing outside their page (never a secret): every
+// way out of their tab asks while they have changes, switching Monitoring tabs included.
+describe("leaving a silence or contact point being written", () => {
+  const SILENCES: MonitoringView = { page: "alerts", tab: "silences" };
+  const CONTACTS: MonitoringView = { page: "alerts", tab: "contacts" };
+  const ASK_SILENCE = 'Leave "New silence" with unsaved changes?';
+
+  afterEach(() => { for (const id of [...alertFormMarks.keys()]) clearAlertForms(id); });
+
+  async function silencing() {
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New silence" }, { timeout: 3000 }));
+    await user.type(await screen.findByLabelText("Matchers"), 'alertname="A"');
+    return user;
+  }
+
+  it("the sidebar asks first; Stay keeps it, Discard changes leaves", async () => {
+    setup({ view: SILENCES });
+    const user = await silencing();
+    expect([...(alertFormMarks.get("m0")?.values() ?? [])]).toEqual([{ title: "New silence", tab: "silences" }]);
+    await user.click(await screen.findByRole("treeitem", { name: "Shop" }));
+    const ask = screen.getByRole("alertdialog", { name: ASK_SILENCE });
+    expect(within(ask).getByText("Leaving loses what you entered in this form.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect((screen.getByLabelText("Matchers") as HTMLInputElement).value).toBe('alertname="A"');
+    await user.click(screen.getByRole("treeitem", { name: "Shop" }));
+    await user.click(within(screen.getByRole("alertdialog", { name: ASK_SILENCE })).getByRole("button", { name: "Discard changes" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Shop" })).toBeTruthy();
+    expect(alertFormMarks.size).toBe(0);
+    await frame();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("switching Monitoring tabs, Back and closing the tab ask first", async () => {
+    setup({ view: SILENCES, back: [HOME] }, { view: HOME });
+    const user = await silencing();
+    await user.click(monitoringTabs()[1]);
+    const ask = screen.getByRole("alertdialog", { name: ASK_SILENCE });
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect((screen.getByLabelText("Matchers") as HTMLInputElement).value).toBe('alertname="A"');
+    act(() => screen.getByRole("heading", { level: 1, name: "Alerts" }).focus());
+    altKey("ArrowLeft", "ArrowLeft");
+    await user.click(within(screen.getByRole("alertdialog", { name: ASK_SILENCE })).getByRole("button", { name: "Stay" }));
+    altKey("w", "KeyW");
+    await user.click(within(screen.getByRole("alertdialog", { name: ASK_SILENCE })).getByRole("button", { name: "Stay" }));
+    expect(monitoringTabs()).toHaveLength(2);
+    // Discard changes on a switch goes to the other tab.
+    await user.click(monitoringTabs()[1]);
+    await user.click(within(screen.getByRole("alertdialog", { name: ASK_SILENCE })).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(monitoringTabs()[1].getAttribute("aria-selected")).toBe("true"));
+    expect(alertFormMarks.size).toBe(0);
+  });
+
+  it("an untouched form never asks, and a contact point being added asks too", async () => {
+    setup({ view: SILENCES }, { view: CONTACTS });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New silence" }, { timeout: 3000 }));
+    await screen.findByLabelText("Matchers");
+    await user.click(monitoringTabs()[1]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await user.click(await screen.findByRole("button", { name: "Add a contact point" }));
+    await user.type(await screen.findByLabelText("Name"), "Ops");
+    await user.click(await screen.findByRole("treeitem", { name: "Shop" }));
+    expect(screen.getByRole("alertdialog", { name: 'Leave "New contact point" with unsaved changes?' })).toBeTruthy();
+  });
+
+  it("closing or reloading the browser tab asks while a form has changes", () => {
+    const unload = () => {
+      const e = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    expect(unload()).toBe(false);
+    markAlertForm("m9", "f1", { title: "New silence", tab: "silences" });
+    expect(unload()).toBe(true);
+    markAlertForm("m9", "f1", null);
     expect(unload()).toBe(false);
   });
 });

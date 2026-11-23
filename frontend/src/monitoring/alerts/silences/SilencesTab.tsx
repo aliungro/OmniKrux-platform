@@ -63,7 +63,7 @@ function SilenceRow({ x, now, onExpire }: { x: SilenceOut; now: number; onExpire
   );
 }
 
-export function SilencesTab({ ask, onAskTaken, leaveRef }: { ask: SilenceAsk | null; onAskTaken(): void; leaveRef: LeaveRef }) {
+export function SilencesTab({ ask, onAskTaken, leaveRef, tabId }: { ask: SilenceAsk | null; onAskTaken(): void; leaveRef: LeaveRef; tabId?: string }) {
   const client = useQueryClient();
   const query = useQuery<SilencesOut, AlertRequestError>({
     queryKey: alertsKeys.silences, queryFn: ({ signal }) => listSilences(signal), refetchInterval: REFETCH_MS, retry: false,
@@ -154,7 +154,7 @@ export function SilencesTab({ ask, onAskTaken, leaveRef }: { ask: SilenceAsk | n
         <span className={s.spacer} />
         <button ref={newRef} type="button" className={s.secondary} onClick={openNew} aria-disabled={form !== null || undefined}>New silence</button>
       </div>
-      {form && <SilenceForm key={form.key} prefill={form.prefill} onDone={closeForm} leaveRef={leaveRef} />}
+      {form && <SilenceForm key={form.key} prefill={form.prefill} onDone={closeForm} leaveRef={leaveRef} tabId={tabId} />}
       {data && data.problems.length > 0 && (
         <ul className={s.problems} aria-label="Problems" data-tone="warn">
           {data.problems.map((p) => <li key={p.source_name} className={s.problem}>{p.source_name}: {p.message}</li>)}

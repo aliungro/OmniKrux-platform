@@ -59,9 +59,80 @@ export function endRuleForm(tabId: string): void {
 
 /** Tabs that are gone take their forms with them. */
 export function pruneRuleForms(tabs: AppTabs<MonitoringView>): void {
-  if (ruleFormSessions.size === 0) return;
+  if (ruleFormSessions.size === 0 && alertFormMarks.size === 0) return;
   const ids = new Set(tabs.tabs.map((t) => t.id));
   for (const id of [...ruleFormSessions.keys()]) if (!ids.has(id)) endRuleForm(id);
+  for (const id of [...alertFormMarks.keys()]) if (!ids.has(id)) clearAlertForms(id);
+}
+
+// --- the Silences and Contact points forms ----------------------------------------------------
+// They keep nothing outside their page (never a secret), so leaving the page loses them: each one
+// with changes marks its tab here (its title and where it lives, never what was typed), and every
+// way out of that tab asks first, switching tabs included.
+
+/** Where a marked form lives on the Alerts page, and its name for the leave question. */
+export interface AlertFormMark {
+  title: string;
+  tab: "silences" | "contacts";
+}
+
+/** By Monitoring tab id, then by form. */
+export const alertFormMarks = new Map<string, Map<string, AlertFormMark>>();
+
+const formUnloadKey = (tabId: string, formId: string) => `form:${tabId}:${formId}`;
+
+/** A form says whether it has changes (`mark`) or not (null). */
+export function markAlertForm(tabId: string, formId: string, mark: AlertFormMark | null): void {
+  const forms = alertFormMarks.get(tabId) ?? new Map<string, AlertFormMark>();
+  if (mark) forms.set(formId, mark);
+  else forms.delete(formId);
+  if (forms.size > 0) alertFormMarks.set(tabId, forms);
+  else alertFormMarks.delete(tabId);
+  holdUnload(formUnloadKey(tabId, formId), mark !== null);
+}
+
+/** Discard in the leave question: the tab's forms no longer hold it (they go with the page). */
+export function clearAlertForms(tabId: string): void {
+  for (const formId of [...(alertFormMarks.get(tabId)?.keys() ?? [])]) markAlertForm(tabId, formId, null);
+}
+
+export const FORM_LEAVE_BODY = "Leaving loses what you entered in this form.";
+
+/**
+ * The tab an action would take a changed Silences or Contact points form away from, else null:
+ * closing that tab; going to another page or another Alerts view (the form's own view is no way
+ * out); Back or Forward to one; and, since such a form keeps nothing, switching to or opening
+ * another tab while it is the active one.
+ */
+export function heldFormLeave(
+  action: MonitoringTabAction,
+  tabs: AppTabs<MonitoringView>,
+  marks: ReadonlyMap<string, ReadonlyMap<string, AlertFormMark>> = alertFormMarks,
+): { tabId: string; title: string } | null {
+  const first = (tabId: string) => {
+    const forms = marks.get(tabId);
+    const mark = forms ? [...forms.values()][0] : undefined;
+    return mark ? { tabId, mark } : null;
+  };
+  if (action.type === "newTab" || action.type === "activateTab" || action.type === "nextTab" || action.type === "previousTab") {
+    const found = first(tabs.active);
+    if (!found) return null;
+    if (action.type === "activateTab" && action.id === tabs.active) return null;
+    if ((action.type === "nextTab" || action.type === "previousTab") && tabs.tabs.length < 2) return null;
+    return { tabId: found.tabId, title: found.mark.title };
+  }
+  if (action.type !== "closeTab" && action.type !== "navigate" && action.type !== "back" && action.type !== "forward") return null;
+  const found = first(action.id);
+  if (!found) return null;
+  const held = { tabId: action.id, title: found.mark.title };
+  const stays = (v: MonitoringView) => v.page === "alerts" && (v.tab ?? "rules") === found.mark.tab;
+  if (action.type === "closeTab") return held;
+  const tab = tabs.tabs.find((t) => t.id === action.id);
+  if (!tab) return null;
+  if (action.type === "navigate") return stays(action.view) ? null : held;
+  const history = action.type === "back" ? tab.back : tab.forward;
+  if (history.length === 0) return null;
+  return stays(history[history.length - 1]) ? null : held;
 }
 
 export const NEW_TITLE = "New alert rule";
