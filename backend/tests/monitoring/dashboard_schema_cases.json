@@ -6990,5 +6990,72 @@
         "message": "At most 10 contact points."
       }
     ]
+  },
+  {
+    "name": "alert_channel_label_name_order",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3,
+            "engine": "tool",
+            "channel": {
+              "receiver": "ops",
+              "labels": {
+                "b-1": "x",
+                "9": "x",
+                "a-1": "x",
+                "10": "x",
+                "ok": "x"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.channel.labels.10",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "panels[0].alert.channel.labels.9",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "panels[0].alert.channel.labels.a-1",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "panels[0].alert.channel.labels.b-1",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      }
+    ]
   }
 ]

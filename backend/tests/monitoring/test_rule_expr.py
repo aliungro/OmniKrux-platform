@@ -128,14 +128,26 @@ def test_duration_helpers():
 
 def test_condition_and_eval_expr():
     c = Condition("each", "above", 0.3, 300, 60)
-    assert condition_expr("rate(x[5m])", c) == "(rate(x[5m])) > 0.3"
-    assert condition_expr("x", Condition("total", "below", 2.0, 0, 60)) == "sum(x) < 2"
-    assert condition_expr("x", Condition("each", "below", -1.5, 0, 60)) == "(x) < -1.5"
-    assert eval_expr("x", "total") == "sum(x)" and eval_expr("x", "each") == "x"
+    assert condition_expr("rate(x[5m])", c) == "(rate(x[5m])\n) > 0.3"
+    assert condition_expr("x", Condition("total", "below", 2.0, 0, 60)) == "sum(x\n) < 2"
+    assert condition_expr("x", Condition("each", "below", -1.5, 0, 60)) == "(x\n) < -1.5"
+    assert eval_expr("x", "total") == "sum(x\n)" and eval_expr("x", "each") == "x"
+
+
+def test_a_trailing_comment_cannot_swallow_the_wrapper():
+    each = condition_expr("up # note", Condition("each", "above", 0.3, 0, 60))
+    total = condition_expr("up # note", Condition("total", "below", 2.0, 0, 60))
+    assert each == "(up # note\n) > 0.3" and total == "sum(up # note\n) < 2"
+    assert eval_expr("up # note", "total") == "sum(up # note\n)"
 
 
 def test_is_log_query():
     assert is_log_query('  {app="api"} |= "x"') and not is_log_query("sum(rate(x[5m]))")
+
+
+def _as_typed(template: str) -> str:
+    """What Prometheus prints for the escaped text: the string actions, evaluated."""
+    return template.replace('{{ "{{" }}', "{{").replace('{{ "}}" }}', "}}")
 
 
 def test_templates():
@@ -143,12 +155,38 @@ def test_templates():
         to_prometheus_template("p95 for {{route}} is {{value}}")
         == "p95 for {{ $labels.route }} is {{ $value }}"
     )
-    assert to_prometheus_template("{x} {{ 1 }} {{a-b}}") == "{x} {{ 1 }} {{a-b}}"
-    assert render_message("p95 for {{route}} is {{value}}", {"route": "/a"}, 0.31234) == (
-        "p95 for /a is 0.312"
-    )
-    assert render_message("{{gone}}|{{value}}", {}, None) == "|–"
-    assert render_message("{{value}}", {}, 1234.5) == "1230"
+    assert to_prometheus_template("{x} {{a}}") == "{x} {{ $labels.a }}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['{{ query "up" }}', "{{ .Labels }}", "a {{ b", "a }} b", "{{{value}}}", "{{ range . }}"],
+)
+def test_other_template_text_is_written_as_typed(text):
+    out = to_prometheus_template(text)
+    assert _as_typed(out) == text
+    assert render_message(text, {}, None) == text
+
+
+def test_template_actions_never_survive_outside_the_placeholders():
+    out = to_prometheus_template('{{ query "up" | first | value }} {{value}}')
+    assert out.endswith("{{ $value }}")
+    assert out.startswith('{{ "{{" }} query "up" | first | value {{ "}}" }}')
+
+
+MESSAGE_CASES = json.loads((Path(__file__).parent / "alert_message_cases.json").read_text("utf-8"))
+
+
+@pytest.mark.parametrize("case", MESSAGE_CASES, ids=[c["name"] for c in MESSAGE_CASES])
+def test_render_message_shared_cases(case):
+    assert render_message(case["message"], case["labels"], case["value"]) == case["expected"]
+
+
+def test_message_case_file_pins_the_number_format():
+    shown = {c["name"]: c["expected"] for c in MESSAGE_CASES}
+    assert shown["small_has_no_exponent"] == "0.0000123"
+    assert shown["huge_has_no_exponent"] == "1" + "0" * 21
+    assert shown["no_value_is_a_dash"] == "–"
 
 
 def test_worst():

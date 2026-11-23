@@ -8,6 +8,7 @@ values, so each variable takes its default and the built-ins come from the alert
 import math
 import re
 from collections.abc import Mapping
+from decimal import Decimal
 
 from omnikrux.monitoring.alerts.types import Condition, Of
 
@@ -205,41 +206,75 @@ def _number_text(value: float) -> str:
 
 
 def condition_expr(expr: str, cond: Condition) -> str:
+    """The rule's condition. A line feed ends the operand, so a `#` comment at the end of the
+    query can't swallow what the wrapper adds after it."""
     sign = ">" if cond.op == "above" else "<"
-    left = f"sum({expr})" if cond.of == "total" else f"({expr})"
+    left = f"sum({expr}\n)" if cond.of == "total" else f"({expr}\n)"
     return f"{left} {sign} {_number_text(cond.threshold)}"
 
 
 def eval_expr(expr: str, of: Of) -> str:
-    return f"sum({expr})" if of == "total" else expr
+    return f"sum({expr}\n)" if of == "total" else expr
 
 
 def is_log_query(expr: str) -> bool:
     return expr.strip().startswith("{")
 
 
-def to_prometheus_template(message: str) -> str:
-    def swap(m: re.Match[str]) -> str:
-        name = m.group(1)
-        return "{{ $value }}" if name == "value" else "{{ $labels." + name + " }}"
+def _message_parts(message: str):
+    """The message left to right: ("name", label or "value") for a placeholder, else ("text", s).
 
-    return _TEMPLATE.sub(swap, message)
+    A `{{` or `}}` that isn't part of a placeholder is its own text part, scanned from the left
+    like the browser does, so both readings of `{{{value}}}` agree.
+    """
+    i = 0
+    while i < len(message):
+        m = _TEMPLATE.match(message, i)
+        if m:
+            yield "name", m.group(1)
+            i = m.end()
+        elif message.startswith(("{{", "}}"), i):
+            yield "text", message[i : i + 2]
+            i += 2
+        else:
+            yield "text", message[i]
+            i += 1
+
+
+def to_prometheus_template(message: str) -> str:
+    """The message as a Prometheus annotation template.
+
+    Only {{name}} and {{value}} become template actions. Every other `{{` or `}}` is written as
+    a Go string action, so the notification shows the text as typed and no other action (such as
+    `query`, which would run PromQL unfiltered) can run.
+    """
+    out: list[str] = []
+    for kind, part in _message_parts(message):
+        if kind == "name":
+            out.append("{{ $value }}" if part == "value" else "{{ $labels." + part + " }}")
+        elif part in ("{{", "}}"):
+            out.append('{{ "' + part + '" }}')
+        else:
+            out.append(part)
+    return "".join(out)
 
 
 def _three_digits(value: float) -> str:
+    """Three significant digits, written out in full: never an exponent."""
     text = f"{value:.3g}"
-    if "e+" in text:
-        return f"{float(text):.0f}"
+    if "e" in text:
+        return format(Decimal(text), "f")
     return text
 
 
 def render_message(message: str, labels: Mapping[str, str], value: float | None) -> str:
-    def swap(m: re.Match[str]) -> str:
-        name = m.group(1)
-        if name == "value":
-            if value is None or not math.isfinite(value):
-                return "\u2013"
-            return _three_digits(value)
-        return labels.get(name, "")
-
-    return _TEMPLATE.sub(swap, message)
+    out: list[str] = []
+    for kind, part in _message_parts(message):
+        if kind == "text":
+            out.append(part)
+        elif part == "value":
+            shown = "–" if value is None or not math.isfinite(value) else _three_digits(value)
+            out.append(shown)
+        else:
+            out.append(labels.get(part, ""))
+    return "".join(out)

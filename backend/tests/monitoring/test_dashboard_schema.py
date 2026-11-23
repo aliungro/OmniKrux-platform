@@ -48,6 +48,7 @@ REQUIRED_CASES = {
     "alert_bad_fields",
     "alert_loki_log_query",
     "alert_uses_range",
+    "alert_channel_label_name_order",
     "bad_time",
     "time_backwards",
     "wrong_types_everywhere",
@@ -284,9 +285,13 @@ def test_alert_object_is_normalised():
     )
 
 
-def test_documents_without_alerts_are_unchanged():
+def test_documents_valid_before_stay_valid():
+    checked = 0
     for case in OK_CASES:
-        if "alert" in json.dumps(case["input"]):
-            continue
         out = validate_dashboard(case["input"], owner_kind=case["owner"])
-        assert all(p["alert"] is None for p in out["panels"])
+        assert out == case["normalized"], case["name"]
+        for raw, panel in zip(case["input"].get("panels", []), out["panels"], strict=True):
+            if raw.get("alert") is None:
+                assert panel["alert"] is None, case["name"]
+                checked += 1
+    assert checked >= 10
