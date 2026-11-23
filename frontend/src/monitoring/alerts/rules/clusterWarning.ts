@@ -11,9 +11,18 @@ import type { ScopeKind, SourceType } from "../api";
 export const mixedClustersWords = (project: string, source: string) =>
   `${project}'s data from ${source} may include other clusters: OmniKrux couldn't tell which label separates them, so this rule may fire on another cluster's data. Add a filter on the project page.`;
 
+/** The line on a project link whose source may include other clusters' data. */
+export const mixedLinkWords = (source: string) =>
+  `${source} may include data from other clusters: OmniKrux couldn't tell which label separates them. Add a filter so alerts and charts stay on this project.`;
+
 /** A Kubernetes project's link that no filter narrows to its cluster, because OmniKrux couldn't tell
  * how (a filter OmniKrux decided isn't needed reads "auto"; one the user wrote, "user"). */
-export function mayMixClusters(project: Pick<ProjectOut, "kind" | "cluster_id">, link: Pick<LinkOut, "filter" | "filter_origin">): boolean {
+export function mayMixClusters(
+  project: Pick<ProjectOut, "kind" | "cluster_id">,
+  link: Pick<LinkOut, "filter" | "filter_origin"> & Partial<Pick<LinkOut, "source_type">>,
+): boolean {
+  // An Alertmanager has no labels to filter on: the warning is about data a rule or chart reads.
+  if (link.source_type === "alertmanager") return false;
   return project.kind === "kubernetes" && project.cluster_id !== null && link.filter.trim() === "" && link.filter_origin === "none";
 }
 

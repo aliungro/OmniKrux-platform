@@ -33,6 +33,8 @@ export interface FakeAlertsState {
   alertChangesOnSave: AlertChangeOut[];
   /** What a rule create or save answers as `changes`. */
   ruleChanges: AlertChangeOut[];
+  /** What a rule delete answers as `changes`. */
+  ruleDeleteChanges: AlertChangeOut[];
   /** By project or group id: the rules its delete review names (an empty list is left out, as the server does). */
   ownerRules: Record<string, { alert_rules?: { id: string; name: string }[]; cluster_rules?: { id: string; name: string }[] }>;
 }
@@ -71,6 +73,7 @@ export function emptyAlertsState(): FakeAlertsState {
     syncAnswers: {},
     alertChangesOnSave: [],
     ruleChanges: [],
+    ruleDeleteChanges: [],
     ownerRules: {},
   };
 }
@@ -158,7 +161,7 @@ export function alertsRoute(
     if (is("DELETE", "rules", b)) {
       if (query.get("token") !== TOKEN) return coded(409, "rule_changed", REVIEW_CHANGED);
       state.rules = state.rules.filter((r) => r !== found);
-      return json({ rule: null, changes: [] });
+      return json({ rule: null, changes: state.ruleDeleteChanges.filter((c) => c.rule_id === found.id) });
     }
     if (is("POST", "rules", b, "attach")) {
       const d = dashboard(String(body.dashboard_id));

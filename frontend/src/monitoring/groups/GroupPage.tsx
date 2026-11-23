@@ -102,9 +102,6 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
 
   const byId = new Map((projects.data ?? []).map((p) => [p.id, p]));
   const members = group.project_ids.flatMap((pid) => byId.get(pid) ?? []);
-  // Where the group's cluster rules run: its projects' clusters.
-  const clusterNames = [...new Set(members.flatMap((p) => (p.cluster_name ? [p.cluster_name] : [])))];
-  const clusterWords = clusterNames.length === 0 ? "a cluster" : clusterNames.length === 1 ? clusterNames[0] : `${clusterNames.slice(0, -1).join(", ")} and ${clusterNames[clusterNames.length - 1]}`;
 
   const open = (target: MonitoringView, e: { ctrlKey: boolean; metaKey: boolean }) =>
     e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push");
@@ -122,6 +119,16 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
       setReview(await groupDeleteReview(group.id));
     } catch (err) {
       setPageError(failure(err));
+    }
+  };
+
+  /** After a cluster rule's removal: the review is read again; a read that fails says so in the dialog. */
+  const rereadReview = async () => {
+    try {
+      setReview(await groupDeleteReview(group.id));
+      setError(null);
+    } catch (err) {
+      setError(`${STALE_REVIEW} ${failure(err, "try again")}`);
     }
   };
 
@@ -190,8 +197,9 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
           onCancel={() => { if (!busy) { setReview(null); setError(null); } }} onConfirm={() => void confirmDelete()}>
           <p>Its projects stay as they are.</p>
           {review.dashboards.length > 0 && <p>Its dashboards go with it: {review.dashboards.map((d) => d.title).join(", ")}.</p>}
-          <OwnerRuleLines alertRules={review.alert_rules} clusterRules={review.cluster_rules} cluster={clusterWords}
-            onReviewed={() => void askDelete()} />
+          <OwnerRuleLines alertRules={review.alert_rules} clusterRules={review.cluster_rules} owner={{ kind: "group", id: group.id }}
+            clusterOf={(pid) => byId.get(pid)?.cluster_name ?? null} fallbackCluster="a cluster"
+            onOpenRule={(rule) => nav.navigate({ page: "alerts", rule }, "replace")} onReviewed={rereadReview} />
         </DeleteReviewDialog>
       )}
     </section>

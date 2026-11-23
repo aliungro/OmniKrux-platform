@@ -4,7 +4,7 @@ import { OwnerRuleLines, waitsForClusterRules } from "../alerts/reviews/OwnerRul
 import type { ProjectDeleteReviewOut } from "../api/types";
 
 /** Asks before a project is deleted: everything it owns, what stays, then Delete project (focused) or Cancel. */
-export function ProjectDeleteReview({ review, busy, error, clusterName, restoreFocusTo, onCancel, onConfirm, onReviewed }: {
+export function ProjectDeleteReview({ review, busy, error, clusterName, restoreFocusTo, onCancel, onConfirm, onOpenRule, onReviewed }: {
   review: ProjectDeleteReviewOut;
   busy: boolean;
   error: string | null;
@@ -13,8 +13,10 @@ export function ProjectDeleteReview({ review, busy, error, clusterName, restoreF
   restoreFocusTo: RefObject<HTMLElement | null>;
   onCancel(): void;
   onConfirm(): void;
-  /** A cluster rule's review applied a change: the review is read again. */
-  onReviewed(): void;
+  /** Opens a rule on the Alerts page (a group's rule can't be removed from a project). */
+  onOpenRule(ruleId: string): void;
+  /** A cluster rule's removal finished: the review is read again. */
+  onReviewed(): Promise<void>;
 }) {
   const names = (list: { name: string }[]) => list.map((x) => x.name).join(", ");
   const first: string[] = [];
@@ -36,8 +38,8 @@ export function ProjectDeleteReview({ review, busy, error, clusterName, restoreF
     <DeleteReviewDialog title={`Delete project ${review.name}?`} action="Delete project" busy={busy} blocked={waitsForClusterRules(review)} error={error}
       restoreFocusTo={restoreFocusTo} onCancel={onCancel} onConfirm={onConfirm}>
       {first.map((line) => <p key={line}>{line}</p>)}
-      <OwnerRuleLines alertRules={review.alert_rules} clusterRules={review.cluster_rules} cluster={clusterName ?? "its cluster"}
-        projectId={review.project_id} onReviewed={onReviewed} />
+      <OwnerRuleLines alertRules={review.alert_rules} clusterRules={review.cluster_rules} owner={{ kind: "project", id: review.project_id }}
+        clusterOf={() => clusterName} fallbackCluster={clusterName ?? "its cluster"} onOpenRule={onOpenRule} onReviewed={onReviewed} />
       {lines.map((line) => <p key={line}>{line}</p>)}
     </DeleteReviewDialog>
   );

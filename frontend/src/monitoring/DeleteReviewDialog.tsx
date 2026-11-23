@@ -24,6 +24,13 @@ export function DeleteReviewDialog({ title, action, busy, blocked = false, error
   const id = useId();
   const go = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (!busy) go.current?.focus(); }, [busy]);
+  // The delete is open again (its last blocker went, with the button the keyboard was on): back to the action.
+  const wasBlocked = useRef(blocked);
+  useEffect(() => {
+    const active = document.activeElement;
+    if (wasBlocked.current && !blocked && (active === null || active === document.body || !active.isConnected)) go.current?.focus();
+    wasBlocked.current = blocked;
+  }, [blocked]);
   return (
     <DialogShell provider="monitoring" busy={busy} onCancel={onCancel} onConfirm={blocked ? () => {} : onConfirm} first={go}
       restoreFocusTo={restoreFocusTo} labelledBy={`${id}-t`} describedBy={`${id}-b`} className={s.dialog}>

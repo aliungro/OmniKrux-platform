@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GroupOut } from "../api/types";
+import type { RuleOut, TargetOut } from "../alerts/api";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import { seedDashboard, spec } from "../test/dashboardSeeds";
@@ -132,19 +133,39 @@ describe("Groups", () => {
 });
 
 describe("Group delete review and alert rules", () => {
-  it("group delete lists its rules and waits for cluster rules", async () => {
+  const groupRule = (id: string, name: string, projectIds: string[]): RuleOut => ({
+    id, name, scope: { kind: "group", id: "g1", name: "Prod" }, source_type: "prometheus", source_id: null, expr: "up",
+    condition: { of: "each", op: "above", threshold: 5, for: "5m", every: "1m" }, severity: "warning", message: "", contact_points: [],
+    engine: "tool", channel: null, paused: false, origin: "page", panel: null, state: "waiting", firing_since: null, removing: false, version: 1,
+    created_at: T, updated_at: T,
+    targets: projectIds.map((pid) => ({
+      id: `t-${id}-${pid}`, project_id: pid, project_name: pid, engine: "tool", tool: "prometheus_rule", where: "x", engine_note: null, state: "waiting",
+      state_since: T, last_eval_at: null, message: null, eval_expr: "", rule_text: "", tool_state: "in_sync", tool_message: null, leaving: false, instances: [],
+    } as TargetOut)),
+  });
+
+  it("group delete lists its rules, names only the clusters they run in, and waits", async () => {
     const user = userEvent.setup();
-    const api = installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1", "p2"])] }, fallback);
+    const api = installFakeMonitoringApi({
+      projects: [
+        { ...seedProject("p1", "Dev", "kubernetes", { id: "c1", provider: "kind" }), cluster_name: "kind-dev" },
+        { ...seedProject("p2", "Stage", "kubernetes", { id: "c2", provider: "kind" }), cluster_name: "kind-stage" },
+        seedProject("p3", "Prod east"),
+      ],
+      groups: [group("g1", "Prod", ["p1", "p2", "p3"])],
+    }, fallback);
+    api.state.rules = [groupRule("r1", "Slow checkout", ["p1"])];
     api.state.ownerRules.g1 = { alert_rules: [{ id: "r1", name: "Slow checkout" }], cluster_rules: [{ id: "r1", name: "Slow checkout" }] };
     renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
     await user.click(await screen.findByRole("button", { name: "Delete group…" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText("Alert rules that go with it: Slow checkout.")).toBeTruthy();
-    expect(within(dialog).getByText("Remove its rules that run in a cluster first: Slow checkout. Each opens its own review.")).toBeTruthy();
+    expect(await within(dialog).findByText("Remove its rules that run in kind-dev first: Slow checkout. Each opens its own review.")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "Delete group" }).getAttribute("aria-disabled")).toBe("true");
-    expect(within(dialog).getByRole("button", { name: "Review Slow checkout" })).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
     expect(api.requests.some((r) => r.method === "DELETE" && r.url.startsWith("/api/monitoring/groups/"))).toBe(false);
+    await user.click(within(dialog).getByRole("button", { name: "Open rule Slow checkout" }));
+    expect(await screen.findByRole("button", { name: "New alert rule" })).toBeTruthy();
   });
 });
 

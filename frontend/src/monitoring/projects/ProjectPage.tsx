@@ -9,8 +9,8 @@ import { takeHeadingFocus } from "../dashboards/create/arrival";
 import { OwnerDashboards } from "../dashboards/OwnerDashboards";
 import { EditableName } from "../EditableName";
 import { escapeCloses } from "../focus";
-import { mayMixClusters } from "../alerts/rules/clusterWarning";
-import { ageNote, kindLine, mixedLinkWords, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
+import { mayMixClusters, mixedLinkWords } from "../alerts/rules/clusterWarning";
+import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
 import { SourceForm } from "../sources/SourceForm";
@@ -305,6 +305,16 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
     }
   };
 
+  /** After a cluster rule's removal: the review is read again; a read that fails says so in the dialog. */
+  const rereadReview = async () => {
+    try {
+      setReview(await projectDeleteReview(project.id));
+      setReviewError(null);
+    } catch (err) {
+      setReviewError(`${STALE_REVIEW} ${failure(err, "try again")}`);
+    }
+  };
+
   const confirmDelete = async () => {
     if (!review || reviewBusy) return;
     setReviewBusy(true);
@@ -413,7 +423,8 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
 
       {review && (
         <ProjectDeleteReview review={review} busy={reviewBusy} error={reviewError} clusterName={clusterName} restoreFocusTo={deleteButton}
-          onReviewed={() => void askDelete()}
+          onOpenRule={(rule) => nav.navigate({ page: "alerts", rule }, "replace")}
+          onReviewed={rereadReview}
           onCancel={() => { if (!reviewBusy) { setReview(null); setReviewError(null); } }} onConfirm={() => void confirmDelete()} />
       )}
     </section>

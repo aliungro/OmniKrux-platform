@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import type { FiringOut, OverviewOut } from "../alerts/api";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { alertsKeys, type FiringOut, type OverviewOut } from "../alerts/api";
 import type { GroupOut, HealthOut, LinkOut, ProjectOut, SourceOut } from "../api/types";
 import { healthSummary } from "./MonitoringHome";
 import { recordRecent } from "./recent";
@@ -194,6 +194,32 @@ describe("Monitoring Home", () => {
     expect(await screen.findByText(/Alerts couldn't be read, so what is firing isn't shown\./)).toBeTruthy();
     expect(screen.queryByText(/All quiet/)).toBeNull();
     expect(screen.queryByText("2 firing")).toBeNull();
+  });
+
+  it("the warning is the card's description, not part of its name", async () => {
+    seedHealthy();
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Dev cluster/ });
+    expect(card.getAttribute("aria-describedby")).toBeTruthy();
+    expect(document.getElementById(card.getAttribute("aria-describedby")!)?.textContent).toMatch(/may include data from other clusters/);
+    expect(screen.queryByRole("button", { name: /may include data/ })).toBeNull();
+  });
+
+  it("a refresh that fails after a good read keeps the rows with a note and drops the counts", async () => {
+    seedHealthy({ overview: overviewOf({ firing: [firingRow()], by_project: { p1: 2 } }, { firing: 1 }) });
+    const real = globalThis.fetch;
+    let fail = false;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      fail && String(url).includes("/alerts/overview") ? Promise.resolve(new Response("{}", { status: 500 })) : real(url, init));
+    const view = renderMonitoringApp();
+    expect(await screen.findByText("2 firing")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Alerts, 1 firing" })).toBeTruthy();
+    fail = true;
+    await act(async () => { await view.client.refetchQueries({ queryKey: alertsKeys.overview }); });
+    expect(await screen.findByText(/Couldn't refresh: showing the state from/)).toBeTruthy();
+    expect(screen.getByText("PodCrashLooping")).toBeTruthy();
+    expect(screen.queryByText("2 firing")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Alerts, \d+ firing/ })).toBeNull();
   });
 
   it("a link with no cluster filter warns that it may include other clusters", async () => {

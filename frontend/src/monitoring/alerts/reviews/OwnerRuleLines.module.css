@@ -46,3 +46,9 @@
   color: var(--bad);
   font-size: 12.5px;
 }
+
+.hint {
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}

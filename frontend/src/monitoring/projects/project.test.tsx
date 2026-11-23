@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GroupOut, LinkOut, ProjectOut, SourceOut } from "../api/types";
-import type { RuleOut, TargetOut } from "../alerts/api";
+import type { Plan } from "../../api/types";
+import type { AlertChangeOut, RuleOut, TargetOut } from "../alerts/api";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import { panel, seedDashboard, spec } from "../test/dashboardSeeds";
@@ -308,8 +309,98 @@ describe("Project delete review", () => {
     await user.click(del);
     await user.keyboard("{Control>}{Enter}{/Control}");
     expect(api.requests.some((r) => r.method === "DELETE" && r.url.startsWith("/api/monitoring/projects/"))).toBe(false);
-    await user.click(within(dialog).getByRole("button", { name: "Review Slow checkout" }));
-    await waitFor(() => expect(api.requests.some((r) => r.method === "POST" && r.url === "/api/monitoring/alerts/targets/t1/sync")).toBe(true));
+    expect(within(dialog).getByRole("button", { name: "Review Slow checkout" })).toBeTruthy();
+  });
+
+  const PLAN: Plan = {
+    plan_id: "plan-1", action: "delete", target: { cluster_id: "c1", kind_key: "prometheusrules.monitoring.coreos.com", namespace: "monitoring", name: "omnikrux-slow" },
+    kind: "PrometheusRule", cluster: { id: "c1", name: "kind-dev", provider: "kind", environment: "development" },
+    title: "Remove PrometheusRule omnikrux-slow", summary: ["Remove PrometheusRule monitoring/omnikrux-slow."], warnings: [], blocked: [],
+    diff: null, confirm_text: null, apply_label: "Remove", expires_at: "2026-11-23T10:05:00Z",
+  };
+  const removal = (id: string, rule: string): AlertChangeOut => ({ target_id: `t-${id}`, rule_id: id, rule_name: rule, project_id: "p1", project_name: "Dev", kind: "review", message: null });
+
+  /** A Kubernetes project with the given cluster rules; applying a removal takes that rule out of the review. */
+  function withClusterRules(rules: { id: string; name: string }[]) {
+    let api: ReturnType<typeof installFakeMonitoringApi>;
+    let applied = 0;
+    const fb = async (url: string, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url === "/api/clusters") return json([{ id: "c1", name: "kind-dev", provider: "kind", state: "ready" }]);
+      if (method === "POST" && url.endsWith("/apply")) {
+        applied += 1;
+        api.state.ownerRules.p1 = { cluster_rules: rules.slice(applied) };
+        return json({ outcome: "succeeded", message: "Removed.", job_id: null, audit_id: 1 });
+      }
+      if (method === "DELETE" && url.startsWith("/api/actions/")) return new Response(null, { status: 204 });
+      return json([]);
+    };
+    api = withEverything(fb);
+    api.state.projects[0] = { ...api.state.projects[0], kind: "kubernetes", cluster_id: "c1", cluster_name: "kind-dev" };
+    api.state.rules = rules.map((r) => ({ ...clusterRule(), id: r.id, name: r.name, targets: [{ ...clusterRule().targets[0], id: `t-${r.id}` }] }));
+    api.state.ownerRules.p1 = { cluster_rules: rules };
+    api.state.ruleDeleteChanges = rules.map((r) => removal(r.id, r.name));
+    api.state.syncAnswers = Object.fromEntries(rules.map((r) => [`t-${r.id}`, { kind: "review", plan: { ...PLAN, plan_id: `plan-${r.id}` } }]));
+    return api;
+  }
+
+  it("Review removes the project's own rule, opens its removal, and unblocks the delete", async () => {
+    const user = userEvent.setup();
+    const api = withClusterRules([{ id: "r1", name: "Slow checkout" }]);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(await within(dialog).findByRole("button", { name: "Review Slow checkout" }));
+    const review = await screen.findByRole("dialog", { name: /Remove PrometheusRule omnikrux-slow/ });
+    await user.click(within(review).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete project" }).getAttribute("aria-disabled")).toBeNull());
+    expect(api.requests.some((r) => r.method === "DELETE" && r.url.startsWith("/api/monitoring/alerts/rules/r1"))).toBe(true);
+    expect(within(screen.getByRole("alertdialog")).queryByText(/Remove its rules/)).toBeNull();
+    // The keyboard is on the action, never on the body.
+    await waitFor(() => expect(document.activeElement).toBe(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete project" })));
+  });
+
+  it("when a rule's Review goes, the keyboard moves to the next rule's button", async () => {
+    const user = userEvent.setup();
+    withClusterRules([{ id: "r1", name: "Slow checkout" }, { id: "r2", name: "Disk full" }]);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(await within(dialog).findByRole("button", { name: "Review Slow checkout" }));
+    const review = await screen.findByRole("dialog", { name: /Remove PrometheusRule/ });
+    await user.click(within(review).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(within(dialog).queryByRole("button", { name: "Review Slow checkout" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Review Disk full" })));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a review that can't be read again says so in the dialog", async () => {
+    const user = userEvent.setup();
+    withClusterRules([{ id: "r1", name: "Slow checkout" }]);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(await within(dialog).findByRole("button", { name: "Review Slow checkout" }));
+    const review = await screen.findByRole("dialog", { name: /Remove PrometheusRule/ });
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      String(url).includes("/delete-review") && String(url).includes("/projects/") ? Promise.resolve(new Response("{}", { status: 500 })) : real(url, init));
+    await user.click(within(review).getByRole("button", { name: "Remove" }));
+    const alert = await within(screen.getByRole("alertdialog")).findByText(/Something changed since the review\. Review it again\./);
+    expect(alert.getAttribute("role")).toBe("alert");
+  });
+
+  it("a group's rule is opened on the Alerts page, not removed from the project", async () => {
+    const user = userEvent.setup();
+    const api = withClusterRules([{ id: "r1", name: "Slow checkout" }]);
+    api.state.rules[0] = { ...api.state.rules[0], scope: { kind: "group", id: "g1", name: "Prod" } };
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(await within(dialog).findByText("A group's rule can't be removed from a project. Open it to remove it there, or take this project out of the group.")).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "Open rule Slow checkout" }));
+    expect(await screen.findByRole("button", { name: "New alert rule" })).toBeTruthy();
+    expect(api.requests.some((r) => r.method === "DELETE" && r.url.includes("/rules/"))).toBe(false);
   });
 
   it("an answer without rule lists reads as none", async () => {
@@ -331,6 +422,16 @@ describe("Project delete review", () => {
     expect(await screen.findByText(
       "Prometheus main may include data from other clusters: OmniKrux couldn't tell which label separates them. Add a filter so alerts and charts stay on this project.",
     )).toBeTruthy();
+  });
+
+  it("an Alertmanager link carries no cluster warning", async () => {
+    const am = source("s1", "Alertmanager main", { type: "alertmanager" });
+    installFakeMonitoringApi({
+      sources: [am], projects: [project("p1", "Dev", [link(am)], { kind: "kubernetes", cluster_id: "c1" })],
+    }, fallback);
+    open("p1");
+    await screen.findByText("Alertmanager main");
+    expect(screen.queryByText(/may include data from other clusters/)).toBeNull();
   });
 
   it("a link with a filter, or on a project that isn't Kubernetes, carries no such warning", async () => {

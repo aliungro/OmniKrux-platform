@@ -1,5 +1,6 @@
+import { useId } from "react";
 import type { HealthOut, ProjectOut, SourceOut } from "../api/types";
-import { mayMixClusters } from "../alerts/rules/clusterWarning";
+import { mayMixClusters, mixedLinkWords } from "../alerts/rules/clusterWarning";
 import { DOT } from "../sidebar/Sidebar";
 import s from "./MonitoringHome.module.css";
 
@@ -19,10 +20,6 @@ export function ageNote(checkedAt: string | null, now: number): string | null {
 }
 
 export const firingWords = (n: number) => `${n} firing`;
-
-/** The warning on a link whose source may include data from other clusters. */
-export const mixedLinkWords = (source: string) =>
-  `${source} may include data from other clusters: OmniKrux couldn't tell which label separates them. Add a filter so alerts and charts stay on this project.`;
 
 export const STATE_WORDS = { up: "Up", down: "Can't be reached", unknown: "Not checked yet" } as const;
 
@@ -60,8 +57,10 @@ interface Props {
 }
 
 export function ProjectCard({ project, health, now, clusterName, clusterGone, firing, onOpen }: Props) {
+  const warnId = useId();
+  const warned = project.links.filter((l) => mayMixClusters(project, l));
   return (
-    <button type="button" className={s.card} onClick={(e) => onOpen(e.ctrlKey || e.metaKey)}>
+    <button type="button" className={s.card} aria-describedby={warned.length ? warnId : undefined} onClick={(e) => onOpen(e.ctrlKey || e.metaKey)}>
       <span className={s.cardHead}>
         <i className={s.dot} style={{ background: projectDot(project) }} aria-hidden="true" />
         <span className={s.cardName}>{project.name}</span>
@@ -81,11 +80,16 @@ export function ProjectCard({ project, health, now, clusterName, clusterGone, fi
               <i className={s.pip} aria-hidden="true" />
               <span className={s.rowText} title={why}>{`${l.source_name} · ${STATE_WORDS[state]}`}</span>
               {age && <span className={s.age}>{age}</span>}
-              {mayMixClusters(project, l) && <span className={s.cardWarn}>{mixedLinkWords(l.source_name)}</span>}
             </span>
           );
         })}
       </span>
+      {/* Read as the card's description, not as part of its name. */}
+      {warned.length > 0 && (
+        <span id={warnId} className={s.cardWarn} aria-hidden="true">
+          {warned.map((l) => mixedLinkWords(l.source_name)).join(" ")}
+        </span>
+      )}
     </button>
   );
 }
