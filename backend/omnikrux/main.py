@@ -249,11 +249,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         jobs = app.state.jobs = JobRunner(audit)
         app.state.forwards = forwards
         app.state.streams = streams
-        monitoring = app.state.monitoring = build_services(sessionmaker, box, connections, registry)
+        monitoring = app.state.monitoring = build_services(
+            sessionmaker,
+            box,
+            connections,
+            registry,
+            audit=audit,
+            alert_engine=settings.alert_engine,
+        )
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
                 await hub.forget(cluster_id)
             discovery.start()
+            # Task 8 hook: `await monitoring.alert_sync.reconcile_all()` goes here, before the
+            # alert engine starts.
+            monitoring.engine.start()  # nothing starts with OMNIKRUX_ALERT_ENGINE=false
             yield
         finally:
             await discovery.close()

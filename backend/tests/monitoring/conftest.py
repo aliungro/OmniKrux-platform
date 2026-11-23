@@ -20,6 +20,8 @@ from omnikrux.db import init_db, make_engine, make_sessionmaker
 from omnikrux.kube.connections import ClusterConnections
 from omnikrux.main import create_app
 from omnikrux.monitoring.alerts.contact_points.store import ContactPointStore
+from omnikrux.monitoring.alerts.engine import AlertEngine
+from omnikrux.monitoring.alerts.notify import Notifier
 from omnikrux.monitoring.alerts.store import AlertStore
 from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
@@ -28,6 +30,7 @@ from omnikrux.monitoring.sources.transport import TransportFactory
 from omnikrux.monitoring.sources.types import SourceConfig, SourceSecrets
 from omnikrux.security.secrets import SecretBox
 from tests.fakekube import kubeconfig_for
+from tests.monitoring.alert_env import CONTACT_POINTS, EngineEnv, no_sleep
 from tests.monitoring.fake_receivers import serve_fake_smtp, serve_fake_webhook
 from tests.monitoring.fakes import (
     TlsMaterial,
@@ -125,7 +128,10 @@ async def stores(tmp_path, db_path):
 
 @pytest.fixture
 def monitoring_client(tmp_path):
-    app = create_app(Settings(data_dir=tmp_path, kubeconfig="", in_container=False))
+    # No alert engine loop in API tests: a test that checks rules drives `engine.tick(now)`.
+    app = create_app(
+        Settings(data_dir=tmp_path, kubeconfig="", in_container=False, alert_engine=False)
+    )
     with TestClient(app) as client:
         yield client
 
@@ -134,7 +140,13 @@ def monitoring_client(tmp_path):
 async def monitoring_app(tmp_path):
     """The real app with its lifespan running, and an httpx client talking to it in-process."""
     app = create_app(
-        Settings(data_dir=tmp_path, kubeconfig="", in_container=False, rewrite_loopback=False)
+        Settings(
+            data_dir=tmp_path,
+            kubeconfig="",
+            in_container=False,
+            rewrite_loopback=False,
+            alert_engine=False,
+        )
     )
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -337,3 +349,39 @@ async def direct(registry):
 
     yield make
     await factory.close()
+
+
+@pytest.fixture
+async def engine_env(monitoring_app, fake_prometheus, linked_project, fake_webhook):
+    """`linked_project` ("Shop" on `fake_prometheus`, filter `cluster="a"`) with a webhook
+    contact point "Ops hook" on `fake_webhook`, and the app's services with an alert engine that
+    runs no loop (tests drive `tick(now)`) and a notifier that waits nothing between retries."""
+    http, app = monitoring_app
+    services = app.state.monitoring
+    services.notifier = Notifier(services, sleep=no_sleep)
+    services.engine = AlertEngine(services, enabled=False)
+    created = await http.post(
+        CONTACT_POINTS,
+        json={
+            "name": "Ops hook",
+            "type": "webhook",
+            "secrets": {"url": f"{fake_webhook.url}/hook"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    yield EngineEnv(
+        http=http,
+        app=app,
+        services=services,
+        engine=services.engine,
+        prom=fake_prometheus,
+        webhook=fake_webhook,
+        project_id=linked_project.project_id,
+        source_id=linked_project.source_id,
+        cp_id=created.json()["id"],
+    )
+    # Whatever a test left hanging answers now, so nothing waits on it at shutdown.
+    fake_prometheus.release.set()
+    fake_webhook.release.set()
+    await services.engine.stop()
+    await services.notifier.drain(10)

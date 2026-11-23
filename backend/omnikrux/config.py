@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     oci_dir: Path | None = None
     cloud_endpoints: Annotated[str | None, NoDecode] = None
     cloud_discovery_seconds: int = 600
+    # OMNIKRUX_ALERT_ENGINE: false turns off OmniKrux's own alert checks (rules that run in
+    # Prometheus or Loki keep running there).
+    alert_engine: bool = True
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod

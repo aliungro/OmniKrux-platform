@@ -39,6 +39,10 @@ class FakeWebhookReceiver:
         self.status_codes: list[int] = []
         self.release = asyncio.Event()
 
+    def bodies(self) -> list:
+        """Every request's JSON body, in order."""
+        return [r.json for r in self.requests]
+
     async def handle(self, request: web.Request) -> web.StreamResponse:
         params = {key: request.query.getall(key) for key in request.query}
         body = await request.read()
