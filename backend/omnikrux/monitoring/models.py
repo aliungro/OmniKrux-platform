@@ -1,5 +1,5 @@
-"""Monitoring tables. Kept identical to migrations 0007 and 0008 (`tests/test_db.py` compares
-them)."""
+"""Monitoring tables. Kept identical to migrations 0007, 0008 and 0009 (`tests/test_db.py`
+compares them)."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     Index,
     Integer,
     LargeBinary,
@@ -76,6 +77,10 @@ class SourceRecord(Base):
     check_ok: Mapped[bool | None] = mapped_column(Boolean)
     check_message: Mapped[str | None] = mapped_column(Text)
     version: Mapped[str | None] = mapped_column(String)
+    # OmniKrux installed this tool itself (M5): only then may contact-point secrets go into it.
+    installed_by_omnikrux: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
 
 
 class ProjectRecord(Base):
@@ -155,6 +160,156 @@ class DashboardVersionRow(Base):
     restored_from: Mapped[int | None] = mapped_column(Integer)
     copied_from: Mapped[str | None] = mapped_column(String)
     saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AlertRuleRow(Base):
+    """An alert rule: a query and a condition, for a project or a group. A panel rule
+    (`origin` "panel") belongs to a dashboard panel. A deleted rule keeps its row (`deleted_at`)
+    until its last target is removed."""
+
+    __tablename__ = "monitoring_alert_rules"
+    __table_args__ = (
+        Index("ix_monitoring_alert_rules_scope", "scope_kind", "scope_id"),
+        Index("ix_monitoring_alert_rules_panel", "dashboard_id", "panel_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    scope_kind: Mapped[str] = mapped_column(String)
+    scope_id: Mapped[str] = mapped_column(String)
+    source_type: Mapped[str] = mapped_column(String)
+    source_id: Mapped[str | None] = mapped_column(String)
+    expr: Mapped[str] = mapped_column(Text)
+    cond_of: Mapped[str] = mapped_column(String)
+    cond_op: Mapped[str] = mapped_column(String)
+    threshold: Mapped[float] = mapped_column(Float)
+    for_seconds: Mapped[int] = mapped_column(Integer)
+    every_seconds: Mapped[int] = mapped_column(Integer)
+    severity: Mapped[str] = mapped_column(String)
+    message: Mapped[str] = mapped_column(Text)
+    contact_point_ids: Mapped[str] = mapped_column(Text)  # JSON list
+    engine: Mapped[str] = mapped_column(String)
+    channel: Mapped[str | None] = mapped_column(Text)  # JSON {receiver, labels}
+    paused: Mapped[bool] = mapped_column(Boolean)
+    origin: Mapped[str] = mapped_column(String)  # page or panel
+    dashboard_id: Mapped[str | None] = mapped_column(String)
+    panel_id: Mapped[str | None] = mapped_column(String)
+    version: Mapped[int] = mapped_column(Integer)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AlertTargetRow(Base):
+    """Where a rule runs for one project: checked by OmniKrux, or applied in a tool."""
+
+    __tablename__ = "monitoring_alert_targets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String, index=True)
+    project_id: Mapped[str] = mapped_column(String, index=True)
+    engine: Mapped[str] = mapped_column(String)
+    engine_note: Mapped[str | None] = mapped_column(Text)
+    source_id: Mapped[str | None] = mapped_column(String)
+    eval_expr: Mapped[str] = mapped_column(Text)
+    rule_text: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String)
+    state_since: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    message: Mapped[str | None] = mapped_column(Text)
+    last_eval_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_eval_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tool_kind: Mapped[str | None] = mapped_column(String)
+    tool_object: Mapped[str | None] = mapped_column(Text)  # JSON ToolObject
+    tool_state: Mapped[str | None] = mapped_column(String)
+    tool_message: Mapped[str | None] = mapped_column(Text)
+    applied_version: Mapped[int | None] = mapped_column(Integer)
+    leaving: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AlertInstanceRow(Base):
+    """One series of a target that is pending or firing, by its labels' fingerprint."""
+
+    __tablename__ = "monitoring_alert_instances"
+
+    target_id: Mapped[str] = mapped_column(String, primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String, primary_key=True)
+    labels: Mapped[str] = mapped_column(Text)  # JSON {name: value}
+    state: Mapped[str] = mapped_column(String)
+    active_since: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    value: Mapped[float | None] = mapped_column(Float)
+    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    silenced: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+
+class AlertHistoryRow(Base):
+    """What happened to a target; kept for 7 days and within bounds (`AlertStore.prune`)."""
+
+    __tablename__ = "monitoring_alert_history"
+    __table_args__ = (
+        Index("ix_monitoring_alert_history_rule_at", "rule_id", "at"),
+        Index("ix_monitoring_alert_history_at", "at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_id: Mapped[str] = mapped_column(String)
+    rule_id: Mapped[str] = mapped_column(String)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    kind: Mapped[str] = mapped_column(String)
+    labels: Mapped[str | None] = mapped_column(Text)  # JSON {name: value}
+    value: Mapped[float | None] = mapped_column(Float)
+    message: Mapped[str | None] = mapped_column(Text)
+
+
+class ContactPointRow(Base):
+    """Where notifications go. Secret values are SecretBox-encrypted JSON."""
+
+    __tablename__ = "monitoring_contact_points"
+    __table_args__ = (UniqueConstraint("name", name="uq_monitoring_contact_points_name"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    type: Mapped[str] = mapped_column(String)
+    settings: Mapped[str] = mapped_column(Text)  # JSON, nothing secret
+    secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_delivery_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_delivery_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SilenceRow(Base):
+    """An OmniKrux silence: instances whose labels match stay quiet until it ends."""
+
+    __tablename__ = "monitoring_silences"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    matchers: Mapped[str] = mapped_column(Text)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    comment: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DeliveryRow(Base):
+    """One notification sent (or not) to a contact point; kept for 7 days and within a bound."""
+
+    __tablename__ = "monitoring_alert_deliveries"
+    __table_args__ = (Index("ix_monitoring_alert_deliveries_at", "at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    contact_point_id: Mapped[str] = mapped_column(String)
+    target_id: Mapped[str | None] = mapped_column(String)
+    kind: Mapped[str] = mapped_column(String)
+    ok: Mapped[bool] = mapped_column(Boolean)
+    message: Mapped[str | None] = mapped_column(Text)
 
 
 async def lock_first(session: AsyncSession) -> None:

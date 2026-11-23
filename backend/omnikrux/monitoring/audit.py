@@ -18,7 +18,16 @@ from omnikrux.audit.store import (
 async def begin_change(
     request: Request,
     action: Action,
-    kind: Literal["source", "project", "group", "dashboard"],
+    kind: Literal[
+        "source",
+        "project",
+        "group",
+        "dashboard",
+        "alert_rule",
+        "contact_point",
+        "silence",
+        "loki_rule",
+    ],
     name: str,
     details: dict | None = None,
 ) -> int:

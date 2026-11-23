@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 LOCAL_ACTOR = "local"
 
 Action = Literal[
+    "create",
     "edit",
     "scale",
     "restart",
@@ -54,6 +55,17 @@ Action = Literal[
     "dashboard_save",
     "dashboard_remove",
     "dashboard_restore",
+    "alert_rule_add",
+    "alert_rule_change",
+    "alert_rule_remove",
+    "contact_point_add",
+    "contact_point_change",
+    "contact_point_remove",
+    "contact_point_test",
+    "silence_add",
+    "silence_remove",
+    "loki_rule_write",
+    "loki_rule_remove",
 ]
 App = Literal["kubernetes", "monitoring"]
 Outcome = Literal["started", "succeeded", "failed", "ended", "unknown"]

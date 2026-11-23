@@ -154,6 +154,7 @@ class SourceStore:
             updated_at=utc(row.updated_at),
             check=check,
             secrets_unreadable=secrets is None,
+            installed_by_omnikrux=bool(row.installed_by_omnikrux),
         )
 
     async def list(self) -> list[SourceConfig]:

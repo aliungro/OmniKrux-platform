@@ -263,6 +263,44 @@ async def test_dashboard_actions_are_recorded(audit_log):
     assert rec.details == {"version": 3}
 
 
+async def test_alert_actions_are_recorded(audit_log):
+    actions = {
+        "create",
+        "alert_rule_add",
+        "alert_rule_change",
+        "alert_rule_remove",
+        "contact_point_add",
+        "contact_point_change",
+        "contact_point_remove",
+        "contact_point_test",
+        "silence_add",
+        "silence_remove",
+        "loki_rule_write",
+        "loki_rule_remove",
+    }
+    assert actions <= set(get_args(Action))
+    rid = await audit_log.begin_app(
+        AppAuditEntry(
+            "local",
+            "monitoring",
+            "alert_rule_add",
+            "alert_rule",
+            "API latency high",
+            {"severity": "warning"},
+        )
+    )
+    await audit_log.finish(rid, "succeeded")
+    [rec] = (await audit_log.list(action="alert_rule_add")).records
+    assert (rec.app, rec.action, rec.kind, rec.name, rec.outcome) == (
+        "monitoring",
+        "alert_rule_add",
+        "alert_rule",
+        "API latency high",
+        "succeeded",
+    )
+    assert rec.details == {"severity": "warning"}
+
+
 async def test_kubernetes_records_are_unchanged(setup):
     audit, info, _ = setup
     rid = await audit.begin(

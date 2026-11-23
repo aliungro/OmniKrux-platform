@@ -146,6 +146,7 @@ class SourceOut(BaseModel):
     headers: list[HeaderOut]
     has_ca: bool
     created_by_project_id: str | None
+    installed_by_omnikrux: bool
     used_by: list[ProjectRefOut]
     health: HealthOut
     created_at: datetime
@@ -299,6 +300,7 @@ def _out(
         headers=[HeaderOut(name=n, has_value=n in secrets.headers) for n in s.header_names],
         has_ca=bool(s.ca_pem),
         created_by_project_id=s.created_by_project_id,
+        installed_by_omnikrux=s.installed_by_omnikrux,
         used_by=used_by,
         health=health,
         created_at=s.created_at,

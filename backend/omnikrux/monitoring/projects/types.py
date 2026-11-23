@@ -132,9 +132,10 @@ class SourceDeleteReview:
 
 def review_token(review_without_token: dict) -> str:
     """A fingerprint of what a review shows: it changes whenever the review would. An empty
-    `dashboards` list stays out of it, so a review without dashboards keeps the fingerprint it
-    had before owners had dashboards."""
+    `dashboards`, `alert_rules` or `cluster_rules` list stays out of it, so a review without
+    them keeps the fingerprint it had before owners had dashboards and alert rules."""
     fields = dict(review_without_token)
-    if "dashboards" in fields and not fields["dashboards"]:
-        del fields["dashboards"]
+    for key in ("dashboards", "alert_rules", "cluster_rules"):
+        if key in fields and not fields[key]:
+            del fields[key]
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()

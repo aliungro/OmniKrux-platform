@@ -99,3 +99,5 @@ class SourceConfig:
     # The stored secrets can't be decrypted (the key changed): `secrets` is empty and the user
     # has to enter them again.
     secrets_unreadable: bool = False
+    # OmniKrux installed this tool itself (M5); only then may contact-point secrets go into it.
+    installed_by_omnikrux: bool = False
