@@ -7,6 +7,7 @@ import pytest
 
 from omnikrux.monitoring.sources import messages
 from omnikrux.monitoring.sources.connector import NO_OPERATOR
+from omnikrux.monitoring.sources.prometheus_operator import NOT_SERVED
 from omnikrux.monitoring.sources.discovery import (
     CLUSTER_GONE,
     KubeClusterProbe,
@@ -389,6 +390,25 @@ async def test_alerting_asks_the_cluster_for_the_operator(
     }
     fake_api.resources.append(
         FakeResource("monitoring.coreos.com", "v1", "prometheusrules", "PrometheusRule", True)
+    )
+    # The Operator is there, but no Prometheus resource runs this Service.
+    assert (await http.get(url)).json() == {
+        "omnikrux_engine": True,
+        "tool_engine": None,
+        "reason": NOT_SERVED.format(source=created["name"]),
+    }
+    fake_api.resources.append(
+        FakeResource("monitoring.coreos.com", "v1", "prometheuses", "Prometheus", True)
+    )
+    fake_api.objects["prometheuses.monitoring.coreos.com"][("monitoring", "kps")] = {
+        "metadata": {"name": "kps", "namespace": "monitoring"},
+        "spec": {"ruleSelector": {}},
+    }
+    fake_api.objects["services"][("monitoring", "prometheus-server")] = service(
+        "monitoring",
+        "prometheus-server",
+        ports=[{"name": "http", "port": 80}],
+        selector={"operator.prometheus.io/name": "kps"},
     )
     assert (await http.get(url)).json() == {
         "omnikrux_engine": True,

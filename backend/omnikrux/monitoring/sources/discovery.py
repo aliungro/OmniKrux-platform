@@ -49,6 +49,10 @@ Scheme = Literal["http", "https"]
 CLUSTER_GONE = "That cluster isn't connected to OmniKrux any more."
 LIST_ACTION = "list the cluster's services"
 PROBE_FAILED = "Couldn't check {name}. Try again."
+PROBE_FORBIDDEN = (
+    "Couldn't check {name}: its login isn't allowed to read the Prometheus Operator's "
+    "resources. Give it permission to read them, or run the rule in OmniKrux."
+)
 UNEXPECTED_LIST = (
     "The cluster answered the list of its services with something unexpected. Try again."
 )
@@ -356,19 +360,42 @@ class KubeClusterProbe(ClusterProbe):
             if exc.status == 404:
                 return False
             log.info("Couldn't read whether a cluster serves %s (HTTP %s)", plural, exc.status)
-            raise ProbeFailed(timed_out=False) from None
+            raise ProbeFailed(timed_out=False, forbidden=exc.status == 403) from None
         except (*KUBE_ERRORS, KeyError, OSError, ValueError, HttpProcessingError) as exc:
             log.info("Couldn't read whether a cluster serves %s (%s)", plural, type(exc).__name__)
             raise ProbeFailed(timed_out=isinstance(exc, TimeoutError)) from None
         return _lists(data, plural)
 
+    async def read(self, path: str) -> dict | None:
+        """The object at an API path; None when the cluster says it isn't there (404);
+        ProbeFailed when the cluster can't be asked (like `check`)."""
+        try:
+            async with (
+                asyncio.timeout(self._timeout),
+                self._connections.api(self._cluster_id) as api,
+            ):
+                data = await call_json(api, "GET", path, timeout=self._timeout)
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            log.info("Couldn't read a cluster object for the alerting check (HTTP %s)", exc.status)
+            raise ProbeFailed(timed_out=False, forbidden=exc.status == 403) from None
+        except (*KUBE_ERRORS, KeyError, OSError, ValueError, HttpProcessingError) as exc:
+            log.info(
+                "Couldn't read a cluster object for the alerting check (%s)", type(exc).__name__
+            )
+            raise ProbeFailed(timed_out=isinstance(exc, TimeoutError)) from None
+        return data if isinstance(data, dict) else None
+
 
 class ProbeFailed(Exception):
-    """The cluster couldn't be asked what it serves (`KubeClusterProbe.check`)."""
+    """The cluster couldn't be asked what it serves (`KubeClusterProbe.check`): it didn't answer
+    (`timed_out` when it took too long), or it refused the login (`forbidden`, HTTP 403)."""
 
-    def __init__(self, *, timed_out: bool) -> None:
+    def __init__(self, *, timed_out: bool, forbidden: bool = False) -> None:
         super().__init__("The cluster couldn't be asked what it serves.")
         self.timed_out = timed_out
+        self.forbidden = forbidden
 
 
 def _lists(data: object, plural: str) -> bool:

@@ -142,6 +142,7 @@ from omnikrux.monitoring.query.run import NOT_LINKED, QUERY_LENGTH, SOURCE_GONE
 from omnikrux.monitoring.query.series import MAX_QUERY_CHARS
 from omnikrux.monitoring.services import MonitoringServices
 from omnikrux.monitoring.sources.capability import CapabilityUnknown
+from omnikrux.monitoring.sources.prometheus_operator import NOT_SERVED, NOT_SERVED_OTHER
 from omnikrux.monitoring.sources.transport import SourceUnreachable
 from omnikrux.monitoring.sources.types import QUERYABLE_TYPES, NameTaken, SourceConfig
 
@@ -1716,6 +1717,10 @@ async def capabilities(
             reason: str | None = UNKNOWN_CAPABILITY.format(source=source.name, message=exc.message)
         else:
             tool, reason = capability.tool_engine, capability.reason
+            if reason == NOT_SERVED.format(source=source.name):
+                other = await _served_other(services, project, source.id)
+                if other is not None:
+                    reason = NOT_SERVED_OTHER.format(source=source.name, other=other)
         out.append(
             CapabilityOut(
                 project_id=project.id,
@@ -1727,6 +1732,27 @@ async def capabilities(
             )
         )
     return out
+
+
+async def _served_other(services, project, source_id: str) -> str | None:
+    """The name of another Prometheus the project links that the Prometheus Operator runs (so
+    a rule on it can run in Prometheus); None when there is none, or it can't be told now."""
+    for link in project.links:
+        if link.source_id == source_id:
+            continue
+        try:
+            other = await services.sources.get(link.source_id)
+        except KeyError:
+            continue
+        if other.type != "prometheus":
+            continue
+        try:
+            capability = await services.capabilities.get(other)
+        except CapabilityUnknown:
+            continue
+        if capability.tool_engine == "prometheus_rule":
+            return other.name
+    return None
 
 
 def _probe_rule(

@@ -30,7 +30,14 @@ from omnikrux.monitoring.sources.connector import (
     number_text,
     status_message,
 )
+from omnikrux.monitoring.sources.prometheus_operator import (
+    GROUP,
+    NOT_SERVED,
+    rule_labels,
+    serving_prometheus,
+)
 from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreachable
+from omnikrux.monitoring.sources.types import SourceConfig
 
 PROBE_SECONDS = 10.0
 QUERY_SECONDS = 30.0
@@ -188,13 +195,27 @@ class PrometheusConnector:
         return (await self._list(t, path, params))[:limit]
 
     async def alerting(
-        self, t: SourceTransport, *, cluster: ClusterProbe | None
+        self,
+        t: SourceTransport,
+        *,
+        cluster: ClusterProbe | None,
+        source: SourceConfig | None = None,
     ) -> AlertingCapability:
-        if cluster is not None and await cluster.serves(
-            "monitoring.coreos.com", "v1", "prometheusrules"
-        ):
+        """Rules run in the tool only when the cluster serves PrometheusRules and the source's
+        Service is run by a Prometheus resource that would load one (`serving_prometheus`, the
+        same answer the PrometheusRule review reads). ProbeFailed when the cluster can't say."""
+        if cluster is None or not await cluster.serves(GROUP, "v1", "prometheusrules"):
+            return AlertingCapability(True, None, NO_OPERATOR)
+        place = source.cluster if source is not None else None
+        if source is None or place is None:
             return AlertingCapability(True, "prometheus_rule", None)
-        return AlertingCapability(True, None, NO_OPERATOR)
+        prometheus = await serving_prometheus(cluster.read, place.namespace, place.service)
+        if prometheus is None:
+            return AlertingCapability(True, None, NOT_SERVED.format(source=source.name))
+        _, problem = await rule_labels(cluster.read, prometheus, place.namespace)
+        if problem is not None:
+            return AlertingCapability(True, None, problem)
+        return AlertingCapability(True, "prometheus_rule", None)
 
     async def _list(
         self, t: SourceTransport, path: str, params: list[tuple[str, str]]

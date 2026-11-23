@@ -178,7 +178,7 @@ class _Counting:
         self.calls = 0
         self.fail = False
 
-    async def alerting(self, t, *, cluster):
+    async def alerting(self, t, *, cluster, source=None):
         self.calls += 1
         if self.fail:
             raise SourceUnreachable("timeout", "It took too long.")

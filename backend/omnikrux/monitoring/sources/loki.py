@@ -30,6 +30,7 @@ from omnikrux.monitoring.sources.connector import (
     status_message,
 )
 from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreachable
+from omnikrux.monitoring.sources.types import SourceConfig
 
 PROBE_SECONDS = 10.0
 # What Loki's ruler answers (with a 404) to a list of rules when it holds none.
@@ -210,7 +211,11 @@ class LokiConnector:
         return (await self._list(t, path, params))[:limit]
 
     async def alerting(
-        self, t: SourceTransport, *, cluster: ClusterProbe | None
+        self,
+        t: SourceTransport,
+        *,
+        cluster: ClusterProbe | None,
+        source: SourceConfig | None = None,
     ) -> AlertingCapability:
         got = await t.request("GET", "/loki/api/v1/rules", timeout=PROBE_SECONDS)
         # A ruler that holds no rule yet answers 404 "no rule groups found", not 200: it is on.

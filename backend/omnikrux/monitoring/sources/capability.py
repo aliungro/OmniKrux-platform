@@ -19,7 +19,12 @@ from omnikrux.monitoring.sources.connector import (
     QueryRejected,
     UnknownSourceType,
 )
-from omnikrux.monitoring.sources.discovery import PROBE_FAILED, Discovery, ProbeFailed
+from omnikrux.monitoring.sources.discovery import (
+    PROBE_FAILED,
+    PROBE_FORBIDDEN,
+    Discovery,
+    ProbeFailed,
+)
 from omnikrux.monitoring.sources.transport import SourceUnreachable, TransportFactory
 from omnikrux.monitoring.sources.types import SourceConfig
 
@@ -42,14 +47,17 @@ class _Entry:
 
 
 class _Strict:
-    """A cluster probe whose `serves` raises `ProbeFailed` when the cluster can't be asked,
-    instead of answering "no"."""
+    """A cluster probe whose `serves` and `read` raise `ProbeFailed` when the cluster can't be
+    asked, instead of answering "no"."""
 
     def __init__(self, probe) -> None:
         self._probe = probe
 
     async def serves(self, group: str, version: str, plural: str) -> bool:
         return await self._probe.check(group, version, plural)
+
+    async def read(self, path: str) -> dict | None:
+        return await self._probe.read(path)
 
 
 class CapabilityCache:
@@ -97,11 +105,12 @@ class CapabilityCache:
                 probe = _Strict(self._discovery.probe(source.cluster.cluster_id))
         try:
             capability = await connector.alerting(
-                self._transports.for_source(source), cluster=probe
+                self._transports.for_source(source), cluster=probe, source=source
             )
         except ProbeFailed as exc:
             self._entries.pop(source.id, None)
-            message = PROBE_FAILED.format(name=cluster_name or "the cluster")
+            words = PROBE_FORBIDDEN if exc.forbidden else PROBE_FAILED
+            message = words.format(name=cluster_name or "the cluster")
             raise CapabilityUnknown(message, 504 if exc.timed_out else 502) from None
         except SourceUnreachable as exc:
             self._entries.pop(source.id, None)

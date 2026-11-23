@@ -12,7 +12,8 @@ never ask for it.
 The object is named once, when the target has none yet (`omnikrux-<slug>-<hash of the target
 id>`, `object_name`); afterwards the target's `tool_object` names it, so renaming a rule never
 makes a second object. It goes into the namespace of the Prometheus custom resource serving the
-source, labelled to meet that resource's `ruleSelector` (refused in words when it can't be met).
+source (`serving_prometheus`, the same answer the capability check reads), labelled to meet that
+resource's `ruleSelector` (refused in words when it can't be met).
 
 An apply first reads the rule again: when what OmniKrux would write now differs from what was
 reviewed, it is refused ("This rule changed since you reviewed it."). A write whose outcome isn't
@@ -62,6 +63,13 @@ from omnikrux.monitoring.alerts.store import (
     mark_unread,
 )
 from omnikrux.monitoring.models import AlertRuleRow, AlertTargetRow, lock_first, now
+from omnikrux.monitoring.sources.prometheus_operator import (
+    GROUP,
+    MANAGED_BY,
+    TARGET_LABEL,
+    rule_labels,
+    serving_prometheus,
+)
 from omnikrux.monitoring.sources.types import SourceConfig
 from omnikrux.resources.kinds import KindSpec, object_name_problem
 
@@ -70,14 +78,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-GROUP = "monitoring.coreos.com"
 KIND_KEY = f"prometheusrules.{GROUP}"
 API_VERSION = f"{GROUP}/v1"
-MANAGED_BY = "app.kubernetes.io/managed-by"
-TARGET_LABEL = "omnikrux.io/target"
-# The Service selector labels the Operator (and kube-prometheus-stack) put on a Prometheus's
-# pods, naming the Prometheus resource.
-SERVING_LABELS = ("operator.prometheus.io/name", "prometheus")
 MAX_SLUG = 40
 # The alert labels OmniKrux sets itself start with this (and `severity`); a channel can't set them.
 OWN_LABEL_PREFIX = "omnikrux_"
@@ -103,18 +105,6 @@ DELETE_LABEL = "Delete rule"
 CANT_TELL = (
     "OmniKrux can't tell which Prometheus in {namespace} answers as {service}. "
     "Run this rule in OmniKrux instead."
-)
-NO_RULE_SELECTOR = (
-    "This Prometheus doesn't load any PrometheusRule (its ruleSelector is empty). "
-    "Run this rule in OmniKrux instead."
-)
-UNMEETABLE = (
-    "This Prometheus selects rules with a pattern OmniKrux can't meet ({expression}). "
-    "Run this rule in OmniKrux instead."
-)
-NAMESPACE_UNMATCHED = (
-    "This Prometheus reads rules only from namespaces matching {selector}, and {namespace} "
-    "doesn't match."
 )
 NOTHING_CHANGES = "Nothing changes: the rule in the cluster already matches."
 NOT_OURS = (
@@ -258,70 +248,6 @@ def _words(seconds: int) -> str:
     if seconds % 60 == 0:
         return f"{seconds // 60} min"
     return f"{seconds} s"
-
-
-# -- selectors ---------------------------------------------------------------------------------
-
-
-def _expression_text(expr: dict) -> str:
-    key, op = str(expr.get("key", "")), str(expr.get("operator", ""))
-    values = expr.get("values") or []
-    if op in ("In", "NotIn"):
-        return f"{key} {op} ({', '.join(str(v) for v in values)})"
-    return f"{key} {op}"
-
-
-def selector_text(selector: dict) -> str:
-    """A label selector as kubectl writes one: `team=x, env In (a, b)`."""
-    parts = [f"{k}={v}" for k, v in (selector.get("matchLabels") or {}).items()]
-    parts += [_expression_text(e) for e in selector.get("matchExpressions") or []]
-    return ", ".join(parts)
-
-
-def labels_for(selector: dict) -> tuple[dict[str, str], str | None]:
-    """The labels that meet a `ruleSelector` (`matchLabels`; `In` with one value; `Exists`),
-    or the part OmniKrux can't meet, in words."""
-    labels = {str(k): str(v) for k, v in (selector.get("matchLabels") or {}).items()}
-    exists: list[str] = []
-    for expr in selector.get("matchExpressions") or []:
-        if not isinstance(expr, dict):
-            return {}, str(expr)
-        key, op = str(expr.get("key", "")), expr.get("operator")
-        values = expr.get("values") or []
-        if op == "In" and len(values) == 1 and labels.get(key, str(values[0])) == str(values[0]):
-            labels[key] = str(values[0])
-        elif op == "Exists" and key:
-            exists.append(key)
-        else:
-            return {}, _expression_text(expr)
-    for key in exists:
-        labels.setdefault(key, "true")
-    for key in (MANAGED_BY, TARGET_LABEL):
-        if key in labels:  # OmniKrux sets these itself
-            return {}, f"{key}={labels[key]}"
-    return labels, None
-
-
-def _matches(selector: dict, labels: dict) -> bool:
-    for k, v in (selector.get("matchLabels") or {}).items():
-        if labels.get(k) != v:
-            return False
-    for expr in selector.get("matchExpressions") or []:
-        if not isinstance(expr, dict):
-            return False
-        key, op = expr.get("key"), expr.get("operator")
-        values = [str(v) for v in expr.get("values") or []]
-        if op == "In" and not (key in labels and labels[key] in values):
-            return False
-        if op == "NotIn" and key in labels and labels[key] in values:
-            return False
-        if op == "Exists" and key not in labels:
-            return False
-        if op == "DoesNotExist" and key in labels:
-            return False
-        if op not in ("In", "NotIn", "Exists", "DoesNotExist"):
-            return False
-    return True
 
 
 # -- what a target needs -----------------------------------------------------------------------
@@ -538,30 +464,14 @@ class PrometheusRuleAction:
 
         if live is not None and not self._ours(live, record):
             return refused(NOT_OURS.format(namespace=target.namespace, name=target.name))
-        prometheus = await self._serving(api, ns, svc)
+        prometheus = await serving_prometheus(lambda path: _read(api, path), ns, svc)
         if prometheus is None:
             return refused(CANT_TELL.format(namespace=ns, service=svc))
-        prom_spec = prometheus.get("spec") or {}
-        selector = prom_spec.get("ruleSelector")
-        if not isinstance(selector, dict):
-            return refused(NO_RULE_SELECTOR)
-        labels, unmet = labels_for(selector)
-        if unmet is not None:
-            return refused(UNMEETABLE.format(expression=unmet))
-        ns_selector = prom_spec.get("ruleNamespaceSelector")
-        if isinstance(ns_selector, dict) and (
-            ns_selector.get("matchLabels") or ns_selector.get("matchExpressions")
-        ):
-            namespace = await call_json(
-                api, "GET", f"/api/v1/namespaces/{target.namespace}", timeout=REQUEST_TIMEOUT
-            )
-            ns_labels = (namespace.get("metadata") or {}).get("labels") or {}
-            if not _matches(ns_selector, ns_labels):
-                return refused(
-                    NAMESPACE_UNMATCHED.format(
-                        selector=selector_text(ns_selector), namespace=target.namespace
-                    )
-                )
+        labels, problem = await rule_labels(
+            lambda path: _read(api, path), prometheus, target.namespace or ""
+        )
+        if problem is not None:
+            return refused(problem)
         desired = desired_object(
             rule, record, namespace=target.namespace, name=target.name, labels=labels
         )
@@ -646,27 +556,6 @@ class PrometheusRuleAction:
     def _ours(live: dict, record: TargetRecord) -> bool:
         labels = (live.get("metadata") or {}).get("labels") or {}
         return labels.get(TARGET_LABEL) == record.id
-
-    async def _serving(self, api: ApiClient, namespace: str | None, service: str | None):
-        """The Prometheus resource behind the source's Service: the one its selector names, else
-        the only one in the namespace; None when OmniKrux can't tell."""
-        if not namespace or not service:
-            return None
-        found = await _read(api, f"/api/v1/namespaces/{namespace}/services/{service}")
-        if found is None:
-            return None
-        selector = (found.get("spec") or {}).get("selector") or {}
-        named = next((selector[k] for k in SERVING_LABELS if selector.get(k)), None)
-        listed = await call_json(
-            api,
-            "GET",
-            f"/apis/{GROUP}/v1/namespaces/{namespace}/prometheuses",
-            timeout=REQUEST_TIMEOUT,
-        )
-        items = [i for i in listed.get("items") or [] if isinstance(i, dict)]
-        if named is not None:
-            return next((i for i in items if (i.get("metadata") or {}).get("name") == named), None)
-        return items[0] if len(items) == 1 else None
 
     async def apply(
         self, ctx: ApplyContext, target: Target, spec: KindSpec, planned: Planned

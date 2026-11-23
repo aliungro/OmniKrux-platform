@@ -26,7 +26,7 @@ from omnikrux.monitoring.sources.transport import (
     TransportResponse,
     scrub_text,
 )
-from omnikrux.monitoring.sources.types import SourceType
+from omnikrux.monitoring.sources.types import SourceConfig, SourceType
 
 QueryLanguage = Literal["promql", "logql", "none"]
 QueryRejectedCode = Literal["bad_query", "tool_error", "unauthorized"]
@@ -132,6 +132,10 @@ class AlertingCapability:
 class ClusterProbe(Protocol):
     async def serves(self, group: str, version: str, plural: str) -> bool: ...
 
+    async def read(self, path: str) -> dict | None:
+        """The object at an API path; None when the cluster says it isn't there."""
+        ...
+
 
 @dataclass(frozen=True)
 class ConnectorQuery:
@@ -205,8 +209,15 @@ class Connector(Protocol):
         ...
 
     async def alerting(
-        self, t: SourceTransport, *, cluster: ClusterProbe | None
-    ) -> AlertingCapability: ...
+        self,
+        t: SourceTransport,
+        *,
+        cluster: ClusterProbe | None,
+        source: SourceConfig | None = None,
+    ) -> AlertingCapability:
+        """What the tool can run. `cluster` asks the source's cluster (None when it isn't reached
+        through one); `source` is the source asked about."""
+        ...
 
 
 class ConnectorRegistry:

@@ -12,16 +12,18 @@ from omnikrux.monitoring.alerts.tool import prometheus_rule
 from omnikrux.monitoring.alerts.tool.prometheus_rule import (
     CANT_TELL,
     KIND_KEY,
-    NAMESPACE_UNMATCHED,
-    NO_RULE_SELECTOR,
     STALE,
     UNKNOWN_OUTCOME,
-    UNMEETABLE,
-    labels_for,
     object_name,
 )
 from omnikrux.monitoring.models import now
 from omnikrux.monitoring.sources.connector import AlertingCapability
+from omnikrux.monitoring.sources.prometheus_operator import (
+    NAMESPACE_UNMATCHED,
+    NO_RULE_SELECTOR,
+    UNMEETABLE,
+    labels_for,
+)
 from tests.actions.clusters import kubeconfig_named
 from tests.fakekube import FORBIDDEN, prometheus_operator, service
 
