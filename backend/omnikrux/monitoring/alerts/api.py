@@ -71,7 +71,7 @@ from omnikrux.monitoring.alerts.sync import (
 )
 from omnikrux.monitoring.alerts.sync import change_out as _change_out
 from omnikrux.monitoring.alerts.tool.channels import ChannelsUnreadable, read_channels
-from omnikrux.monitoring.alerts.tool.prometheus_rule import wanted_mode
+from omnikrux.monitoring.alerts.tool.prometheus_rule import TransientRefusal, wanted_mode
 from omnikrux.monitoring.alerts.types import (
     ALERT_PANEL_TYPES,
     EVERY_CHOICES,
@@ -1301,6 +1301,8 @@ async def sync_target(target_id: str, request: Request) -> SyncReviewOut | SyncD
         plan = await services.prometheus_rules.review(
             request.app.state, actor=actor_of(request), target=target, rule=rule, mode=mode
         )
+    except TransientRefusal:
+        raise  # a passing reason: the target stays as it was, and the answer says try again
     except HTTPException as exc:
         detail = exc.detail
         message = detail.get("message") if isinstance(detail, dict) else str(detail)

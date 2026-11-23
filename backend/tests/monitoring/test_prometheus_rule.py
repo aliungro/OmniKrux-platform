@@ -4,7 +4,9 @@ applied through the action pipeline, against a fake Kubernetes API running the O
 from dataclasses import dataclass
 
 import pytest
+from kubernetes_asyncio.client.exceptions import ApiException
 
+from omnikrux.actions.pipeline import MAX_OPEN_DELETE_PLANS, OPEN_DELETES_LIMIT
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.monitoring.alerts.tool import prometheus_rule
 from omnikrux.monitoring.alerts.tool.prometheus_rule import (
@@ -13,6 +15,7 @@ from omnikrux.monitoring.alerts.tool.prometheus_rule import (
     NAMESPACE_UNMATCHED,
     NO_RULE_SELECTOR,
     STALE,
+    UNKNOWN_OUTCOME,
     UNMEETABLE,
     labels_for,
     object_name,
@@ -368,8 +371,15 @@ async def test_a_second_review_of_one_change_conflicts(monitoring_app, fake_api,
     assert again.json()["kind"] == "done" and again.json()["target"]["tool_state"] == "in_sync"
 
 
+def _gateway_timeout() -> ApiException:
+    exc = ApiException(status=504, reason="Gateway Timeout")
+    exc.body = '{"kind":"Status","message":"the server was unable to return a response in time"}'
+    return exc
+
+
+@pytest.mark.parametrize("lost_answer", [TimeoutError, _gateway_timeout], ids=["no answer", "504"])
 async def test_an_unanswered_write_still_records_the_object(
-    monitoring_app, fake_api, tool_rule, monkeypatch
+    monitoring_app, fake_api, tool_rule, monkeypatch, lost_answer
 ):
     http, app = monitoring_app
     plan = await review(http, tool_rule)
@@ -378,14 +388,19 @@ async def test_an_unanswered_write_still_records_the_object(
     async def lost(api, method, path, **kwargs):
         if method == "POST":
             await real(api, method, path, **kwargs)
-            raise TimeoutError
+            raise lost_answer()
         return await real(api, method, path, **kwargs)
 
     monkeypatch.setattr(prometheus_rule, "call_json", lost)
     out = await apply(http, plan)
     assert out.status_code == 502, out.text
     [stored_target] = await app.state.monitoring.alerts.targets(rule_id=tool_rule.rule_id)
-    assert stored_target.tool_state == "failed"
+    # Not a known failure: the outcome is unknown, so the target is marked for a check.
+    assert (stored_target.tool_state, stored_target.tool_message) == (
+        "needs_review",
+        UNKNOWN_OUTCOME,
+    )
+    assert [h["kind"] for h in await history(http, tool_rule)] == ["apply_failed"]
     assert stored_target.tool_object is not None
     assert stored_target.tool_object.name == plan["target"]["name"]
     assert stored_target.applied_version is not None  # it counts as running in the cluster
@@ -395,6 +410,121 @@ async def test_an_unanswered_write_still_records_the_object(
     again = await sync(http, tool_rule)
     assert again.status_code == 200 and again.json()["kind"] == "done"
     assert (await target(http, tool_rule))["tool_state"] == "in_sync"
+
+
+async def test_a_save_during_the_write_needs_a_review(
+    monitoring_app, fake_api, tool_rule, monkeypatch
+):
+    http, _ = monitoring_app
+    plan = await review(http, tool_rule)
+    real = prometheus_rule.call_json
+    saved: list[dict] = []
+
+    async def save_meanwhile(api, method, path, **kwargs):
+        answer = await real(api, method, path, **kwargs)
+        if method == "POST":  # the object is written; the rule is saved before the apply ends
+            saved.append(
+                await save_rule(
+                    http,
+                    tool_rule,
+                    condition={"op": "above", "threshold": 0.7, "for": "5m", "every": "1m"},
+                )
+            )
+        return answer
+
+    monkeypatch.setattr(prometheus_rule, "call_json", save_meanwhile)
+    out = await apply(http, plan)
+    monkeypatch.setattr(prometheus_rule, "call_json", real)
+    assert out.status_code == 200, out.text
+    assert len(saved) == 1
+    # The cluster holds the reviewed version: recorded, but never "in sync" with the newer one.
+    shown = await target(http, tool_rule)
+    assert shown["tool_state"] == "needs_review" and shown["state"] == "not_applied"
+    again = await review(http, tool_rule)
+    assert again["action"] == "edit" and "> 0.7" in again["diff"]["after"]
+    assert (await apply(http, again)).status_code == 200
+    assert (await target(http, tool_rule))["tool_state"] == "in_sync"
+
+
+async def test_channel_labels_never_override_omnikrux_labels(monitoring_app, fake_api, tool_rule):
+    http, _ = monitoring_app
+    await save_rule(
+        http,
+        tool_rule,
+        channel={
+            "receiver": "ops",
+            "labels": {
+                "severity": "critical",
+                "omnikrux_rule": "someone-else",
+                "omnikrux_project": "elsewhere",
+                "omnikrux_extra": "x",
+                "team": "ops",
+            },
+        },
+    )
+    plan = await review(http, tool_rule)
+    assert (await apply(http, plan)).status_code == 200
+    [rule] = stored(fake_api, plan["target"]["name"])["spec"]["groups"][0]["rules"]
+    assert rule["labels"] == {
+        "team": "ops",
+        "severity": "warning",
+        "omnikrux_rule": tool_rule.rule_id,
+        "omnikrux_project": tool_rule.project_id,
+    }
+
+
+async def test_transient_refusals_leave_the_target(
+    monitoring_app, fake_api, tool_rule, monkeypatch
+):
+    http, app = monitoring_app
+    handler = app.state.monitoring.prometheus_rules
+    name = object_name("API latency high", tool_rule.target_id)
+
+    # The object seems there at first, then isn't when the plan reads it: try again.
+    async def seen(state, where):
+        return True
+
+    monkeypatch.setattr(handler, "_exists", seen)
+    out = await sync(http, tool_rule)
+    assert out.status_code == 409
+    assert out.json() == {
+        "detail": f"PrometheusRule {name} changed while OmniKrux read it. Try again."
+    }
+    shown = await target(http, tool_rule)
+    assert (shown["tool_state"], shown["tool_message"]) == ("needs_review", None)
+    monkeypatch.undo()
+
+    # Too many open delete reviews: the delete waits, the target is as it was.
+    created = await review(http, tool_rule)
+    assert (await apply(http, created)).status_code == 200
+    token = (await http.get(f"{RULES}/{tool_rule.rule_id}/delete-review")).json()["token"]
+    assert (
+        await http.delete(f"{RULES}/{tool_rule.rule_id}", params={"token": token})
+    ).status_code == 200
+    plans = app.state.plans
+    monkeypatch.setattr(plans, "open_count", lambda actor, action: MAX_OPEN_DELETE_PLANS)
+    out = await sync(http, tool_rule)
+    assert (out.status_code, out.json()["detail"]) == (429, OPEN_DELETES_LIMIT)
+    [left] = await app.state.monitoring.alerts.targets(rule_id=tool_rule.rule_id)
+    assert (left.tool_state, left.tool_message, left.leaving) == ("needs_review", None, True)
+    monkeypatch.undo()
+    plan = await review(http, tool_rule)
+    assert plan["action"] == "delete"
+
+
+async def test_a_delete_of_an_object_already_gone_says_so(monitoring_app, fake_api, tool_rule):
+    http, _ = monitoring_app
+    created = await review(http, tool_rule)
+    assert (await apply(http, created)).status_code == 200
+    name = created["target"]["name"]
+    token = (await http.get(f"{RULES}/{tool_rule.rule_id}/delete-review")).json()["token"]
+    await http.delete(f"{RULES}/{tool_rule.rule_id}", params={"token": token})
+    plan = await review(http, tool_rule)
+    del fake_api.objects[KIND_KEY][("monitoring", name)]  # someone removed it meanwhile
+    out = await apply(http, plan)
+    assert out.status_code == 200, out.text
+    assert out.json()["message"] == f"PrometheusRule monitoring/{name} was already gone."
+    assert (await http.get(f"{RULES}/{tool_rule.rule_id}")).status_code == 404
 
 
 async def test_blocked_when_the_selector_cannot_be_met(monitoring_app, fake_api, tool_rule):

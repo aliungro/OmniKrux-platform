@@ -60,7 +60,7 @@ from omnikrux.monitoring.alerts.store import (
     UnknownRule,
     UnknownTarget,
 )
-from omnikrux.monitoring.models import now
+from omnikrux.monitoring.models import AlertRuleRow, AlertTargetRow, lock_first, now
 from omnikrux.monitoring.sources.types import SourceConfig
 from omnikrux.resources.kinds import KindSpec, object_name_problem
 
@@ -78,6 +78,8 @@ TARGET_LABEL = "omnikrux.io/target"
 # pods, naming the Prometheus resource.
 SERVING_LABELS = ("operator.prometheus.io/name", "prometheus")
 MAX_SLUG = 40
+# The alert labels OmniKrux sets itself start with this (and `severity`); a channel can't set them.
+OWN_LABEL_PREFIX = "omnikrux_"
 
 Mode = Literal["upsert", "delete"]
 
@@ -116,19 +118,25 @@ NAMESPACE_UNMATCHED = (
 NOTHING_CHANGES = "Nothing changes: the rule in the cluster already matches."
 NOT_OURS = (
     "PrometheusRule {namespace}/{name} wasn't made by OmniKrux for this rule, so OmniKrux won't "
-    "change or delete it."
+    "change or delete it. Remove or rename that object with kubectl, then review again."
 )
 STALE = "This rule changed since you reviewed it. Review it again."
 RACED = "PrometheusRule {name} changed while OmniKrux read it. Try again."
-TARGET_GONE = "That alert rule no longer runs there."
 NOT_IN_CLUSTER = (
     "This rule's source isn't reached through a cluster, so it can't run as a PrometheusRule. "
     "Run it in OmniKrux instead."
 )
-SOURCE_GONE = "This rule's source no longer exists, so OmniKrux can't tell where its Prometheus is."
+SOURCE_GONE = (
+    "This rule's source no longer exists, so OmniKrux can't tell where its Prometheus is. "
+    "Link a Prometheus source to the project again, or run the rule in OmniKrux."
+)
+UNKNOWN_OUTCOME = (
+    "The cluster didn't say whether it made this change. Review the rule to check what is there."
+)
 CREATED = "Created PrometheusRule {namespace}/{name}."
 UPDATED = "Updated PrometheusRule {namespace}/{name}."
 DELETED = "Deleted PrometheusRule {namespace}/{name}."
+ALREADY_GONE = "PrometheusRule {namespace}/{name} was already gone."
 DEFAULT_SUMMARY = "{name} is {op} {threshold}"
 
 
@@ -179,9 +187,17 @@ def desired_object(
     labels carry the severity, the rule and the project (by id, which a rename doesn't change)
     and the channel's labels."""
     cond = rule.condition
-    alert_labels: dict[str, str] = {"severity": rule.severity}
+    # The channel's labels first; OmniKrux's own (the severity and every `omnikrux_*`) win.
+    alert_labels: dict[str, str] = {}
     if rule.channel is not None:
-        alert_labels.update({str(k): str(v) for k, v in rule.channel.labels.items()})
+        alert_labels.update(
+            {
+                str(k): str(v)
+                for k, v in rule.channel.labels.items()
+                if not str(k).startswith(OWN_LABEL_PREFIX)
+            }
+        )
+    alert_labels["severity"] = rule.severity
     alert_labels["omnikrux_rule"] = rule.id
     alert_labels["omnikrux_project"] = target.project_id
     return {
@@ -329,6 +345,11 @@ class Where:
     source_service: str | None
 
 
+class TransientRefusal(HTTPException):
+    """A review refused for a passing reason (too many open reviews, or the object or the rule
+    moved while it was read): the target stays as it was, and trying again works."""
+
+
 def _object_path(namespace: str, name: str) -> str:
     return f"/apis/{GROUP}/v1/namespaces/{namespace}/prometheusrules/{name}"
 
@@ -407,39 +428,47 @@ class PrometheusRuleAction:
             raise HTTPException(status_code=422, detail=problem)
         exists = await self._exists(state, where)
         if mode == "delete" and exists is False:
-            await self.removed(target, where, applied=None)
+            await self.removed(target, where, already_gone=True)
             return None
         if mode == "delete":
             action = "delete"
         else:
             known = exists if exists is not None else target.tool_object is not None
             action = "edit" if known else "create"
-        plan = await make_plan(
-            state,
-            actor=actor,
-            action=action,
-            handler=self,
-            target=Target(
-                cluster_id=where.cluster_id,
-                kind_key=KIND_KEY,
-                namespace=where.namespace,
-                name=where.name,
-            ),
-            params={
-                "target_id": target.id,
-                "mode": mode,
-                "rule_version": rule.version,
-                "source_namespace": where.source_namespace,
-                "source_service": where.source_service,
-                "exists": None if mode == "delete" else action == "edit",
-            },
-            limit=MAX_OPEN_DELETE_PLANS if action == "delete" else None,
-        )
+        try:
+            plan = await make_plan(
+                state,
+                actor=actor,
+                action=action,
+                handler=self,
+                target=Target(
+                    cluster_id=where.cluster_id,
+                    kind_key=KIND_KEY,
+                    namespace=where.namespace,
+                    name=where.name,
+                ),
+                params={
+                    "target_id": target.id,
+                    "mode": mode,
+                    "rule_version": rule.version,
+                    "source_namespace": where.source_namespace,
+                    "source_service": where.source_service,
+                    "exists": None if mode == "delete" else action == "edit",
+                },
+                limit=MAX_OPEN_DELETE_PLANS if action == "delete" else None,
+            )
+        except HTTPException as exc:
+            # Too many open reviews, or the object or rule moved while it was read: nothing is
+            # wrong with the rule, and trying again works.
+            if exc.status_code == 429 or exc.detail in (RACED.format(name=where.name), STALE):
+                raise TransientRefusal(exc.status_code, exc.detail) from exc
+            raise
         stored = state.plans.peek(plan.plan_id)
         if stored is not None and stored.planned.state.get("unchanged"):
             state.plans.discard(plan.plan_id, actor)
-            await self.mark_in_sync(target, rule, where)
-            return None
+            if await self._settle(target, rule.version, where):
+                return None
+            raise TransientRefusal(409, STALE)  # the rule changed while it was read
         return plan
 
     async def _exists(self, state, where: Where) -> bool | None:
@@ -656,6 +685,7 @@ class PrometheusRuleAction:
         )
         action = "delete" if mode == "delete" else ("edit" if state["exists"] else "create")
         path = spec.object_path(target.namespace, target.name)
+        gone_already = False
         try:
             if mode == "delete":
                 body = {"preconditions": {"uid": state["uid"]}}
@@ -664,6 +694,7 @@ class PrometheusRuleAction:
                 except ApiException as exc:
                     if exc.status != 404:  # gone already: that is what was asked
                         raise
+                    gone_already = True
             elif state["exists"]:
                 body = copy.deepcopy(state["body"])
                 body["metadata"]["resourceVersion"] = state["resourceVersion"]
@@ -682,19 +713,15 @@ class PrometheusRuleAction:
             )
             raise
         if mode == "delete":
-            message = DELETED.format(namespace=target.namespace, name=target.name)
-            await self.removed(record, where, applied=message)
-            return Applied(message)
+            await self.removed(record, where, already_gone=gone_already)
+            template = ALREADY_GONE if gone_already else DELETED
+            return Applied(template.format(namespace=target.namespace, name=target.name))
         template = UPDATED if state["exists"] else CREATED
         message = template.format(namespace=target.namespace, name=target.name)
         try:
-            await self._services.alerts.set_tool(
-                record.id,
-                tool_state="in_sync",
-                tool_message=None,
-                tool_object=self._object(where),
-                applied_version=rule.version,
-            )
+            # The rule may have been saved while the cluster wrote: then what is there is the
+            # reviewed version, and the target needs a review of the newer one.
+            await self._settle(record, rule.version, where)
             await self._history(record, "applied", message)
         except UnknownTarget:
             log.warning("Alert target %s went while its PrometheusRule was applied", record.id)
@@ -712,25 +739,47 @@ class PrometheusRuleAction:
             name=where.name,
         )
 
-    async def mark_in_sync(self, target: TargetRecord, rule: RuleRecord, where: Where) -> None:
-        """The object in the cluster already is what OmniKrux would write: the target is in
-        sync (nothing is written to the cluster)."""
-        await self._services.alerts.set_tool(
-            target.id,
-            tool_state="in_sync",
-            tool_message=None,
-            tool_object=self._object(where),
-            applied_version=rule.version,
-        )
+    async def _settle(self, target: TargetRecord, rule_version: int, where: Where) -> bool:
+        """The cluster holds the object for `rule_version` of the rule: record it on the target
+        and say whether the target is in sync. In one transaction that holds the write lock, so a
+        save of the rule either landed before (seen here: the target needs a review of the newer
+        version) or lands after (and its own hand-off marks the target for review). The target
+        is in sync only while the rule is still at that version and the target still runs in
+        Prometheus with the same rule text. UnknownTarget."""
+        alerts = self._services.alerts
+        async with self._services.sessionmaker.begin() as session:
+            await lock_first(session)
+            rule_row = await session.get(AlertRuleRow, target.rule_id)
+            row = await session.get(AlertTargetRow, target.id)
+            if row is None:
+                raise UnknownTarget(target.id)
+            same = (
+                rule_row is not None
+                and rule_row.deleted_at is None
+                and rule_row.version == rule_version
+                and not row.leaving
+                and row.engine == "tool"
+                and row.tool_kind == "prometheus_rule"
+                and row.rule_text == target.rule_text
+            )
+            await alerts.set_tool(
+                target.id,
+                tool_state="in_sync" if same else "needs_review",
+                tool_message=None,
+                tool_object=self._object(where),
+                applied_version=rule_version,
+                session=session,
+            )
+        return same
 
-    async def removed(self, target: TargetRecord, where: Where, *, applied: str | None) -> None:
-        """The target's PrometheusRule is gone: a leaving target goes (and a deleted rule left
-        without targets with it); one that now runs in OmniKrux forgets its object."""
+    async def removed(self, target: TargetRecord, where: Where, *, already_gone: bool) -> None:
+        """The target's PrometheusRule is gone (`already_gone`: before OmniKrux deleted it): a
+        leaving target goes (and a deleted rule left without targets with it); one that now runs
+        in OmniKrux forgets its object."""
+        template = ALREADY_GONE if already_gone else DELETED
         try:
             await self._history(
-                target,
-                "removed",
-                applied or DELETED.format(namespace=where.namespace, name=where.name),
+                target, "removed", template.format(namespace=where.namespace, name=where.name)
             )
             if target.leaving:
                 await self._services.alert_sync.forget_target(target)
@@ -773,23 +822,30 @@ class PrometheusRuleAction:
     ) -> None:
         """The apply failed: the target reads "failed" with the pipeline's words, and the
         history says so; when the object changed in the cluster since the review (a conflict),
-        it needs a review again instead. When the cluster may have made the change anyway (it
-        didn't answer), the object is recorded too, so it is never forgotten in the cluster."""
+        it needs a review again instead. When the outcome isn't known (no answer, a timeout, a
+        cancel, or a 5xx: the API server may have committed the write anyway), the object is
+        recorded as possibly applied, so it is never forgotten in the cluster, and the target
+        needs a review, which reads what is there."""
         if isinstance(exc, Exception):
             message = str(_failure(exc, action, spec, target).detail)
         else:
             message = CANCELLED
-        unknown = not isinstance(exc, ApiException | ActionError)
+        if isinstance(exc, ApiException):
+            unknown = exc.status is None or exc.status >= 500
+        else:
+            unknown = not isinstance(exc, ActionError)
         extra: dict = {}
         if unknown and state["mode"] == "upsert":
             extra = {"tool_object": self._object(where), "applied_version": rule.version}
-        conflict = is_conflict(exc)
+        if is_conflict(exc):
+            tool_state, tool_message = "needs_review", None
+        elif unknown:
+            tool_state, tool_message = "needs_review", UNKNOWN_OUTCOME
+        else:
+            tool_state, tool_message = "failed", message
         try:
             await self._services.alerts.set_tool(
-                record.id,
-                tool_state="needs_review" if conflict else "failed",
-                tool_message=None if conflict else message,
-                **extra,
+                record.id, tool_state=tool_state, tool_message=tool_message, **extra
             )
             await self._history(record, "apply_failed", message)
         except UnknownTarget:
