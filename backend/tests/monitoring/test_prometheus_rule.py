@@ -20,6 +20,7 @@ from omnikrux.monitoring.alerts.tool.prometheus_rule import (
     labels_for,
     object_name,
 )
+from omnikrux.monitoring.models import now
 from omnikrux.monitoring.sources.connector import AlertingCapability
 from tests.actions.clusters import kubeconfig_named
 from tests.fakekube import FORBIDDEN, prometheus_operator, service
@@ -148,8 +149,10 @@ async def save_rule(http, tool_rule: ToolRule, **over) -> dict:
     return r.json()
 
 
-async def test_review_create_and_apply(monitoring_app, kube_cluster, fake_api, tool_rule):
-    http, _ = monitoring_app
+async def test_review_create_and_apply(
+    monitoring_app, kube_cluster, fake_api, tool_rule, fake_prometheus
+):
+    http, app = monitoring_app
     plan = await review(http, tool_rule)
     name = plan["target"]["name"]
     assert name == object_name("API latency high", tool_rule.target_id)
@@ -199,6 +202,26 @@ async def test_review_create_and_apply(monitoring_app, kube_cluster, fake_api, t
         "omnikrux_rule": tool_rule.rule_id,
     }
 
+    shown = await target(http, tool_rule)
+    # Applied, but not read back from Prometheus yet: "waiting", never "OK" (OmniKrux's checks
+    # are off in these tests, so nothing reads it until the reader is called).
+    assert shown["tool_state"] == "in_sync" and shown["state"] == "waiting"
+    assert shown["message"] == "Not checked yet: OmniKrux's checks are off."
+    fake_prometheus.rule_groups = [
+        {
+            "name": f"omnikrux-{tool_rule.target_id}",
+            "rules": [
+                {
+                    "type": "alerting",
+                    "state": "inactive",
+                    "health": "ok",
+                    "labels": rule["labels"],
+                    "alerts": [],
+                }
+            ],
+        }
+    ]
+    await app.state.monitoring.tool_state.refresh(now())
     shown = await target(http, tool_rule)
     assert shown["tool_state"] == "in_sync" and shown["state"] == "ok"
     rec = (await http.get("/api/audit")).json()["records"][0]

@@ -66,6 +66,10 @@ HISTORY_PER_TARGET = 500
 HISTORY_TOTAL = 20_000
 DELIVERIES_TOTAL = 5000
 
+# What a target that runs in a tool says until the tool's state is first read: never "OK".
+LOADING = "Loading in {tool}…"
+TOOL_WORDS = {"prometheus_rule": "Prometheus", "loki_ruler": "Loki"}
+
 RULE_CHANGED = (
     "This rule was changed somewhere else since you opened it (version {current}). Open it again."
 )
@@ -425,6 +429,21 @@ def _refs(rows: Sequence[tuple[str, str]]) -> tuple[RuleRef, ...]:
     )
 
 
+def loading_copy(tool_kind: str | None) -> str:
+    return LOADING.format(tool=TOOL_WORDS.get(tool_kind or "", "the tool"))
+
+
+def mark_unread(row: AlertTargetRow, moment: datetime) -> None:
+    """A target that runs in a tool and whose state was never read from it is "waiting" with
+    `Loading in {tool}…`, never "OK" (`put_targets`, and both tools' apply)."""
+    if row.engine != "tool" or row.last_eval_at is not None:
+        return
+    if row.state != "waiting":
+        row.state = "waiting"
+        row.state_since = moment
+    row.message = loading_copy(row.tool_kind)
+
+
 async def _rule_row(session: AsyncSession, id: str) -> AlertRuleRow:
     row = await session.get(AlertRuleRow, id)
     if row is None:
@@ -706,6 +725,7 @@ class AlertStore:
                         created_at=moment,
                         updated_at=moment,
                     )
+                    mark_unread(row, moment)
                     s.add(row)
                     by_project[spec.project_id] = row
                     added.append(row.id)
@@ -720,6 +740,7 @@ class AlertStore:
                         restarted.append(row.id)
                     for key, value in values.items():
                         setattr(row, key, value)
+                    mark_unread(row, moment)
                     row.leaving = False
                     row.next_eval_at = None
                     row.updated_at = moment

@@ -3,10 +3,12 @@ and the project's Alertmanager: honest when the tool can't be read, and each tar
 only its own group, rule and project."""
 
 import asyncio
+import time
 from datetime import timedelta
 
 from omnikrux.monitoring.alerts.engine import AlertEngine
 from omnikrux.monitoring.alerts.store import HistoryRecord, ToolObject
+from omnikrux.monitoring.alerts.tool import state_reader
 from omnikrux.monitoring.models import now
 from tests.monitoring.alert_env import until
 from tests.monitoring.test_loki_ruler import loki_body
@@ -17,10 +19,10 @@ RULES = f"{API}/alerts/rules"
 MIN = timedelta(minutes=1)
 
 
-async def prometheus_target(http, app, shop) -> tuple[dict, dict]:
+async def prometheus_target(http, app, shop, **over) -> tuple[dict, dict]:
     """A rule that runs in Prometheus, applied (as Task 10 records it) a moment ago."""
     as_tool(app)
-    rule = (await add_rule(http, rule_body(shop.project_id, engine="tool")))["rule"]
+    rule = (await add_rule(http, rule_body(shop.project_id, engine="tool", **over)))["rule"]
     [target] = rule["targets"]
     alerts = app.state.monitoring.alerts
     await alerts.set_tool(
@@ -130,6 +132,17 @@ async def test_prometheus_state_comes_from_the_rules_api(
     _, shown_target = await shown(http, rule["id"])
     assert (shown_target["state"], shown_target["message"]) == ("error", "bad expr")
 
+    # Loaded but never evaluated: still waiting, never "OK".
+    fake_prometheus.rule_groups = [
+        group(target["id"], rule, pid, "inactive", [], health="unknown", lastError="")
+    ]
+    await reader.refresh(moment + 4 * MIN)
+    _, shown_target = await shown(http, rule["id"])
+    assert (shown_target["state"], shown_target["message"]) == (
+        "waiting",
+        "Loading in Prometheus…",
+    )
+
 
 async def test_loading_then_not_loaded(monitoring_app, linked_project, fake_prometheus):
     http, app = monitoring_app
@@ -176,6 +189,19 @@ async def test_loki_state_comes_from_the_ruler(monitoring_app, linked_project_wi
     [instance] = shown_target["instances"]
     assert instance["state"] == "pending" and instance["value"] == 12.0
     assert any(r.path == "/prometheus/api/v1/rules" for r in fake_loki.requests)
+
+    # Inside the target's own group, a rule or an alert labelled for another rule or project is
+    # never read as this target's.
+    own = group(target["id"], rule, shop.project_id, "inactive", [])
+    foreign_rule = dict(rule, id="another-rule")
+    stranger = group(target["id"], foreign_rule, shop.project_id, "firing", [])["rules"][0]
+    stranger["alerts"] = [alert(own_labels(foreign_rule, shop.project_id))]
+    own["rules"][0]["alerts"] = [alert(own_labels(rule, "another-project", app="api"))]
+    own["rules"].append(stranger)
+    fake_loki.rule_states = [own]
+    await reader.refresh(applied_at + 13 * MIN)
+    _, shown_target = await shown(http, rule["id"])
+    assert shown_target["state"] == "ok" and shown_target["instances"] == []
 
 
 async def test_unreadable_tool_is_cant_check(monitoring_app, linked_project, fake_prometheus):
@@ -239,8 +265,9 @@ async def test_alertmanager_marks_silenced(
     silenced = {i["labels"]["route"]: i["silenced"] for i in shown_target["instances"]}
     assert silenced == {"/a": True, "/b": False}
     [asked] = [r for r in fake_alertmanager.requests if r.path == "/api/v2/alerts"]
+    # One read for the project's rules; each target keeps only its own rule's alerts.
     assert sorted(asked.params["filter"]) == sorted(
-        [f'omnikrux_rule="{rule["id"]}"', f'omnikrux_project="{pid}"']
+        ['omnikrux_rule=~".+"', f'omnikrux_project=~"{pid}"']
     )
 
     # An Alertmanager that can't be read leaves the marks as they were.
@@ -274,3 +301,35 @@ async def test_the_engine_reads_the_tools_only_when_it_runs(monitoring_app):
         assert len(asked) == 1  # every 30 s, not every tick
     finally:
         await on.stop()
+
+
+async def test_one_dead_alertmanager_costs_one_timeout_per_refresh(
+    monitoring_app, linked_project, fake_prometheus, fake_alertmanager, monkeypatch
+):
+    http, app = monitoring_app
+    reader = app.state.monitoring.tool_state
+    pid = linked_project.project_id
+    am = await http.post(
+        f"{API}/sources",
+        json={"type": "alertmanager", "reach": "url", "url": fake_alertmanager.url, "name": "AM"},
+    )
+    assert am.status_code == 201, am.text
+    linked = await http.put(f"{API}/projects/{pid}/sources/{am.json()['id']}", json={"filter": ""})
+    assert linked.status_code == 200, linked.text
+    made = [await prometheus_target(http, app, linked_project, name=f"Rule {n}") for n in range(5)]
+    fake_prometheus.rule_groups = [
+        group(target["id"], rule, pid, "firing", [alert(own_labels(rule, pid, route="/a"))])
+        for rule, target in made
+    ]
+    monkeypatch.setattr(state_reader, "READ_SECONDS", 0.5)
+    fake_alertmanager.mode = "hang"  # never answers
+    started = time.monotonic()
+    await reader.refresh(now())
+    # One read of the Alertmanager for all five rules, bounded by one timeout.
+    assert time.monotonic() - started < 2.0
+    assert len([r for r in fake_alertmanager.requests if r.path == "/api/v2/alerts"]) == 1
+    for rule, _ in made:
+        _, shown_target = await shown(http, rule["id"])
+        assert shown_target["state"] == "firing"
+        assert [i["silenced"] for i in shown_target["instances"]] == [False]
+    fake_alertmanager.release.set()

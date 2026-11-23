@@ -1,14 +1,17 @@
 """Rules that run in a Loki ruler: written and removed at once (no review), each change audited
 first, a failure in words with a retry, and the group named and filtered per project."""
 
+import asyncio
 import json
+from dataclasses import fields, replace
 
 import yaml
 
 from omnikrux.audit.store import AuditUnavailable
-from omnikrux.monitoring.alerts.store import ToolObject, UnknownRule
+from omnikrux.monitoring.alerts.store import RuleSpec, ToolObject, UnknownRule
 from omnikrux.monitoring.projects.types import ReviewChanged
 from omnikrux.monitoring.sources.types import ClusterTarget
+from tests.monitoring.alert_env import until
 from tests.monitoring.test_rules_api import add_rule, monitoring_records, rule_body
 from tests.monitoring.test_transport import config
 
@@ -55,8 +58,12 @@ async def test_loki_rule_is_written_and_audited(
     [target] = rule["targets"]
     assert target["tool"] == "loki_ruler" and target["where"] == "in Loki"
     assert target["tool_state"] == "in_sync" and target["tool_message"] is None
-    # Written, not yet read back from the ruler: "waiting", never "OK".
-    assert target["state"] == "waiting" and target["message"] == "Loading in Loki…"
+    # Written, not yet read back from the ruler: "waiting", never "OK". With OmniKrux's checks
+    # off (as in these tests) nothing reads the ruler, and the target says so.
+    assert target["state"] == "waiting"
+    assert target["message"] == "Not checked yet: OmniKrux's checks are off."
+    unread = await app.state.monitoring.alerts.get_target(target["id"])
+    assert (unread.state, unread.message) == ("waiting", "Loading in Loki…")
     assert [(c["kind"], c["message"]) for c in out["changes"]] == [("written", None)]
 
     group = stored_group(fake_loki, target["id"])
@@ -439,3 +446,39 @@ async def test_rule_groups_and_silences_cross_a_clusters_service_proxy(
     assert made.status == 200
     [held] = fake_alertmanager.silences.values()
     assert held["createdBy"] == "OmniKrux" and held["matchers"] == silence["matchers"]
+
+
+async def test_a_save_during_a_loki_write_is_never_marked_in_sync(
+    monitoring_app, linked_project_with_loki, fake_loki
+):
+    http, app = monitoring_app
+    services = app.state.monitoring
+    shop = linked_project_with_loki
+    rule = (await add_rule(http, loki_body(shop.project_id)))["rule"]
+    target = await services.alerts.get_target((await target_of(http, rule["id"]))["id"])
+    record = await services.alerts.get_rule(rule["id"])
+
+    fake_loki.release.clear()
+    fake_loki.mode = "hang"  # the ruler holds the next write until released
+    posts = len([r for r in fake_loki.requests if r.method == "POST"])
+    writing = asyncio.create_task(services.loki_ruler.write(target, record))
+    await until(lambda: len([r for r in fake_loki.requests if r.method == "POST"]) > posts)
+    # The rule is saved while the ruler holds the older version.
+    spec = RuleSpec(**{f.name: getattr(record, f.name) for f in fields(RuleSpec)})
+    await services.alerts.update_rule(
+        rule["id"], replace(spec, name="Errors (saved meanwhile)"), base_version=record.version
+    )
+    fake_loki.mode = "ok"
+    fake_loki.release.set()
+    change = await writing
+    assert change.kind == "written"
+    held = await services.alerts.get_target(target.id)
+    # What the ruler holds is the version before: not in sync, and the save's own hand-off
+    # writes the newer one.
+    assert held.tool_state == "needs_review" and held.applied_version == record.version
+
+    await services.alert_sync.reconcile_rule(rule["id"], changed=True)
+    held = await services.alerts.get_target(target.id)
+    assert held.tool_state == "in_sync" and held.applied_version == record.version + 1
+    [alert] = stored_group(fake_loki, target.id)["rules"]
+    assert alert["alert"] == "Errors (saved meanwhile)"

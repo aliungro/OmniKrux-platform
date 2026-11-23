@@ -354,18 +354,6 @@ def matches_empty(matcher: Matcher) -> bool:
     return hit if matcher.op in ("=", "=~") else not hit
 
 
-def _readable_problem(label: str, value: str) -> str | None:
-    """A pattern for a tool that matches it itself (Alertmanager's regular expressions run in
-    linear time): only its length, and that it can be read."""
-    if len(value) > MAX_PATTERN:
-        return LONG_PATTERN.format(label=label)
-    try:
-        re.compile(value)
-    except re.error:
-        return BAD_PATTERN.format(label=label)
-    return None
-
-
 def check_silence(
     text: str,
     starts_at: datetime | None,
@@ -373,12 +361,12 @@ def check_silence(
     comment: str,
     *,
     now: datetime,
-    bound_patterns: bool = True,
 ) -> NewSilence:
-    """The silence as given, checked: matchers that name something (each pattern short and
-    readable; also quick to match when `bound_patterns`, for those OmniKrux runs itself), a start
-    (now when none, or one already past), an end after it and at most 90 days later, and a
-    comment of 1 to 500 characters. SilenceInvalid with the copy and the field."""
+    """The silence as given, checked: matchers that name something (each pattern guarded by
+    `pattern_problem`, wherever the silence goes: OmniKrux matches it in the event loop, for its
+    own checks and for every preview), a start (now when none, or one already past), an end after
+    it and at most 90 days later, and a comment of 1 to 500 characters. SilenceInvalid with the
+    copy and the field."""
     if len(text) > MAX_MATCHERS_TEXT:
         raise SilenceInvalid(LONG_MATCHERS, "matchers")
     try:
@@ -390,8 +378,7 @@ def check_silence(
     for m in matchers:
         if m.op not in ("=~", "!~"):
             continue
-        check = pattern_problem if bound_patterns else _readable_problem
-        if (problem := check(m.label, m.value)) is not None:
+        if (problem := pattern_problem(m.label, m.value)) is not None:
             raise SilenceInvalid(problem, "matchers")
     if all(matches_empty(m) for m in matchers):
         raise SilenceInvalid(NAMES_NOTHING, "matchers")
@@ -611,6 +598,16 @@ class AlertmanagerSilences:
         if not isinstance(found, str):
             raise AlertmanagerFailed(AM_UNREADABLE.format(source=self._name), unknown=True)
         return found
+
+    async def find(self, silence_id: str, moment: datetime) -> ToolSilence:
+        """The silence by its id. AlertmanagerFailed (404 when it holds none by that id, or the
+        id can't be one)."""
+        if _AM_ID.fullmatch(silence_id) is None:
+            raise AlertmanagerFailed(AM_SILENCE_GONE.format(source=self._name), 404)
+        for silence in await self.list(moment):
+            if silence.id == silence_id:
+                return silence
+        raise AlertmanagerFailed(AM_SILENCE_GONE.format(source=self._name), 404)
 
     async def expire(self, silence_id: str) -> None:
         """End it now. AlertmanagerFailed (404 when it isn't there)."""

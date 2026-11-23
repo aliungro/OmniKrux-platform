@@ -47,6 +47,7 @@ from omnikrux.monitoring.alerts.store import (
     ToolObject,
     UnknownRule,
     UnknownTarget,
+    mark_unread,
 )
 from omnikrux.monitoring.alerts.sync import TOOL_FAILED, AlertChange, in_loki, project_name
 from omnikrux.monitoring.alerts.tool.prometheus_rule import group_name, rule_group
@@ -83,7 +84,6 @@ SOURCE_GONE_FORGOTTEN = (
     "The Loki source that held rule group {namespace}/{group} no longer exists in OmniKrux, so "
     "it couldn't be removed there. Remove it in Loki if it still runs."
 )
-LOADING = "Loading in Loki…"
 
 
 @dataclass(frozen=True)
@@ -250,9 +250,7 @@ class LokiRuler:
                 and row.source_id == obj.source_id
                 and row.rule_text == target.rule_text
             )
-            if row.last_eval_at is None and row.state == "ok":
-                moment = now()
-                row.state, row.state_since, row.message = "waiting", moment, LOADING
+            mark_unread(row, now())
             await services.alerts.set_tool(
                 target.id,
                 tool_state="in_sync" if same else "needs_review",

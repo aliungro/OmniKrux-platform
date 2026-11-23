@@ -120,7 +120,10 @@ async def test_silences_in_omnikrux_and_alertmanager(
     assert records[0][3]["matchers"] == 'alertname="API latency high"'
     assert records[1][3]["where"] == "Alertmanager · Main AM"
     assert records[1][3]["ends_at"].startswith(held["ends_at"][:19])
-    assert records[3][3] == {"where": "Alertmanager · Main AM"}
+    assert records[3][3] == {
+        "where": "Alertmanager · Main AM",
+        "matchers": 'team=~"web|api",env!="dev"',
+    }
 
 
 async def test_unreachable_alertmanager_is_a_problem_not_a_failure(monitoring_app, linked_project):
@@ -189,10 +192,9 @@ async def test_alertmanager_refusals_pass_through_without_secrets(
         auth={"type": "bearer", "token": "tok-SECRET-12"},
     )
     where = {"kind": "alertmanager", "source_id": am["id"]}
-    # Alertmanager matches patterns itself (in linear time): only length and syntax are checked.
     fake_alertmanager.echo_auth_in_errors = True
     fake_alertmanager.fail_paths["/api/v2/silences"] = 400
-    r = await http.post(SILENCES, json=silence_body(where, matchers='job=~"(a+)+"'))
+    r = await http.post(SILENCES, json=silence_body(where, matchers='job=~"api.*"'))
     assert refusal(r)[:2] == (422, "refused")
     assert refusal(r)[2].startswith("Main AM refused the silence: refused")
     [record] = [r for r in await monitoring_records(http) if r["action"] == "silence_add"]
@@ -215,10 +217,15 @@ async def test_alertmanager_refusals_pass_through_without_secrets(
     texts = [r.text, str(listed), (await http.get("/api/audit")).text]
     assert all("tok-SECRET-12" not in text for text in texts)
 
+    fake_alertmanager.fail_paths.clear()
+    before = len(await monitoring_records(http))
     gone = await http.delete(f"{SILENCES}/alertmanager/../x", params={"source_id": am["id"]})
     assert gone.status_code in (404, 405)
     unknown = await http.delete(f"{SILENCES}/alertmanager/no-such", params={"source_id": am["id"]})
     assert refusal(unknown) == (404, "not_found", "That silence no longer exists in Main AM.")
+    # Looked up first: an id it doesn't hold writes no audit record.
+    assert len(await monitoring_records(http)) == before
+    assert not [r for r in fake_alertmanager.requests if r.method == "DELETE"]
     nowhere = await http.delete(f"{SILENCES}/alertmanager/no-such")
     assert refusal(nowhere) == (422, "invalid_silence", "Say which Alertmanager holds the silence.")
     missing = await http.post(
@@ -280,6 +287,26 @@ async def test_preview_counts_matched_instances(monitoring_app, linked_project, 
         json=silence_body({"kind": "alertmanager", "source_id": am["id"]}, matchers='route="/a"'),
     )
     assert r.json() == {"affects": 1, "rules": ["Disk full"]}
+
+    # Its patterns run in OmniKrux for the preview: guarded like OmniKrux's own, so a nested
+    # quantifier never reaches the matcher (nor the Alertmanager).
+    fake_alertmanager.alerts.append(
+        {"labels": {"alertname": "a" * 255 + "!", "route": "/a"}, "status": {"state": "active"}}
+    )
+    for path in (f"{SILENCES}/preview", SILENCES):
+        r = await http.post(
+            path,
+            json=silence_body(
+                {"kind": "alertmanager", "source_id": am["id"]}, matchers='alertname=~"(a+)+$"'
+            ),
+        )
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"] == {
+            "code": "invalid_silence",
+            "message": "This pattern could take too long to match. Simplify it.",
+            "field": "matchers",
+        }
+    assert not [q for q in fake_alertmanager.requests if q.method == "POST"]
 
 
 async def test_silence_routes_refuse_cross_origin(monitoring_app):

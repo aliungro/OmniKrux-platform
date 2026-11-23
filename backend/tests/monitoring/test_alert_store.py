@@ -385,10 +385,16 @@ async def test_a_target_that_moves_engine_or_source_starts_over(stores):
         diff = await alerts.put_targets(r.id, [target_spec("A", **change)])
         assert diff.changed == (t.id,)
         fresh = await alerts.get_target(t.id)
+        # A target that now runs in a tool waits for the tool's first read: never "OK" (T11).
+        started = (
+            ("waiting", "Loading in Prometheus…")
+            if change.get("engine") == "tool"
+            else ("ok", None)
+        )
         assert (fresh.state, fresh.failures, fresh.message, fresh.last_eval_at) == (
-            "ok",
+            started[0],
             0,
-            None,
+            started[1],
             None,
         )
         assert fresh.state_since != T0  # set when it started over

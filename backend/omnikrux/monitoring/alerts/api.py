@@ -11,6 +11,7 @@ nothing, sends nothing), so it writes no audit record."""
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import re
 import string
@@ -73,6 +74,7 @@ from omnikrux.monitoring.alerts.store import (
     TargetRecord,
     UnknownRule,
     UnknownTarget,
+    loading_copy,
 )
 from omnikrux.monitoring.alerts.sync import (
     CONTACT_POINT_GONE,
@@ -170,6 +172,7 @@ NO_ALERTMANAGER = (
 )
 NOT_SAVED = "The rule couldn't be saved. Try again."
 NOT_REMOVED = "The rule couldn't be removed. Try again."
+NOT_CHECKED_OFF = "Not checked yet: OmniKrux's checks are off."
 NOT_SAVED_SILENCE = "The silence couldn't be saved. Try again."
 NOT_REMOVED_SILENCE = "The silence couldn't be ended. Try again."
 TARGETS_BEHIND = (
@@ -496,6 +499,7 @@ class _Names:
     projects: dict[str, Project]
     groups: dict[str, Group]
     contact_points: dict[str, ContactPoint]
+    checks_on: bool = True  # whether the engine runs (it reads the tools too)
 
     def project(self, id: str) -> str:
         project = self.projects.get(id)
@@ -515,19 +519,37 @@ async def _names(services: MonitoringServices, *, contact_points: bool = True) -
         contact_points=(
             {cp.id: cp for cp in await services.contact_points.list()} if contact_points else {}
         ),
+        checks_on=services.engine.enabled,
     )
+
+
+def never_read(target: TargetRecord) -> bool:
+    """A target that runs in a tool whose state has never been read from the tool."""
+    return target.engine == "tool" and target.last_eval_at is None
 
 
 def shown_state(target: TargetRecord, rule: RuleRecord) -> TargetState:
     """The state a target shows. A target in a tool that isn't in sync there is "not applied"
-    unless what the tool reports is worse; a paused rule's OmniKrux targets are "paused"."""
+    unless what the tool reports is worse; one whose state was never read from the tool is at
+    least "waiting", never "OK"; a paused rule's OmniKrux targets are "paused"."""
     if target.engine == "tool":
+        state = target.state
+        if never_read(target) and state == "ok":
+            state = "waiting"
         if target.tool_state != "in_sync":
-            return worst((target.state, "not_applied"))
-        return target.state
+            return worst((state, "not_applied"))
+        return state
     if rule.paused:
         return "paused"
     return target.state
+
+
+def shown_message(target: TargetRecord, checks_on: bool) -> str | None:
+    """What a target says: a never-read tool target says it is loading, or, with OmniKrux's
+    checks off (nothing reads the tools then), that it isn't checked yet."""
+    if never_read(target):
+        return loading_copy(target.tool_kind) if checks_on else NOT_CHECKED_OFF
+    return target.message
 
 
 def _rule_state(rule: RuleRecord, targets: list[TargetRecord]) -> TargetState:
@@ -566,7 +588,7 @@ def _target_out(
         state=shown_state(target, rule),
         state_since=target.state_since,
         last_eval_at=target.last_eval_at,
-        message=target.message,
+        message=shown_message(target, names.checks_on),
         eval_expr=target.eval_expr,
         rule_text=target.rule_text,
         tool_state=target.tool_state,
@@ -1787,6 +1809,7 @@ WHERE_OMNIKRUX_WORDS = "OmniKrux"
 WHERE_ALERTMANAGER_WORDS = "Alertmanager · {source}"
 EXPIRED_FOR = 24 * 3600
 PREVIEW_RULES = 5
+CONCURRENT_AM_READS = 8
 
 
 class OmniKruxWhereIn(BaseModel):
@@ -1853,17 +1876,11 @@ def _silence_error(status: int, code: str, message: str, field: str | None = Non
 
 
 def _checked(body: SilenceIn, moment: datetime) -> NewSilence:
-    """The silence the body asks for; 422 `invalid_silence` in words. A silence OmniKrux matches
-    itself also gets its patterns bounded (they run inside every check)."""
+    """The silence the body asks for; 422 `invalid_silence` in words. Every pattern is guarded
+    alike (T7's `pattern_problem`), an Alertmanager's too: OmniKrux matches it itself in a
+    preview, in the event loop, against label values cut at 256 characters."""
     try:
-        return check_silence(
-            body.matchers,
-            body.starts_at,
-            body.ends_at,
-            body.comment,
-            now=moment,
-            bound_patterns=body.where.kind == "omnikrux",
-        )
+        return check_silence(body.matchers, body.starts_at, body.ends_at, body.comment, now=moment)
     except SilenceInvalid as exc:
         raise _silence_error(422, "invalid_silence", exc.message, exc.field) from None
 
@@ -1975,11 +1992,22 @@ async def list_silences(request: Request) -> SilencesOut:
         )
         out.append(_omnikrux_out(s, moment, affects))
     problems: list[SilenceProblemOut] = []
-    for source in await _linked_alertmanagers(services):
-        try:
-            held = await _am_client(services, source).list(moment)
-        except AlertmanagerFailed as exc:
-            problems.append(SilenceProblemOut(source_name=source.name, message=exc.message))
+    managers = await _linked_alertmanagers(services)
+    slots = asyncio.Semaphore(CONCURRENT_AM_READS)
+
+    async def read(source: SourceConfig) -> list[ToolSilence] | AlertmanagerFailed:
+        async with slots:
+            try:
+                return await _am_client(services, source).list(moment)
+            except AlertmanagerFailed as exc:
+                return exc
+
+    # At once (bounded), so one Alertmanager that doesn't answer costs one timeout in all.
+    for source, held in zip(
+        managers, await asyncio.gather(*(read(m) for m in managers)), strict=True
+    ):
+        if isinstance(held, AlertmanagerFailed):
+            problems.append(SilenceProblemOut(source_name=source.name, message=held.message))
             continue
         out += [_tool_out(s, source) for s in held if s.state != "expired" or s.ends_at >= since]
     out.sort(key=lambda s: (s.starts_at, s.id), reverse=True)
@@ -2118,15 +2146,23 @@ async def remove_silence(
     if not source_id:
         raise _silence_error(422, "invalid_silence", NEEDS_ALERTMANAGER, "source_id")
     source = await _alertmanager(services, source_id)
+    client = _am_client(services, source)
+    # The silence is looked up first: an id it doesn't hold answers 404 with no audit record.
+    try:
+        held = await client.find(id, now_utc())
+    except AlertmanagerFailed as exc:
+        code = {404: "not_found", 422: "refused"}.get(exc.status, "unreachable")
+        raise _silence_error(exc.status, code, exc.message) from None
+    text = matchers_text(held.matchers)
     record = await begin_change(
         request,
         "silence_remove",
         "silence",
-        id,
-        {"where": WHERE_ALERTMANAGER_WORDS.format(source=source.name)},
+        text,
+        {"where": WHERE_ALERTMANAGER_WORDS.format(source=source.name), "matchers": text},
     )
     try:
-        await _am_client(services, source).expire(id)
+        await client.expire(id)
     except AlertmanagerFailed as exc:
         await request.app.state.audit.finish(
             record, "unknown" if exc.unknown else "failed", exc.message

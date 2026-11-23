@@ -59,6 +59,7 @@ from omnikrux.monitoring.alerts.store import (
     ToolObject,
     UnknownRule,
     UnknownTarget,
+    mark_unread,
 )
 from omnikrux.monitoring.models import AlertRuleRow, AlertTargetRow, lock_first, now
 from omnikrux.monitoring.sources.types import SourceConfig
@@ -768,6 +769,7 @@ class PrometheusRuleAction:
                 and row.tool_kind == "prometheus_rule"
                 and row.rule_text == target.rule_text
             )
+            mark_unread(row, now())
             await alerts.set_tool(
                 target.id,
                 tool_state="in_sync" if same else "needs_review",
