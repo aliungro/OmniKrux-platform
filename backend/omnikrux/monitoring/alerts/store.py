@@ -218,11 +218,13 @@ class InstanceRecord:
 
 @dataclass(frozen=True)
 class HistoryRecord:
-    """`id` is None until the entry is stored."""
+    """`id` is None until the entry is stored. `project_id` is the target's project: the entry
+    still names it once the target is gone."""
 
     id: int | None
     target_id: str
     rule_id: str
+    project_id: str
     at: datetime
     kind: HistoryKind
     labels: Mapping[str, str] | None = field(default=None)
@@ -399,6 +401,7 @@ def _history(row: AlertHistoryRow) -> HistoryRecord:
         id=row.id,
         target_id=row.target_id,
         rule_id=row.rule_id,
+        project_id=row.project_id,
         at=utc(row.at),
         kind=row.kind,  # type: ignore[arg-type]
         labels=json.loads(row.labels) if row.labels is not None else None,
@@ -424,6 +427,14 @@ def _refs(rows: Sequence[tuple[str, str]]) -> tuple[RuleRef, ...]:
 async def _rule_row(session: AsyncSession, id: str) -> AlertRuleRow:
     row = await session.get(AlertRuleRow, id)
     if row is None:
+        raise UnknownRule(id)
+    return row
+
+
+async def _live_rule_row(session: AsyncSession, id: str) -> AlertRuleRow:
+    """The rule, unless it is deleted (being removed): UnknownRule then too."""
+    row = await _rule_row(session, id)
+    if row.deleted_at is not None:
         raise UnknownRule(id)
     return row
 
@@ -520,10 +531,10 @@ class AlertStore:
     ) -> RuleRecord:
         """Write `spec` as the next version when something changed (else the rule stays at its
         version). With `base_version`, the rule must still be at it. UnknownRule, RuleChanged
-        (nothing changed)."""
+        (nothing changed). A deleted rule reads as UnknownRule."""
         values = _rule_values(spec)
         async with self._locked(session) as s:
-            row = await _rule_row(s, id)
+            row = await _live_rule_row(s, id)
             current = row.version
             if base_version is not None and current != base_version:
                 raise RuleChanged(current)
@@ -569,7 +580,7 @@ class AlertStore:
     async def tombstone_rule(self, id: str, *, session: AsyncSession | None = None) -> None:
         """Mark the rule deleted; it stays (out of `list_rules`) until `purge_rule` removes it
         once its targets are gone. UnknownRule."""
-        async with writing(self._sessionmaker, session) as s:
+        async with self._locked(session) as s:
             row = await _rule_row(s, id)
             if row.deleted_at is None:
                 row.deleted_at = now()
@@ -578,7 +589,7 @@ class AlertStore:
     async def purge_rule(self, id: str, *, session: AsyncSession | None = None) -> bool:
         """Remove the rule and its history when it has no targets left; whether it was removed.
         UnknownRule."""
-        async with writing(self._sessionmaker, session) as s:
+        async with self._locked(session) as s:
             await _rule_row(s, id)
             left = await s.scalar(
                 select(func.count()).select_from(AlertTargetRow).where(AlertTargetRow.rule_id == id)
@@ -614,12 +625,23 @@ class AlertStore:
         """Bring the rule's targets in line with `specs` (one per project): a new project gets a
         target (state "ok", checked at once), a changed one is updated (and checked at once;
         a leaving one that is wanted again stays), and the targets of projects no longer
-        wanted are marked leaving; the caller removes them. UnknownRule."""
+        wanted are marked leaving; the caller removes them. A target whose engine or source
+        changes starts over: state "ok", no failures, no instances (nothing stale stays shown).
+
+        UnknownRule; for a deleted rule too, unless `specs` is empty (that only marks its
+        targets leaving). ValueError when two specs name one project."""
+        projects = [spec.project_id for spec in specs]
+        if len(set(projects)) != len(projects):
+            raise ValueError("Each project can have only one target per rule.")
         moment = now()
         added: list[str] = []
         changed: list[str] = []
+        restarted: list[str] = []
         async with self._locked(session) as s:
-            await _rule_row(s, rule_id)
+            if specs:
+                await _live_rule_row(s, rule_id)
+            else:
+                await _rule_row(s, rule_id)
             rows = list(
                 await s.scalars(
                     select(AlertTargetRow)
@@ -658,6 +680,13 @@ class AlertStore:
                     added.append(row.id)
                     continue
                 if row.leaving or any(getattr(row, k) != v for k, v in values.items()):
+                    if row.engine != spec.engine or row.source_id != spec.source_id:
+                        row.state = "ok"
+                        row.state_since = moment
+                        row.message = None
+                        row.last_eval_at = None
+                        row.failures = 0
+                        restarted.append(row.id)
                     for key, value in values.items():
                         setattr(row, key, value)
                     row.leaving = False
@@ -672,6 +701,10 @@ class AlertStore:
                     row.leaving = True
                     row.updated_at = moment
                 leaving.append(row.id)
+            if restarted:
+                await s.execute(
+                    delete(AlertInstanceRow).where(AlertInstanceRow.target_id.in_(restarted))
+                )
             await s.flush()
         return TargetDiff(added=tuple(added), changed=tuple(changed), leaving=tuple(leaving))
 
@@ -801,6 +834,7 @@ class AlertStore:
                 AlertHistoryRow(
                     target_id=e.target_id,
                     rule_id=e.rule_id,
+                    project_id=e.project_id,
                     at=e.at,
                     kind=e.kind,
                     labels=(
@@ -813,14 +847,16 @@ class AlertStore:
             )
             await s.flush()
 
-    async def history(self, *, rule_id: str, limit: int = 50) -> list[HistoryRecord]:
-        """The rule's history, newest first."""
+    async def history(
+        self, *, rule_id: str, project_id: str | None = None, limit: int = 50
+    ) -> list[HistoryRecord]:
+        """The rule's history, or its history in one project, newest first."""
+        query = select(AlertHistoryRow).where(AlertHistoryRow.rule_id == rule_id)
+        if project_id is not None:
+            query = query.where(AlertHistoryRow.project_id == project_id)
         async with self._sessionmaker() as session:
             rows = await session.scalars(
-                select(AlertHistoryRow)
-                .where(AlertHistoryRow.rule_id == rule_id)
-                .order_by(AlertHistoryRow.at.desc(), AlertHistoryRow.id.desc())
-                .limit(limit)
+                query.order_by(AlertHistoryRow.at.desc(), AlertHistoryRow.id.desc()).limit(limit)
             )
             return [_history(row) for row in rows]
 
@@ -937,6 +973,9 @@ class AlertStore:
                 delete(AlertHistoryRow).where(AlertHistoryRow.target_id.in_(target_ids))
             )
             await _delete_targets(session, target_ids)
+        if kind == "project":
+            # Its history in other rules too, also of targets removed earlier.
+            await session.execute(delete(AlertHistoryRow).where(AlertHistoryRow.project_id == id))
         if rule_ids:
             await session.execute(
                 delete(AlertHistoryRow).where(AlertHistoryRow.rule_id.in_(rule_ids))

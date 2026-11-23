@@ -77,6 +77,9 @@ def upgrade() -> None:
         sa.Column("leaving", sa.Boolean(), nullable=False, server_default=sa.false()),
         _moment("created_at"),
         _moment("updated_at"),
+        sa.UniqueConstraint(
+            "rule_id", "project_id", name="uq_monitoring_alert_targets_rule_project"
+        ),
     )
     op.create_index("ix_monitoring_alert_targets_rule_id", "monitoring_alert_targets", ["rule_id"])
     op.create_index(
@@ -100,6 +103,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("target_id", sa.String(), nullable=False),
         sa.Column("rule_id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
         _moment("at"),
         sa.Column("kind", sa.String(), nullable=False),
         sa.Column("labels", sa.Text()),
@@ -110,6 +114,9 @@ def upgrade() -> None:
         "ix_monitoring_alert_history_rule_at", "monitoring_alert_history", ["rule_id", "at"]
     )
     op.create_index("ix_monitoring_alert_history_at", "monitoring_alert_history", ["at"])
+    op.create_index(
+        "ix_monitoring_alert_history_project_id", "monitoring_alert_history", ["project_id"]
+    )
     op.create_table(
         "monitoring_contact_points",
         sa.Column("id", sa.String(), primary_key=True),
@@ -159,6 +166,7 @@ def downgrade() -> None:
     op.drop_table("monitoring_alert_deliveries")
     op.drop_table("monitoring_silences")
     op.drop_table("monitoring_contact_points")
+    op.drop_index("ix_monitoring_alert_history_project_id", table_name="monitoring_alert_history")
     op.drop_index("ix_monitoring_alert_history_at", table_name="monitoring_alert_history")
     op.drop_index("ix_monitoring_alert_history_rule_at", table_name="monitoring_alert_history")
     op.drop_table("monitoring_alert_history")

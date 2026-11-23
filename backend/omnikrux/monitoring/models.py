@@ -204,6 +204,9 @@ class AlertTargetRow(Base):
     """Where a rule runs for one project: checked by OmniKrux, or applied in a tool."""
 
     __tablename__ = "monitoring_alert_targets"
+    __table_args__ = (
+        UniqueConstraint("rule_id", "project_id", name="uq_monitoring_alert_targets_rule_project"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     rule_id: Mapped[str] = mapped_column(String, index=True)
@@ -252,11 +255,14 @@ class AlertHistoryRow(Base):
     __table_args__ = (
         Index("ix_monitoring_alert_history_rule_at", "rule_id", "at"),
         Index("ix_monitoring_alert_history_at", "at"),
+        Index("ix_monitoring_alert_history_project_id", "project_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     target_id: Mapped[str] = mapped_column(String)
     rule_id: Mapped[str] = mapped_column(String)
+    # The target's project: the entry still names it once the target is gone.
+    project_id: Mapped[str] = mapped_column(String)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     kind: Mapped[str] = mapped_column(String)
     labels: Mapped[str | None] = mapped_column(Text)  # JSON {name: value}

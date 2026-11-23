@@ -68,11 +68,14 @@ def target_spec(project_id: str, **over) -> TargetSpec:
     return TargetSpec(**(values | over))
 
 
-def entry(target_id: str, rule_id: str, at: datetime, kind="firing") -> HistoryRecord:
+def entry(
+    target_id: str, rule_id: str, at: datetime, kind="firing", project_id: str = "A"
+) -> HistoryRecord:
     return HistoryRecord(
         id=None,
         target_id=target_id,
         rule_id=rule_id,
+        project_id=project_id,
         at=at,
         kind=kind,
         labels={"route": "/a"},
@@ -325,6 +328,89 @@ async def test_due_targets_skip_paused_tool_and_leaving(stores):
     }
 
 
+async def test_a_deleted_rule_takes_no_new_targets(stores):
+    r = await stores.alerts.create_rule(rule_spec())
+    await stores.alerts.put_targets(r.id, [target_spec("A")])
+    await stores.alerts.tombstone_rule(r.id)
+    with pytest.raises(UnknownRule):
+        await stores.alerts.put_targets(r.id, [target_spec("A"), target_spec("B")])
+    with pytest.raises(UnknownRule):
+        await stores.alerts.update_rule(r.id, rule_spec(severity="info"), base_version=None)
+    # Empty specs only mark its targets leaving, so they can be removed.
+    [t] = await stores.alerts.targets(rule_id=r.id)
+    assert (await stores.alerts.put_targets(r.id, [])).leaving == (t.id,)
+    assert [x.project_id for x in await stores.alerts.targets(rule_id=r.id)] == ["A"]
+
+
+async def test_one_target_per_rule_and_project(stores, db_path):
+    r = await stores.alerts.create_rule(rule_spec())
+    with pytest.raises(ValueError, match="only one target"):
+        await stores.alerts.put_targets(r.id, [target_spec("A"), target_spec("A")])
+    assert await stores.alerts.targets() == []
+    await stores.alerts.put_targets(r.id, [target_spec("A")])
+    with closing(sqlite3.connect(db_path)) as conn, pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO monitoring_alert_targets (id, rule_id, project_id, engine, eval_expr,"
+            " rule_text, state, state_since, created_at, updated_at) VALUES ('x', ?, 'A',"
+            " 'omnikrux', 'e', 'r', 'ok', '2026-11-23', '2026-11-23', '2026-11-23')",
+            (r.id,),
+        )
+
+
+async def test_a_target_that_moves_engine_or_source_starts_over(stores):
+    alerts = stores.alerts
+    r = await alerts.create_rule(rule_spec())
+    await alerts.put_targets(r.id, [target_spec("A")])
+    [t] = await alerts.targets(rule_id=r.id)
+    firing = InstanceRecord(t.id, "f1", {"route": "/a"}, "firing", T0, T0, 0.4, None)
+
+    async def fire() -> None:
+        await alerts.set_eval(
+            t.id, state="firing", message=None, at=T0, next_eval_at=None, failures=1
+        )
+        await alerts.replace_instances(t.id, [firing])
+
+    await fire()
+    # Only the query changed: the state stays until the next check.
+    await alerts.put_targets(r.id, [target_spec("A", eval_expr="rate(y[5m])")])
+    kept = await alerts.get_target(t.id)
+    assert (kept.state, kept.failures) == ("firing", 1)
+    assert await alerts.instances(t.id) == [firing]
+
+    for change in (
+        {"source_id": "src-other"},
+        {"engine": "tool", "tool_kind": "prometheus_rule", "source_id": "src-other"},
+    ):
+        await fire()
+        diff = await alerts.put_targets(r.id, [target_spec("A", **change)])
+        assert diff.changed == (t.id,)
+        fresh = await alerts.get_target(t.id)
+        assert (fresh.state, fresh.failures, fresh.message, fresh.last_eval_at) == (
+            "ok",
+            0,
+            None,
+            None,
+        )
+        assert fresh.state_since != T0  # set when it started over
+        assert await alerts.instances(t.id) == []
+
+
+async def test_a_removed_targets_history_still_names_its_project(stores):
+    r = await stores.alerts.create_rule(rule_spec(scope_kind="group", scope_id="g"))
+    await stores.alerts.put_targets(r.id, [target_spec("A"), target_spec("B")])
+    a, b = sorted(await stores.alerts.targets(rule_id=r.id), key=lambda t: t.project_id)
+    await stores.alerts.add_history(
+        [
+            entry(a.id, r.id, T0, project_id="A"),
+            entry(b.id, r.id, T0 + timedelta(minutes=1), project_id="B"),
+        ]
+    )
+    await stores.alerts.delete_target(a.id)
+    [kept] = await stores.alerts.history(rule_id=r.id, project_id="A")
+    assert (kept.target_id, kept.project_id) == (a.id, "A")
+    assert [h.project_id for h in await stores.alerts.history(rule_id=r.id)] == ["B", "A"]
+
+
 # -- instances and history ---------------------------------------------------------------------
 
 
@@ -467,7 +553,9 @@ async def test_rule_refs_and_delete_owned_for_a_project(stores, db_path):
             (RuleRef(shared.id, "shared"),),
         )
     [own_target] = await alerts.targets(rule_id=own.id)
-    await alerts.add_history([entry(own_target.id, own.id, T0)])
+    await alerts.add_history([entry(own_target.id, own.id, T0, project_id=a)])
+    # History of a target removed earlier, in a rule that stays, goes with the project too.
+    await alerts.add_history([entry("gone", other.id, T0, project_id=a)])
 
     async with stores.sessionmaker.begin() as session:
         gone = await alerts.delete_owned("project", a, session=session)
@@ -475,6 +563,7 @@ async def test_rule_refs_and_delete_owned_for_a_project(stores, db_path):
     assert [r.id for r in await alerts.list_rules(include_deleted=True)] == [other.id, shared.id]
     assert {t.project_id for t in await alerts.targets()} == {b}
     assert await alerts.history(rule_id=own.id) == []
+    assert await alerts.history(rule_id=other.id) == []
 
     async with stores.sessionmaker.begin() as session:
         assert await alerts.delete_owned("group", group.id, session=session) == [
@@ -590,6 +679,7 @@ async def test_migration_0009_up_and_down(tmp_path):
             "ix_monitoring_alert_targets_project_id": ["project_id"],
             "ix_monitoring_alert_history_rule_at": ["rule_id", "at"],
             "ix_monitoring_alert_history_at": ["at"],
+            "ix_monitoring_alert_history_project_id": ["project_id"],
             "ix_monitoring_alert_deliveries_at": ["at"],
         }
         pk = await conn.run_sync(
@@ -600,6 +690,10 @@ async def test_migration_0009_up_and_down(tmp_path):
             lambda c: inspect(c).get_unique_constraints("monitoring_contact_points")
         )
         assert [u["column_names"] for u in uniques] == [["name"]]
+        uniques = await conn.run_sync(
+            lambda c: inspect(c).get_unique_constraints("monitoring_alert_targets")
+        )
+        assert [u["column_names"] for u in uniques] == [["rule_id", "project_id"]]
         assert "installed_by_omnikrux" in columns
 
         await conn.run_sync(migrate, "downgrade", "0008")
