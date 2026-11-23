@@ -235,9 +235,9 @@ These are the keys listed under **Monitoring** and **Dashboards** in the **?** s
 
 Type a PromQL query (LogQL for a Loki source) in the **Query** field. It runs 300 ms after you stop typing, and **Ctrl Enter** runs it now. A line under it says how the last run ended, for example `✓ 4 series · 38 ms · Last 1 hour · updated 10:21:07`, and **Running…** shows beside it while a run is on.
 
-- A query the tool can't read keeps the last result on screen, dimmed and labelled **Last good result** with the query that made it, so a typo while typing never blanks the chart. The line says what is wrong and "showing the last result".
+- A query the tool refuses as unreadable (a syntax error, say) keeps the last result on screen, dimmed and labelled **Last good result** with the query that made it, so a typo while typing never blanks the chart. The line says what is wrong and "showing the last result".
 - Text with an unclosed bracket or quote is refused on the spot with a message and is not sent.
-- A tool that didn't answer (**Source unreachable**) or refused the query (**Query error**) draws no chart, never the old one as if it were current, and offers **Try again**.
+- A tool that didn't answer (**Source unreachable**) or failed in any other way (**Query error**) draws no chart, never the old one as if it were current, and offers **Try again**.
 - A slow answer to an older text never replaces a newer one.
 
 ### The trail
@@ -267,7 +267,7 @@ Under the chart, **Log lines** shows the lines of the same time range, newest fi
 
 **Add to dashboard** (or `a`) turns the query into a panel. Pick a dashboard of the project, or of a group that holds it, or **New dashboard in …** with a **Title**. Then set the **Panel title** and the **Chart** (**Time series**, **Stat**, **Bar** or **Table**; a log query becomes a **Logs** panel) and press **Add panel**. The query text is added exactly as written. The page then says `Added to "…".` with **Open dashboard**.
 
-If the dashboard has unsaved changes in this browser, the panel is saved to it now, and saving your draft later asks you to review the differences. The change is written to the Audit log as **Saved a dashboard** (or **Added a dashboard** for a new one); its details say it came from Explore and name the panel it added.
+If the dashboard has unsaved changes in this browser, the panel is saved to it now, and saving your draft later asks you to review the differences. The Audit log records a panel added to an existing dashboard as **Saved a dashboard**, and its details say it came from Explore and name the panel it added. A new dashboard is recorded as **Added a dashboard**, like any other new dashboard, without that note.
 
 ### Reduced motion and keys
 
@@ -302,7 +302,7 @@ A source a project did not create, or that another project still uses, is never 
 
 ## Audit
 
-Every change in Monitoring is written to the Audit log, marked as coming from Monitoring: **Added a source**, **Changed a source**, **Removed a source**, and the same for projects and groups. For dashboards the entries are **Added a dashboard** (a new one or a copy), **Saved a dashboard**, **Restored a dashboard version** and **Removed a dashboard**. An entry names what changed and whether it succeeded. A dashboard's entries say who owns it, which versions are involved and how many panels it has, never its queries. A panel added from Explore is recorded as **Saved a dashboard**, with a note that it came from Explore and the title of the panel added. Details never include secrets: an entry says which kind of sign-in a source uses, not the password or token. Reading is not audited: testing a source, opening a project or running a query leaves no entry.
+Every change in Monitoring is written to the Audit log, marked as coming from Monitoring: **Added a source**, **Changed a source**, **Removed a source**, and the same for projects and groups. For dashboards the entries are **Added a dashboard** (a new one or a copy), **Saved a dashboard**, **Restored a dashboard version** and **Removed a dashboard**. An entry names what changed and whether it succeeded. A dashboard's entries say who owns it, which versions are involved and how many panels it has, never its queries. A panel added from Explore to an existing dashboard is recorded as **Saved a dashboard**, with a note that it came from Explore and the title of the panel added. Details never include secrets: an entry says which kind of sign-in a source uses, not the password or token. Reading is not audited: testing a source, opening a project or running a query leaves no entry.
 
 ## What comes in later updates
 

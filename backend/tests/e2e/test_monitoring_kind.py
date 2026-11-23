@@ -341,6 +341,15 @@ def both_project(client, cluster, tools):
         yield project
 
 
+def lines_missing(found: bool, what: str) -> None:
+    """Fails, with how to fix it, when a check that needs the pushed log lines finds none."""
+    if not found:
+        pytest.fail(
+            f"{what}: the pushed log lines are missing or older than the last hour. Push them "
+            "again (see 'Pushing the log lines' in docs/guide/developer/monitoring.md)."
+        )
+
+
 def catalog_of(client, project: dict) -> dict[str, dict]:
     """The project's catalog sections, by source type."""
     response = client.get(f"{API}/projects/{project['id']}/catalog")
@@ -368,16 +377,17 @@ def test_catalog_on_the_cluster(client, both_project):
     loki = sections["loki"]
     assert loki["state"] in ("ok", "partial"), loki["message"]
     streams = {s["name"]: s for s in loki["streams"]}
-    assert CHECK_JOB in streams["job"]["values"], "push the log lines again (see live-check.md)"
-    assert "level" in streams
+    lines_missing(CHECK_JOB in streams.get("job", {}).get("values", []), "Loki lists no job value")
+    lines_missing("level" in streams, "Loki lists no level label")
 
 
 def test_suggestion_templates_run_on_the_cluster(client, both_project):
     project = both_project
     loki_section = catalog_of(client, project)["loki"]
     writable = [s["name"] for s in loki_section["streams"] if re.match(IDENT, s["name"])]
-    assert writable, "Loki lists no log label"
+    lines_missing(bool(writable), "Loki lists no log label")
     label = next((name for name in STREAM_LABELS if name in writable), writable[0])
+    # Assumes the pushed streams carry a `level` label (the volume is split by it).
     volume = f'sum by (level) (count_over_time({{{label}=~".+"}}[30s]))'
     errors = f'{{{label}=~".+"}} |~ "(?i)(error|fatal|panic)"'
 
@@ -419,7 +429,7 @@ def test_suggestion_templates_run_on_the_cluster(client, both_project):
 
     assert answers["rate"]["ok"] and answers["rate"]["response"]["series"]
     assert answers["volume"]["ok"], answers["volume"]
-    assert answers["volume"]["response"]["series"], "push the log lines again (see live-check.md)"
+    lines_missing(bool(answers["volume"]["response"]["series"]), "The log volume is empty")
 
 
 def test_catalog_follows_a_filter_on_the_cluster(client, cluster, tools):

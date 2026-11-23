@@ -266,7 +266,7 @@ With `limit_per_metric=1` the answer holds a single entry per metric name, which
 
 `explore/catalog.py` keeps entries in `CatalogCache`, keyed by project id, source id, the filter's text and the source's `updated_at`, so one project's entry is never served to another and a changed filter or source builds a new one.
 
-- An entry is served for 300 s (an error for 30 s). `refresh=true` rebuilds, but not more than once per 10 s per source; a refresh inside that gap gets the entry as it is.
+- An entry is served for 300 s (an error for 30 s). `refresh=true` rebuilds, but not more than once per 10 s per cache entry (a project and source pair); a refresh inside that gap gets the entry as it is.
 - One build per key at a time (single flight): every caller for that key awaits the same task. A caller that goes away never cancels it.
 - A build is bounded by 20 s inside the shared task, so a timed-out build ends there and its error is cached like any other. `project_catalog` reads at most four of a call's sources at once, and the whole call answers within the timeout however many sources hang.
 - At most 64 entries are kept, the least recently used dropped first.
@@ -282,7 +282,7 @@ Code is in `frontend/src/monitoring/build/`. Nothing here calls a model or a pai
 
 `finder.ts` turns plain words into candidate panels. `buildFinderIndex(catalog)` tokenizes the catalog once (metric names split at `_` and `:`, labels, help words, stream labels and values), and `findPanels(index, text)` scores entries, so a keystroke never re-splits thousands of names. The rules:
 
-- The text is lowered and split on anything but letters, digits, `_` and `:`; words in `STOP_WORDS` are dropped. `by` or `per` followed by a word is the split label; `p50`, `p90`, `p95` and `p99` set the percentile.
+- The text is lowered and split on anything but letters, digits, `_` and `:`, and then each word is split again at `_`; words in `STOP_WORDS` are dropped. `by` or `per` followed by a word is the split label; `p50`, `p90`, `p95` and `p99` set the percentile.
 - A word scores 4 for a whole-token match (after plural stripping and `SYNONYMS`), 2 for a token it starts (words of three letters or more), 2 for a label name and 1 for a help word. An entry carrying the split label gets 4 more, and one that lacks it loses 3. An entry with no content points never qualifies on intent alone.
 - An intent bonus is added by kind: errors (the `error` synonym group, a status label on the counter) +3, latency (a percentile or the latency group, a histogram that looks like a timing) +3, logs +3 for lines and +1 for volume, and "volume" or "count" +3 for volume.
 - Results sort by score, then kind (rate, errors, quantile, value, volume, lines), then series count, then title; at most six are kept (`FINDER_MAX_RESULTS`), and a candidate whose query can't be written (`UnwritableQuery`) or repeats an earlier query is skipped.
@@ -441,10 +441,11 @@ curl -s -X POST http://127.0.0.1:3100/loki/api/v1/push -H 'Content-Type: applica
 
 Loki keeps them for as long as the pod runs; push them again after it restarts. With no persistent volume they are lost when the pod is replaced.
 
-To push the lines the catalog tests read, send one batch with a port-forward open. These are three streams that differ only in `level`:
+#### Pushing the log lines
+
+To push the lines the catalog tests read, use the port-forward from above (start one only if none is running; it listens on port 3100) and send a line to each of three streams that differ only in `level`:
 
 ```bash
-kubectl -n monitoring port-forward svc/loki 3100:3100 &
 now=$(date +%s)000000000
 for level in info warn error; do
   curl -s -X POST http://127.0.0.1:3100/loki/api/v1/push -H 'Content-Type: application/json' \
@@ -452,4 +453,4 @@ for level in info warn error; do
 done
 ```
 
-Both sets of lines age out: Loki only lists labels for streams with lines in the last hour, so push them again before a run when the tests report that the `job` value or the log volume is missing.
+These lines age out: the catalog tests read Loki's labels over the last hour, so push them again before a run when a test reports that the pushed log lines are missing. (The older `omnikrux-live-check` lines are read over seven days, so they last until Loki's pod is replaced.)
