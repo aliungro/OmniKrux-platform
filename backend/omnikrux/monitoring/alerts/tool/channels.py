@@ -87,11 +87,11 @@ def _walk(
     parts = [_own(c) if isinstance(c, dict) else ({}, None) for c in children]
     stops = [isinstance(c, dict) and not c.get("continue") for c in children]
     passed_down = reason or (SHADOWED_REASON if shadowed else None)
-    # An earlier child that stops the walk and catches every alert this route's own channel
-    # stands for (a catch-all) takes them first.
-    if reason is None and any(
-        stop and not lab and why is None for stop, (lab, why) in zip(stops, parts, strict=True)
-    ):
+    # A route's own receiver gets an alert only when no child matches it, `continue` or not: a
+    # child whose labels are all among this route's (a catch-all has none) takes every alert
+    # this route's channel stands for. A child with a pattern or unreadable matcher can't be
+    # proved to match everything, so it takes none.
+    if reason is None and any(why is None and lab.items() <= labels.items() for lab, why in parts):
         reason = SHADOWED_REASON
     if shadowed and reason is None:
         reason = SHADOWED_REASON
@@ -106,10 +106,14 @@ def _walk(
             )
         )
     prefix = "" if path == "default" else f"{path}."
-    catching: list[dict[str, str]] = []  # the labels of earlier children that stop the walk
+    # The effective labels of earlier children that stop the walk. A later sibling is shadowed
+    # only by one that matches everything it matches; a pattern or unreadable matcher proves
+    # nothing, so such an earlier sibling never shadows.
+    catching: list[dict[str, str]] = []
     for i, child in enumerate(children):
         own_child = parts[i]
-        caught = any(e.items() <= own_child[0].items() for e in catching)
+        effective = labels | own_child[0]
+        caught = any(e.items() <= effective.items() for e in catching)
         _walk(
             child,
             receiver,
@@ -122,7 +126,7 @@ def _walk(
             caught,
         )
         if stops[i] and own_child[1] is None:
-            catching.append(own_child[0])
+            catching.append(effective)
 
 
 def parse_channels(config_yaml: str) -> list[Channel]:

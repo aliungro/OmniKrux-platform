@@ -128,7 +128,7 @@ route:
     ]
 
 
-def test_continue_stops_the_shadow():
+def test_continue_does_not_save_a_parent_from_a_matching_child():
     got = shapes(
         """
 route:
@@ -145,7 +145,60 @@ route:
       matchers: ['team="z"']
 """
     )
-    assert [u for _, u, _ in got] == [True] * 5
+    # The catch-all child takes everything the root would get, `continue` or not; `first` has
+    # `continue`, so `second` is still tried.
+    assert got == [
+        ("root", False, SHADOW),
+        ("first", True, None),
+        ("second", True, None),
+        ("all", True, None),
+        ("last", True, None),
+    ]
+
+
+def test_a_narrower_child_leaves_the_parent_usable():
+    got = shapes(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: a
+      matchers: ['team="a"']
+      routes:
+        - receiver: page
+          matchers: ['severity="page"']
+"""
+    )
+    assert [u for _, u, _ in got] == [True, True, True]
+    shadowed = shapes(
+        """
+route:
+  receiver: root
+  routes:
+    - receiver: a
+      matchers: ['team="a"']
+      routes:
+        - receiver: same
+          matchers: ['team="a"']
+"""
+    )
+    assert [(r, u) for r, u, _ in shadowed] == [("root", True), ("a", False), ("same", True)]
+
+
+def test_a_sibling_is_compared_by_its_inherited_labels_too():
+    got = shapes(
+        """
+route:
+  receiver: root
+  matchers: ['team="a"']
+  routes:
+    - receiver: first
+      matchers: ['team="a"']
+    - receiver: second
+      matchers: ['severity="page"']
+"""
+    )
+    assert [(r, u) for r, u, _ in got] == [("root", False), ("first", True), ("second", False)]
 
 
 def test_a_narrower_earlier_sibling_does_not_shadow():
