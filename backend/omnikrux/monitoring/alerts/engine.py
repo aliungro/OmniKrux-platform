@@ -3,8 +3,10 @@
 A background loop ticks once a second. Each tick starts a check of every due target (at most
 `concurrency` at once; a target is never checked twice at once) and returns without waiting for
 them, so a slow source never holds up the others. A check's query is bounded by `CHECK_SECONDS`.
-The loop also prunes history and deliveries once an hour (first a minute after it starts), and
-catches every exception (logged by its type): it never dies. Tests drive `tick(now)` directly and run no loop.
+The loop also prunes history and deliveries once an hour (first a minute after it starts), reads
+the state of the rules that run in a tool every 30 s (`ToolStateReader`, in the background, one
+read at a time), and catches every exception (logged by its type): it never dies. Tests drive
+`tick(now)` (and `ToolStateReader.refresh(now)`) directly and run no loop.
 
 One check: an instant query of the target's `eval_expr` through M2's `run_query` with the
 target's project (so the project's filter is on every selector); the samples, labelled with the
@@ -71,6 +73,8 @@ COUNT_SECONDS = 30
 HOLD_SECONDS = 60
 # Failed checks in a row before "can't check" is told.
 CANT_CHECK_AFTER = 3
+# How often the state of rules that run in a tool is read from the tools.
+TOOL_STATE_SECONDS = 30
 
 UNREACHABLE_CODES = frozenset({"unreachable", "timeout", "unauthorized", "too_large", "tool_error"})
 ERROR_CODES = frozenset({"bad_query", "bad_request", "not_found", "not_linked"})
@@ -181,6 +185,8 @@ class AlertEngine:
         self._targets = 0
         self._counted_at: datetime | None = None
         self._pruned_at: datetime | None = None
+        self._tools_read_at: datetime | None = None
+        self._tools_task: asyncio.Task | None = None
 
     # -- the loop ------------------------------------------------------------------------------
 
@@ -199,6 +205,10 @@ class AlertEngine:
         if loop_task is not None:
             loop_task.cancel()
             await asyncio.gather(loop_task, return_exceptions=True)
+        tools_task, self._tools_task = self._tools_task, None
+        if tools_task is not None:
+            tools_task.cancel()
+            await asyncio.gather(tools_task, return_exceptions=True)
         running = list(self._running.values())
         for task in running:
             task.cancel()
@@ -212,10 +222,25 @@ class AlertEngine:
             try:
                 now = self._clock()
                 await self._launch(now, None)
+                self._read_tools(now)
                 await self._prune(now)
             except Exception as exc:  # noqa: BLE001 (the loop carries on; the next tick tries again)
                 log.warning("An alert engine tick failed (%s); trying again.", type(exc).__name__)
             await asyncio.sleep(self._tick_seconds)
+
+    def _read_tools(self, now: datetime) -> None:
+        """Start a read of the tools' rule state every TOOL_STATE_SECONDS, in the background (a
+        slow tool never holds up the checks), never two at once."""
+        if self._tools_task is not None and not self._tools_task.done():
+            return
+        if self._tools_read_at is not None and 0 <= (now - self._tools_read_at).total_seconds() < (
+            TOOL_STATE_SECONDS
+        ):
+            return
+        self._tools_read_at = now
+        self._tools_task = asyncio.create_task(
+            self._services.tool_state.refresh(now), name="omnikrux-alert-tool-state"
+        )
 
     async def _prune(self, now: datetime) -> None:
         if self._pruned_at is not None and 0 <= (now - self._pruned_at).total_seconds() < (

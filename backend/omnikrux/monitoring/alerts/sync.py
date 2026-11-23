@@ -13,8 +13,8 @@ carries another project's filter, and a rule never reads another project's sourc
 - a target with no source of the type is `error` with the engine's copy at once (never "OK");
 - a leaving target with nothing in a tool goes at once; one with an object in a tool, and every
   added or changed target that runs in a tool (or still has an object there), is handed to the
-  `ToolSync`, which reviews, writes or removes it (Tasks 10 and 11; until then a stub marks it
-  `needs_review`);
+  `ToolSync`, which reviews it (a PrometheusRule: Task 10) or writes or removes it at once (a
+  Loki ruler rule: Task 11);
 - a deleted rule is purged once its last target is gone.
 
 Reconciles of one rule never overlap (a lock per rule), so the last one to start reads the newest
@@ -281,8 +281,7 @@ class ReviewEveryChange:
     """A `ToolSync` that writes nothing into a tool: every change waits for a review. A
     PrometheusRule is always written this way (a cluster change goes through the action
     pipeline: `POST /alerts/targets/{id}/sync` plans the create, update or, for a leaving
-    target or one that no longer runs in Prometheus, the delete). Loki ruler targets wait here
-    too until Task 11's ruler engine writes them."""
+    target or one that no longer runs in Prometheus, the delete)."""
 
     def __init__(self, services: MonitoringServices) -> None:
         self._services = services
@@ -308,18 +307,33 @@ class ReviewEveryChange:
 class ToolEngines:
     """The `ToolSync` that hands each target to the engine of its tool (the tool its object is
     in, else the one it runs in): a PrometheusRule waits for its review (`ReviewEveryChange`,
-    a delete plan when the target is leaving); a Loki ruler rule goes to `loki` (until Task 11,
-    the same review stub)."""
+    a delete plan when the target is leaving); a Loki ruler rule is written or removed at once
+    (`loki`, Task 11's `LokiRuler`). A target whose group leaves Loki because it now runs in
+    Prometheus goes on to its review once the group is out."""
 
     def __init__(self, services: MonitoringServices, *, loki: ToolSync | None = None) -> None:
+        self._services = services
         self._prometheus = ReviewEveryChange(services)
-        self.loki: ToolSync = loki if loki is not None else ReviewEveryChange(services)
+        if loki is None:
+            from omnikrux.monitoring.alerts.tool.loki_ruler import LokiRuler
+
+            loki = LokiRuler(services)
+        self.loki: ToolSync = loki
 
     async def after_change(self, target: TargetRecord, rule: RuleRecord) -> AlertChange | None:
         kind = target.tool_object.kind if target.tool_object is not None else target.tool_kind
-        if kind == "loki_ruler":
-            return await self.loki.after_change(target, rule)
-        return await self._prometheus.after_change(target, rule)
+        if kind != "loki_ruler":
+            return await self._prometheus.after_change(target, rule)
+        change = await self.loki.after_change(target, rule)
+        if target.leaving or (change is not None and change.kind == "failed"):
+            return change
+        try:
+            fresh = await self._services.alerts.get_target(target.id)
+        except UnknownTarget:
+            return change
+        if fresh.engine == "tool" and fresh.tool_kind == "prometheus_rule" and not fresh.leaving:
+            return await self._prometheus.after_change(fresh, rule)
+        return change
 
 
 def _injector(source: SourceConfig):
@@ -627,6 +641,10 @@ class AlertSync:
             except UnknownRule:
                 pass
         return gone
+
+    async def hand_over(self, target: TargetRecord, rule: RuleRecord) -> AlertChange | None:
+        """Hand one target to the ToolSync now (a retry); a failure inside it reads "failed"."""
+        return await self._tell(target, rule)
 
     async def _tell(self, target: TargetRecord, rule: RuleRecord) -> AlertChange | None:
         try:

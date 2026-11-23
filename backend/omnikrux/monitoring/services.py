@@ -33,7 +33,9 @@ if TYPE_CHECKING:
     from omnikrux.monitoring.alerts.engine import AlertEngine
     from omnikrux.monitoring.alerts.notify import Notifier
     from omnikrux.monitoring.alerts.sync import AlertSync
+    from omnikrux.monitoring.alerts.tool.loki_ruler import LokiRuler
     from omnikrux.monitoring.alerts.tool.prometheus_rule import PrometheusRuleAction
+    from omnikrux.monitoring.alerts.tool.state_reader import ToolStateReader
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +68,10 @@ class MonitoringServices:
     alert_sync: AlertSync = field(init=False)
     # Plans and applies a target's PrometheusRule through the action pipeline.
     prometheus_rules: PrometheusRuleAction = field(init=False)
+    # Writes and removes the rules that run in a Loki ruler.
+    loki_ruler: LokiRuler = field(init=False)
+    # Reads the state of the rules that run in a tool (in the engine's loop).
+    tool_state: ToolStateReader = field(init=False)
     # The startup pass of `alert_sync.reconcile_all` (`start_alerts`), while it runs.
     startup_reconcile: asyncio.Task | None = field(default=None, init=False)
 
@@ -115,11 +121,13 @@ def build_services(
 ) -> MonitoringServices:
     """The one place that wires the Monitoring services; `main.py` calls it in the lifespan.
     `alert_engine` False (OMNIKRUX_ALERT_ENGINE=false): the engine is built but never starts,
-    and nothing else that would run in its loop starts either."""
+    and nothing else that would run in its loop starts either (the tool state reader included)."""
     from omnikrux.monitoring.alerts.engine import AlertEngine
     from omnikrux.monitoring.alerts.notify import Notifier
-    from omnikrux.monitoring.alerts.sync import AlertSync
+    from omnikrux.monitoring.alerts.sync import AlertSync, ToolEngines
+    from omnikrux.monitoring.alerts.tool.loki_ruler import LokiRuler
     from omnikrux.monitoring.alerts.tool.prometheus_rule import PrometheusRuleAction
+    from omnikrux.monitoring.alerts.tool.state_reader import ToolStateReader
 
     sources = SourceStore(sessionmaker, box)
     transports = TransportFactory(connections, registry)
@@ -145,6 +153,10 @@ def build_services(
     )
     services.notifier = Notifier(services)
     services.engine = AlertEngine(services, enabled=alert_engine)
-    services.alert_sync = AlertSync(services)
+    services.loki_ruler = LokiRuler(services)
+    services.alert_sync = AlertSync(
+        services, tool_sync=ToolEngines(services, loki=services.loki_ruler)
+    )
     services.prometheus_rules = PrometheusRuleAction(services)
+    services.tool_state = ToolStateReader(services)
     return services

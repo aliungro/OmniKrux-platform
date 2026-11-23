@@ -179,15 +179,12 @@ def summary_template(rule: RuleRecord) -> str:
     return f"{_literal(words)} ({{{{ $value }}}})"
 
 
-def desired_object(
-    rule: RuleRecord, target: TargetRecord, *, namespace: str, name: str, labels: dict[str, str]
-) -> dict:
-    """The PrometheusRule OmniKrux writes for the target: `labels` (what the Prometheus's
-    `ruleSelector` needs) and OmniKrux's own on the object; one group with one alert whose
-    labels carry the severity, the rule and the project (by id, which a rename doesn't change)
-    and the channel's labels."""
+def rule_group(rule: RuleRecord, target: TargetRecord) -> dict:
+    """The rule group a tool runs for the target (a PrometheusRule's one group, or the group a
+    Loki ruler holds): `omnikrux-<target id>`, at the rule's interval, with one alert whose
+    labels carry the channel's labels, then the severity, the rule and the project (by id, which
+    a rename doesn't change). OmniKrux's own labels win over the channel's."""
     cond = rule.condition
-    # The channel's labels first; OmniKrux's own (the severity and every `omnikrux_*`) win.
     alert_labels: dict[str, str] = {}
     if rule.channel is not None:
         alert_labels.update(
@@ -201,6 +198,34 @@ def desired_object(
     alert_labels["omnikrux_rule"] = rule.id
     alert_labels["omnikrux_project"] = target.project_id
     return {
+        "name": group_name(target.id),
+        "interval": duration_text(cond.every_seconds),
+        "rules": [
+            {
+                "alert": rule.name,
+                "expr": target.rule_text,
+                "for": duration_text(cond.for_seconds),
+                "labels": alert_labels,
+                "annotations": {
+                    "summary": summary_template(rule),
+                    "omnikrux_rule": rule.id,
+                },
+            }
+        ],
+    }
+
+
+def group_name(target_id: str) -> str:
+    """The name of the rule group that holds a target's rule in its tool."""
+    return f"omnikrux-{target_id}"
+
+
+def desired_object(
+    rule: RuleRecord, target: TargetRecord, *, namespace: str, name: str, labels: dict[str, str]
+) -> dict:
+    """The PrometheusRule OmniKrux writes for the target: `labels` (what the Prometheus's
+    `ruleSelector` needs) and OmniKrux's own on the object; its one group is `rule_group`."""
+    return {
         "apiVersion": API_VERSION,
         "kind": "PrometheusRule",
         "metadata": {
@@ -208,26 +233,7 @@ def desired_object(
             "namespace": namespace,
             "labels": {**labels, MANAGED_BY: "omnikrux", TARGET_LABEL: target.id},
         },
-        "spec": {
-            "groups": [
-                {
-                    "name": f"omnikrux-{target.id}",
-                    "interval": duration_text(cond.every_seconds),
-                    "rules": [
-                        {
-                            "alert": rule.name,
-                            "expr": target.rule_text,
-                            "for": duration_text(cond.for_seconds),
-                            "labels": alert_labels,
-                            "annotations": {
-                                "summary": summary_template(rule),
-                                "omnikrux_rule": rule.id,
-                            },
-                        }
-                    ],
-                }
-            ]
-        },
+        "spec": {"groups": [rule_group(rule, target)]},
     }
 
 

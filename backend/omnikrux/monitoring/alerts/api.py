@@ -16,10 +16,10 @@ import re
 import string
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +49,20 @@ from omnikrux.monitoring.alerts.rule_expr import (
     substitute,
     variable_defaults,
 )
+from omnikrux.monitoring.alerts.silences import (
+    CREATED_BY,
+    AlertmanagerFailed,
+    AlertmanagerSilences,
+    NewSilence,
+    Silence,
+    SilenceInvalid,
+    ToolSilence,
+    UnknownSilence,
+    check_silence,
+    matchers_text,
+    silence_state,
+)
+from omnikrux.monitoring.alerts.silences import matches as silence_matches
 from omnikrux.monitoring.alerts.store import (
     HistoryKind,
     InstanceRecord,
@@ -127,7 +141,7 @@ from omnikrux.monitoring.query.series import MAX_QUERY_CHARS
 from omnikrux.monitoring.services import MonitoringServices
 from omnikrux.monitoring.sources.capability import CapabilityUnknown
 from omnikrux.monitoring.sources.transport import SourceUnreachable
-from omnikrux.monitoring.sources.types import QUERYABLE_TYPES, NameTaken
+from omnikrux.monitoring.sources.types import QUERYABLE_TYPES, NameTaken, SourceConfig
 
 router = APIRouter(prefix="/alerts")
 
@@ -138,7 +152,6 @@ RuleErrorCode = Literal[
 # -- copy --------------------------------------------------------------------------------------
 
 RULE_GONE = "That alert rule no longer exists."
-LOKI_NOT_REVIEWED = "OmniKrux writes Loki ruler rules itself: there is nothing to review."
 UNKNOWN_SCOPE = "That project or group no longer exists."
 PANEL_RULE = 'This rule belongs to the panel "{panel}" on "{dashboard}". Change it there.'
 TOOL_RULE = "This rule runs in the tool, which keeps checking it. Silence it instead."
@@ -157,6 +170,8 @@ NO_ALERTMANAGER = (
 )
 NOT_SAVED = "The rule couldn't be saved. Try again."
 NOT_REMOVED = "The rule couldn't be removed. Try again."
+NOT_SAVED_SILENCE = "The silence couldn't be saved. Try again."
+NOT_REMOVED_SILENCE = "The silence couldn't be ended. Try again."
 TARGETS_BEHIND = (
     "The rule was saved, but where it runs couldn't be brought up to date. "
     "OmniKrux tries again when it restarts."
@@ -1284,7 +1299,9 @@ async def sync_target(target_id: str, request: Request) -> SyncReviewOut | SyncD
     """Bring the target's tool in line with it. A PrometheusRule is a cluster change: the answer
     is its review (a plan of the action pipeline, applied through `POST /api/actions/{id}/apply`),
     or `done` when nothing is left to do. A refusal is the pipeline's answer, and the target
-    reads "failed" with its words."""
+    reads "failed" with its words. A Loki ruler rule is written (or removed) again at once, with
+    its own audit record; the answer is `done` with the target as it reads after (it says
+    "failed" and why when the ruler refused)."""
     services = _services(request)
     try:
         target = await services.alerts.get_target(target_id)
@@ -1293,7 +1310,8 @@ async def sync_target(target_id: str, request: Request) -> SyncReviewOut | SyncD
         raise RuleRefused(404, "not_found", RULE_GONE).http() from None
     kind = target.tool_object.kind if target.tool_object is not None else target.tool_kind
     if kind == "loki_ruler":
-        raise RuleRefused(409, "tool_rule", LOKI_NOT_REVIEWED).http()
+        await services.alert_sync.hand_over(target, rule)
+        return await _done(services, target.id, rule)
     mode = wanted_mode(target)
     if mode is None or (mode == "upsert" and target.tool_state == "in_sync"):
         return await _done(services, target.id, rule)
@@ -1754,3 +1772,366 @@ async def dry_run_route(body: DryRunIn, request: Request) -> DryRunOut:
         raise HTTPException(
             status_code=exc.status, detail={"code": exc.code, "message": exc.message}
         ) from None
+
+
+# -- routes: silences --------------------------------------------------------------------------
+#
+# Silences live in OmniKrux (they mute what OmniKrux checks and tells) or in a linked
+# Alertmanager (they mute what the tools send there). Adding or ending one writes its audit record
+# first, with no review step ("no audit, no change"); the page asks before it ends one.
+
+SILENCE_GONE = "That silence no longer exists."
+ALERTMANAGER_GONE = "That Alertmanager no longer exists."
+NEEDS_ALERTMANAGER = "Say which Alertmanager holds the silence."
+WHERE_OMNIKRUX_WORDS = "OmniKrux"
+WHERE_ALERTMANAGER_WORDS = "Alertmanager · {source}"
+EXPIRED_FOR = 24 * 3600
+PREVIEW_RULES = 5
+
+
+class OmniKruxWhereIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["omnikrux"]
+
+
+class AlertmanagerWhereIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["alertmanager"]
+    source_id: str = Field(min_length=1)
+
+
+class SilenceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    where: OmniKruxWhereIn | AlertmanagerWhereIn = Field(discriminator="kind")
+    matchers: str  # parsed by `parse_matchers`; refused in words by `check_silence`
+    starts_at: datetime | None = None
+    ends_at: datetime
+    comment: str  # 1 to 500 characters, refused in words by `check_silence`
+
+
+class SilenceWhereOut(BaseModel):
+    kind: Literal["omnikrux", "alertmanager"]
+    source_id: str | None
+    source_name: str | None
+
+
+class SilenceOut(BaseModel):
+    id: str
+    where: SilenceWhereOut
+    matchers: str
+    starts_at: datetime
+    ends_at: datetime
+    comment: str
+    created_by: str
+    state: Literal["active", "pending", "expired"]
+    affects: int | None
+
+
+class SilenceProblemOut(BaseModel):
+    source_name: str
+    message: str
+
+
+class SilencesOut(BaseModel):
+    silences: list[SilenceOut]
+    problems: list[SilenceProblemOut]
+
+
+class SilencePreviewOut(BaseModel):
+    affects: int
+    rules: list[str]
+
+
+def _silence_error(status: int, code: str, message: str, field: str | None = None) -> HTTPException:
+    detail: dict = {"code": code, "message": message}
+    if field is not None:
+        detail["field"] = field
+    return HTTPException(status_code=status, detail=detail)
+
+
+def _checked(body: SilenceIn, moment: datetime) -> NewSilence:
+    """The silence the body asks for; 422 `invalid_silence` in words. A silence OmniKrux matches
+    itself also gets its patterns bounded (they run inside every check)."""
+    try:
+        return check_silence(
+            body.matchers,
+            body.starts_at,
+            body.ends_at,
+            body.comment,
+            now=moment,
+            bound_patterns=body.where.kind == "omnikrux",
+        )
+    except SilenceInvalid as exc:
+        raise _silence_error(422, "invalid_silence", exc.message, exc.field) from None
+
+
+async def _alertmanager(services: MonitoringServices, source_id: str) -> SourceConfig:
+    """The Alertmanager source; 404 `not_found` when there is none by that id."""
+    try:
+        source = await services.sources.get(source_id)
+    except KeyError:
+        source = None
+    if source is None or source.type != "alertmanager":
+        raise _silence_error(404, "not_found", ALERTMANAGER_GONE)
+    return source
+
+
+def _am_client(services: MonitoringServices, source: SourceConfig) -> AlertmanagerSilences:
+    return AlertmanagerSilences(services.transports.for_source(source), source.name)
+
+
+async def _linked_alertmanagers(services: MonitoringServices) -> list[SourceConfig]:
+    """Every Alertmanager linked to a project, by name."""
+    found: dict[str, SourceConfig] = {}
+    for project in await services.projects.list():
+        for link in project.links:
+            if link.source_id in found:
+                continue
+            try:
+                source = await services.sources.get(link.source_id)
+            except KeyError:
+                continue
+            if source.type == "alertmanager":
+                found[source.id] = source
+    return sorted(found.values(), key=lambda s: (s.name.casefold(), s.id))
+
+
+async def _checked_instances(
+    services: MonitoringServices,
+) -> list[tuple[RuleRecord, InstanceRecord]]:
+    """The pending and firing instances of every target OmniKrux checks (an OmniKrux silence
+    mutes only those), with their rules."""
+    alerts = services.alerts
+    rules = {r.id: r for r in await alerts.list_rules()}
+    found: list[tuple[RuleRecord, InstanceRecord]] = []
+    for target in await alerts.targets():
+        rule = rules.get(target.rule_id)
+        if rule is None or target.engine != "omnikrux" or target.leaving:
+            continue
+        found += [(rule, i) for i in await alerts.instances(target.id)]
+    return found
+
+
+def _probe_silence(silence: NewSilence) -> Silence:
+    return Silence(
+        id="",
+        matchers=silence.matchers,
+        starts_at=silence.starts_at,
+        ends_at=silence.ends_at,
+        comment=silence.comment,
+        created_by="",
+        created_at=silence.starts_at,
+        expired_at=None,
+    )
+
+
+def _omnikrux_out(s: Silence, moment: datetime, affects: int | None) -> SilenceOut:
+    return SilenceOut(
+        id=s.id,
+        where=SilenceWhereOut(kind="omnikrux", source_id=None, source_name=None),
+        matchers=matchers_text(s.matchers),
+        starts_at=s.starts_at,
+        ends_at=s.ended_at,
+        comment=s.comment,
+        created_by=s.created_by,
+        state=silence_state(s.starts_at, s.ended_at, moment),
+        affects=affects,
+    )
+
+
+def _tool_out(s: ToolSilence, source: SourceConfig) -> SilenceOut:
+    return SilenceOut(
+        id=s.id,
+        where=SilenceWhereOut(kind="alertmanager", source_id=source.id, source_name=source.name),
+        matchers=matchers_text(s.matchers),
+        starts_at=s.starts_at,
+        ends_at=s.ends_at,
+        comment=s.comment,
+        created_by=s.created_by,
+        state=s.state,
+        affects=None,
+    )
+
+
+@router.get("/silences")
+async def list_silences(request: Request) -> SilencesOut:
+    """OmniKrux's silences and every linked Alertmanager's, newest first; ended ones only from
+    the last 24 hours. An Alertmanager that can't be read is a problem in words; it never hides
+    the others. `affects` counts the instances an OmniKrux silence matches now."""
+    services = _services(request)
+    moment = now_utc()
+    since = moment - timedelta(seconds=EXPIRED_FOR)
+    instances = await _checked_instances(services)
+    out: list[SilenceOut] = []
+    for s in await services.silences.list(include_expired_since=since):
+        state = silence_state(s.starts_at, s.ended_at, moment)
+        affects = (
+            None
+            if state == "expired"
+            else sum(1 for _, i in instances if silence_matches(s, i.labels))
+        )
+        out.append(_omnikrux_out(s, moment, affects))
+    problems: list[SilenceProblemOut] = []
+    for source in await _linked_alertmanagers(services):
+        try:
+            held = await _am_client(services, source).list(moment)
+        except AlertmanagerFailed as exc:
+            problems.append(SilenceProblemOut(source_name=source.name, message=exc.message))
+            continue
+        out += [_tool_out(s, source) for s in held if s.state != "expired" or s.ends_at >= since]
+    out.sort(key=lambda s: (s.starts_at, s.id), reverse=True)
+    return SilencesOut(silences=out, problems=problems)
+
+
+@router.post("/silences/preview")
+async def preview_silence(body: SilenceIn, request: Request) -> SilencePreviewOut:
+    """What the silence would mute now: the active instances it matches (OmniKrux's checks for an
+    OmniKrux silence; the Alertmanager's alerts for one there) and the first 5 rules by name."""
+    services = _services(request)
+    silence = _probe_silence(_checked(body, now_utc()))
+    names: set[str] = set()
+    affects = 0
+    if isinstance(body.where, AlertmanagerWhereIn):
+        source = await _alertmanager(services, body.where.source_id)
+        try:
+            found = await _am_client(services, source).alerts()
+        except AlertmanagerFailed as exc:
+            raise _silence_error(exc.status, "unreachable", exc.message) from None
+        for alert in found:
+            labels = alert.get("labels")
+            if not isinstance(labels, dict):
+                continue
+            labels = {str(k): str(v) for k, v in labels.items()}
+            if silence_matches(silence, labels):
+                affects += 1
+                if labels.get("alertname"):
+                    names.add(labels["alertname"])
+    else:
+        for rule, instance in await _checked_instances(services):
+            if silence_matches(silence, instance.labels):
+                affects += 1
+                names.add(rule.name)
+    rules = sorted(names, key=lambda n: (n.casefold(), n))[:PREVIEW_RULES]
+    return SilencePreviewOut(affects=affects, rules=rules)
+
+
+@router.post("/silences", status_code=201)
+async def add_silence(body: SilenceIn, request: Request) -> SilenceOut:
+    """Add a silence in OmniKrux or in the Alertmanager named (created by "OmniKrux" there). Its
+    audit record is written first; an Alertmanager's refusal passes through in its words."""
+    services = _services(request)
+    moment = now_utc()
+    silence = _checked(body, moment)
+    source: SourceConfig | None = None
+    if isinstance(body.where, AlertmanagerWhereIn):
+        source = await _alertmanager(services, body.where.source_id)
+    text = matchers_text(silence.matchers)
+    where_words = (
+        WHERE_ALERTMANAGER_WORDS.format(source=source.name)
+        if source is not None
+        else WHERE_OMNIKRUX_WORDS
+    )
+    record = await begin_change(
+        request,
+        "silence_add",
+        "silence",
+        text,
+        {"where": where_words, "matchers": text, "ends_at": silence.ends_at.isoformat()},
+    )
+    if source is None:
+        try:
+            stored = await services.silences.create(
+                silence.matchers,
+                silence.starts_at,
+                silence.ends_at,
+                silence.comment,
+                actor_of(request),
+            )
+        except SilenceInvalid as exc:
+            await finish_change(request, record, False, exc.message)
+            raise _silence_error(422, "invalid_silence", exc.message, exc.field) from None
+        except Exception:
+            await finish_change(request, record, False, NOT_SAVED_SILENCE)
+            raise
+        await finish_change(request, record, True)
+        instances = await _checked_instances(services)
+        affects = sum(1 for _, i in instances if silence_matches(stored, i.labels))
+        return _omnikrux_out(stored, now_utc(), affects)
+    try:
+        silence_id = await _am_client(services, source).create(silence)
+    except AlertmanagerFailed as exc:
+        await request.app.state.audit.finish(
+            record, "unknown" if exc.unknown else "failed", exc.message
+        )
+        code = "refused" if exc.status == 422 else "unreachable"
+        raise _silence_error(exc.status, code, exc.message) from None
+    await finish_change(request, record, True)
+    return SilenceOut(
+        id=silence_id,
+        where=SilenceWhereOut(kind="alertmanager", source_id=source.id, source_name=source.name),
+        matchers=text,
+        starts_at=silence.starts_at,
+        ends_at=silence.ends_at,
+        comment=silence.comment,
+        created_by=CREATED_BY,
+        state=silence_state(silence.starts_at, silence.ends_at, now_utc()),
+        affects=None,
+    )
+
+
+@router.delete("/silences/{kind}/{id}", status_code=204)
+async def remove_silence(
+    kind: Literal["omnikrux", "alertmanager"],
+    id: str,
+    request: Request,
+    source_id: str | None = None,
+) -> Response:
+    """End a silence now: OmniKrux's is expired (it stays listed for a day), an Alertmanager's is
+    expired there. Its audit record is written first."""
+    services = _services(request)
+    if kind == "omnikrux":
+        try:
+            held = await services.silences.get(id)
+        except UnknownSilence:
+            raise _silence_error(404, "not_found", SILENCE_GONE) from None
+        text = matchers_text(held.matchers)
+        record = await begin_change(
+            request,
+            "silence_remove",
+            "silence",
+            text,
+            {"where": WHERE_OMNIKRUX_WORDS, "matchers": text},
+        )
+        try:
+            await services.silences.expire(id, now_utc())
+        except UnknownSilence:
+            await finish_change(request, record, False, SILENCE_GONE)
+            raise _silence_error(404, "not_found", SILENCE_GONE) from None
+        except Exception:
+            await finish_change(request, record, False, NOT_REMOVED_SILENCE)
+            raise
+        await finish_change(request, record, True)
+        return Response(status_code=204)
+    if not source_id:
+        raise _silence_error(422, "invalid_silence", NEEDS_ALERTMANAGER, "source_id")
+    source = await _alertmanager(services, source_id)
+    record = await begin_change(
+        request,
+        "silence_remove",
+        "silence",
+        id,
+        {"where": WHERE_ALERTMANAGER_WORDS.format(source=source.name)},
+    )
+    try:
+        await _am_client(services, source).expire(id)
+    except AlertmanagerFailed as exc:
+        await request.app.state.audit.finish(
+            record, "unknown" if exc.unknown else "failed", exc.message
+        )
+        code = {404: "not_found", 422: "refused"}.get(exc.status, "unreachable")
+        raise _silence_error(exc.status, code, exc.message) from None
+    await finish_change(request, record, True)
+    return Response(status_code=204)

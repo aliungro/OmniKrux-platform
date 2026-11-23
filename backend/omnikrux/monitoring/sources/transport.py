@@ -40,7 +40,7 @@ from omnikrux.monitoring.sources.types import SourceConfig
 
 MAX_ANSWER_BYTES = 32 * 1024 * 1024
 
-Method = Literal["GET", "POST"]
+Method = Literal["GET", "POST", "DELETE"]
 UnreachableCode = Literal[
     "unreachable",
     "timeout",
@@ -85,7 +85,12 @@ class SourceTransport(Protocol):
         params: Sequence[tuple[str, str]] = (),
         form: Sequence[tuple[str, str]] | None = None,
         timeout: float,
-    ) -> TransportResponse: ...
+        body: bytes | None = None,
+        content_type: str | None = None,
+    ) -> TransportResponse:
+        """`form` sends a form body; `body` sends those bytes as `content_type` instead (a rule
+        group's YAML, a silence's JSON). Never both."""
+        ...
 
 
 class SourceUnreachable(Exception):
@@ -318,6 +323,8 @@ class DirectTransport:
         params: Sequence[tuple[str, str]] = (),
         form: Sequence[tuple[str, str]] | None = None,
         timeout: float,
+        body: bytes | None = None,
+        content_type: str | None = None,
     ) -> TransportResponse:
         config = self._config
         name = config.name
@@ -329,6 +336,9 @@ class DirectTransport:
         if form is not None:
             data = urlencode(list(form)).encode()
             headers["Content-Type"] = FORM
+        elif body is not None:
+            data = body
+            headers["Content-Type"] = content_type or "application/octet-stream"
         url = self._base + path
         is_https = urlsplit(url).scheme.lower() == "https"
         context = self._factory.ssl_context(config) if is_https else None
@@ -442,6 +452,8 @@ class ClusterServiceTransport:
         params: Sequence[tuple[str, str]] = (),
         form: Sequence[tuple[str, str]] | None = None,
         timeout: float,
+        body: bytes | None = None,
+        content_type: str | None = None,
     ) -> TransportResponse:
         name = self._config.name
         _check_path(path)
@@ -459,7 +471,9 @@ class ClusterServiceTransport:
         cloud = info.source == SOURCE_CLOUD
         try:
             async with asyncio.timeout(timeout):
-                return await self._send(method, path, params, form, timeout, info.name, cloud)
+                return await self._send(
+                    method, path, params, form, timeout, info.name, cloud, body, content_type
+                )
         except SourceUnreachable:
             raise
         except TimeoutError as exc:
@@ -492,12 +506,19 @@ class ClusterServiceTransport:
         timeout: float,
         cluster: str,
         cloud: bool,
+        body: bytes | None = None,
+        content_type: str | None = None,
     ) -> TransportResponse:
         name = self._config.name
         headers = {
             "Accept": "*/*",
             "Content-Type": FORM if form is not None else "application/json",
         }
+        payload: object = None
+        if form is None and body is not None:
+            headers["Content-Type"] = content_type or "application/octet-stream"
+            # The Kubernetes client serialises a JSON body itself; any other type goes as bytes.
+            payload = json.loads(body) if "json" in headers["Content-Type"].lower() else body
         async with AsyncExitStack() as stack:
             try:
                 api = await stack.enter_async_context(
@@ -514,6 +535,7 @@ class ClusterServiceTransport:
                 query_params=list(params),
                 header_params=headers,
                 post_params=list(form) if form is not None else None,
+                body=payload,
                 auth_settings=["BearerToken"],
                 _preload_content=False,
                 _return_http_data_only=True,

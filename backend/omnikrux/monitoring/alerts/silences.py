@@ -11,19 +11,37 @@ matches only the name `API`."""
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnikrux.monitoring.models import SilenceRow, lock_first, now, utc
 from omnikrux.monitoring.projects.types import Matcher
-from omnikrux.monitoring.query.filters import matchers_from_json, matchers_json
+from omnikrux.monitoring.query.filters import (
+    FilterError,
+    matchers_from_json,
+    matchers_json,
+    parse_matchers,
+    render_matchers,
+)
+from omnikrux.monitoring.sources.connector import status_message
+from omnikrux.monitoring.sources.transport import (
+    Method,
+    SourceTransport,
+    SourceUnreachable,
+    TransportResponse,
+    scrub_text,
+)
+
+SilenceState = Literal["active", "pending", "expired"]
 
 NO_MATCHERS = 'A silence needs at least one matcher, like alertname="API latency high".'
 ENDS_BEFORE_START = "A silence has to end after it starts. Pick a later end."
@@ -45,11 +63,12 @@ class UnknownSilence(KeyError):
 
 
 class SilenceInvalid(ValueError):
-    """The silence can't be stored as given; the text says why."""
+    """The silence can't be stored as given; the text says why (and `field`, which value)."""
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, field: str | None = None) -> None:
         super().__init__(message)
         self.message = message
+        self.field = field
 
 
 @dataclass(frozen=True)
@@ -298,3 +317,307 @@ class SilenceStore:
                 row.expired_at = moment
             await session.flush()
             return _record(row)
+
+
+# -- a new silence, as the routes take it ------------------------------------------------------
+
+MAX_DAYS = 90
+MAX_COMMENT = 500
+MAX_MATCHERS_TEXT = 2000
+NAMES_NOTHING = 'Add at least one matcher that names something, like alertname="HighErrorRate".'
+END_FIRST = "The end has to be after the start."
+TOO_LONG = "A silence lasts at most 90 days."
+NO_COMMENT = "Say why, for whoever sees it later."
+LONG_COMMENT = "Use at most 500 characters."
+LONG_MATCHERS = "Use at most 2000 characters."
+
+
+@dataclass(frozen=True)
+class NewSilence:
+    """A silence checked and ready to store, in OmniKrux or in an Alertmanager."""
+
+    matchers: tuple[Matcher, ...]
+    starts_at: datetime
+    ends_at: datetime
+    comment: str
+
+
+def matches_empty(matcher: Matcher) -> bool:
+    """Whether the matcher holds for a label the alert doesn't have (read as "")."""
+    if matcher.op in ("=", "!="):
+        hit = matcher.value == ""
+    else:
+        try:
+            hit = re.fullmatch(matcher.value, "") is not None
+        except re.error:
+            return False
+    return hit if matcher.op in ("=", "=~") else not hit
+
+
+def _readable_problem(label: str, value: str) -> str | None:
+    """A pattern for a tool that matches it itself (Alertmanager's regular expressions run in
+    linear time): only its length, and that it can be read."""
+    if len(value) > MAX_PATTERN:
+        return LONG_PATTERN.format(label=label)
+    try:
+        re.compile(value)
+    except re.error:
+        return BAD_PATTERN.format(label=label)
+    return None
+
+
+def check_silence(
+    text: str,
+    starts_at: datetime | None,
+    ends_at: datetime,
+    comment: str,
+    *,
+    now: datetime,
+    bound_patterns: bool = True,
+) -> NewSilence:
+    """The silence as given, checked: matchers that name something (each pattern short and
+    readable; also quick to match when `bound_patterns`, for those OmniKrux runs itself), a start
+    (now when none, or one already past), an end after it and at most 90 days later, and a
+    comment of 1 to 500 characters. SilenceInvalid with the copy and the field."""
+    if len(text) > MAX_MATCHERS_TEXT:
+        raise SilenceInvalid(LONG_MATCHERS, "matchers")
+    try:
+        matchers = parse_matchers(text)
+    except FilterError as exc:
+        raise SilenceInvalid(str(exc), "matchers") from None
+    if not matchers:
+        raise SilenceInvalid(NAMES_NOTHING, "matchers")
+    for m in matchers:
+        if m.op not in ("=~", "!~"):
+            continue
+        check = pattern_problem if bound_patterns else _readable_problem
+        if (problem := check(m.label, m.value)) is not None:
+            raise SilenceInvalid(problem, "matchers")
+    if all(matches_empty(m) for m in matchers):
+        raise SilenceInvalid(NAMES_NOTHING, "matchers")
+    moment = _aware(now)
+    start = max(_aware(starts_at), moment) if starts_at is not None else moment
+    end = _aware(ends_at)
+    if end <= start:
+        raise SilenceInvalid(END_FIRST, "ends_at")
+    if end - start > timedelta(days=MAX_DAYS):
+        raise SilenceInvalid(TOO_LONG, "ends_at")
+    words = comment.strip()
+    if not words:
+        raise SilenceInvalid(NO_COMMENT, "comment")
+    if len(words) > MAX_COMMENT:
+        raise SilenceInvalid(LONG_COMMENT, "comment")
+    return NewSilence(matchers=matchers, starts_at=start, ends_at=end, comment=words)
+
+
+def silence_state(starts_at: datetime, ended_at: datetime, moment: datetime) -> SilenceState:
+    if ended_at <= moment:
+        return "expired"
+    return "pending" if starts_at > moment else "active"
+
+
+def matchers_text(matchers: Iterable[Matcher]) -> str:
+    """The matchers as written (`alertname="X",team=~"a|b"`); a label name OmniKrux wouldn't
+    write itself (an Alertmanager allows more) is shown as it is."""
+    parts: list[str] = []
+    for m in matchers:
+        try:
+            parts.append(render_matchers([m]))
+        except FilterError:
+            value = m.value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            parts.append(f'{m.label}{m.op}"{value}"')
+    return ",".join(parts)
+
+
+# -- silences in an Alertmanager ---------------------------------------------------------------
+
+AM_SECONDS = 15.0
+AM_REFUSED = "{source} refused the silence: {message}"
+AM_SILENCE_GONE = "That silence no longer exists in {source}."
+AM_UNREADABLE = "{source} answered, but not with its silences. Check the source's address."
+CREATED_BY = "OmniKrux"
+MAX_SAID = 300
+_AM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_FRACTION = re.compile(r"(\.\d{6})\d+")
+
+
+class AlertmanagerFailed(Exception):
+    """An Alertmanager didn't do what was asked. `message` is words to show; `status` the HTTP
+    status a route answers with (422 a refusal, 404 gone, 502 not reached or a fault there);
+    `unknown` when the change may have been made anyway."""
+
+    def __init__(self, message: str, status: int = 502, *, unknown: bool = False) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+        self.unknown = unknown
+
+
+@dataclass(frozen=True)
+class ToolSilence:
+    """A silence as an Alertmanager holds it."""
+
+    id: str
+    matchers: tuple[Matcher, ...]
+    starts_at: datetime
+    ends_at: datetime
+    comment: str
+    created_by: str
+    state: SilenceState
+
+
+def _said(body: bytes) -> str:
+    """What the Alertmanager said was wrong (a JSON string, or an object's message), bounded and
+    without anything that looks like a credential."""
+    text = body.decode("utf-8", "replace")
+    try:
+        data = json.loads(body)
+    except ValueError:
+        data = None
+    if isinstance(data, str):
+        text = data
+    elif isinstance(data, dict):
+        found = data.get("message") or data.get("error")
+        text = found if isinstance(found, str) else ""
+    return " ".join(scrub_text(text).split())[:MAX_SAID]
+
+
+def _am_matcher(m: Matcher) -> dict:
+    return {
+        "name": m.label,
+        "value": m.value,
+        "isRegex": m.op in ("=~", "!~"),
+        "isEqual": m.op in ("=", "=~"),
+    }
+
+
+def _from_am_matcher(raw: object) -> Matcher | None:
+    if not isinstance(raw, dict):
+        return None
+    name, value = raw.get("name"), raw.get("value")
+    if not isinstance(name, str) or not isinstance(value, str):
+        return None
+    equal = raw.get("isEqual", True) is not False
+    if raw.get("isRegex"):
+        return Matcher(name, "=~" if equal else "!~", value)
+    return Matcher(name, "=" if equal else "!=", value)
+
+
+def _parse_time(text: object) -> datetime | None:
+    if not isinstance(text, str) or not text:
+        return None
+    cleaned = _FRACTION.sub(r"\1", text.strip()).replace("Z", "+00:00")
+    try:
+        return _aware(datetime.fromisoformat(cleaned))
+    except ValueError:
+        return None
+
+
+def _tool_silence(raw: object, moment: datetime) -> ToolSilence | None:
+    if not isinstance(raw, dict) or not isinstance(raw.get("id"), str):
+        return None
+    starts, ends = _parse_time(raw.get("startsAt")), _parse_time(raw.get("endsAt"))
+    if starts is None or ends is None:
+        return None
+    matchers = tuple(m for raw_m in raw.get("matchers") or [] if (m := _from_am_matcher(raw_m)))
+    status = raw.get("status")
+    said = status.get("state") if isinstance(status, dict) else None
+    state: SilenceState = (
+        said if said in ("active", "pending", "expired") else silence_state(starts, ends, moment)
+    )
+    created_by, comment = raw.get("createdBy"), raw.get("comment")
+    return ToolSilence(
+        id=raw["id"],
+        matchers=matchers,
+        starts_at=starts,
+        ends_at=ends,
+        comment=comment if isinstance(comment, str) else "",
+        created_by=created_by if isinstance(created_by, str) else "",
+        state=state,
+    )
+
+
+def _json_list(got: TransportResponse) -> list | None:
+    try:
+        data = json.loads(got.body)
+    except ValueError:
+        return None
+    return data if isinstance(data, list) else None
+
+
+class AlertmanagerSilences:
+    """An Alertmanager's silences through its v2 API, over the source's transport (its
+    credentials never leave the transport, and no answer here repeats them)."""
+
+    def __init__(self, transport: SourceTransport, name: str) -> None:
+        self._transport = transport
+        self._name = name
+
+    async def _request(self, method: Method, path: str, **kwargs) -> TransportResponse:
+        try:
+            return await self._transport.request(method, path, timeout=AM_SECONDS, **kwargs)
+        except SourceUnreachable as exc:
+            unknown = exc.code in ("timeout", "unreachable")
+            raise AlertmanagerFailed(exc.message, unknown=unknown) from None
+
+    def _failed(self, got: TransportResponse) -> AlertmanagerFailed:
+        if got.status in (400, 422):
+            said = _said(got.body) or status_message(self._name, got.status)
+            return AlertmanagerFailed(AM_REFUSED.format(source=self._name, message=said), 422)
+        return AlertmanagerFailed(status_message(self._name, got.status), unknown=got.status >= 500)
+
+    async def list(self, moment: datetime) -> list[ToolSilence]:
+        """Every silence it holds. AlertmanagerFailed."""
+        got = await self._request("GET", "/api/v2/silences")
+        if got.status != 200:
+            raise self._failed(got)
+        data = _json_list(got)
+        if data is None:
+            raise AlertmanagerFailed(AM_UNREADABLE.format(source=self._name))
+        return [s for raw in data if (s := _tool_silence(raw, _aware(moment))) is not None]
+
+    async def alerts(self) -> list[dict]:
+        """Its active alerts, silenced and inhibited ones included. AlertmanagerFailed."""
+        got = await self._request("GET", "/api/v2/alerts", params=[("active", "true")])
+        if got.status != 200:
+            raise self._failed(got)
+        data = _json_list(got)
+        if data is None:
+            raise AlertmanagerFailed(AM_UNREADABLE.format(source=self._name))
+        return [a for a in data if isinstance(a, dict)]
+
+    async def create(self, silence: NewSilence) -> str:
+        """The new silence's id. AlertmanagerFailed (422 with its words when it refused)."""
+        body = {
+            "matchers": [_am_matcher(m) for m in silence.matchers],
+            "startsAt": silence.starts_at.isoformat(),
+            "endsAt": silence.ends_at.isoformat(),
+            "createdBy": CREATED_BY,
+            "comment": silence.comment,
+        }
+        got = await self._request(
+            "POST",
+            "/api/v2/silences",
+            body=json.dumps(body).encode(),
+            content_type="application/json",
+        )
+        if not 200 <= got.status < 300:
+            raise self._failed(got)
+        try:
+            data = json.loads(got.body)
+        except ValueError:
+            data = None
+        found = data.get("silenceID") if isinstance(data, dict) else None
+        if not isinstance(found, str):
+            raise AlertmanagerFailed(AM_UNREADABLE.format(source=self._name), unknown=True)
+        return found
+
+    async def expire(self, silence_id: str) -> None:
+        """End it now. AlertmanagerFailed (404 when it isn't there)."""
+        if _AM_ID.fullmatch(silence_id) is None:
+            raise AlertmanagerFailed(AM_SILENCE_GONE.format(source=self._name), 404)
+        got = await self._request("DELETE", f"/api/v2/silence/{silence_id}")
+        if got.status == 404:
+            raise AlertmanagerFailed(AM_SILENCE_GONE.format(source=self._name), 404)
+        if not 200 <= got.status < 300:
+            raise self._failed(got)
