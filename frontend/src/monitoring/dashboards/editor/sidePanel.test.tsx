@@ -258,12 +258,12 @@ describe("The panel side panel", () => {
     expect(draftPanel("p-1").queries.map((q) => q.ref)).toEqual(["A"]);
   });
 
-  it("the Alert tab says when alerts arrive", async () => {
+  it("the Alert tab offers an alert to a panel without one", async () => {
     const { user } = await openSettings();
     await user.click(tabNamed("Alert"));
     const panel = within(settings()).getByRole("tabpanel");
-    expect(panel.textContent).toBe("Alerts arrive in a later update, together with the Alerts page.");
-    expect(within(panel).queryAllByRole("button")).toHaveLength(0);
+    expect(panel.textContent).toBe("This panel has no alert.Add an alert");
+    expect(within(panel).getAllByRole("button").map((b) => b.textContent)).toEqual(["Add an alert"]);
     expect(document.activeElement).toBe(tabNamed("Alert"));
   });
 });

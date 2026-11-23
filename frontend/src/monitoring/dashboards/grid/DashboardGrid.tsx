@@ -30,26 +30,36 @@ interface Props {
   controls?: RefObject<GridControls | null>;
   /** Edit mode on a new dashboard with the suggestions open: the dashed "Your new dashboard" board. */
   board?: boolean;
+  /** A panel's alert badge opens its rule on the Alerts page (a new workspace tab with Ctrl). */
+  openRule?(ruleId: string, newTab: boolean): void;
+  /** The panel to flash (a link to it arrived); `seq` rises with each arrival. */
+  spotlight?: { id: string; seq: number } | null;
 }
 
-export type GridControls = Pick<GridEditing, "addEmpty" | "announce" | "focusPanel">;
+export type GridControls = Pick<GridEditing, "addEmpty" | "announce" | "focusPanel" | "openPanel">;
 
-export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, range, waiting, blocked, refreshSeq, status, editor, onAddPanel, controls, board }: Props) {
+export function DashboardGrid({
+  dashboardId, panels, owner, ownerName, vars, range, waiting, blocked, refreshSeq, status, editor, onAddPanel, controls, board, openRule, spotlight,
+}: Props) {
   const gridRef = useRef<HTMLDivElement>(null);
   const edit = useEditableGrid(editor ?? null, gridRef, owner, { onAddPanel });
   const addEmpty = edit?.addEmpty;
   const announce = edit?.announce;
   const focusPanel = edit?.focusPanel;
+  const openPanel = edit?.openPanel;
   useLayoutEffect(() => {
     if (!controls) return;
     const ref = controls as { current: GridControls | null };
-    ref.current = addEmpty && announce && focusPanel ? { addEmpty, announce, focusPanel } : null;
+    ref.current = addEmpty && announce && focusPanel && openPanel ? { addEmpty, announce, focusPanel, openPanel } : null;
     return () => { ref.current = null; };
-  }, [controls, addEmpty, announce, focusPanel]);
+  }, [controls, addEmpty, announce, focusPanel, openPanel]);
   const ordered = useMemo(
     () => [...panels].sort((a, b) => a.layout.y - b.layout.y || a.layout.x - b.layout.x),
     [panels],
   );
+  // In edit mode a panel's badge compares its draft alert with the saved one.
+  const base = editor?.state.base.panels;
+  const saved = useMemo(() => (base ? new Map(base.map((p) => [p.id, p.alert])) : null), [base]);
   if (ordered.length === 0 && !edit) return <p className={s.empty}>This dashboard has no panels yet.</p>;
   return (
     <div className={s.frame}>
@@ -58,7 +68,9 @@ export function DashboardGrid({ dashboardId, panels, owner, ownerName, vars, ran
         {ordered.map((panel) => (
           <PanelFrame key={panel.id} dashboardId={dashboardId} panel={panel} owner={owner} ownerName={ownerName}
             vars={vars} range={range} waiting={waiting(panel)} blocked={blocked(panel)} refreshSeq={refreshSeq} status={status}
-            changeId={editor?.state.changes[panel.id] ?? 0} layout={edit?.layoutOf(panel)} tile={edit?.tile(panel)} />
+            changeId={editor?.state.changes[panel.id] ?? 0} layout={edit?.layoutOf(panel)} tile={edit?.tile(panel)}
+            savedAlert={saved ? saved.get(panel.id) ?? null : panel.alert} openRule={openRule}
+            spotlight={spotlight?.id === panel.id ? spotlight.seq : 0} />
         ))}
         {edit && board && (
           <div className={s.board} data-board="">

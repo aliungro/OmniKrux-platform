@@ -1,8 +1,11 @@
 // Copy dashboard…: a new dashboard with this one's panels, under a title and owner of the
-// reader's choice (sources the new owner can't use are set to its own).
+// reader's choice (sources the new owner can't use are set to its own). Panel alerts stay with the
+// dashboard they were written on: the copy's panels have none, and the dialog says so.
 import type { RefObject } from "react";
 import { copyDashboard, type DashboardOut } from "../api";
 import { OwnerDialog } from "./NewDashboardDialog";
+
+export const ALERTS_NOT_COPIED = "Alerts aren't copied; add them on the copy's panels.";
 
 export function CopyDashboardDialog({ dashboard, restoreFocusTo, onCancel, onCopied }: {
   dashboard: DashboardOut;
@@ -16,6 +19,7 @@ export function CopyDashboardDialog({ dashboard, restoreFocusTo, onCancel, onCop
     <OwnerDialog heading="Copy dashboard" action="Create copy" busyAction="Copying…" owner={owner}
       titleFor={() => title}
       send={(o, t) => copyDashboard({ from_id: dashboard.id, owner_kind: o.kind, owner_id: o.id, title: t })}
-      restoreFocusTo={restoreFocusTo} onCancel={onCancel} onDone={onCopied} />
+      restoreFocusTo={restoreFocusTo} onCancel={onCancel} onDone={onCopied}
+      note={dashboard.spec.panels.some((p) => p.alert !== null) ? ALERTS_NOT_COPIED : null} />
   );
 }

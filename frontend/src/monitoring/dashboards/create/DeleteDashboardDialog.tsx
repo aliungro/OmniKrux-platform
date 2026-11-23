@@ -12,6 +12,9 @@ import { readDraft } from "../drafts/draftStore";
 export const STALE_DELETE = "This dashboard was saved since you opened this. Review it again.";
 
 const versionsLine = (n: number) => (n === 1 ? "Its saved version goes with it." : `Its ${n} saved versions go with it.`);
+/** Its panels' alert rules aren't deleted with it: they stay on the Alerts page, unattached. */
+export const alertsLine = (n: number) =>
+  (n === 1 ? "Its alert rule stays on the Alerts page, without a panel." : `Its ${n} alert rules stay on the Alerts page, without a panel.`);
 
 export function DeleteDashboardDialog({ dashboard, restoreFocusTo, onCancel, onDeleted }: {
   dashboard: DashboardOut;
@@ -28,6 +31,7 @@ export function DeleteDashboardDialog({ dashboard, restoreFocusTo, onCancel, onD
   const [error, setError] = useState<string | null>(null);
   const draft = readDraft(dashboard.id) !== null;
   const count = versions.data?.length;
+  const alerts = dashboard.spec.panels.filter((p) => p.alert !== null).length;
 
   const confirm = async () => {
     if (busy) return;
@@ -64,6 +68,7 @@ export function DeleteDashboardDialog({ dashboard, restoreFocusTo, onCancel, onD
       restoreFocusTo={restoreFocusTo} onCancel={onCancel} onConfirm={() => void confirm()}>
       <p>{count === undefined ? "Its saved versions go with it." : versionsLine(count)}</p>
       {draft && <p>Your unsaved draft in this browser goes too.</p>}
+      {alerts > 0 && <p>{alertsLine(alerts)}</p>}
     </DeleteReviewDialog>
   );
 }

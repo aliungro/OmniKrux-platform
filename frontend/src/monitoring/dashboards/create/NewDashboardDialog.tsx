@@ -31,7 +31,7 @@ function ownerOfKey(tree: TreeOut | undefined, key: string): Owner | null {
  * the action (Ctrl+Enter, or Enter in Title). A title the owner already uses comes back under Title
  * with the keyboard on it; nowhere picked says so under Goes to.
  */
-export function OwnerDialog({ heading, action, busyAction, owner, titleFor, send, restoreFocusTo, onCancel, onDone }: {
+export function OwnerDialog({ heading, action, busyAction, owner, titleFor, send, restoreFocusTo, onCancel, onDone, note }: {
   heading: string;
   action: string;
   busyAction: string;
@@ -43,6 +43,8 @@ export function OwnerDialog({ heading, action, busyAction, owner, titleFor, send
   restoreFocusTo?: RefObject<HTMLElement | null>;
   onCancel(): void;
   onDone(out: DashboardOut): void;
+  /** Said above the buttons: what the new dashboard won't have (a copy's alerts). */
+  note?: string | null;
 }) {
   const id = useId();
   const client = useQueryClient();
@@ -139,6 +141,7 @@ export function OwnerDialog({ heading, action, busyAction, owner, titleFor, send
           {ownerError && <p id={`${id}-oe`} className={s.fieldError}>{ownerError}</p>}
           {hint && <p id={`${id}-oh`} className={s.hint}>{hint}</p>}
         </div>
+        {note && <p className={s.hint}>{note}</p>}
         {error && <p className={s.error} role="alert">{error}</p>}
         <div className={s.actions}>
           <button type="button" className={s.secondary} aria-disabled={busy || undefined} onClick={() => { if (!busy) onCancel(); }}>Cancel</button>

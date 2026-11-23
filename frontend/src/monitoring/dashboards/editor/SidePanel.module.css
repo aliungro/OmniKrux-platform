@@ -457,11 +457,127 @@
 
 /* --- Alert ---------------------------------------------------------------------------------- */
 
-.later {
+/* The rule form's pieces, stacked in the 360 px column; quiet notes between them in ink-3. */
+.alertForm,
+.alertEmpty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.alertEmpty .add {
+  margin-top: 2px;
+}
+
+.alertQuiet {
   margin: 0;
   color: var(--ink-2);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+.alertNote {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.alertSentence {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Once saved: where the rule stands now, its tone on a dot, and the way to it on the Alerts page. */
+.alertNow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.alertNowText {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.alertNowText::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  translate: 0 -1px;
+}
+
+.alertNow[data-tone="ok"] .alertNowText::before {
+  background: var(--ok);
+}
+
+.alertNow[data-tone="warn"] .alertNowText::before {
+  background: var(--warn);
+}
+
+.alertNow[data-tone="bad"] {
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--rule));
+  background: color-mix(in srgb, var(--bad) 6%, var(--bg));
+}
+
+.alertNow[data-tone="bad"] .alertNowText::before {
+  background: var(--bad);
+}
+
+.alertLink {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--focus) 40%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.alertLink:hover {
+  text-decoration-color: var(--focus);
+}
+
+.alertFoot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+}
+
+.alertRemove {
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.alertRemove:hover {
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--rule));
+  color: var(--bad);
 }
 
 .body:focus-visible,
@@ -475,7 +591,9 @@
 .box:focus-visible,
 .type:focus-visible,
 .remove:focus-visible,
-.add:focus-visible {
+.add:focus-visible,
+.alertLink:focus-visible,
+.alertRemove:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }

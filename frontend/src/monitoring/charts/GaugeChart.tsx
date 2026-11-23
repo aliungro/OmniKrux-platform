@@ -1,8 +1,10 @@
-// Gauge panel: up to six arcs from min to max with threshold bands behind the value.
+// Gauge panel: up to six arcs from min to max with threshold bands behind the value. A panel
+// alert's threshold is a rose tick across the arc (when it is inside the range).
 
 import type { ChartSeries } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
 import { thresholdColor } from "./colors";
+import type { AlertBand } from "./drawTimeSeries";
 import { reduceSeries } from "./reduce";
 import { formatValue } from "./units";
 import styles from "./Charts.module.css";
@@ -25,6 +27,12 @@ function at(f: number): string {
 function arc(f0: number, f1: number): string {
   return `M${at(f0)} A${R} ${R} 0 0 1 ${at(f1)}`;
 }
+/** A short radial line across the arc at fraction f. */
+function tick(f: number): string {
+  const a = Math.PI * (1 - f);
+  const p = (r: number) => `${(CX + r * Math.cos(a)).toFixed(2)} ${(CY - r * Math.sin(a)).toFixed(2)}`;
+  return `M${p(R - 8)} L${p(R + 7)}`;
+}
 
 /** The maximum the panel draws to: its own, or the unit's natural one. */
 export function gaugeMax(o: GaugePanel["options"]): number | null {
@@ -37,9 +45,11 @@ export function gaugeMax(o: GaugePanel["options"]): number | null {
 export interface GaugeChartProps {
   panel: GaugePanel;
   series: ChartSeries[];
+  /** A panel alert's threshold: a `--bad` tick at it. */
+  alert?: AlertBand | null;
 }
 
-export default function GaugeChart({ panel, series }: GaugeChartProps) {
+export default function GaugeChart({ panel, series, alert = null }: GaugeChartProps) {
   const o = panel.options;
   if (series.length === 0) return null;
   const max = gaugeMax(o);
@@ -49,6 +59,7 @@ export default function GaugeChart({ panel, series }: GaugeChartProps) {
   const frac = (v: number) => Math.min(1, Math.max(0, (v - min) / (max - min)));
   const bands = [...o.thresholds].sort((a, b) => a.value - b.value);
   const shown = series.slice(0, MAX_GAUGES);
+  const limit = alert && Number.isFinite(alert.threshold) && alert.threshold >= min && alert.threshold <= max ? alert.threshold : null;
   return (
     <div className={styles.stat}>
       <div className={styles.gaugeGrid} role="group" aria-label={panel.title}>
@@ -80,6 +91,7 @@ export default function GaugeChart({ panel, series }: GaugeChartProps) {
                 {value !== null && frac(value) > 0 ? (
                   <path className={styles.gaugeValue} style={{ color: tone ? `var(--${tone})` : "var(--focus)" }} d={arc(0, frac(value))} />
                 ) : null}
+                {limit !== null && <path className={styles.gaugeAlert} data-alert-tick="" d={tick(frac(limit))} />}
               </svg>
               <span className={styles.gaugeText}>{text}</span>
               {series.length > 1 ? <span className={styles.statName} title={s.name}>{s.name}</span> : null}

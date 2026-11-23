@@ -2,6 +2,7 @@
 // the drawing for the panel's type. A panel that couldn't answer draws no series: never the
 // previous answer dressed as current.
 
+import { useMemo } from "react";
 import type { ChartLogLine, ChartSeries, PanelData } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
 import BarChart from "./BarChart";
@@ -36,8 +37,9 @@ export interface ChartViewProps {
   /** Logs only (Explore): the key that brings the keyboard to the list (`aria-keyshortcuts`). */
   listKeyshortcuts?: string;
   /**
-   * Time series only: an alert rule's threshold band (the Alerts page, the rule form). Given, it
-   * wins over the panel's own alert; absent or null, the chart draws none.
+   * An alert rule's threshold (the Alerts page, the rule form). Given (null too), it wins over the
+   * panel's own alert; absent, the panel's alert draws it. A time series draws the dashed line and
+   * the shaded firing side, a bar chart the dashed line, a gauge a tick; a stat draws nothing.
    */
   alert?: AlertBand | null;
 }
@@ -45,6 +47,18 @@ export interface ChartViewProps {
 export type { AlertBand, ChartMark, ChartRange };
 
 const NO_SERIES: ChartSeries[] = [];
+
+/** The band of a panel's own alert: the same object while the alert's condition doesn't change. */
+function usePanelBand(panel: PanelSpec): AlertBand | null {
+  const a = panel.alert;
+  const op = a?.op;
+  const threshold = a?.threshold;
+  const queryRef = a?.query;
+  return useMemo(
+    () => (op !== undefined && threshold !== undefined && queryRef !== undefined && Number.isFinite(threshold) ? { op, threshold, queryRef } : null),
+    [op, threshold, queryRef],
+  );
+}
 const NO_LOGS: ChartLogLine[] = [];
 
 export default function ChartView({
@@ -53,18 +67,20 @@ export default function ChartView({
   // A panel that couldn't answer draws nothing, whatever its type: never the old answer.
   const answered = data.state !== "unreachable" && data.state !== "error" && data.state !== "noQuery";
   const series = answered ? data.series : NO_SERIES;
+  const own = usePanelBand(panel);
+  const band = alert !== undefined ? alert : own;
   switch (panel.type) {
     case "timeseries":
       return (
         <TimeSeriesChart panel={panel} series={series} range={range} animate={animate} changeId={changeId} editId={data.editId}
-          selection={selection} onSelect={onSelect} marks={marks} step={step} alert={alert ?? null} />
+          selection={selection} onSelect={onSelect} marks={marks} step={step} alert={band} />
       );
     case "stat":
       return <StatChart panel={panel} series={series} animate={animate} changeId={changeId} editId={data.editId} />;
     case "gauge":
-      return <GaugeChart panel={panel} series={series} />;
+      return <GaugeChart panel={panel} series={series} alert={band} />;
     case "bar":
-      return <BarChart panel={panel} series={series} />;
+      return <BarChart panel={panel} series={series} alert={band} />;
     case "table":
       return <TableChart panel={panel} series={series} />;
     case "logs":

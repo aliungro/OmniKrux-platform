@@ -3,6 +3,8 @@
 // into tiles and the header into Discard and Save dashboard (edit mode, kept per workspace tab).
 // Time, variables, auto-refresh and the view tab live in the tab's view (replace navigations).
 // "+ Add panel" (and `a`) open Add panel's search; what it adds goes into the edit draft.
+// A link to a panel (`panel`) scrolls to it and flashes it; `editAlert` opens edit mode on that
+// panel's Alert tab. A panel's alert badge and its Alert tab open the rule on the Alerts page.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
@@ -22,6 +24,7 @@ import type { VarValue } from "../interpolate";
 import type { NewPanel } from "../layout";
 import type { RefreshSpec, TimeSpec } from "../schema";
 import { DashboardGrid, type GridControls } from "../grid/DashboardGrid";
+import { usePrefersReducedMotion } from "../motion";
 import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/EditBar";
 import { hasUnsavedWork, isDraftEdit, JSON_FIRST, type EditorAction, type EditorState } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
@@ -93,7 +96,12 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   reread: RereadFailure | null;
 }) {
   const ready = dashboard.ready_made;
-  const editor = useDashboardEditor(dashboard.id, tabId);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const saveButton = useRef<HTMLButtonElement>(null);
+  // A save's cluster reviews open over the saved dashboard; the keyboard comes back to Edit after.
+  const editor = useDashboardEditor(dashboard.id, tabId, {
+    reviewFocus: (stillEditing) => (stillEditing ? saveButton.current : editButton.current),
+  });
   const editing = editor.state.mode === "edit" ? editor.state : null;
   // In edit mode the page shows the draft; the saved document otherwise.
   const spec = editing ? editing.draft : dashboard.spec;
@@ -109,10 +117,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const tabRefs = useRef<Partial<Record<DashboardTab, HTMLButtonElement | null>>>({});
   const timeButton = useRef<HTMLButtonElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
-  const editButton = useRef<HTMLButtonElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
   const discardButton = useRef<HTMLButtonElement>(null);
-  const saveButton = useRef<HTMLButtonElement>(null);
   const page = useRef<HTMLElement>(null);
   const [timeOpen, setTimeOpen] = useState(false);
   /** Asking before Discard drops changes; the keyboard goes back to the Discard it came from. */
@@ -398,6 +404,70 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
 
   const openPage = (target: MonitoringView, e: MouseEvent<HTMLAnchorElement>) =>
     (e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push"));
+  // A panel's alert (its badge, its Alert tab): the rule on the Alerts page. The same function
+  // across renders, so panels don't render again for it.
+  const ways = useRef({ nav, openInNewTab });
+  ways.current = { nav, openInNewTab };
+  const openRule = useCallback((rule: string, newTab: boolean) => {
+    const target: MonitoringView = { page: "alerts", rule };
+    if (newTab) ways.current.openInNewTab(target);
+    else ways.current.nav.navigate(target, "push");
+  }, []);
+
+  // A link to a panel: it is scrolled into view and flashes; with `editAlert`, edit mode opens on
+  // its Alert tab with the keyboard on Threshold. Both are done once, then left out of the view
+  // (replaced: Back still goes where the user came from); a later link to the same dashboard is a
+  // view change here (the page stays), so it is acted on as it comes.
+  const reduced = usePrefersReducedMotion();
+  const [spotlight, setSpotlight] = useState<{ id: string; seq: number } | null>(null);
+  const alertArrival = useRef<string | null>(null);
+  /** Renders again so the Alert tab opens once the grid can take it. */
+  const [, setAlertSeq] = useState(0);
+  const linkKey = view.panel ? `${view.panel}:${view.editAlert ? "edit" : "view"}` : "";
+  useEffect(() => {
+    const id = view.panel;
+    if (!id) return;
+    const wantsAlert = view.editAlert === true;
+    nav.navigate((v) => {
+      if (v.page !== "dashboard" || v.id !== view.id) return v;
+      const rest = { ...v };
+      delete rest.panel;
+      delete rest.editAlert;
+      return wantsAlert && rest.tab !== undefined && rest.tab !== "dashboard" ? { ...rest, tab: undefined } : rest;
+    }, "replace");
+    if (!spec.panels.some((p) => p.id === id)) return;
+    const el = Array.from(page.current?.querySelectorAll<HTMLElement>("[data-panel-id]") ?? []).find((x) => x.dataset.panelId === id);
+    el?.scrollIntoView?.({ block: "center", behavior: reduced ? "auto" : "smooth" });
+    setSpotlight((was) => ({ id, seq: (was?.seq ?? 0) + 1 }));
+    if (!wantsAlert || ready) return;
+    if (editor.state.mode === "edit" || startEditing(null)) {
+      alertArrival.current = id;
+      setAlertSeq((n) => n + 1);
+    }
+    // Acted on as each link arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkKey]);
+  // Once edit mode is on and the grid can take it: the panel's settings, on its Alert tab.
+  useLayoutEffect(() => {
+    const id = alertArrival.current;
+    if (id === null || editor.state.mode !== "edit" || !grid.current) return;
+    alertArrival.current = null;
+    grid.current.openPanel(id, "alert");
+  });
+
+  // A save refused for a panel's alert (a contact point that's gone): that panel's Alert tab, with
+  // its words under the field and the keyboard there.
+  const refusal = editor.saveError;
+  useEffect(() => {
+    if (!refusal || refusal.code !== "invalid_dashboard" || editor.state.mode !== "edit") return;
+    const at = refusal.problems.map((p) => /^panels\[(\d+)\]\.alert(?:[.[]|$)/.exec(p.path)).find((m) => m !== null);
+    const panel = at ? editor.state.draft.panels[Number(at[1])] : undefined;
+    if (!panel) return;
+    alertArrival.current = panel.id;
+    setAlertSeq((n) => n + 1);
+    // Once per refusal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refusal]);
   const ownerView = { page: dashboard.owner_kind, id: dashboard.owner_id } as const;
   const openOwner = (e: MouseEvent<HTMLAnchorElement>) => openPage(ownerView, e);
   const [asking, setAsking] = useState<"copy" | "delete" | null>(null);
@@ -424,6 +494,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
 
   const { saveError, conflict } = editor;
   const otherError = saveError && saveError.code !== "version_conflict" ? saveError : null;
+  const saveProblems = saveError?.code === "invalid_dashboard" ? saveError.problems : undefined;
 
   return (
     <section ref={page} className={s.page} aria-labelledby={titleId}>
@@ -499,9 +570,11 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
               vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} blocked={ctx.blocked} refreshSeq={ctx.refreshSeq} status={ctx.status}
               editor={editing ? {
                 state: editing, dispatch: editor.dispatch, ownerKind: dashboard.owner_kind, onLeave: () => saveButton.current?.focus(),
+                saveProblems, openRule,
               } : undefined}
               onAddPanel={editing ? openSearch : undefined} controls={grid}
-              board={editing !== null && editing.suggestions === "open" && editing.draft.panels.length === 0} />
+              board={editing !== null && editing.suggestions === "open" && editing.draft.panels.length === 0}
+              openRule={openRule} spotlight={spotlight} />
             </RailLayout>
           </>
         )}

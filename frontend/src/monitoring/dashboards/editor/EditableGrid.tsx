@@ -10,10 +10,10 @@ import {
 import { isDeleteKey, pressed } from "../../../features/chrome/shortcuts";
 import { freeSpot, neighbour, placePanel, type Dir } from "../layout";
 import type { DashboardOwner } from "../runPanel";
-import { GRID_COLUMNS, type Layout, type OwnerKind, type PanelSpec } from "../schema";
+import { GRID_COLUMNS, type Layout, type OwnerKind, type PanelSpec, type Problem } from "../schema";
 import { pageLetter } from "../page/keys";
 import { AddPanelTile, cellStyle } from "./AddPanelTile";
-import { editorReducer, isDraftEdit, JSON_FIRST, type EditingState, type EditorAction } from "./editorState";
+import { editorReducer, isDraftEdit, JSON_FIRST, type EditingState, type EditorAction, type SideTab } from "./editorState";
 import { panelName, SidePanel, type PanelLive } from "./SidePanel";
 import s from "./EditableGrid.module.css";
 
@@ -23,6 +23,10 @@ export interface GridEditor {
   /** Esc on a tile (settings closed): the keyboard goes to Save dashboard. */
   onLeave(): void;
   ownerKind: OwnerKind;
+  /** The last save's refusal (422): the Alert tab shows its problems about the panel's alert. */
+  saveProblems?: readonly Problem[];
+  /** Opens the Alerts page on a rule (a new workspace tab with Ctrl): the Alert tab's link. */
+  openRule?(ruleId: string, newTab: boolean): void;
 }
 
 /** What `PanelFrame` needs to be a tile. The same object while nothing it shows changes. */
@@ -58,6 +62,11 @@ export interface GridEditing {
   announce(text: string): void;
   /** Puts the keyboard on a panel's tile (it becomes the one in the Tab order); the tile, if found. */
   focusPanel(id: string): HTMLElement | null;
+  /**
+   * Selects a panel and opens its settings on `tab`; on the Alert tab the keyboard goes to its first
+   * field with a problem, else Threshold (an alert's Edit on its panel, a refused save).
+   */
+  openPanel(id: string, tab: SideTab): void;
 }
 
 export interface GridOptions {
@@ -93,7 +102,7 @@ type Drag = {
   onEscape: (e: globalThis.KeyboardEvent) => void;
 };
 type Preview = { id: string; kind: "move" | "resize"; panels: PanelSpec[]; target: Layout; offset: { x: number; y: number } | null };
-type Settings = { open: boolean; focus: "tab" | "query" | "none"; seq: number };
+type Settings = { open: boolean; focus: "tab" | "query" | "alert" | "none"; seq: number };
 /** The tile handlers, rebuilt each render; tiles call them through a ref so their props stay the same. */
 type Handlers = {
   key(id: string, e: KeyboardEvent<HTMLElement>): void;
@@ -166,6 +175,14 @@ export function useEditableGrid(
     return el;
   }, [findTile]);
   const announce = useCallback((text: string) => setMessage(text), [setMessage]);
+  const openPanel = useCallback((id: string, tab: SideTab) => {
+    const ed = latest.current;
+    if (!ed || !ed.state.draft.panels.some((p) => p.id === id)) return;
+    ed.dispatch({ type: "select", id });
+    ed.dispatch({ type: "sideTab", tab });
+    setCurrent(id);
+    setSettings((was) => ({ open: true, focus: tab === "alert" ? "alert" : "tab", seq: was.seq + 1 }));
+  }, []);
 
   /**
    * While the JSON tab holds text that doesn't apply, edits here are refused (they would drop it)
@@ -469,12 +486,14 @@ export function useEditableGrid(
     aside: settings.open && selected
       ? (
         <SidePanel key={selected.id} state={state} dispatch={settingsDispatch} owner={owner} ownerKind={editor.ownerKind}
-          panelData={live?.data ?? null} live={live} initialFocus={settings.focus} seq={settings.seq} onClose={closeSettings} />
+          panelData={live?.data ?? null} live={live} initialFocus={settings.focus} seq={settings.seq} onClose={closeSettings}
+          saveProblems={editor.saveProblems} onOpenRule={editor.openRule} />
       )
       : null,
     live: <p className={s.live} role="status" aria-live="polite"><span key={message.seq}>{message.text}</span></p>,
     addEmpty: add,
     announce,
     focusPanel,
+    openPanel,
   };
 }

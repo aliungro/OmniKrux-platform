@@ -10,7 +10,7 @@ import type { DashboardOut, ReadyMadeOut } from "../api";
 import { readDraft, writeDraft } from "../drafts/draftStore";
 import { editorReducer, VIEW } from "../editor/editorState";
 import { editSessions } from "../editor/useDashboardEditor";
-import { emptyDashboard } from "../schema";
+import { emptyDashboard, newAlert } from "../schema";
 import { forgetArrival, openMade } from "./arrival";
 import { currentOwner } from "./currentOwner";
 
@@ -342,5 +342,49 @@ describe("Copy and delete", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete dashboard" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Shop" })).toBeTruthy();
     expect(api.state.dashboards.api).toBeUndefined();
+  });
+});
+
+describe("Copy and delete with panel alerts", () => {
+  const withAlerts = (n: number) => {
+    const panels = [panel("p-1", "Requests", "up"), panel("p-2", "Errors", "up", { x: 12 }), panel("p-3", "Latency", "up", { y: 8 })];
+    panels.slice(0, n).forEach((p) => { p.alert = newAlert(p, 1); });
+    return shop({ dashboards: { api: seedDashboard("api", SHOP, spec("API latency", panels)) } });
+  };
+
+  it("copy and delete dialogs say what happens to alerts", async () => {
+    withAlerts(2);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "api" }) });
+    await screen.findByRole("heading", { level: 1, name: "API latency" });
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy dashboard…" }));
+    let dialog = await screen.findByRole("dialog", { name: "Copy dashboard" });
+    expect(within(dialog).getByText("Alerts aren't copied; add them on the copy's panels.")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete dashboard…" }));
+    dialog = await screen.findByRole("alertdialog", { name: 'Delete dashboard "API latency"?' });
+    expect(within(dialog).getByText("Its 2 alert rules stay on the Alerts page, without a panel.")).toBeTruthy();
+  });
+
+  it("one alert reads in the singular, and none says nothing about alerts", async () => {
+    withAlerts(1);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "api" }) });
+    await screen.findByRole("heading", { level: 1, name: "API latency" });
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete dashboard…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Its alert rule stays on the Alerts page, without a panel.")).toBeTruthy();
+    cleanup();
+
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "api" }) });
+    await screen.findByRole("heading", { level: 1, name: "API latency" });
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy dashboard…" }));
+    const copy = await screen.findByRole("dialog", { name: "Copy dashboard" });
+    expect(within(copy).queryByText(/Alerts aren't copied/)).toBeNull();
   });
 });

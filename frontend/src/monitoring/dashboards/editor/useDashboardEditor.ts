@@ -1,10 +1,13 @@
 // A dashboard's edit session in one workspace tab. Sessions live in `editSessions` (this module is
 // in the lazy Monitoring chunk), keyed by tab id, so switching app and back resumes edit mode; the
 // leave check and drafts (Task 16) read the same map. The draft is kept in browser storage while
-// it has changes (`useDraft`), so a reload or Browser Back offers it back.
+// it has changes (`useDraft`), so a reload or Browser Back offers it back. A save that changed
+// panel alerts running in a cluster opens their reviews (the tool review queue) once it is done.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { AlertChangeOut } from "../../alerts/api";
+import { useToolReviews } from "../../alerts/reviews/useToolReviews";
 import { dashboardKey, DashboardRequestError, saveDashboard, useDashboardMutation, type DashboardOut } from "../api";
 import { removeDraft, type StoredDraft } from "../drafts/draftStore";
 import { useDraft } from "../drafts/useDraft";
@@ -46,8 +49,21 @@ const sessionFor = (tabId: string, dashboardId: string): EditorState => {
   return s?.mode === "edit" && s.dashboardId === dashboardId ? s : VIEW;
 };
 
-export function useDashboardEditor(dashboardId: string, tabId: string): DashboardEditor {
+export interface DashboardEditorOptions {
+  /**
+   * Where the keyboard goes when the reviews a save opened are done: the Edit button once edit mode
+   * ended, Save dashboard while it goes on. Read when the reviews are queued (after the save's render).
+   */
+  reviewFocus?(editing: boolean): HTMLElement | null;
+}
+
+export function useDashboardEditor(dashboardId: string, tabId: string, options: DashboardEditorOptions = {}): DashboardEditor {
   const client = useQueryClient();
+  const reviews = useToolReviews();
+  const reviewFocus = useRef(options.reviewFocus);
+  reviewFocus.current = options.reviewFocus;
+  /** A save's alert changes, queued once the page shows what the save did (edit mode ended). */
+  const [toReview, setToReview] = useState<{ changes: AlertChangeOut[] } | null>(null);
   // The latest state, read synchronously: save() right after a dispatch sends what it made.
   const current = useRef<EditorState>(sessionFor(tabId, dashboardId));
   const [state, setState] = useState<EditorState>(current.current);
@@ -111,6 +127,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
       const out: DashboardOut = await mutation.mutateAsync({ id: s.dashboardId, baseVersion, spec: s.draft });
       client.setQueryData(dashboardKey(out.id), out);
       setLastSaved(out);
+      if (out.alert_changes.length > 0) setToReview({ changes: out.alert_changes });
       // Changed while saving: editing goes on over the saved version, and the stored draft is
       // updated with the next write. Otherwise the draft is done with (also when the page went away).
       dispatch({ type: "saved", version: out.version, spec: out.spec, sent: s.draft });
@@ -143,6 +160,15 @@ export function useDashboardEditor(dashboardId: string, tabId: string): Dashboar
   const saveOver = useCallback(async (version: number, base: DashboardSpec) => {
     await send(version, { version, base });
   }, [send]);
+
+  // The reviews open over the saved dashboard: after the render that ended edit mode (its Edit
+  // button is back), and the keyboard returns there when they are done.
+  const { enqueue } = reviews;
+  useEffect(() => {
+    if (toReview === null) return;
+    setToReview(null);
+    enqueue(toReview.changes, { focus: reviewFocus.current?.(current.current.mode === "edit") ?? null });
+  }, [toReview, enqueue]);
 
   const discard = useCallback(() => dispatch({ type: "discard" }), [dispatch]);
 

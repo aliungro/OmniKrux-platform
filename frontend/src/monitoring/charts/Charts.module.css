@@ -309,6 +309,14 @@
   font-size: clamp(16px, 13cqw, 30px);
 }
 
+/* A panel alert's threshold: a rose tick across the arc. */
+.gaugeAlert {
+  fill: none;
+  stroke: var(--bad);
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
 /* Bars */
 .barsH,
 .barsV {
@@ -386,6 +394,13 @@
 
 .barFill {
   fill: currentcolor;
+}
+
+/* A panel alert's threshold: dashed rose, the same line as on a time series. */
+.barAlert {
+  stroke: var(--bad);
+  stroke-dasharray: 3 2;
+  stroke-width: 1.5;
 }
 
 .barValue {

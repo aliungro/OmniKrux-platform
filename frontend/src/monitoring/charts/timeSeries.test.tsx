@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChartSeries, PanelData } from "../dashboards/runPanel";
-import { newPanel, type PanelSpec, type TimeseriesOptions } from "../dashboards/schema";
+import { newAlert, newPanel, type PanelSpec, type TimeseriesOptions } from "../dashboards/schema";
 import ChartView, { type ChartViewProps } from "./index";
 import { buildFrame, drawTimeSeries, type CanvasLike } from "./drawTimeSeries";
 import { formatTooltipTime } from "./scale";
@@ -220,6 +220,45 @@ describe("ChartView time series", () => {
       unmount();
       vi.restoreAllMocks();
     }
+  });
+
+  it("a panel's alert draws its band: the time series' dashed line, the bar line, the gauge tick", () => {
+    const dashes = (calls: { name: string; args: unknown[] }[]) =>
+      calls.filter((c) => c.name === "setLineDash" && (c.args[0] as number[]).length > 0).length;
+    const alerting = <T extends PanelSpec>(p: T, threshold: number): T => ({ ...p, alert: newAlert(p, threshold) });
+
+    let rec = stubBrowser();
+    const { unmount } = render(<ChartView {...base()} />);
+    expect(dashes(rec.calls)).toBe(0);
+    unmount();
+    vi.restoreAllMocks();
+    rec = stubBrowser();
+    render(<ChartView {...base({ panel: alerting(panelOf(), 2.5) })} />);
+    expect(dashes(rec.calls)).toBeGreaterThan(0);
+    // The firing side is filled faintly.
+    expect(rec.calls.some((c) => c.name === "fill")).toBe(true);
+    cleanup();
+
+    const bar = newPanel("bar", "p-b", { x: 0, y: 0, w: 12, h: 8 });
+    const { container: bars } = render(<ChartView {...base({ panel: alerting(bar, 2) })} />);
+    const lines = bars.querySelectorAll("[data-alert-line]");
+    expect(lines).toHaveLength(2);
+    // On a scale from 0 to 3 (the larger last value), 2 is two thirds of the way.
+    expect(Number(lines[0].getAttribute("x1"))).toBeCloseTo(66.67, 1);
+    cleanup();
+
+    const gauge = { ...newPanel("gauge", "p-g", { x: 0, y: 0, w: 12, h: 8 }) } as Extract<PanelSpec, { type: "gauge" }>;
+    gauge.options = { ...gauge.options, max: 10 };
+    const { container: gauges } = render(<ChartView {...base({ panel: alerting(gauge, 5) })} />);
+    expect(gauges.querySelectorAll("[data-alert-tick]")).toHaveLength(2);
+    cleanup();
+    // Outside its range the gauge draws no tick, and a stat draws nothing for an alert.
+    const { container: high } = render(<ChartView {...base({ panel: alerting(gauge, 50) })} />);
+    expect(high.querySelectorAll("[data-alert-tick]")).toHaveLength(0);
+    cleanup();
+    const stat = newPanel("stat", "p-s", { x: 0, y: 0, w: 6, h: 4 });
+    const { container: stats } = render(<ChartView {...base({ panel: alerting(stat, 2) })} />);
+    expect(stats.querySelectorAll("[data-alert-line], [data-alert-tick]")).toHaveLength(0);
   });
 
   describe("morph", () => {

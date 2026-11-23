@@ -2,11 +2,15 @@
 // when its data was read, and keeps the keyboard off <body> when its chart goes away. In edit
 // mode it is also a tile (`tile`): focusable, named by its place, with move and resize handles;
 // it runs its queries 300 ms after the typing stops, and its frame flashes when it is edited (D1).
-// Memoised: an edit re-renders only the panel it changed.
-import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+// Memoised: an edit re-renders only the panel it changed. A panel with an alert wears its state in
+// the corner (the worst of its targets); in edit mode a changed alert says it isn't saved yet.
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
+import { usePanelStates } from "../../alerts/api";
+import { STATE_LABEL, stateTone } from "../../alerts/format";
 import type { ResolvedVars } from "../interpolate";
 import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun } from "../runPanel";
-import type { Layout, PanelSpec } from "../schema";
+import { sameJson } from "../sameJson";
+import type { Layout, PanelAlert, PanelSpec } from "../schema";
 import type { TileProps } from "../editor/EditableGrid";
 import { useDebouncedQueries } from "../editor/useDebouncedQueries";
 import { FLASH_MS, usePrefersReducedMotion } from "../motion";
@@ -31,6 +35,50 @@ interface Props {
   /** Where it is drawn, when that isn't `panel.layout` (a drag in progress). */
   layout?: Layout;
   tile?: TileProps;
+  /** The panel's alert as saved (in view mode, its own): a draft alert that differs isn't saved yet. */
+  savedAlert?: PanelAlert | null;
+  /** The badge opens its rule on the Alerts page (a new workspace tab with Ctrl). */
+  openRule?(ruleId: string, newTab: boolean): void;
+  /** Rises when a link to this panel arrives: its frame flashes (not under reduced motion). */
+  spotlight?: number;
+}
+
+export const NOT_SAVED_YET = "Alert: not saved yet";
+/** The panel states couldn't be read: the badge says so rather than guess. */
+export const STATE_UNKNOWN = "Unknown";
+export const badgeLabel = (name: string, label: string) => `Alert "${name}": ${label}`;
+
+/** A panel alert's state in the corner: a pill, and a way to its rule on the Alerts page. */
+function AlertBadge({ dashboardId, panelId, alert, changed, openRule }: {
+  dashboardId: string;
+  panelId: string;
+  alert: PanelAlert;
+  changed: boolean;
+  openRule?(ruleId: string, newTab: boolean): void;
+}) {
+  const states = usePanelStates(dashboardId);
+  if (changed) {
+    return <span className={s.badge} data-tone="muted" role="img" aria-label={badgeLabel(alert.name, "not saved yet")}><span aria-hidden="true">● </span>{NOT_SAVED_YET}</span>;
+  }
+  const state = states.data?.[panelId];
+  if (!state) {
+    // Never shown as OK while it isn't known: waiting while it is read, unknown when it couldn't be.
+    const label = states.isError ? STATE_UNKNOWN : STATE_LABEL.waiting;
+    return <span className={s.badge} data-tone="muted" role="img" aria-label={badgeLabel(alert.name, label)}><span aria-hidden="true">● </span>{label}</span>;
+  }
+  const label = STATE_LABEL[state.state];
+  const open = (e: MouseEvent<HTMLButtonElement>) => openRule?.(state.rule_id, e.ctrlKey || e.metaKey);
+  const keys = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    openRule?.(state.rule_id, true);
+  };
+  return (
+    <button type="button" className={s.badge} data-tone={stateTone(state.state)} data-state={state.state}
+      aria-label={badgeLabel(state.name, label)} aria-keyshortcuts="Control+Enter" onClick={open} onKeyDown={keys}>
+      <span aria-hidden="true">● </span>{label}
+    </button>
+  );
 }
 
 const NO_RUN: PanelRun = { requests: [], parts: [], skipped: [], ownerKind: "project", range: { start: 0, end: 1 }, step: 1 };
@@ -76,7 +124,10 @@ const blockedData = (reason: string): PanelData => ({
   state: "error", series: [], logs: [], problems: [reason], summary: { series: 0, points: 0, tookMs: 0 }, editId: 0,
 });
 
-export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, ownerName, vars, range, waiting, blocked, refreshSeq, status, changeId: changes = 0, layout, tile }: Props) {
+export const PanelFrame = memo(function PanelFrame({
+  dashboardId, panel, owner, ownerName, vars, range, waiting, blocked, refreshSeq, status, changeId: changes = 0, layout, tile, savedAlert,
+  openRule, spotlight = 0,
+}: Props) {
   const titleId = useId();
   const tipId = useId();
   const problemsId = useId();
@@ -87,6 +138,8 @@ export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, 
   const changeId = useRisingCount(changes);
   // Morphs, counts and this highlight are all off under reduced motion.
   const flash = useFlash(changes, tile !== undefined && !reduced);
+  // A link to this panel arrived: it flashes once, the same way.
+  const spot = useFlash(spotlight, !reduced);
   // While editing, the queries (and a logs panel's Lines) run 300 ms after the typing stops;
   // everything else applies at once.
   const debounced = useDebouncedQueries(panel, tile ? 300 : 0);
@@ -148,10 +201,17 @@ export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, 
   } as CSSProperties;
   const named = tile ? { "aria-label": tile.label } : { "aria-labelledby": titleId };
 
-  const classes = [s.panel, tile ? s.tile : "", flash ? s.flash : ""].filter(Boolean).join(" ");
+  const classes = [s.panel, tile ? s.tile : "", flash ? s.flash : "", spot ? s.spot : ""].filter(Boolean).join(" ");
+  const saved = savedAlert === undefined ? panel.alert : savedAlert;
+  // The badge: the saved alert's state; in edit mode a draft alert that differs isn't saved yet.
+  const changedAlert = tile !== undefined && !(panel.alert === saved || (panel.alert !== null && saved !== null && sameJson(panel.alert, saved)));
+  const badgeAlert = changedAlert ? (panel.alert ?? saved) : saved;
+  const badge = badgeAlert
+    ? <AlertBadge dashboardId={dashboardId} panelId={panel.id} alert={badgeAlert} changed={changedAlert} openRule={openRule} />
+    : null;
 
   return (
-    <section ref={frame} className={classes} style={place} {...named} data-state={state ?? "loading"}
+    <section ref={frame} className={classes} style={place} {...named} data-state={state ?? "loading"} data-panel-id={panel.id} data-spot={spot || undefined}
       tabIndex={tile?.tabIndex} data-tile-id={tile ? panel.id : undefined} data-selected={tile?.selected || undefined}
       data-dragging={tile?.dragging || undefined} data-motion={tile && reduced ? "off" : undefined}
       onKeyDown={tile?.onKeyDown} onClick={tile?.onClick}
@@ -176,7 +236,7 @@ export const PanelFrame = memo(function PanelFrame({ dashboardId, panel, owner, 
             </span>
           </span>
         )}
-        {tile?.grab}
+        {badge ? <span className={s.headEnd}>{badge}{tile?.grab}</span> : tile?.grab}
       </header>
       <div className={s.body}>
         {/* Only edits animate: view mode has none, and reduced motion always jumps. */}

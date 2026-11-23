@@ -268,9 +268,13 @@ export const useLabelValues = (p: LabelValuesParams | null): UseQueryResult<Labe
     retry: false,
   });
 
-/** Keys a dashboard change leaves alone: panel queries, label values and catalogs did not change. */
+/**
+ * Keys a dashboard change leaves alone: panel queries, label values and catalogs did not change, and
+ * an alert's dry run answers for the alert as written in an open Alert tab, which a save doesn't change.
+ */
 function keepsData(key: readonly unknown[]): boolean {
-  return key[0] === "monitoring" && (key[1] === "panel" || key[1] === "labelValues" || key[1] === "catalog");
+  return key[0] === "monitoring"
+    && (key[1] === "panel" || key[1] === "labelValues" || key[1] === "catalog" || (key[1] === "alerts" && key[2] === "dryRun"));
 }
 
 /**
