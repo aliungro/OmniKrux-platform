@@ -20,16 +20,22 @@ describe("interpolate", () => {
     expect(interpolate('{x="${one}"}', vars, B)).toBe('{x="a\\"} or up{x=\\""}');
     expect(interpolate('{ns=~"$ns"}', { ns: { multi: true, value: "all" } }, B)).toBe('{ns=~".+"}');
     expect(interpolate('{ns=~"$ns"}', { ns: { multi: true, value: [] } }, B)).toBe('{ns=~".+"}');
+    // Four steps win once they pass the four-minute floor.
     expect(
-      interpolate("rate(x[$__rate_interval])", {}, { stepSeconds: 30, rangeSeconds: 21600 }),
-    ).toBe("rate(x[2m])");
+      interpolate("rate(x[$__rate_interval])", {}, { stepSeconds: 120, rangeSeconds: 21600 }),
+    ).toBe("rate(x[8m])");
     expect(interpolate('{a=~"^b$|c"} $nope', {}, B)).toBe('{a=~"^b$|c"} $nope');
   });
 
   it("builtins", () => {
     expect(interpolate("$__interval $__range", {}, B)).toBe("30s 6h");
+    // A tiny step still gets four minutes: four samples at a one-minute scrape.
     expect(interpolate("[$__rate_interval]", {}, { stepSeconds: 5, rangeSeconds: 60 })).toBe(
-      "[1m]",
+      "[4m]",
+    );
+    // Where both terms meet.
+    expect(interpolate("[$__rate_interval]", {}, { stepSeconds: 60, rangeSeconds: 3600 })).toBe(
+      "[4m]",
     );
   });
 
@@ -110,7 +116,7 @@ describe("interpolate", () => {
 
   it("builtins are allowed anywhere", () => {
     expect(interpolate("rate(x[$__rate_interval]) '$__interval' `$__range`", {}, B)).toBe(
-      "rate(x[2m]) '30s' `6h`",
+      "rate(x[4m]) '30s' `6h`",
     );
   });
 

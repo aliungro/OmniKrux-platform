@@ -9,6 +9,13 @@ export type ResolvedVars = Record<string, { multi: boolean; value: VarValue }>;
 
 export const ALL_PATTERN = ".+";
 
+/**
+ * The shortest `$__rate_interval`, in seconds. Grafana's value is four scrape intervals;
+ * Prometheus scrapes every minute by default, so four minutes holds four samples there and
+ * survives one missed scrape. A shorter window can hold a single sample, and rate() is empty.
+ */
+export const RATE_INTERVAL_FLOOR = 240;
+
 /** A value that cannot be placed safely where its variable sits. */
 export class VariableError extends Error {
   readonly name: string;
@@ -108,7 +115,7 @@ export function interpolate(
         let rendered: string | null;
         if (name === "__interval") rendered = durationText(builtins.stepSeconds);
         else if (name === "__rate_interval") {
-          rendered = durationText(Math.max(4 * builtins.stepSeconds, 60));
+          rendered = durationText(Math.max(4 * builtins.stepSeconds, RATE_INTERVAL_FLOOR));
         } else if (name === "__range") rendered = durationText(builtins.rangeSeconds);
         else {
           rendered = render(name, vars, quote);

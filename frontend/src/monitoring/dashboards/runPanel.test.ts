@@ -107,7 +107,7 @@ describe("buildPanelRun", () => {
       range: { start: 1000, end: 22600 }, ownerName: "projA",
     });
     expect(run.requests).toEqual([{
-      source_id: "promA", project_id: "a", kind: "range", query: 'rate(x{ns=~"a\\\\.b|c"}[2m]) / 30s',
+      source_id: "promA", project_id: "a", kind: "range", query: 'rate(x{ns=~"a\\\\.b|c"}[4m]) / 30s',
       start: 990, end: 22620, step: 30,
     }]);
     expect(run.range).toEqual({ start: 990, end: 22620 });

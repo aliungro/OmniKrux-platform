@@ -57,7 +57,7 @@ def test_every_ready_made_query_takes_a_filter(key):
         doc = build_ready_made(key, kind=kind, has_loki=loki)
         for panel in doc["panels"]:
             for query in panel["queries"]:
-                expr = re.sub(r"\$(?!__)\w+", ".+", query["expr"]).replace("$__rate_interval", "2m")
+                expr = re.sub(r"\$(?!__)\w+", ".+", query["expr"]).replace("$__rate_interval", "4m")
                 inject = inject_logql if query["source"]["type"] == "loki" else inject_promql
                 filtered = inject(expr, FILTER)
                 bodies = re.findall(r"\{([^}]*)\}", filtered)

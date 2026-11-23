@@ -168,7 +168,7 @@ NO_NODE_EXPORTER = "node-exporter isn't installed in the monitoring namespace."
 HOUR = 3600
 STEP = 30
 # What the browser puts in for the built-in variables on a one-hour range at step 30.
-BUILTINS = {"__interval": "30s", "__rate_interval": "2m", "__range": "1h"}
+BUILTINS = {"__interval": "30s", "__rate_interval": "4m", "__range": "1h"}
 
 
 @pytest.fixture
