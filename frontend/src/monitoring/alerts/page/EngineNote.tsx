@@ -4,7 +4,7 @@
 
 import { failure } from "../../../api/http";
 import type { AlertRequestError, OverviewOut } from "../api";
-import { clockTime, staleWords } from "./words";
+import { clockTime, staleStateWords } from "./words";
 import s from "./AlertsPage.module.css";
 
 export function EngineNote({ overview, error, staleAt }: {
@@ -23,7 +23,7 @@ export function EngineNote({ overview, error, staleAt }: {
   const engine = overview.engine;
   const warn = !engine.enabled || engine.behind > 0 || !engine.running || staleAt !== null;
   const last = engine.last_tick_at ? ` Last check ${clockTime(engine.last_tick_at)}.` : "";
-  const stale = staleAt !== null ? ` ${staleWords(staleAt)}` : "";
+  const stale = staleAt !== null ? ` ${staleStateWords(staleAt)}` : "";
   return (
     <p role="note" className={s.engineNote} data-tone={warn ? "warn" : "muted"}>
       <span className={s.engineMark} aria-hidden="true" />

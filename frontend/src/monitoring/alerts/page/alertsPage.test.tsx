@@ -426,12 +426,11 @@ describe("the Alerts page", () => {
       ? Promise.reject(new TypeError("Failed to fetch"))
       : fake(url, init)));
     await app.client.refetchQueries({ queryKey: alertsKeys.overview });
-    const notes = await screen.findAllByText(/Couldn't refresh: showing the list from \d\d:\d\d:\d\d\./);
     // Under the list (for the pins) and in the engine note (for its last check).
-    expect(notes).toHaveLength(2);
+    expect(await screen.findAllByText(/^Couldn't refresh: showing the list from \d\d:\d\d:\d\d\.$/)).toHaveLength(1);
     const engine = screen.getByRole("note");
     expect(engine.getAttribute("data-tone")).toBe("warn");
-    expect(engine.textContent).toMatch(/Last check 10:15:30\. Couldn't refresh: showing the list from/);
+    expect(engine.textContent).toMatch(/Last check 10:15:30\. Couldn't refresh: showing the state from \d\d:\d\d:\d\d\.$/);
     expect(screen.getByLabelText(/^1 firing at \d\d:\d\d:\d\d$/)).toBeTruthy();
     // The pins stay shown.
     expect(options()[0].getAttribute("aria-label")).toMatch(/^PodCrashLooping, 1\dm$/);
@@ -458,6 +457,14 @@ describe("the Alerts page", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(api.requests.filter((r) => r.url.endsWith("/targets/t-l/sync"))).toHaveLength(1));
     expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+
+    // `tool_copy` null: nothing is in a tool (a cancelled review, a failed first write): no bar.
+    open({ rules: [{ ...moved, targets: [left({ tool_copy: null, tool_state: "needs_review" })] }], overview: overview([]) });
+    await waitFor(() => expect(details().textContent).toBe("LogErrors"));
+    expect(screen.queryByText(/^Still in/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
     cleanup();
 
     // An answer without `tool_copy`: the rule's source type says where the copy is.

@@ -44,7 +44,9 @@ export function toolProblem(t: TargetOut, ruleTool: ToolKind): ToolProblem | nul
   // Leaving (the rule moved, or is being deleted), or now checked by OmniKrux while its old copy
   // stays in the tool: shown until it is gone. A leaving OmniKrux check with no copy goes at once.
   if (t.leaving || (t.engine !== "tool" && outOfStep)) {
-    const copy = t.tool ?? t.tool_copy ?? (outOfStep ? ruleTool : null);
+    // `tool_copy` null says nothing is in a tool (a cancelled review, a first write that failed);
+    // only an older answer without the field falls back to the rule's own tool.
+    const copy = t.tool ?? (t.tool_copy !== undefined ? t.tool_copy : outOfStep ? ruleTool : null);
     if (copy === "loki_ruler") return { text: `Still in Loki.${msg}`, action: "retry", tool: copy };
     if (copy === "prometheus_rule") return { text: `Still in ${clusterOf(t)}: removing it needs a review.`, action: "review", tool: copy };
     return null;
