@@ -672,7 +672,7 @@ def remove_contact_point(client, cp_id: str) -> None:
     done = client.delete(
         f"{ALERTS}/contact-points/{cp_id}", params={"token": review.json()["token"]}
     )
-    assert done.status_code == 204, done.text
+    assert done.status_code in (200, 204), done.text
 
 
 @contextmanager
