@@ -1,6 +1,6 @@
 # Monitoring: developer guide
 
-Monitoring reads metrics and logs from tools you already run (a Prometheus-compatible service, Loki) and shows them per project. It has sources, projects, groups, label filters, discovery in known clusters, the query proxy, dashboards, the catalog that the building tools and Explore read, the faster ways to build a panel, Explore, and alerts (rules, the alert engine, contact points, silences and rules that run in Prometheus or Loki). For what the app does for its users, see the [user guide](../user/monitoring.md).
+Monitoring reads metrics and logs from tools you already run (a Prometheus-compatible service, Loki) and shows them per project. It has sources, projects, groups, label filters, discovery in known clusters, the query proxy, dashboards, the catalog that the building tools and Explore read, the faster ways to build a panel, Explore, alerts (rules, the alert engine, contact points, silences and rules that run in Prometheus or Loki), and installing the tools (Helm into a cluster, or generated files for Docker hosts and servers). For what the app does for its users, see the [user guide](../user/monitoring.md).
 
 ## Code layout
 
@@ -17,13 +17,14 @@ Backend, under `backend/omnikrux/monitoring/`:
 | `dashboards/` | `schema.py` (the dashboard document and its checks), `store.py` (dashboards and their versions), `api.py` (the routes), `ready_made.py` (the generated views). See [Dashboards](#dashboards). |
 | `explore/` | `catalog.py` (the catalog cache and `project_catalog`) and `api.py` (`GET /projects/{id}/catalog`). See [The catalog](#the-catalog). |
 | `alerts/` | Rules, the alert engine, contact points, silences and the tool handlers. See [Alerts](#alerts). |
+| `install/` | Installing the tools: the pins, the Helm runner, the install, uninstall and contact-point reviews and jobs, the status, and the generators. See [Installing the tools](#installing-the-tools). |
 | `audit.py` | Writes Monitoring's entries to the shared audit log. |
 
-Frontend, under `frontend/src/monitoring/`: `MonitoringApp.tsx` (the app and its pages), `shell/` (tab state), `sidebar/`, `home/`, `sources/`, `setup/`, `projects/`, `groups/`, `search/`, `api/` (client, hooks, types, query helper), `dashboards/` and `charts/` (see [Dashboards](#dashboards)), `catalog/` (the catalog's client and merge, see [The catalog](#the-catalog)), `build/` (the finder, suggestions, recommendations and Add panel's search and rail, see [Building faster](#building-faster-the-finder-and-the-suggestions)), `explore/` (see [Explore](#explore)), `alerts/` (see [Alerts](#alerts)) and `test/` (a fake API for tests).
+Frontend, under `frontend/src/monitoring/`: `MonitoringApp.tsx` (the app and its pages), `shell/` (tab state), `sidebar/`, `home/`, `sources/`, `setup/`, `projects/`, `groups/`, `search/`, `api/` (client, hooks, types, query helper), `dashboards/` and `charts/` (see [Dashboards](#dashboards)), `catalog/` (the catalog's client and merge, see [The catalog](#the-catalog)), `build/` (the finder, suggestions, recommendations and Add panel's search and rail, see [Building faster](#building-faster-the-finder-and-the-suggestions)), `explore/` (see [Explore](#explore)), `alerts/` (see [Alerts](#alerts)), `install/` (see [Installing the tools](#installing-the-tools)) and `test/` (a fake API for tests).
 
 ### Tables and migrations
 
-Migration `0006` adds an `app` column to the audit log, so each entry records which app made it. Migration `0007` creates the Monitoring tables, `0008` the dashboard tables (see [Dashboards](#dashboards)) and `0009` the alert tables (see [Alerts](#alerts)). `0007` holds:
+Migration `0006` adds an `app` column to the audit log, so each entry records which app made it. Migration `0007` creates the Monitoring tables, `0008` the dashboard tables (see [Dashboards](#dashboards)), `0009` the alert tables (see [Alerts](#alerts)) and `0010` the install records (see [Installing the tools](#installing-the-tools)). `0007` holds:
 
 - `monitoring_sources`: one row per source. Secrets are stored encrypted; the API never returns them, only whether one is set.
 - `monitoring_projects`: one row per project (kind, optional cluster).
@@ -548,6 +549,136 @@ python -m uv run --frozen pytest -q tests/monitoring/test_mailpit.py
 
 The first takes about four minutes (Prometheus loads rules on a schedule, and Alertmanager waits before it sends).
 
+## Installing the tools
+
+OmniKrux installs Prometheus, Alertmanager, node-exporter and kube-state-metrics (one release of kube-prometheus-stack), and Loki and Grafana Alloy (two releases), into a Kubernetes cluster with a Helm and chart archives pinned in the image. For Docker hosts and servers it only writes files. Every change it makes in a cluster is a server-built plan through the action pipeline (review, confirm, audit, apply), and it never rolls back on its own. The user guide's [Installing the tools](../user/monitoring.md#installing-the-tools) says what users see.
+
+### Code layout and routes
+
+Backend, under `backend/omnikrux/monitoring/install/`:
+
+| File | What it holds |
+| --- | --- |
+| `pins.py` | `HELM_VERSION`, `CHARTS` (`ChartPin`: version, app version, SHA-256, URL), and for the generators `IMAGES`, `CHART_IMAGE_VERSIONS` and `SERVER_BINARIES`. |
+| `tools.py` | `ToolsCheck`: is the pinned Helm there (`helm version`), and is each chart archive there byte for byte. Checked once, kept until `refresh()`. |
+| `helm.py` | The only Helm argument builders (`template_args`, `upgrade_args`, `uninstall_args`, `show_crds_args`), the `HelmRunner` protocol, `SubprocessHelm`, and `helm_error_message` (Helm's words, scrubbed). |
+| `kubeconfig.py` | `helm_kubeconfig`: the private kubeconfig one Helm call gets, and the sweep of leftover folders at startup. |
+| `settings.py`, `values.py` | `InstallSettings` and its checks; the values per release (`values_for`), the Alloy config, `RELEASES` (what each release runs), `DATA_INSTANCES`, `AMC_NAME`. |
+| `render.py` | `render` (`helm template` with our values, never a kubeconfig) and `chart_crds` (`helm show crds` of kube-prometheus-stack). |
+| `facts.py` | What a review reads from the cluster: its version, the default storage class, the namespace, the Operator's CRDs, a Prometheus Operator OmniKrux didn't install, and Helm's release Secrets with OmniKrux's names (`decode_release`). |
+| `action.py` | `InstallAction`: the install review (`make_plan`) and its apply, which starts the job. |
+| `job.py`, `readiness.py`, `connect.py` | The install job: namespace, CRDs, one `helm upgrade --install` per release, waiting for each workload, connecting the sources. |
+| `uninstall.py` | `UninstallAction` and the uninstall job. |
+| `contacts.py` | `ContactSyncAction`: the `AlertmanagerConfig` and Secret for OmniKrux's contact points, and `contact_changes` for the rule and contact-point saves. |
+| `status.py` | What the Monitoring tools page shows, read live. |
+| `store.py` | `InstallStore`: one record per cluster (table `monitoring_installs`, migration `0010`). |
+| `generate.py`, `probe.py` | The docker-compose file and the server script, and the probe of the addresses a user gives. |
+| `api.py`, `messages.py` | The routes and every sentence they say. |
+
+Routes, under `/api/monitoring/install`: `GET /tools`, `POST /plan` (the install review), `GET /clusters/{id}` (the live status), `POST /clusters/{id}/uninstall/plan`, `POST /clusters/{id}/contacts/sync` (a review, or `done` when nothing changed), `POST /generate` and `POST /probe`. Every plan is applied through the pipeline's `POST /api/actions/{plan_id}/apply`; install and uninstall apply as jobs (`GET /api/actions/jobs/{id}`, `POST …/cancel`). The browser can never ask for `install` or `uninstall` through `POST /api/actions/plan`: those handlers aren't in the pipeline's `ACTIONS`.
+
+Frontend, under `frontend/src/monitoring/install/`: `api.ts` (the client and its keys), `ToolsPage.tsx` (Monitoring tools), `InstallReviewHost.tsx` and `useInstallReviews.ts` (the install, uninstall and contact-point reviews in the shared `ActionDialog`, one at a time with M4's tool review queue), `InstallSettingsPanel.tsx` and `UninstallOptions.tsx` (what goes in the dialog's `options` slot), `InstallProgress.tsx`, `GenerateTools.tsx` and `useToolsProbe.ts`. Setup, the project page and the Sources page link to them.
+
+`monitoring_installs` holds, per cluster (unique `cluster_id`): the namespace, components, settings and chart versions, the state (`installing`, `installed`, `failed`, `cancelled`, `uninstalling`) and its message, the running job, the project the install was started from, the three source ids, and the contact points' last applied digest, time and message. Nothing in it is secret. At startup a record left `installing` or `uninstalling` is marked interrupted.
+
+### The pins
+
+The image and a developer machine must install with the same files:
+
+- `pins.py` holds the versions and SHA-256 sums;
+- the Dockerfile's `monitoring-tools` stage has the same values as ARGs (`HELM_VERSION`, `HELM_AMD64_SHA256`, `HELM_ARM64_SHA256`, `KPS_CHART_VERSION`, `KPS_CHART_SHA256`, `LOKI_CHART_VERSION`, …), downloads Helm and the three archives, checks all four with one `sha256sum --strict -c -`, and the final stage copies them to `/usr/local/bin/helm` and `/app/charts` and sets `OMNIKRUX_HELM_BINARY` and `OMNIKRUX_CHARTS_DIR` to them;
+- `scripts/dev-monitoring-tools.sh` reads the chart pins from those ARGs and puts Helm for your machine and the archives in `.tools/` (ignored), checking each against its sum (a mismatch deletes the file and stops). It prints the two variables to export.
+
+`tests/monitoring/test_install_pins.py` keeps `pins.py`, the Dockerfile and the script equal. Without the variables, OmniKrux looks for `helm` on `PATH` and says installing isn't available.
+
+### Bumping a chart or Helm version
+
+1. Read the new versions and their sums from the official files, in a scratch folder outside the repository:
+
+   ```bash
+   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+   helm repo add grafana https://grafana.github.io/helm-charts
+   helm repo update
+   helm search repo prometheus-community/kube-prometheus-stack --versions | head -3
+   helm search repo grafana/loki --versions | head -3
+   helm search repo grafana/alloy --versions | head -3
+   helm pull prometheus-community/kube-prometheus-stack --version <V>   # and loki, alloy
+   sha256sum kube-prometheus-stack-<V>.tgz loki-<V>.tgz alloy-<V>.tgz
+   helm show chart kube-prometheus-stack-<V>.tgz | grep -E '^(appVersion|kubeVersion|deprecated)'
+   curl -fsSL https://prometheus-community.github.io/helm-charts/index.yaml -o idx-pc.yaml
+   curl -fsSL https://grafana.github.io/helm-charts/index.yaml -o idx-gr.yaml
+   python -c "import sys,yaml; e=[x for x in yaml.safe_load(open(sys.argv[1]))['entries'][sys.argv[2]] if x['version']==sys.argv[3]][0]; print(e['urls'][0], e.get('digest'))" idx-pc.yaml kube-prometheus-stack <V>
+   curl -fsSLO https://get.helm.sh/helm-v<H>-linux-amd64.tar.gz.sha256sum   # and -linux-arm64, and your own machine's build
+   ```
+
+   Each archive's SHA-256 must equal the index `digest`; Helm's sums come from the release's `.sha256sum` files. Never write a sum you didn't compute or read from the official file. A chart marked `deprecated: true` is not a candidate.
+2. For the generators, read the versions the new charts deploy (`helm show values <archive> | grep -A3 -E '^\s+image:'` and each chart's `appVersion`) and the server binaries' sums from their releases (`curl -fsSL <release>/sha256sums.txt | grep linux-amd64` for Prometheus, Alertmanager and node_exporter; `SHA256SUMS` for Loki and Alloy).
+3. Change the Dockerfile ARGs (and their comments naming where each value was read) and `pins.py` together: `CHARTS`, `HELM_VERSION`, `IMAGES`, `CHART_IMAGE_VERSIONS`, `SERVER_BINARIES`. For your own machine's Helm, update `HELM_DEV_VERSION` and its `HELM_DEV_SHA256_<os>_<arch>` in the script.
+4. Run `bash scripts/dev-monitoring-tools.sh`, then from `backend` `python -m uv run --frozen pytest -q -m helm tests/monitoring` and the unit tests. The `helm` tests render each chart with our values and fail when a release's workload or Service name changes, a CRD the app needs is missing, or Loki's retention settings move.
+5. Read each chart's upgrade notes for the versions you skip.
+6. On kind, install with the previous image, then start the new one and use **Update to the shipped versions…** (`test_monitoring_install_kind.py` covers a fresh install, an update and a reinstall).
+7. Commit as `build: bump the monitoring charts to …`.
+
+### The Helm runner
+
+`SubprocessHelm` runs the pinned binary with an environment that holds nothing of OmniKrux's (no `OMNIKRUX_*`), a private `HELM_*` cache and config folder per call, and `KUBECONFIG` naming that call's kubeconfig. Output is capped (4 MiB, 32 MiB for `show crds`, whose CRDs are large); a call past its time limit or cancelled is terminated and killed after 20 seconds. On Windows a terminate ends Helm at once.
+
+A Helm stopped before it records how its change ended (killed after the grace, a terminate on Windows, or OmniKrux stopping) leaves the release `pending-install` or `pending-upgrade`, and Helm refuses any further change to it ("another operation is in progress"). With no OmniKrux job running there, the install review blocks on such a release of OmniKrux's and points to uninstalling (Helm uninstalls a pending release); OmniKrux never rewrites Helm's records.
+
+There is no `--wait`, `--atomic` or rollback. Helm returns once it has applied the objects (and run the charts' hooks); the job then waits for each workload itself (`readiness.py`: rolled out and ready as `kubectl rollout status` judges it, 10 minutes at most), so progress can name what holds it up and a cancel stops between steps. A failed install is left as Helm left it, and the next install upgrades from there.
+
+### The kubeconfig for Helm
+
+Helm never gets OmniKrux's kubeconfig. `helm_kubeconfig` builds one from the connection OmniKrux already uses (`ClusterConnections.configuration`, so a cloud login or an exec plugin becomes a plain token), writes it into a private temporary folder (`omnikrux-helm-…`), and removes the folder when the call ends, on success, failure or cancel. Folders left by a crash are swept at startup. Credentials are never in Helm's arguments or environment values, and Helm's output is scrubbed of the token, the client key and (for cloud clusters) the server address before it reaches a message or a log.
+
+### The handlers and the jobs
+
+The three changes are handlers on the shared `make_plan`, like M4's `PrometheusRuleAction`:
+
+- **`InstallAction`** (kind `namespaces`, action `install`). Planning reads the facts, renders each release with `render` (so a chart that refuses the cluster blocks the review in its own words), reads the CRDs from `chart_crds`, and blocks on a foreign Prometheus Operator, a foreign release with our name, another namespace already used, a running job, a release of OmniKrux's that Helm left `pending-*`, or settings that would change the volume claim of the installed Loki StatefulSet (`facts.loki_volume`; Kubernetes refuses that, so Helm would fail half way). The plan's state holds what the apply checks again (settings, chart sums, each release's revision, the CRDs, a digest of the values); anything changed answers "Review it again". The apply starts the job: the namespace, the CRDs (POST or PUT, so no last-applied annotation), `helm upgrade --install` for each release in order (metrics, Loki, Alloy), waiting, then `connect_installed`. After the CRD step and at the end it forgets the cached kind catalog and the sources' capability and health caches, so a PrometheusRule or AlertmanagerConfig review right after an install doesn't read "not served".
+- **`UninstallAction`** (action `uninstall`, destructive: the review opens on Cancel). Blocked while rules run in the installed tools. The job removes the releases (Alloy, Loki, then metrics, and before metrics the Operator's Prometheus and Alertmanager resources, while the Operator still runs to finish them), waits for what each ran to stop, removes the `AlertmanagerConfig` and Secret when they carry `app.kubernetes.io/managed-by: omnikrux`, deletes the data volumes when asked (PersistentVolumeClaims matched by `app.kubernetes.io/instance` in `DATA_INSTANCES`), removes the sources (audited) and the record. The namespace and the CRDs stay.
+- **`ContactSyncAction`** (kind `alertmanagerconfigs.monitoring.coreos.com`, `create`, `edit` or `delete`), see below.
+
+One job runs per cluster (the record says which); a cancel stops Helm and finishes the record and the audit entry. Typed confirmation follows the pipeline: on a production cluster install and uninstall ask for the namespace name.
+
+### Release and object names
+
+| Release | Chart | Workloads | Services |
+| --- | --- | --- | --- |
+| `omnikrux-metrics` | kube-prometheus-stack | Deployments `omnikrux-metrics-operator`, `omnikrux-metrics-kube-state-metrics`; DaemonSet `omnikrux-metrics-prometheus-node-exporter`; StatefulSets `prometheus-omnikrux-metrics-prometheus` and `alertmanager-omnikrux-metrics-alertmanager` (made by the Operator) | `omnikrux-metrics-prometheus` 9090, `omnikrux-metrics-alertmanager` 9093 |
+| `omnikrux-loki` | loki | StatefulSet `omnikrux-loki` | `omnikrux-loki` 3100 |
+| `omnikrux-alloy` | alloy | Deployment `omnikrux-alloy` | — |
+
+They come from each release's `fullnameOverride` and live in `values.RELEASES`; readiness, status, connect and uninstall read them from there. Each release's values carry a top-level `omnikrux.managedBy: omnikrux` that no chart reads: Helm stores it in the release, and `decode_release` reads it back from the release Secret (`sh.helm.release.v1.<name>.v<revision>`: the API's base64, Helm's base64, gzip, JSON) to tell OmniKrux's releases from others. A chart change that renames something is caught by the `helm` tests (`test_install_charts_helm.py`), and a change in how Helm stores releases by the kind install test.
+
+### The AlertmanagerConfig and the secret rule
+
+OmniKrux's Alertmanager selects `AlertmanagerConfig`s labelled `app.kubernetes.io/managed-by: omnikrux` in its own namespace, with `alertmanagerConfigMatcherStrategy: None`, so the routes see every alert. `desired_contacts` builds one `AlertmanagerConfig` (`monitoring.coreos.com/v1alpha1`, name `omnikrux-contact-points`): a route to the `omnikrux-none` receiver with a child route per rule and contact point, matching `omnikrux_rule` (the label every rule OmniKrux writes carries) and `continue: true`, grouped by `alertname`, `omnikrux_rule` and `omnikrux_project`; and one receiver per contact point, whose address, key or password is a reference into the Secret `omnikrux-contact-points`.
+
+The values come only from M4's `export_receivers`, which refuses (`SecretRuleRefused`) any Alertmanager source not marked installed by OmniKrux. They exist only while the Secret body and the digest are built: the plan, its diff and the audit show the `AlertmanagerConfig` alone, and the record keeps a SHA-256 digest of the whole configuration. The apply builds it again and refuses when the digest differs. `contact_changes` runs inside rule and contact-point saves and never raises: a problem is stored as the contacts' message.
+
+### The generators
+
+`generate.py` writes a `docker-compose.yml` (dictionaries dumped as YAML, the images from `IMAGES`, configs inline, never the Docker socket) or `omnikrux-monitoring.sh` (fixed text with validated, shell-quoted values; it downloads each binary in `SERVER_BINARIES`, checks it with `sha256sum -c` before installing anything, and installs systemd units). Tests check the compose file with `docker compose config` (marker `compose`) and the script with `bash -n`, and that every Alloy config has one attribute per line. Neither file is started by the tests.
+
+### Tests and fakes
+
+- `tests/monitoring/fake_helm.py`: `FakeHelm` records each call and answers from a script (`script["upgrade"]` and friends), `AvailableTools` says the pinned tools are there, `pinned_tools()` finds `.tools/` for the `helm` tests.
+- `tests/monitoring/install_env.py`: plan and apply through the API, wait for a job, Helm release records and workloads on the fake cluster (`prepare_install`, `helm_writes_releases`, `helm_uninstall_removes`, `mark_all_ready`), and the `installed_cluster` fixture's pieces.
+- `tests/fakekube.py`: `storage_class`, `helm_release_secret`, `prometheus_operator_deployment`, and generic objects in any served kind.
+- Markers: `helm` (the pinned Helm and charts from `scripts/dev-monitoring-tools.sh`), `compose` (Docker with `docker compose`), `kind`. See [Testing](testing.md#markers).
+
+### The install on kind
+
+`backend/tests/e2e/test_monitoring_install_kind.py` installs on a second kind cluster, `omnikrux-install` (or `OMNIKRUX_KIND_INSTALL_CLUSTER`), so the Argo-managed tools in `omnikrux-dev` that the other kind tests use stay as they are. The test starts OmniKrux on `omnikrux-dev`'s kubeconfig and adds the second cluster through `POST /api/clusters/kubeconfig`, as Settings → Import kubeconfig does, so it also proves an install touches only the cluster it names; each test ends by checking that `omnikrux-dev` has no OmniKrux release and its Argo apps are still Synced and Healthy. In order, on one app:
+
+- `test_install_review_apply_and_connect`: a review with small settings, the job, three releases `deployed` and every workload ready, Helm 4's release Secrets decoded, three sources, the Operator's resources labelled with the release, kube-state-metrics and node-exporter scraped, Alloy shipping `{namespace="kube-system"}` lines, and Loki's retention settings live. On a cluster a previous run left installed, it first checks that the review refuses a different Loki volume size, then keeps the installed size.
+- `test_install_again_waits_for_the_new_statefulsets`: an update that changes Prometheus' memory request ends only when the Operator's new StatefulSet is rolled out.
+- `test_contact_sync_routes_a_tool_rule_to_the_webhook`: a webhook contact point at the test's own receiver on port 9911 (kind reaches it as `host.docker.internal`), a `vector(1)` rule in the tool, its PrometheusRule review, then the contact-point review; the installed Alertmanager posts the alert with `omnikrux_rule`, the address never reaches Audit, and removing the rule removes the `AlertmanagerConfig`.
+- `test_uninstall_then_install_again`: uninstall deleting the data (no release, source or volume left, the namespace and CRDs kept), an install cancelled once Helm has recorded the release (when that leaves it `pending-install`, as a terminate on Windows does, the review must block and an uninstall clears it), and an install with the defaults, which stays.
+
+It needs the pinned Helm and charts (`OMNIKRUX_HELM_BINARY` and `OMNIKRUX_CHARTS_DIR`, or `.tools/`), and port 9911 free. The first install pulls about 1 to 1.5 GB of images into the cluster.
+
 ## Running the tests
 
 Backend, from `backend`:
@@ -579,6 +710,8 @@ The Monitoring app is a lazy chunk: the shell loads it only when you open Monito
 cd backend
 python -m uv run --frozen pytest -q -m kind tests/e2e/test_monitoring_kind.py
 ```
+
+Installing the tools is checked on a second cluster instead, by `test_monitoring_install_kind.py` (see [The install on kind](#the-install-on-kind)); these tests never install or remove anything in `omnikrux-dev`.
 
 They need Prometheus and Loki in the namespace `monitoring` (the alert checks need more: see [Alerts on a kind cluster](#alerts-on-a-kind-cluster)), with Services named `prometheus-server` and `loki`, and log lines to read (below). Without the Services the tests skip and say so. They create their projects, sources and dashboards through the API and delete them again, leaving the tools installed.
 

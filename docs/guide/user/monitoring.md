@@ -1,6 +1,6 @@
 # Monitoring
 
-Monitoring is the second app in OmniKrux. It is in development. So far you can describe what you run, connect the tools that hold its metrics and logs, have OmniKrux check that it can reach them and query them safely, build dashboards on top of that, ask one-off questions of your metrics and logs in Explore, and get alerts when something crosses a line.
+Monitoring is the second app in OmniKrux. It is in development. So far you can describe what you run, connect the tools that hold its metrics and logs, have OmniKrux check that it can reach them and query them safely, build dashboards on top of that, ask one-off questions of your metrics and logs in Explore, get alerts when something crosses a line, and install the tools a project is missing.
 
 Open it from the left rail, or press `Alt 2`.
 
@@ -18,9 +18,11 @@ Open it from the left rail, or press `Alt 2`.
 Use **+** next to Projects in the sidebar, or **Set up a project** on Home. When no project exists yet, Home offers a button for each connected cluster that starts the setup for that cluster. The setup has four steps.
 
 1. **What to monitor.** Choose **A Kubernetes cluster**, **A Docker host**, **Servers** or **Something of your own**. For a cluster, pick one of the clusters OmniKrux already knows. If none is connected, **Open Settings** takes you to where you add one.
-2. **Sources.** For a cluster, OmniKrux looks inside it for Prometheus, Loki and Grafana and lists what it found. A tool shows as **Reachable** or **Missing**; Grafana only shows as **Found**, because importing its dashboards is not available yet. Tick the tools to use. A source you added earlier can be reused under **Use an existing source**. If nothing is found, or you want a tool that runs elsewhere, use **Add a source by hand**. **Look again** searches the cluster again.
-3. **Import.** Marked "Comes later". Importing dashboards, and installing missing tools from here, arrive in a later update. OmniKrux connects to tools that already run.
-4. **Name and review.** Give the project a name (leave it empty to keep the suggested one), check the summary of sources and their filters, and press **Create project**. The project, its new sources and all the links are created together, or not at all.
+2. **Sources.** For a cluster, OmniKrux looks inside it for Prometheus, Loki and Grafana and lists what it found. A tool shows as **Reachable** or **Missing**; Grafana only shows as **Found**, because importing its dashboards is not available yet. A tool OmniKrux installed carries **Installed by OmniKrux** and a **Monitoring tools** link. Tick the tools to use. A missing Prometheus or Loki has an **Install Prometheus…** or **Install Loki…** button: press it to install that tool once the project is created (the row then says **To install**; see [Installing the tools](#installing-the-tools)). Where OmniKrux can't install, the row says why ("Installing isn't available here: …"). A source you added earlier can be reused under **Use an existing source**. If nothing is found, or you want a tool that runs elsewhere, use **Add a source by hand**. **Look again** searches the cluster again. For **A Docker host** or **Servers**, this step can also write the files that run the tools there (see [Docker hosts and servers](#docker-hosts-and-servers)).
+3. **Import.** Marked "Comes later". Importing dashboards arrives in a later update.
+4. **Name and review.** Give the project a name (leave it empty to keep the suggested one), check the summary of sources, their filters and what will be installed, and press **Create project** (**Create project and review the install** when you asked for an install). The project, its new sources and all the links are created together, or not at all. The install review opens right after; nothing is installed until you confirm it there.
+
+A setup you leave half way is kept in that Monitoring tab and comes back when you open setup there again, until you create the project or close the tab. Passwords, tokens and header values are never kept: a source that needed one comes back **Not in use**, with **Enter it again**.
 
 ## Add a source by hand
 
@@ -307,7 +309,7 @@ When you make a rule you choose **Where it runs**.
 - **In the tool.** The tool that holds the data checks the rule and keeps doing so when OmniKrux is off. For Prometheus this is a `PrometheusRule` in the cluster, which the Prometheus Operator loads, so only a Prometheus the Operator runs can take it (a Prometheus installed some other way, such as a plain Helm chart, says "isn't run by the Prometheus Operator"); for Loki it is a rule in Loki's ruler. Each project says what it can do: the choice is greyed out when no project of the rule has a tool that can run it, and a project whose tool can't take the rule is checked by OmniKrux instead, with the reason shown.
   - A `PrometheusRule` is a change to the cluster, so it is **reviewed like any cluster change**: the review shows what will be created, changed or removed, and nothing happens until you confirm it. The rule reads **Not applied** until you do.
   - A Loki ruler rule is written (and removed) at once, and **Audit** records each change before it is made.
-  - The notifications of a rule that runs in the tool come from that tool's Alertmanager, not from OmniKrux. Pick its **Channel** (an Alertmanager route, with the labels the rule must carry to reach it), or leave **Wherever its Alertmanager sends it**.
+  - The notifications of a rule that runs in the tool come from that tool's Alertmanager, not from OmniKrux. Pick its **Channel** (an Alertmanager route, with the labels the rule must carry to reach it), or leave **Wherever its Alertmanager sends it**. Where OmniKrux installed the tools, the rule notifies contact points instead, sent by OmniKrux's own Alertmanager (see [Contact points and OmniKrux's own Alertmanager](#contact-points-and-omnikruxs-own-alertmanager)).
 
 A rule that runs in the tool and one OmniKrux checks look the same on the Alerts page, apart from the **Where** line (**checked by OmniKrux**, **in Prometheus** or **in Loki**).
 
@@ -428,6 +430,123 @@ If a Kubernetes project's source link has no label filter, because OmniKrux coul
 
 The Audit log records **Added an alert rule**, **Changed an alert rule**, **Removed an alert rule**, **Added a contact point**, **Changed a contact point**, **Removed a contact point**, **Sent a test message**, **Added a silence**, **Expired a silence**, and for rules in a Loki ruler **Wrote a Loki rule** and **Removed a Loki rule**. A `PrometheusRule` goes through the normal cluster change record. An entry names the rule, contact point or silence and what changed, never a webhook address, token, password or routing key.
 
+## Installing the tools
+
+When a cluster has no Prometheus or Loki, OmniKrux can install them. Everything it installs goes through a review first, like any other change to a cluster, and is recorded in Audit.
+
+### What OmniKrux installs
+
+Into a Kubernetes cluster, in one namespace (`monitoring` unless you change it), with the Helm and the chart archives that ship inside OmniKrux:
+
+| Component | What runs | Charts |
+| --- | --- | --- |
+| **Metrics** | Prometheus, Alertmanager, node-exporter and kube-state-metrics, run by the Prometheus Operator | kube-prometheus-stack 93.1.1 (Helm release `omnikrux-metrics`) |
+| **Logs** | Loki in single-binary mode, and Grafana Alloy, which collects every Pod's logs and sends them to that Loki | loki 7.5.0 with Loki 3.6.16 (release `omnikrux-loki`), alloy 1.15.0 with Alloy 1.21.3 (release `omnikrux-alloy`) |
+
+- The cluster pulls the container images itself, from their public registries. A first install can take several minutes while it does.
+- Grafana isn't installed: OmniKrux draws the dashboards itself.
+- For metrics, OmniKrux writes the Prometheus Operator's resource definitions (`monitoring.coreos.com`) itself before Helm runs, because Helm never updates them. A newer one the cluster already has is kept.
+- The charts' own alert rules aren't added. Your alert rules are your own (see [Alerts](#alerts)).
+
+### Where to start an install
+
+- **Setup, step 2.** **Install Prometheus…** or **Install Loki…** on a missing tool. After **Create project and review the install**, the review opens, and what gets installed is added to the new project.
+- **A Kubernetes project.** Its page has a **Monitoring tools** section that says what OmniKrux installed in the project's cluster ("Installed by OmniKrux in monitoring · Running", or "Something is missing", "Not healthy", or "OmniKrux hasn't installed anything in …"). **Install what's missing…** or **Open Monitoring tools** opens the cluster's Monitoring tools page.
+- **Monitoring tools.** The page of one cluster, **Monitoring tools in** followed by the cluster's name. Open it from a project, from **Monitoring tools** beside a source marked **Installed by OmniKrux** on the Sources page, or from that mark in setup; `Ctrl` click (`⌘` click on macOS) opens it in a new Monitoring tab. With nothing installed, tick **Metrics**, **Logs** or both and press **Review install…**.
+
+When the Helm and charts OmniKrux installs with aren't there (OmniKrux run outside its image without them), each of these says so instead ("Installing isn't available here: …") with what to do.
+
+### The review
+
+The review is the normal change review, built on the server from what the cluster has now. Its lines say:
+
+- what it installs, into which cluster and namespace, and that the cluster pulls the images itself;
+- that it creates the namespace, when it isn't there;
+- how many of the Prometheus Operator's resource definitions it creates and updates;
+- for each Helm release, the chart and its version and what it creates (for example "2 Deployments, 1 DaemonSet, 6 Services, … and 4 other objects");
+- where the data is kept: "Keeps data for 7 days on volumes: …" with the sizes and the storage class, or "Keeps data for 7 days, only until the Pods restart." without volumes;
+- which tools OmniKrux connects as sources afterwards, and the project it adds them to.
+
+**Settings** opens the settings, with a one-line summary beside it:
+
+| Setting | Default |
+| --- | --- |
+| **Namespace** | `monitoring` (not `default` or a `kube-` namespace) |
+| **Keep data for** | 7 days (1 to 90) |
+| **Keep data on volumes** | On: Prometheus 20Gi, Loki 10Gi, Alertmanager 1Gi |
+| **Resources** (**CPU request**, **Memory request**, **Memory limit**) | Prometheus 200m, 512Mi, 2Gi; Alertmanager 10m, 32Mi, 128Mi; Loki 100m, 256Mi, 1Gi; Grafana Alloy 50m, 128Mi, 512Mi |
+
+A value that doesn't fit says so under its field ("Use a size like 10Gi.", "Use memory like 256Mi or 1Gi.", "The limit can't be below the request (512Mi)."). **Update review** builds the review again with your changes; until you press it, the dialog says "Not in this review yet. Update review to use them." In a cluster without a default storage class the data can't be kept on volumes: the box is off, and the review says the tools keep their data only until their Pods restart.
+
+The review is **blocked**, in words, when installing would clash with what is there: a Prometheus Operator OmniKrux didn't install ("Connect the Prometheus it runs instead."), a Helm release with one of OmniKrux's release names that OmniKrux didn't make, tools OmniKrux already installed in another namespace of the cluster, an install or uninstall already running there, a change to the volume of a Loki that is already installed (Kubernetes never lets it change: keep Loki's storage as it is, or uninstall and install again), or a chart that refuses the cluster (in the chart's own words). On a production cluster the review says so and asks you to type the namespace name before **Install**.
+
+### Progress, cancelling and failures
+
+After you confirm, the install runs on its own, step by step: "Creating the namespace monitoring…", "Updating the Prometheus Operator's resource definitions…", "Installing omnikrux-metrics with Helm…" (and the other releases), "Waiting for Prometheus to be ready…" with what holds each tool up (for example a Pod still pulling its image), then "Connecting the sources…". You can close the dialog: the install carries on, and the Monitoring tools page follows it.
+
+- **Cancel install** asks "Stop the install? What Helm already applied stays." **Stop install** stops Helm, which can take up to about 20 seconds ("Stopping the install…"). The message then names the step it stopped in and says that what was applied stays as Helm left it.
+- A failure says what failed, in Helm's or the cluster's words, and what stays. OmniKrux never rolls anything back and never deletes what a failed install made. A tool that isn't ready after 10 minutes stops the wait, with the reason.
+- **Install again…** on the Monitoring tools page finishes a failed or cancelled install from where it is.
+- If Helm was stopped before it could record how its change ended, Helm won't touch that release again. The review then says so ("Helm's record of omnikrux-metrics says an earlier change never finished (pending-install), …"): use **Uninstall monitoring tools…**, then install again.
+- If OmniKrux stops while an install runs, the install says so when OmniKrux starts again ("OmniKrux stopped during the install. …"). Open Monitoring tools to see what's there, then run it again.
+
+### What gets connected
+
+Once everything is ready, OmniKrux adds each installed tool as a source (Prometheus, Alertmanager and Loki, reached through the cluster) marked **Installed by OmniKrux**. A source that already reaches the same tool is reused, never added twice. When the install was started from a project or from setup, the sources are added to that project. OmniKrux waits until each source answers before it says the tools are running ("Installed in monitoring: … are running. Connected 3 sources.").
+
+### The Monitoring tools page
+
+The page reads Helm's own records and the cluster each time, and says when ("Read …", with **Refresh**). If the read fails it says so and shows nothing old as current. It shows:
+
+- the state ("Installed by OmniKrux in monitoring", "Installing…", "The last install failed", "The last install was cancelled" or "Uninstalling…") and the last message;
+- **Metrics** and **Logs**, each **Installed**, **Not installed**, **Not healthy** or **Working**;
+- each Helm release with its chart, its status in Helm and its revision, and its workloads with their ready and wanted Pods (and why one isn't ready);
+- the **Sources** it connected, and the state of the **Contact points** (see below);
+- a Prometheus, Loki or Alertmanager the cluster already runs elsewhere ("You can connect it instead of installing another."), with **Use it in a project**.
+
+### Updating to the shipped versions
+
+When a newer OmniKrux ships newer charts than the ones installed, the page offers **Update to the shipped versions…**: the same review, titled "Update monitoring tools in monitoring", with your settings kept. **Install what's missing…** adds a component you didn't install yet (for example **Logs** next to **Metrics**); that review covers what is installed too, so nothing is removed.
+
+### Contact points and OmniKrux's own Alertmanager
+
+When OmniKrux installed the tools, their Alertmanager is OmniKrux's own, so a rule that runs in that Prometheus can notify OmniKrux's [contact points](#contact-points). The rule form then shows **Notify** with the contact points ("These contact points are sent from the Alertmanager OmniKrux installed; saving asks you to review that change."). A rule whose projects use both kinds of tools shows both the contact points and a **Channel** for the Prometheus you run.
+
+- Saving such a rule, or changing or deleting a contact point it uses, opens a review of the contact points in that Alertmanager, for example "Send alerts to 2 contact points from monitoring's Alertmanager" (or an update, or a removal when nothing is left to send). It names each contact point and the rules that use it, and says that the secret values are held in a Secret and never shown. Nothing changes in the cluster until you confirm.
+- The Monitoring tools page shows **Contact points**: "Up to date · 2 contact points for 3 rules", or "Changed since the last review" with **Review** (for example after you cancelled a review), or "Couldn't be updated: …" with **Try again**.
+- Webhook addresses, tokens, passwords and routing keys are written only into an Alertmanager OmniKrux installed, in its own Secret. They never appear in the review, in Audit, on the page or in a log. OmniKrux never writes secrets into a Prometheus or Alertmanager you run yourself: rules there use a **Channel** of your Alertmanager instead.
+- Alertmanager sends email with direct TLS only on port 465. An email contact point set to **TLS** on another port is left out, and the review says why.
+
+### Uninstalling
+
+**Uninstall monitoring tools…** opens its own review, which opens with the focus on **Cancel**. It says:
+
+- which Helm releases it removes from the cluster (Grafana Alloy, Loki, then the metrics stack, whose Prometheus and Alertmanager go first);
+- that OmniKrux's contact-point settings are removed from its Alertmanager;
+- which sources go, and which projects lose them;
+- what happens to the stored data: kept unless you tick **Also delete the stored data (metrics, logs and alerts history on the volumes)**, which can't be undone;
+- that the namespace and the `monitoring.coreos.com` resource definitions stay, so objects other tools made aren't touched.
+
+The review is blocked while alert rules still run in these tools: "Move or remove the alert rules that run in these tools first: …". Each of those rules has its own review. On a production cluster you type the namespace name. Cancelling an uninstall leaves what was already removed removed; **Uninstall monitoring tools…** again finishes it.
+
+**Deleting a project never uninstalls anything.** The project's delete review says "Monitoring tools OmniKrux installed in … stay. Uninstall them from Monitoring tools."
+
+### Docker hosts and servers
+
+OmniKrux doesn't install on a Docker host or on servers itself, and never asks for SSH keys or the Docker socket. It writes a file that installs the same tools (Prometheus, Alertmanager, node-exporter, Loki and Grafana Alloy, at the same versions), and you run it. Find it in setup step 2 for **A Docker host** or **Servers**, and in the **Monitoring tools** section of such a project.
+
+1. Fill in **Address OmniKrux will reach them at** (a host name or IP address, without `http://` or a port) and **Keep data for**; for servers also **Servers to watch** (one `host` or `host:port` per line; node-exporter is read on port 9100 unless you give one).
+2. Press **Write the file** (a `docker-compose.yml`) or **Write the script** (`omnikrux-monitoring.sh`), then **Copy** it, or download it with the **Download** button that names the file.
+3. Run it. On a Docker host, copy the file there and run `docker compose up -d` in its folder. On servers, run `sudo bash omnikrux-monitoring.sh --role central` on the server that keeps the data, and `sudo bash omnikrux-monitoring.sh --role agent --central <address>` on every other one. The script checks every download against its pinned checksum before it installs anything, and runs the tools as systemd services.
+4. Make sure the ports the instructions name (Prometheus 9090, Alertmanager 9093, Loki 3100) are reachable from OmniKrux, and from nowhere else: **the tools have no sign-in**.
+5. OmniKrux waits for the tools to answer ("Waiting for the tools to answer…", each tool **Answering** or **Not answering yet**; **Stop waiting** and **Wait again**). Once they answer, they become sources of the project.
+
+To remove them, run the script with `--uninstall` (add `--purge` to delete the data too), or `docker compose down` on the Docker host (add `-v` to delete the data too).
+
+### Audit
+
+An install is recorded as **Installed** and an uninstall as **Uninstalled**, with the cluster, the namespace and how it ended. The sources OmniKrux connects or removes are recorded as **Added a source** and **Removed a source**, and the contact-point review as a change to the `AlertmanagerConfig` `omnikrux-contact-points`. No entry holds a secret.
+
 ## Rename, unlink and delete
 
 - Use **Rename** beside a project's or group's name to change it.
@@ -449,4 +568,4 @@ Every change in Monitoring is written to the Audit log, marked as coming from Mo
 ## What comes in later updates
 
 - Importing existing Grafana dashboards.
-- Installing monitoring tools from OmniKrux, and discovery for Docker hosts and servers.
+- Finding the tools that already run on a Docker host or servers by itself (today OmniKrux checks only the addresses you give it).
