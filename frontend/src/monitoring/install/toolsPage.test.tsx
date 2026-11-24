@@ -239,6 +239,36 @@ describe("an install", () => {
     noBody();
   });
 
+  it("a refused change of the stored-data choice reverts, and Review again then sends false", async () => {
+    const user = userEvent.setup();
+    const fallback = (url: string, init?: RequestInit) =>
+      (init?.method ?? "GET").toUpperCase() === "POST" && url.endsWith("/apply")
+        ? json({ detail: "That changed since you looked. Review it again." }, 409)
+        : pipeline()(url, init);
+    const { fake } = renderPage({
+      fallback,
+      seed: {
+        install: {
+          ...AVAILABLE,
+          status: { c1: status({ install: record(), releases: [release()] }) },
+          uninstallPlans: [uninstallPlan(), { status: 500, error: { message: "Couldn't plan the uninstall." } }, uninstallPlan({ plan_id: "plan-u2" })],
+        },
+      },
+    });
+    await user.click(await screen.findByRole("button", { name: "Uninstall monitoring tools…" }));
+    const dialog = await screen.findByRole("dialog");
+    const box = within(dialog).getByRole("checkbox") as HTMLInputElement;
+    await user.click(box);
+    await within(dialog).findByText(/Couldn't plan the uninstall/);
+    await waitFor(() => expect(box.checked).toBe(false));
+
+    await user.click(within(dialog).getByRole("button", { name: "Uninstall" }));
+    await user.click(await within(dialog).findByRole("button", { name: "Review again" }));
+    const bodies = () => fake.requests.filter((r) => r.url.endsWith("/uninstall/plan")).map((r) => r.body);
+    await waitFor(() => expect(bodies()).toEqual([{ delete_data: false }, { delete_data: true }, { delete_data: false }]));
+    noBody();
+  });
+
   it("a running job shows its progress inline", async () => {
     renderPage({
       seed: { install: { ...AVAILABLE, status: { c1: status({ install: record({ state: "installing", job_id: "j1", message: "Installing…" }) }) } } },
@@ -248,6 +278,27 @@ describe("an install", () => {
     expect(screen.getByRole("button", { name: "Cancel install" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Uninstall monitoring tools…" })).toBeNull();
     noBody();
+  });
+});
+
+describe("the keyboard and a running job", () => {
+  const running = { install: { ...AVAILABLE, status: { c1: status({ install: record({ state: "installing", job_id: "j1", message: "Installing…" }) }) } } };
+
+  it("a job already running on load leaves the keyboard on the heading", async () => {
+    renderPage({ seed: running });
+    const h1 = await screen.findByRole("heading", { level: 1 });
+    await screen.findByText("Installing omnikrux-kps with Helm…");
+    expect(document.activeElement).toBe(h1);
+  });
+
+  it("a job that starts elsewhere leaves the keyboard where it is", async () => {
+    const user = userEvent.setup();
+    const { fake } = renderPage({ seed: { install: { ...AVAILABLE, status: { c1: status() } } } });
+    const refresh = await screen.findByRole("button", { name: "Refresh" });
+    fake.state.install.status.c1 = status({ install: record({ state: "installing", job_id: "j1", message: "Installing…" }) });
+    await user.click(refresh);
+    await screen.findByText("Installing omnikrux-kps with Helm…");
+    expect(document.activeElement).toBe(refresh);
   });
 });
 

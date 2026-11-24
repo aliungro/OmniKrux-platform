@@ -53,6 +53,7 @@ export function InstallProgress({
   onClose,
   onOutcome,
   onState,
+  takeFocus = true,
 }: {
   jobId: string;
   action: "install" | "uninstall";
@@ -60,6 +61,8 @@ export function InstallProgress({
   onOutcome(o: ActionOutcome | null): void;
   /** Hears where the job stands (for whoever opened the review: how to say it ended). */
   onState?(state: InstallJobState): void;
+  /** Whether Close takes the keyboard when this appears (a dialog: yes; a page asks for it only after the user's own review). */
+  takeFocus?: boolean;
 }) {
   const id = useId();
   const copy = COPY[action];
@@ -105,10 +108,13 @@ export function InstallProgress({
   /** Where the keyboard goes once the question opens or closes. */
   const want = useRef<"keep" | "cancel" | null>(null);
   const alive = useRef(true);
+  const root = useRef<HTMLDivElement>(null);
+  /** Whether the keyboard was inside this at the last look. */
+  const heldFocus = useRef(false);
 
   useEffect(() => {
     alive.current = true;
-    closeRef.current?.focus();
+    if (takeFocus) closeRef.current?.focus();
     return () => { alive.current = false; };
   }, []);
 
@@ -150,7 +156,9 @@ export function InstallProgress({
       return;
     }
     const active = document.activeElement;
-    if (active === null || active === document.body || !active.isConnected) closeRef.current?.focus();
+    // A page's inline progress hands Close the keyboard only when it held it (never from elsewhere).
+    if ((active === null || active === document.body || !active.isConnected) && (takeFocus || heldFocus.current)) closeRef.current?.focus();
+    heldFocus.current = active !== null && root.current?.contains(active) === true;
   });
 
   const ask = () => {
@@ -241,7 +249,7 @@ export function InstallProgress({
   // The question goes with Cancel (a failed read, the job's end); it doesn't come back by itself.
   if (asking && !canCancel) setAsking(false);
   return (
-    <div className={s.progress}>
+    <div ref={root} className={s.progress}>
       {shown}
       {stopping && <p className={s.stopping} role="status">{copy.stopping}</p>}
       {cancelError && <p className={s.error} role="alert">{cancelError}</p>}

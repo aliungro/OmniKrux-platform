@@ -22,6 +22,8 @@ export const POLL_RUNNING_MS = 3000;
 export const POLL_IDLE_MS = 30_000;
 /** A read this young is shown as it is when the page opens again. */
 const STALE_MS = 10_000;
+/** Progress that shows up this soon after the user's own review is theirs: it takes the keyboard. */
+const OWN_REVIEW_MS = 15_000;
 
 export const toolsKey = (clusterId: string) => ["install-live", clusterId] as const;
 
@@ -162,6 +164,8 @@ export default function ToolsPage({ view, nav, openInNewTab }: MonitoringPagePro
 
   const [closedJobs, setClosedJobs] = useState<string[]>([]);
   const ended = useRef<string | null>(null);
+  /** When the user last closed a review here: progress that appears right after takes the keyboard. */
+  const reviewedAt = useRef(0);
 
   const install = status?.install ?? null;
   const unavailable = status && !status.tools.available ? unavailableWords(status.tools.message) : null;
@@ -169,7 +173,10 @@ export default function ToolsPage({ view, nav, openInNewTab }: MonitoringPagePro
 
   /** Opens a review from a button, then reads the cluster again whatever came of it. */
   const review = (open: (from: HTMLElement) => Promise<unknown>): Click => (e) => {
-    void open(e.currentTarget).finally(() => { if (alive.current) read(); });
+    void open(e.currentTarget).finally(() => {
+      reviewedAt.current = Date.now();
+      if (alive.current) read();
+    });
   };
   const runInstall = (components: Component[]) => review((from) => reviews.install({ clusterId, components, focusAfter: from }));
 
@@ -198,6 +205,7 @@ export default function ToolsPage({ view, nav, openInNewTab }: MonitoringPagePro
       ? <FreshInstall charts={status.tools.charts} gate={gate} onReview={runInstall} others={others} />
       : (
         <Installed status={status} install={install} others={others} gate={gate}
+          takeFocus={Date.now() - reviewedAt.current < OWN_REVIEW_MS}
           closed={install.job_id !== null && closedJobs.includes(install.job_id)}
           onCloseProgress={() => {
             if (install.job_id) setClosedJobs((x) => [...x, install.job_id as string]);
@@ -282,12 +290,13 @@ function FreshInstall({ charts, gate, onReview, others }: {
 
 // --- With an install -------------------------------------------------------------------------
 
-function Installed({ status, install, others, gate, closed, onCloseProgress, onOutcome, onMissing, onAgain, onUninstall, onContacts, onSource }: {
+function Installed({ status, install, others, gate, closed, takeFocus, onCloseProgress, onOutcome, onMissing, onAgain, onUninstall, onContacts, onSource }: {
   status: InstallStatusOut;
   install: InstallOut;
   others: ReactNode;
   gate: Gate;
   closed: boolean;
+  takeFocus: boolean;
   onCloseProgress(): void;
   onOutcome(): void;
   onMissing: Click;
@@ -312,7 +321,7 @@ function Installed({ status, install, others, gate, closed, onCloseProgress, onO
       {running && install.job_id && !closed && (
         <div className={s.progress}>
           <InstallProgress key={install.job_id} jobId={install.job_id} action={install.state === "uninstalling" ? "uninstall" : "install"}
-            onClose={onCloseProgress} onOutcome={onOutcome} />
+            onClose={onCloseProgress} onOutcome={onOutcome} takeFocus={takeFocus} />
         </div>
       )}
 

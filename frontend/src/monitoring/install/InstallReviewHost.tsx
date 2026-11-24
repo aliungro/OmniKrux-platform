@@ -221,12 +221,20 @@ export function InstallReviewHost({ children, place }: {
   const onReview = useCallback(async (params?: Record<string, unknown>) => {
     const now = shown.current;
     if (now === null) return;
+    // The stored-data choice sticks only once its plan was made: a refusal leaves it as it was.
+    const keptDeleteData = now.item.deleteData;
     if (now.item.kind === "uninstall" && params && "delete_data" in params) now.item.deleteData = params.delete_data === true;
     if (now.item.kind === "install") {
       if (params && "settings" in params) now.item.settings = params.settings as InstallSettingsIn;
       else if (!params && now.item.draft) now.item.settings = now.item.draft;
     }
-    const next = await planFor(now.item);
+    let next: Awaited<ReturnType<typeof planFor>>;
+    try {
+      next = await planFor(now.item);
+    } catch (err) {
+      now.item.deleteData = keptDeleteData;
+      throw err;
+    }
     if (shown.current !== now) {
       if (next !== "done") discardPlans([next.plan.plan_id]);
       return;
