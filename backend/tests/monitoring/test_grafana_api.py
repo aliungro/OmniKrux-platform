@@ -5,6 +5,7 @@ write is audited; a Grafana that can't be read says why in plain words."""
 import logging
 from datetime import datetime
 
+from omnikrux.monitoring.sources import messages
 from omnikrux.monitoring.sources.transport import URL_RULE
 from omnikrux.monitoring.transfer.api import (
     BASIC_NEEDS,
@@ -17,7 +18,7 @@ from omnikrux.monitoring.transfer.api import (
 from omnikrux.monitoring.transfer.grafana_client import NOT_GRAFANA, SIGN_IN_CLUSTER, SIGN_IN_URL
 from omnikrux.monitoring.transfer.origins import OriginRecord
 from tests.monitoring.conftest import GRAFANA_TOKEN
-from tests.monitoring.fakes import Basic, grafana_answer
+from tests.monitoring.fakes import Basic, Bearer, grafana_answer
 from tests.monitoring.test_rules_api import monitoring_records, refusal
 
 API = "/api/monitoring"
@@ -332,3 +333,73 @@ async def test_removing_a_grafana_keeps_imported_dashboards(
     assert (await http.get(f"{API}/dashboards/{dashboard_id}")).status_code == 200
     origin = await services.origins.get(dashboard_id)
     assert origin is not None and origin.grafana_id is None
+
+
+async def test_a_sign_in_change_without_a_type_keeps_the_sign_in(monitoring_app, fake_grafana_auth):
+    http, _ = monitoring_app
+    created = await add(http, by_url(fake_grafana_auth.url))
+    url = f"{GRAFANA}/{created['id']}"
+    fake_grafana_auth.require = Bearer("glsa_SECRET-16")
+    changed = await http.patch(url, json={"auth": {"token": "glsa_SECRET-16"}})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["auth"] == {
+        "type": "bearer",
+        "username": None,
+        "has_password": False,
+        "has_token": True,
+    }
+    assert (await http.post(f"{url}/test")).json()["ok"] is True  # the new token is sent
+    assert "glsa_SECRET-16" not in changed.text
+
+    basic = await add(
+        http,
+        by_url(
+            fake_grafana_auth.url,
+            name="Basic",
+            auth={"type": "basic", "username": "ana", "password": "pw-1"},
+        ),
+    )
+    fake_grafana_auth.require = Basic("ana", "pw-2")
+    kept = await http.patch(f"{GRAFANA}/{basic['id']}", json={"auth": {"password": "pw-2"}})
+    assert kept.json()["auth"] == {
+        "type": "basic",
+        "username": "ana",
+        "has_password": True,
+        "has_token": False,
+    }
+    assert (await http.post(f"{GRAFANA}/{basic['id']}/test")).json()["ok"] is True
+    # A connection without a sign-in still takes none from a type-less change.
+    plain = await add(http, {"reach": "url", "url": fake_grafana_auth.url, "name": "Plain"})
+    still = await http.patch(f"{GRAFANA}/{plain['id']}", json={"auth": {}})
+    assert still.json()["auth"]["type"] == "none"
+
+
+async def test_a_change_or_removal_forgets_the_cached_tls_setting(
+    monitoring_app, fake_grafana_auth, monkeypatch
+):
+    http, app = monitoring_app
+    transports = app.state.monitoring.transports
+    forgotten: list[str] = []
+    forget = transports.forget
+    monkeypatch.setattr(transports, "forget", lambda key: (forgotten.append(key), forget(key)))
+    created = await add(http, by_url(fake_grafana_auth.url))
+    assert forgotten == []
+    await http.patch(f"{GRAFANA}/{created['id']}", json={"name": "Renamed"})
+    assert forgotten == [f"grafana:{created['id']}"]
+    assert (await http.delete(f"{GRAFANA}/{created['id']}")).status_code == 204
+    assert forgotten == [f"grafana:{created['id']}"] * 2
+
+
+async def test_a_cluster_that_may_not_proxy_keeps_its_own_words(
+    fake_api, fake_grafana, kube_cluster, monitoring_app
+):
+    http, app = monitoring_app
+    fake_api.service_backends[("monitoring", "grafana:80")] = fake_grafana.url
+    fake_api.proxy_forbidden = True
+    cluster = (await app.state.registry.get(kube_cluster)).name
+    name = f"Grafana · {cluster}"
+    words = messages.FORBIDDEN.format(name=name, cluster=cluster)
+    listed = await http.post(f"{GRAFANA}/dashboards", json=in_cluster(kube_cluster))
+    assert refusal(listed) == (502, "grafana", words)
+    tested = (await http.post(f"{GRAFANA}/test", json=in_cluster(kube_cluster))).json()
+    assert (tested["ok"], tested["message"]) == (False, words)

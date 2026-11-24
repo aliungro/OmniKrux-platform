@@ -568,7 +568,10 @@ class ClusterServiceTransport:
 
         def raise_(code: UnreachableCode, message: str, tool_status: int | None = None) -> None:
             if cloud:
+                # A cloud cluster's answers are worded by its own login rules, and its API
+                # server's refusal can't be told from the tool's: never say the tool refused.
                 message = cloud_kube_error(f"reach {name}", status=status).message
+                tool_status = None
             raise SourceUnreachable(code, message, status=tool_status)
 
         if 300 <= status < 400:

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import pytest
 
 from omnikrux.monitoring.sources import messages
-from omnikrux.monitoring.sources.transport import SourceUnreachable
+from omnikrux.monitoring.sources.transport import ClusterServiceTransport, SourceUnreachable
 from omnikrux.monitoring.sources.types import ClusterTarget
 from omnikrux.monitoring.transfer.grafana.datasources import GrafanaDatasource
 from omnikrux.monitoring.transfer.grafana_client import (
@@ -293,3 +293,24 @@ async def test_error_bodies_that_echo_the_token_never_reach_a_message(
     said = [repr(caught.value), str(caught.value), repr(notes), repr(gone.value), caplog.text]
     assert all(GRAFANA_TOKEN not in text for text in said)
     assert caught.value.message == DASHBOARD_REFUSED.format(name=NAME, uid="api", status=500)
+
+
+def test_only_the_tools_own_refusal_carries_a_status_and_never_on_a_cloud_cluster():
+    cfg = transport_config(
+        config(
+            None,
+            reach="cluster",
+            cluster=ClusterTarget("c1", "monitoring", "grafana", "80", "http"),
+        )
+    )
+    transport = ClusterServiceTransport(None, None, cfg)  # _refuse reads neither
+    tool = b'{"message": "invalid API key"}'
+    kube = b'{"kind": "Status", "message": "Unauthorized", "code": 401}'
+    cases = [(tool, False, 401), (tool, True, None), (kube, False, None), (kube, True, None)]
+    for body, cloud, status in cases:
+        with pytest.raises(SourceUnreachable) as caught:
+            transport._refuse(401, body, "prod", cloud)
+        assert (caught.value.code, caught.value.status) == ("unauthorized", status), (body, cloud)
+    with pytest.raises(SourceUnreachable) as on_cloud:
+        transport._refuse(403, tool, "prod", True)
+    assert on_cloud.value.message != messages.REJECTED.format(name=NAME, status=403)

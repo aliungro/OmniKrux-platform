@@ -186,6 +186,15 @@ class GrafanaIn(_Body):
     auth: GrafanaAuthIn = Field(default_factory=GrafanaAuthIn)
 
 
+class GrafanaAuthPatch(_Body):
+    """A sign-in change: `type` None keeps the connection's current sign-in."""
+
+    type: GrafanaAuth | None = None
+    username: str | None = None
+    password: SecretStr | None = None
+    token: SecretStr | None = None
+
+
 class GrafanaPatch(_Body):
     """Every field optional; `None` keeps what is stored. A secret left out keeps the stored one
     while the sign-in stays the same."""
@@ -199,7 +208,7 @@ class GrafanaPatch(_Body):
     port: str | None = None
     scheme: Literal["http", "https"] | None = None
     path_prefix: str | None = None
-    auth: GrafanaAuthIn | None = None
+    auth: GrafanaAuthPatch | None = None
 
 
 class GrafanaAuthOut(BaseModel):
@@ -493,19 +502,21 @@ async def _change(
     secrets = GrafanaSecrets()
     if body.auth is not None:
         auth = body.auth
-        if old.reach == "cluster" and auth.type != "none":
+        # Without a type the sign-in stays as it is; only the values given change.
+        kind: GrafanaAuth = auth.type if auth.type is not None else old.auth_type
+        if old.reach == "cluster" and kind != "none":
             raise _refuse(CLUSTER_NO_SIGN_IN)
         # What is stored counts only for the same sign-in, and only while it can be read.
-        same = auth.type == old.auth_type and not old.secrets_unreadable
+        same = kind == old.auth_type and not old.secrets_unreadable
         password, token = _secret(auth.password), _secret(auth.token)
         username = auth.username if auth.username is not None else (old.username if same else None)
         has_password = bool(password) or (password is None and same and bool(old.secrets.password))
         kept_token = old.secrets.token if same and token is None else None
-        _check_sign_in(auth.type, username, has_password, token or kept_token)
-        auth_type = auth.type
+        _check_sign_in(kind, username, has_password, token or kept_token)
+        auth_type = kind
         secrets = GrafanaSecrets(
-            password=password if auth.type == "basic" else None,
-            token=token if auth.type == "bearer" else None,
+            password=password if kind == "basic" else None,
+            token=token if kind == "bearer" else None,
         )
         username = username or ""  # the store reads None as "keep"
     change = GrafanaChange(
