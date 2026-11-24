@@ -189,7 +189,7 @@ def test_a_draft_that_does_not_fit_is_skipped_in_words():
     assert skipped == SkippedItem(
         'Alert "' + "x" * 121 + '"',
         "The rule",
-        "It doesn't fit OmniKrux alerts: Use 1 to 120 characters, without line breaks.",
+        "It doesn't fit OmniKrux alerts: name: Use 1 to 120 characters, without line breaks.",
     )
 
 
@@ -221,7 +221,7 @@ def test_a_draft_reads_the_dashboard_variables():
     )
     assert alert is None
     assert skipped.reason == (
-        "It doesn't fit OmniKrux alerts: Uses $job, which has no default value. "
+        "It doesn't fit OmniKrux alerts: query: Uses $job, which has no default value. "
         "Alerts use each variable's default, so give it one."
     )
     alert, skipped = alert_from_draft(
@@ -400,7 +400,7 @@ def test_an_alert_that_does_not_fit_is_skipped_in_words():
         SkippedItem(
             'Alert on panel "Latency"',
             "The alert",
-            "It doesn't fit OmniKrux alerts: Use one of: above, below.",
+            "It doesn't fit OmniKrux alerts: op: Use one of: above, below.",
         )
     ]
 
@@ -410,7 +410,6 @@ def test_an_alert_that_does_not_fit_is_skipped_in_words():
     [
         "loud",
         ["a"],
-        m4_alert(notify="Ops Slack"),
         m4_alert(engine="grafana"),
         m4_alert(channel={"receiver": "x"}),
         m4_alert(query="B"),
@@ -450,6 +449,73 @@ def test_an_update_keeps_where_the_alert_runs_and_who_it_tells():
     )
     assert current["threshold"] == 0.5 and incoming["engine"] == "omnikrux"
     validate_panel_alert(merged, panel_with_queries("A"))  # does not raise
+
+
+def test_a_non_list_notify_is_dropped_in_words():
+    imported, skipped = import_alert(
+        m4_alert(notify="Ops Slack"),
+        panel=panel_with_queries("A"),
+        panel_title="Latency",
+        contact_points_by_name={"Ops Slack": "cp-9"},
+    )
+    assert imported == m4_alert(notify=[])
+    assert skipped == [
+        SkippedItem(
+            'Alert on panel "Latency"',
+            "A contact point",
+            "The file doesn't name it. Pick contact points in the panel's Alert tab.",
+        )
+    ]
+    imported, again = import_alert(
+        m4_alert(notify=None),
+        panel=panel_with_queries("A"),
+        panel_title="Latency",
+        contact_points_by_name={},
+    )
+    assert (imported, again) == (m4_alert(notify=[]), skipped)
+
+
+def test_a_refusal_names_the_field_when_there_is_one():
+    imported, skipped = import_alert(
+        m4_alert(notify=[], threshold="high"),
+        panel=panel_with_queries("A"),
+        panel_title="Latency",
+        contact_points_by_name={},
+    )
+    assert imported is None
+    assert skipped[-1].reason.startswith("It doesn't fit OmniKrux alerts: threshold: ")
+
+
+def test_an_update_keeps_a_local_severity_and_message_the_source_does_not_set():
+    silent = replace(DRAFT, reducer="last", severity=None, message=None)
+    incoming, skipped = alert_from_draft(silent, panel=panel_with_queries("A"))
+    assert skipped is None
+    assert (incoming["severity"], incoming["message"]) == ("warning", "")
+    current = m4_alert(severity="critical", message="Call the API team", threshold=0.5)
+    merged = merge_alert(current, incoming, draft=silent)
+    assert merged == m4_alert(severity="critical", message="Call the API team", threshold=0.3)
+    blank = replace(silent, severity="  ", message="")
+    assert merge_alert(current, incoming, draft=blank) == merged
+
+
+def test_an_update_takes_a_severity_and_message_the_source_sets():
+    loud = replace(DRAFT, reducer="last", severity="info", message="Slow again")
+    incoming, _ = alert_from_draft(loud, panel=panel_with_queries("A"))
+    current = m4_alert(severity="critical", message="Call the API team")
+    merged = merge_alert(current, incoming, draft=loud)
+    assert (merged["severity"], merged["message"]) == ("info", "Slow again")
+    # without a draft (an OmniKrux file sets every field), everything comes from the source
+    silent = replace(loud, severity=None, message=None)
+    incoming, _ = alert_from_draft(silent, panel=panel_with_queries("A"))
+    merged = merge_alert(current, incoming)
+    assert (merged["severity"], merged["message"]) == ("warning", "")
+
+
+def test_a_new_alert_from_a_silent_source_gets_the_defaults():
+    silent = replace(DRAFT, reducer="last", severity=None, message=None)
+    incoming, skipped = alert_from_draft(silent, panel=panel_with_queries("A"))
+    assert skipped is None
+    assert merge_alert(None, incoming, draft=silent) == m4_alert(message="")
 
 
 def test_an_update_without_a_current_alert_takes_the_source():

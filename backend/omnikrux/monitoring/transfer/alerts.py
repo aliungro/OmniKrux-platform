@@ -49,8 +49,10 @@ def _wait_copy(seconds: int) -> str:
     return f"It waits {duration_text(seconds)}; OmniKrux alerts wait at most 24h."
 
 
-def _does_not_fit(message: str) -> str:
-    return f"It doesn't fit OmniKrux alerts: {message}"
+def _does_not_fit(problem: Problem) -> str:
+    field = problem.path.removeprefix(_ALERT_PATH).lstrip(".")
+    where = f"{field}: " if field else ""
+    return f"It doesn't fit OmniKrux alerts: {where}{problem.message}"
 
 
 # --- the alert check ------------------------------------------------------------------------
@@ -149,6 +151,7 @@ def alert_from_draft(
 
     Answers `(alert, None)`; `(None, item)` when the draft can't become an OmniKrux alert; or
     `(alert, item)` when the alert was kept with one change said in words (its severity).
+    A severity or message the source didn't set (None) takes M4's default: warning, no message.
     The alert notifies no one: contact points are picked in OmniKrux. A draft's
     `window_seconds` has no place in M4's alert and changes nothing for a latest-value check."""
     where = f'Alert "{draft.title}"'
@@ -169,7 +172,7 @@ def alert_from_draft(
         "for": duration_text(seconds),
         "every": "1m",
         "severity": severity,
-        "message": draft.message,
+        "message": draft.message or "",
         "notify": [],
         "engine": "omnikrux",
         "channel": None,
@@ -177,7 +180,7 @@ def alert_from_draft(
     try:
         return _normalised(alert, panel, variables), changed
     except DashboardInvalid as err:
-        return None, SkippedItem(where, "The rule", _does_not_fit(err.problems[0].message))
+        return None, SkippedItem(where, "The rule", _does_not_fit(err.problems[0]))
 
 
 def draft_from_alert(alert: dict) -> AlertDraft | None:
@@ -262,7 +265,10 @@ def import_alert(
             out.pop("channel", None)
             skipped.append(SkippedItem(where, "Runs in the tool", _RUNS_IN_THE_TOOL))
         notify = out.get("notify")
-        if isinstance(notify, list):
+        if "notify" in out and not isinstance(notify, list):
+            out["notify"] = []
+            skipped.append(SkippedItem(where, "A contact point", _CONTACT_POINT_UNNAMED))
+        elif isinstance(notify, list):
             ids: list[str] = []
             for entry in notify:
                 name = _named(entry)
@@ -278,27 +284,45 @@ def import_alert(
     try:
         return _normalised(out, panel, variables), skipped
     except DashboardInvalid as err:
-        skipped.append(SkippedItem(where, "The alert", _does_not_fit(err.problems[0].message)))
+        skipped.append(SkippedItem(where, "The alert", _does_not_fit(err.problems[0])))
         return None, skipped
 
 
 # --- update from source ---------------------------------------------------------------------
 
 
-def merge_alert(current: dict | None, incoming: dict | None) -> dict | None:
+def source_left_unset(draft: AlertDraft) -> frozenset[str]:
+    """The alert fields a Grafana draft doesn't set: its severity and message when the rule has
+    no severity label or no summary (None, or blank)."""
+    unset = set()
+    if draft.severity is None or not draft.severity.strip():
+        unset.add("severity")
+    if draft.message is None or not draft.message.strip():
+        unset.add("message")
+    return frozenset(unset)
+
+
+def merge_alert(
+    current: dict | None, incoming: dict | None, *, draft: AlertDraft | None = None
+) -> dict | None:
     """A panel's alert after an update from source.
 
-    The alert's definition (name, query, condition, wait, severity, message) comes from the
-    source; who it tells, where it runs and how often it is checked stay as the panel's current
-    alert has them. No current alert: the source's alert as it is. No incoming alert: None (the
-    update removes it, and a tool-run alert's removal goes through its review)."""
+    The alert's definition (name, query, condition, wait) comes from the source, and so do its
+    severity and message when the source sets them: pass the Grafana `draft` the incoming alert
+    was made from, and a severity or message it leaves unset keeps the current alert's. Who it
+    tells, where it runs and how often it is checked stay as the panel's current alert has them.
+    No current alert: the source's alert as it is (with M4's defaults). No incoming alert: None
+    (the update removes it, and a tool-run alert's removal goes through its review)."""
     if incoming is None:
         return None
     out = copy.deepcopy(incoming)
     if current is None:
         return out
-    kept = {k: copy.deepcopy(v) for k, v in current.items() if k not in _FROM_SOURCE}
-    taken = {k: v for k, v in out.items() if k in _FROM_SOURCE}
+    from_source = set(_FROM_SOURCE)
+    if draft is not None:
+        from_source -= source_left_unset(draft)
+    kept = {k: copy.deepcopy(v) for k, v in current.items() if k not in from_source}
+    taken = {k: v for k, v in out.items() if k in from_source}
     return kept | taken
 
 

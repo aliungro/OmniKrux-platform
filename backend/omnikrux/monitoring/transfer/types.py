@@ -90,8 +90,8 @@ class AlertDraft:
     threshold: float
     for_seconds: int
     title: str
-    message: str
-    severity: str | None
+    message: str | None  # None: the source sets no message
+    severity: str | None  # None: the source sets no severity
     window_seconds: int | None
 
 
