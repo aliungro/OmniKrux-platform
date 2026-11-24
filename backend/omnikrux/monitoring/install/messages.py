@@ -216,6 +216,17 @@ CONTACTS_LINE = "{name} ({type}) for {rules}"
 CONTACTS_SECRET_LINE = (
     "Secret omnikrux-contact-points holds {k} values; they are hidden here and never shown again."
 )
+# Not in the plan's copy list: one value.
+CONTACTS_SECRET_LINE_ONE = (
+    "Secret omnikrux-contact-points holds 1 value; it is hidden here and never shown again."
+)
+
+
+def contacts_secret_line(k: int) -> str:
+    """The review's line about the Secret's values, in the singular for one."""
+    return CONTACTS_SECRET_LINE_ONE if k == 1 else CONTACTS_SECRET_LINE.format(k=k)
+
+
 # Not in the plan's copy list: the summary of a removal (nothing is left to route).
 CONTACTS_DELETE_SUMMARY = "No rule that runs in the tools OmniKrux installed in {cluster} notifies a contact point now, so the AlertmanagerConfig and Secret omnikrux-contact-points are removed."
 CONTACTS_SKIPPED = "{name} can't be sent from Alertmanager: {reason}"

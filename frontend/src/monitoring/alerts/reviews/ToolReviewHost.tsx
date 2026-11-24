@@ -141,6 +141,11 @@ export function ToolReviewHost({ children, place }: {
     }
     // Planned only once no other review holds the screen; held until this one closed.
     const release = await install.current.turn();
+    // Monitoring went away while it waited: nothing is synced for it.
+    if (!alive.current) {
+      release();
+      return "cancelled";
+    }
     try {
       return await syncAndShow(item);
     } finally {
@@ -174,9 +179,10 @@ export function ToolReviewHost({ children, place }: {
    */
   const addContacts = useCallback((clusterId: string, clusterName: string) => {
     const key = contactsKey(clusterId);
-    const at = queue.current.findIndex((i) => i.targetId === key);
-    const waiting = at > 0 || (at === 0 && !running.current);
-    const kept = waiting ? queue.current.splice(at, 1)[0] : null;
+    // The first item is under way while the queue runs: a waiting one is looked for after it.
+    const from = running.current ? 1 : 0;
+    const at = queue.current.findIndex((i, n) => n >= from && i.targetId === key);
+    const kept = at >= 0 ? queue.current.splice(at, 1)[0] : null;
     queue.current.push(kept ?? { targetId: key, ruleName: "", projectName: clusterName, waiting: [], contactsOf: clusterId });
     setPending(queue.current.length);
   }, []);

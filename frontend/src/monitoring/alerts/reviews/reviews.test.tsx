@@ -424,6 +424,28 @@ describe("contact points in the tool review queue", () => {
     expect(installStatus().textContent).toBe("Contact points in kind-dev's Alertmanager aren't updated yet. Review them from Monitoring tools.");
   });
 
+  it("more batches while a cluster's contact points are under review queue one more review, not one each", async () => {
+    const user = userEvent.setup();
+    const { fallback } = pipeline([APPLIED]);
+    const api = installFakeMonitoringApi({ install: { contacts: { c1: { kind: "review", plan: contactsPlan } } } }, fallback);
+    const both = renderBoth([contacts()]);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(heading()).toBe("Update contact points in monitoring"));
+    act(() => {
+      both.queue().enqueue([contacts()]);
+      both.queue().enqueue([contacts()]);
+    });
+    expect(screen.getByTestId("pending").textContent).toBe("2");
+    // The review under way, then the one queued behind it, and no third.
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.getByTestId("pending").textContent).toBe("1"));
+    await waitFor(() => expect(heading()).toBe("Update contact points in monitoring"));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.getByTestId("pending").textContent).toBe("0"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.requests.filter((r) => r.url.endsWith("/install/clusters/c1/contacts/sync"))).toHaveLength(2);
+  });
+
   it("a review either host is asked for waits while the other's review is open", async () => {
     const user = userEvent.setup();
     const { fallback } = pipeline([APPLIED]);

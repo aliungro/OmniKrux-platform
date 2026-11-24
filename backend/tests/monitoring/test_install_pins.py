@@ -211,6 +211,45 @@ async def test_tools_check_reports_a_helm_that_wont_answer(tmp_path):
     )
 
 
+@pytest.mark.parametrize("error", [NotImplementedError(), ValueError("embedded null byte")])
+async def test_tools_check_reports_a_helm_that_cant_be_started(tmp_path, error):
+    # A selector event loop (Windows, `uvicorn --reload`) can't start programs at all.
+    helm = fake_helm(tmp_path)
+
+    async def run_version(path: Path) -> str:
+        raise error
+
+    check = ToolsCheck(settings(helm_binary=helm, charts_dir=tmp_path), run_version=run_version)
+    status = await check.status()
+    assert status.available is False
+    assert status.helm_version is None
+    assert status.message == messages.TOOLS_WRONG_HELM.format(
+        expected=f"v{HELM_VERSION}", path=helm, found=messages.TOOLS_HELM_NO_ANSWER
+    )
+
+
+@pytest.mark.parametrize("printed", ["Usage: helm [command]", "3.16.3", "v3.16"])
+async def test_tools_check_never_shows_other_output_as_a_version(tmp_path, printed):
+    helm = fake_helm(tmp_path)
+    run_version, _ = answers(printed)
+    check = ToolsCheck(settings(helm_binary=helm, charts_dir=tmp_path), run_version=run_version)
+    status = await check.status()
+    assert status.available is False
+    assert status.helm_version is None
+    assert status.message == messages.TOOLS_WRONG_HELM.format(
+        expected=f"v{HELM_VERSION}", path=helm, found=messages.TOOLS_HELM_NO_ANSWER
+    )
+
+
+def test_contacts_secret_line_counts_in_words():
+    assert messages.contacts_secret_line(1) == (
+        "Secret omnikrux-contact-points holds 1 value; it is hidden here and never shown again."
+    )
+    assert messages.contacts_secret_line(3) == (
+        "Secret omnikrux-contact-points holds 3 values; they are hidden here and never shown again."
+    )
+
+
 async def test_tools_check_reports_no_charts_dir(tmp_path):
     helm = fake_helm(tmp_path)
     run_version, _ = answers(f"v{HELM_VERSION}")

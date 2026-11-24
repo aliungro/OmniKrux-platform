@@ -201,7 +201,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     return {
       label: (v: MonitoringView) => monitoringTabLabel(v, {
         project: (id) => projects.get(id)?.name, group: (id) => groups.get(id), source: (id) => sourceNames.get(id),
-        dashboard: (id) => dashboards.get(id), cluster: (id) => clusterNames[id],
+        dashboard: (id) => dashboards.get(id), cluster: (id) => (Object.hasOwn(clusterNames, id) ? clusterNames[id] : undefined),
       }),
       color: (v: MonitoringView) => {
         const p = v.page === "project" ? projects.get(v.id) : undefined;

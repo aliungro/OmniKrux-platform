@@ -674,7 +674,7 @@ class ContactSyncAction:
             )
             for line in desired.receivers
         ]
-        summary.append(messages.CONTACTS_SECRET_LINE.format(k=len(desired.secret_data)))
+        summary.append(messages.contacts_secret_line(len(desired.secret_data)))
         warnings = [
             messages.CONTACTS_SKIPPED.format(name=name, reason=reason)
             for name, reason in desired.skipped

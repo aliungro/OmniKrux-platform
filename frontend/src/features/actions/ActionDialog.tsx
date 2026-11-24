@@ -73,9 +73,9 @@ export function ActionDialog({
   const [typed, setTyped] = useState("");
   const [phase, setPhase] = useState<"idle" | "applying" | "reviewing">("idle");
   const [error, setError] = useState<Failure | null>(null);
-  /** A drain under way: its job, and what the apply said when it started it. */
+  /** A job the apply started (a drain, an install…): its id, and what the apply said when it started it. */
   const [started, setStarted] = useState<{ jobId: string; message: string } | null>(null);
-  /** How the drain ended (or that it is lost), once its progress says so. */
+  /** How that job ended (or that it is lost), once its progress says so. */
   const ended = useRef<ActionOutcome | null>(null);
 
   // A new plan (reviewed again) starts clean: the name is typed again for it.
@@ -130,7 +130,7 @@ export function ActionDialog({
     }
   };
 
-  // Closing a drain's progress, however: say how it ended, or that it was started and carries on.
+  // Closing a started job's progress, however: say how it ended, or that it was started and carries on.
   const close = () => {
     if (started === null) onDone();
     else onDone(ended.current ?? { message: started.message, tone: "ok" });

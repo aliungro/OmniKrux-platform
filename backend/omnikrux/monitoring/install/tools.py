@@ -7,6 +7,7 @@ until `refresh()`."""
 import asyncio
 import hashlib
 import os
+import re
 import shutil
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
@@ -19,6 +20,8 @@ from omnikrux.monitoring.install import messages
 from omnikrux.monitoring.install.pins import CHARTS, HELM_VERSION
 
 HELM_VERSION_TIMEOUT_SECONDS = 5.0
+# What `helm version --template {{.Version}}` prints, e.g. v3.16.3 (or v3.16.3+gabc).
+_HELM_VERSION = re.compile(r"v\d+\.\d+\.\d+\S*")
 _STOP_SECONDS = 2.0
 
 
@@ -125,9 +128,13 @@ class ToolsCheck:
             return ToolsStatus(False, messages.TOOLS_NO_HELM.format(where=where), None, None)
         expected = f"v{HELM_VERSION}"
         try:
-            version = (await self._run_version(helm)).strip()
-        except (OSError, TimeoutError):
+            version: str | None = (await self._run_version(helm)).strip()
+        except (OSError, TimeoutError, NotImplementedError, ValueError):
+            # NotImplementedError: a selector event loop (Windows, `uvicorn --reload`) can't run
+            # programs; ValueError: arguments the platform refuses.
             version = None
+        if version is not None and _HELM_VERSION.fullmatch(version) is None:
+            version = None  # what it printed isn't a version: never shown as one
         if version != expected:
             found = version or messages.TOOLS_HELM_NO_ANSWER
             message = messages.TOOLS_WRONG_HELM.format(expected=expected, path=helm, found=found)

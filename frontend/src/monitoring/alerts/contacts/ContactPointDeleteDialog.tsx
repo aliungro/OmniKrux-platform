@@ -53,7 +53,8 @@ export function ContactPointDeleteDialog({ point, restoreFocusTo, onCancel, onDe
     try {
       const out = await deleteContactPoint(point.id, review.token);
       onDeleted();
-      if (out.alert_changes.length > 0) reviews.enqueue(out.alert_changes);
+      const changes = out?.alert_changes ?? [];
+      if (changes.length > 0) reviews.enqueue(changes);
     } catch (err) {
       const e = err as AlertRequestError;
       if (e.status === 404) {
