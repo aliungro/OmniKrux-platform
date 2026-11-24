@@ -3,7 +3,7 @@ review (a server-built plan the browser applies through `POST /api/actions/{plan
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,7 +16,6 @@ from omnikrux.monitoring.install.pins import CHARTS
 from omnikrux.monitoring.install.settings import (
     Component,
     InstallSettings,
-    Resources,
     validate_settings,
 )
 from omnikrux.monitoring.projects.store import UnknownProject
@@ -46,39 +45,44 @@ class ToolsOut(BaseModel):
 
 
 class ResourcesIn(BaseModel):
+    """A component's resources; a field left out keeps what the settings it updates have."""
+
     model_config = ConfigDict(extra="forbid")
 
-    cpu_request: _TEXT
-    memory_request: _TEXT
-    memory_limit: _TEXT
+    cpu_request: _TEXT | None = None
+    memory_request: _TEXT | None = None
+    memory_limit: _TEXT | None = None
 
 
-def _resources_in(r: Resources) -> ResourcesIn:
-    return ResourcesIn(**asdict(r))
+_RESOURCE_FIELDS = ("prometheus", "alertmanager", "loki", "alloy")
 
 
 class InstallSettingsIn(BaseModel):
-    """What the user can set; a field left out takes its default. Values that don't fit come
-    back as problems with the plan (never a 422), so only the types are checked here."""
+    """What the user can set. A field left out (or null) keeps the value of the settings it
+    updates: the cluster's install record when there is one, else the defaults. Values that
+    don't fit come back as problems with the plan (never a 422), so only types are checked."""
 
     model_config = ConfigDict(extra="forbid")
 
-    namespace: _TEXT = _DEFAULTS.namespace
-    retention_days: int = _DEFAULTS.retention_days
-    persist: bool = _DEFAULTS.persist
-    prometheus_storage: _TEXT = _DEFAULTS.prometheus_storage
-    loki_storage: _TEXT = _DEFAULTS.loki_storage
-    alertmanager_storage: _TEXT = _DEFAULTS.alertmanager_storage
-    prometheus: ResourcesIn = _resources_in(_DEFAULTS.prometheus)
-    alertmanager: ResourcesIn = _resources_in(_DEFAULTS.alertmanager)
-    loki: ResourcesIn = _resources_in(_DEFAULTS.loki)
-    alloy: ResourcesIn = _resources_in(_DEFAULTS.alloy)
+    namespace: _TEXT | None = None
+    retention_days: int | None = None
+    persist: bool | None = None
+    prometheus_storage: _TEXT | None = None
+    loki_storage: _TEXT | None = None
+    alertmanager_storage: _TEXT | None = None
+    prometheus: ResourcesIn | None = None
+    alertmanager: ResourcesIn | None = None
+    loki: ResourcesIn | None = None
+    alloy: ResourcesIn | None = None
 
-    def settings(self) -> InstallSettings:
-        data = self.model_dump()
-        for name in ("prometheus", "alertmanager", "loki", "alloy"):
-            data[name] = Resources(**data[name])
-        return InstallSettings(**data)
+    def over(self, base: InstallSettings) -> InstallSettings:
+        """`base` with every field this body sets."""
+        changes: dict = {}
+        for name, value in self.model_dump(exclude_none=True).items():
+            if name in _RESOURCE_FIELDS:
+                value = replace(getattr(base, name), **value)
+            changes[name] = value
+        return replace(base, **changes)
 
 
 class ResourcesOut(BaseModel):
@@ -169,12 +173,11 @@ async def plan_install(body: InstallPlanIn, request: Request) -> InstallPlanOut:
         except UnknownProject:
             raise HTTPException(status_code=404, detail=PROJECT_GONE) from None
     record = await services.installs.get(body.cluster_id)
+    # The settings start from the record's (what is installed), else the defaults; a body
+    # changes only the fields it sets.
+    settings = record.settings if record is not None else InstallSettings()
     if body.settings is not None:
-        settings = body.settings.settings()
-    elif record is not None:
-        settings = record.settings
-    else:
-        settings = InstallSettings()
+        settings = body.settings.over(settings)
     # What is installed stays installed: the plan covers the record's components too.
     components = ordered([*(record.components if record else ()), *body.components])
     problems = validate_settings(settings)

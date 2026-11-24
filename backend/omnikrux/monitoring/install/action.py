@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
@@ -147,12 +148,37 @@ def _chart_crds_by_name(docs: Sequence[dict]) -> dict[str, str | None]:
     return out
 
 
-def crds_to_write(chart: Mapping[str, str | None], facts: ClusterFacts) -> tuple[list, list]:
-    """(to create, to update): a CRD the cluster has at the chart's version is left alone."""
+_VERSION = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
+
+
+def _version_key(text: str | None) -> tuple[int, int, int] | None:
+    match = _VERSION.match(text or "")
+    return (int(match[1]), int(match[2]), int(match[3])) if match else None
+
+
+def is_newer(version: str | None, than: str | None) -> bool:
+    """Whether `version` is a later release than `than` (False when either can't be read)."""
+    a, b = _version_key(version), _version_key(than)
+    return a is not None and b is not None and a > b
+
+
+def crds_to_write(
+    chart: Mapping[str, str | None], facts: ClusterFacts
+) -> tuple[list[str], list[str], list[tuple[str, str]]]:
+    """(to create, to update, kept as they are with their version). A CRD the cluster has at the
+    chart's version is left alone; one at a newer version is never downgraded (kept, and the
+    review says so)."""
     served = facts.served_monitoring_crds
     create = sorted(name for name in chart if name not in served)
-    update = sorted(name for name, v in chart.items() if name in served and served[name] != v)
-    return create, update
+    update: list[str] = []
+    kept: list[tuple[str, str]] = []
+    for name in sorted(n for n in chart if n in served):
+        have, ships = served[name], chart[name]
+        if have is not None and is_newer(have, ships):
+            kept.append((name, have))
+        elif have != ships:
+            update.append(name)
+    return create, update, kept
 
 
 class InstallAction:
@@ -227,10 +253,10 @@ class InstallAction:
             blocked.append(render_problem)
         blocked += [p.message for p in problems]
 
-        create, update = crds_to_write(chart_crds_found, facts)
+        create, update, kept = crds_to_write(chart_crds_found, facts)
         summary = self._summary(
             components, specs, rendered, facts, effective, namespace, cluster, project_name,
-            create, update,
+            create, update, kept,
         )  # fmt: skip
         ours = any(ref.owner_label == MANAGED_BY for ref in facts.releases.values())
         after: dict[str, Any] = {
@@ -342,6 +368,7 @@ class InstallAction:
         project: str | None,
         create: Sequence[str],
         update: Sequence[str],
+        kept: Sequence[tuple[str, str]],
     ) -> list[str]:
         lines = [
             messages.SUMMARY_INSTALLS.format(
@@ -362,6 +389,7 @@ class InstallAction:
             lines.append(messages.SUMMARY_NAMESPACE.format(namespace=namespace))
         if create or update:
             lines.append(messages.SUMMARY_CRDS.format(created=len(create), updated=len(update)))
+        lines += [messages.SUMMARY_NEWER_CRD.format(crd=n, version=v) for n, v in kept]
         if effective.persist and facts.default_storage_class is not None:
             lines.append(_volumes_line(effective, components, facts.default_storage_class))
         else:

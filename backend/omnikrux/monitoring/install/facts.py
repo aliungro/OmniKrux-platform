@@ -103,8 +103,10 @@ async def _crd_versions(api: ApiClient, names: Sequence[str]) -> dict[str, str |
     return out
 
 
-async def _foreign_operator(api: ApiClient) -> str | None:
-    """`{namespace}/{name}` of a Prometheus Operator Deployment OmniKrux didn't install."""
+async def _foreign_operator(api: ApiClient, namespace: str) -> str | None:
+    """`{namespace}/{name}` of a Prometheus Operator Deployment that isn't this install's own: our
+    instance counts as ours only in `namespace`. Elsewhere (a second OmniKrux on the cluster, or
+    one whose records were lost) it is another install that would fight over the same objects."""
     answers = await asyncio.gather(
         *(
             _get(api, "/apis/apps/v1/deployments", query=[("labelSelector", selector)])
@@ -114,16 +116,19 @@ async def _foreign_operator(api: ApiClient) -> str | None:
     found = set()
     for answer in answers:
         for deployment in _items(answer):
-            if _labels(deployment).get("app.kubernetes.io/instance") == OUR_OPERATOR_INSTANCE:
-                continue
             meta = deployment.get("metadata") or {}
+            if (
+                _labels(deployment).get("app.kubernetes.io/instance") == OUR_OPERATOR_INSTANCE
+                and meta.get("namespace") == namespace
+            ):
+                continue
             found.add(f"{meta.get('namespace') or ''}/{meta.get('name') or ''}")
     return min(found) if found else None
 
 
 def _unpack(data: str) -> dict:
     """Helm's release record: the API's base64, then Helm's base64, then (usually) gzip, then
-    JSON. ValueError (TypeError: JSON but not an object) when it isn't one."""
+    JSON. ValueError when it isn't one (cut, too large, too deeply nested, or not an object)."""
     try:
         packed = base64.b64decode(base64.b64decode(data, validate=True), validate=True)
     except (binascii.Error, ValueError) as exc:
@@ -134,14 +139,14 @@ def _unpack(data: str) -> dict:
             packed = unzip.decompress(packed, _MAX_RELEASE_BYTES)
         except zlib.error as exc:
             raise ValueError("not gzip") from exc
-        if unzip.unconsumed_tail:
-            raise ValueError("too large")
+        if unzip.unconsumed_tail or not unzip.eof:
+            raise ValueError("cut short or too large")
     try:
         release = json.loads(packed)
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (ValueError, RecursionError) as exc:  # RecursionError: nested too deeply
         raise ValueError("not JSON") from exc
     if not isinstance(release, dict):
-        raise TypeError("not a release")
+        raise ValueError("not a release")  # noqa: TRY004 (one error for every bad record)
     return release
 
 
@@ -163,7 +168,7 @@ def decode_release(secret: dict) -> ReleaseRef:
     owner, chart_version = None, None
     try:
         release = _unpack(str(data.get("release") or ""))
-    except (ValueError, TypeError):
+    except Exception:  # noqa: BLE001 (any record that can't be read is not ours)
         release = None
     if release is not None:
         config = release.get("config") if isinstance(release.get("config"), dict) else {}
@@ -224,7 +229,7 @@ async def read_facts(
         _default_storage_class(api),
         _get_or_none(api, f"/api/v1/namespaces/{namespace}"),
         _crd_versions(api, crd_names),
-        _foreign_operator(api),
+        _foreign_operator(api, namespace),
         _releases(api, namespace),
     )
     return ClusterFacts(

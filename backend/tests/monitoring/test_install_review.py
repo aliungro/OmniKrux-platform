@@ -2,6 +2,7 @@
 chart through the (fake) Helm runner, and blocks or warns in words before anything is written."""
 
 import base64
+import gzip
 import json
 
 import pytest
@@ -595,3 +596,145 @@ def test_release_secrets_decode_with_and_without_gzip():
     }
     ref = decode_release(broken)
     assert (ref.revision, ref.status, ref.owner_label) == (2, "deployed", None)
+
+
+# -- fix round 1 -------------------------------------------------------------------------------
+
+
+def _release_secret(packed: bytes, *, name: str = "omnikrux-loki", revision: int = 1) -> dict:
+    """A release Secret carrying `packed` as Helm's record (before Helm's and the API's base64)."""
+    inner = base64.b64encode(packed).decode()
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": f"sh.helm.release.v1.{name}.v{revision}",
+            "namespace": "monitoring",
+            "labels": {
+                "owner": "helm",
+                "name": name,
+                "status": "deployed",
+                "version": str(revision),
+            },
+        },
+        "data": {"release": base64.b64encode(inner.encode()).decode()},
+    }
+
+
+def _ours(pad: int = 0) -> bytes:
+    """A release record carrying OmniKrux's marker, padded to more than `pad` bytes."""
+    record = {"config": {"omnikrux": {"managedBy": "omnikrux"}}, "pad": " " * pad}
+    return json.dumps(record).encode()
+
+
+async def test_our_operator_in_another_namespace_is_foreign(env):
+    http, _, cluster, fake_api, _ = env
+    default_class(fake_api)
+    fake_api.objects["deployments.apps"][("obs", "omnikrux-metrics-operator")] = (
+        prometheus_operator_deployment(
+            "obs", "omnikrux-metrics-operator", instance="omnikrux-metrics"
+        )
+    )
+    plan = (await plan_for(http, cluster, components=["metrics"]))["plan"]
+    assert plan["blocked"] == [
+        (
+            "This cluster already runs a Prometheus Operator (obs/omnikrux-metrics-operator) that "
+            "OmniKrux didn't install. A second one would fight over the same objects. Connect the "
+            "Prometheus it runs instead."
+        )
+    ]
+
+
+async def test_newer_crds_are_never_downgraded(env):
+    http, app, cluster, fake_api, _ = env
+    default_class(fake_api)
+    newer = "prometheuses.monitoring.coreos.com"
+    older = "servicemonitors.monitoring.coreos.com"
+    fake_api.objects[CRDS_KEY][("", newer)] = _crd(newer, "0.99.0")
+    fake_api.objects[CRDS_KEY][("", older)] = _crd(older, "0.9.0")
+    plan = (await plan_for(http, cluster, components=["metrics"]))["plan"]
+    summary = plan["summary"]
+    crd_line = (
+        "Creates 3 and updates 1 CustomResourceDefinitions of the Prometheus Operator "
+        "(monitoring.coreos.com)."
+    )
+    kept_line = (
+        "Keeps the newer prometheuses.monitoring.coreos.com the cluster already has (0.99.0)."
+    )
+    assert summary[summary.index(crd_line) + 1] == kept_line
+    state = app.state.plans.peek(plan["plan_id"]).planned.state
+    assert newer not in state["crds"] and older in state["crds"] and len(state["crds"]) == 4
+    assert newer not in plan["diff"]["after"]
+
+
+async def test_an_unreadable_release_record_is_not_ours(env):
+    http, _, cluster, fake_api, _ = env
+    default_class(fake_api)
+    namespace(fake_api)
+    deep = b'{"a":' + b"[" * 200_000 + b"]" * 200_000 + b"}"
+    secret = _release_secret(gzip.compress(deep))
+    fake_api.objects["secrets"][("monitoring", secret["metadata"]["name"])] = secret
+    r = await http.post(PLAN, json={"cluster_id": cluster, "components": ["logs"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["plan"]["blocked"] == [
+        (
+            "A Helm release named omnikrux-loki already exists in monitoring, and OmniKrux didn't "
+            "install it. Pick another namespace."
+        )
+    ]
+
+
+def test_release_records_are_bounded_and_whole():
+    small = decode_release(_release_secret(gzip.compress(_ours())))
+    assert small.owner_label == "omnikrux"
+    # Unpacked past 64 MiB: not read, so not ours (the record is still valid JSON with the marker).
+    big = _ours(64 * 1024 * 1024)
+    assert len(big) > 64 * 1024 * 1024
+    huge = decode_release(_release_secret(gzip.compress(big, compresslevel=1)))
+    assert (huge.owner_label, huge.revision, huge.status) == (None, 1, "deployed")
+    # A gzip stream cut short is not read either, even when what came through is the marker.
+    whole = gzip.compress(_ours(4096))
+    cut = decode_release(_release_secret(whole[:-12]))
+    assert cut.owner_label is None
+    deep = b'{"a":' + b"[" * 200_000 + b"]" * 200_000 + b"}"
+    assert decode_release(_release_secret(deep)).owner_label is None
+    assert decode_release(_release_secret(b"[1, 2]")).owner_label is None
+
+
+async def test_a_blocked_install_plan_is_refused_with_nothing_written(env):
+    http, app, cluster, fake_api, fake_helm = env
+    default_class(fake_api)
+    fake_api.objects["deployments.apps"][("other", "kps-operator")] = (
+        prometheus_operator_deployment("other", "kps-operator", instance="kps")
+    )
+    plan = (await plan_for(http, cluster, components=["metrics", "logs"]))["plan"]
+    assert plan["blocked"]
+    r = await http.post(f"/api/actions/{plan['plan_id']}/apply", json={})
+    assert r.status_code == 422
+    assert r.json()["detail"] == " ".join(plan["blocked"])
+    assert fake_api.created_objects == [] and fake_api.writes == []
+    assert [c for c in fake_helm.calls if c.args[0] in ("upgrade", "uninstall")] == []
+    assert (await app.state.audit.list(action="install")).records == []
+    assert await app.state.monitoring.installs.get(cluster) is None
+
+
+async def test_a_partial_settings_body_updates_the_installed_settings(env):
+    http, app, cluster, fake_api, _ = env
+    default_class(fake_api)
+    installed = InstallSettings(namespace="obs", retention_days=30, prometheus_storage="50Gi")
+    await _record(app, cluster, namespace="obs", settings=installed)
+    out = await plan_for(
+        http,
+        cluster,
+        components=["metrics"],
+        settings={"retention_days": 14, "prometheus": {"cpu_request": "300m"}},
+    )
+    assert out["plan"]["target"]["name"] == "obs" and out["plan"]["blocked"] == []
+    settings = out["settings"]
+    assert (settings["namespace"], settings["retention_days"]) == ("obs", 14)
+    assert settings["prometheus_storage"] == "50Gi"
+    assert settings["prometheus"] == {
+        "cpu_request": "300m",
+        "memory_request": installed.prometheus.memory_request,
+        "memory_limit": installed.prometheus.memory_limit,
+    }

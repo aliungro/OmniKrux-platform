@@ -432,19 +432,26 @@ async def test_timeout_returns_124(tmp_path):
     )
 
 
+GRACE_MARGIN = 0.05
+
+
 class StubbornProcess:
     """A process whose terminate() doesn't end it; only kill() does."""
 
     def __init__(self):
         self.returncode: int | None = None
         self.signals: list[str] = []
+        # When each signal was sent, on the event loop's clock (the one the grace runs on).
+        self.at: dict[str, float] = {}
         self._ended = asyncio.Event()
 
     def terminate(self) -> None:
         self.signals.append("terminate")
+        self.at["terminate"] = asyncio.get_running_loop().time()
 
     def kill(self) -> None:
         self.signals.append("kill")
+        self.at["kill"] = asyncio.get_running_loop().time()
         self.returncode = -9
         self._ended.set()
 
@@ -456,10 +463,11 @@ class StubbornProcess:
 async def test_stop_kills_after_the_grace_when_terminate_does_not_end_it(monkeypatch):
     monkeypatch.setattr(helm_module, "STOP_GRACE_SECONDS", 0.2)
     proc = StubbornProcess()
-    began = time.monotonic()
     await helm_module._stop(proc)
     assert proc.signals == ["terminate", "kill"] and proc.returncode == -9
-    assert time.monotonic() - began >= 0.2
+    # kill() waited for the grace. The loop may fire a timer up to its clock resolution early
+    # (about 16 ms on Windows), so the bound keeps a margin rather than a bare wall-clock floor.
+    assert proc.at["kill"] - proc.at["terminate"] >= 0.2 - GRACE_MARGIN
 
 
 async def test_stop_still_kills_when_cancelled_during_the_grace(monkeypatch):

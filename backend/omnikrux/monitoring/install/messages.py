@@ -49,6 +49,8 @@ SUMMARY_CRDS = "Creates {created} and updates {updated} CustomResourceDefinition
 SUMMARY_VOLUMES = (
     "Keeps data for {days} days on volumes: {volumes} ({storage_class} storage class)."
 )
+# A CustomResourceDefinition the cluster has at a newer operator version than the chart's.
+SUMMARY_NEWER_CRD = "Keeps the newer {crd} the cluster already has ({version})."
 SUMMARY_MEMORY = "Keeps data for {days} days, only until the Pods restart."
 # `tools` lists what this install connects (Prometheus, Alertmanager, Loki); the plan's wording
 # is for all three, and these read right for one ("Loki as a source ... adds it").
