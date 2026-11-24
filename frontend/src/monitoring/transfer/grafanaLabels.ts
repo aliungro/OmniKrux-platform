@@ -16,9 +16,17 @@ export const DISCARD_CONNECTION = "Discard this Grafana connection?";
 /** F15: an import takes at most this many dashboards. */
 export const MAX_PICK = 100;
 export const PICK_LIMIT = `Pick up to ${MAX_PICK} dashboards at a time.`;
+export const NO_MATCH = "No dashboard matches. Try other words.";
+export const GRAFANA_GONE = "That Grafana connection no longer exists.";
 
-// The backend's own refusals (`transfer/api.py`, `sources/transport.py`), word for word.
-export const URL_RULE = "Use an http or https address with a host, like http://prometheus.example:9090.";
+/** Why an edit can't be tested yet: the saved test would check the old settings, and the stored secret can't travel. */
+export const RETYPE_TO_TEST: Record<"bearer" | "basic", string> = {
+  bearer: "Type the token again to test these changes, or save them and use Test on its row.",
+  basic: "Type the password again to test these changes, or save them and use Test on its row.",
+};
+
+// The backend's own refusals (`transfer/api.py`), word for word.
+export const URL_RULE = "Use an http or https address with a host, like http://grafana.example:3000.";
 export const CLUSTER_PICK = "Pick the cluster, namespace, service and port.";
 export const TOKEN_NEEDED = "A service account token is needed.";
 export const BASIC_NEEDS = "Basic sign-in needs a user name and a password.";

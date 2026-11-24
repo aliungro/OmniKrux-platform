@@ -18,7 +18,7 @@ import {
 } from "./api";
 import {
   ADDRESS_EXAMPLE, AUTH_LABELS, BASIC_NEEDS, CLUSTER_ANONYMOUS, CLUSTER_PICK, DISCARD_CONNECTION, KEEP_SECRET, TOKEN_NEEDED,
-  URL_RULE, testWords,
+  RETYPE_TO_TEST, URL_RULE, testWords,
 } from "./grafanaLabels";
 import s from "./GrafanaForm.module.css";
 
@@ -111,16 +111,29 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
 
   useEffect(() => { first.current?.focus(); }, []);
 
-  const edit = (patch: Partial<Plain>) => { setPlain((p) => ({ ...p, ...patch })); setError(null); setResult(null); };
+  // Any change makes a test on its way out of date: its answer is about what was there before.
+  const testRun = useRef(0);
+  const stale = () => { testRun.current += 1; setError(null); setResult(null); };
+  const edit = (patch: Partial<Plain>) => { setPlain((p) => ({ ...p, ...patch })); stale(); };
+  const typeToken = (v: string) => { setToken(v); stale(); };
+  const typePassword = (v: string) => { setPassword(v); stale(); };
   const byCluster = plain.reach === "cluster";
   // Inside a cluster there is no sign-in: what was picked for the address stays for a switch back.
   const authType: GrafanaAuth = byCluster ? "none" : plain.authType;
   const sameType = stored !== undefined && stored.type === authType;
   const clusterName = clusters.data?.find((c) => c.id === plain.clusterId)?.name;
   const autoName = `Grafana · ${byCluster ? (clusterName || "cluster") : (hostOf(plain.url) || "address")}`;
+  // An edit whose sign-in leans on the stored secret can only be tested as saved (the secret never
+  // comes back to the browser), which is honest only while nothing but the name changed.
+  const { name: _n, ...where } = plain;
+  const { name: _s, ...startWhere } = start;
+  const connectionChanged = JSON.stringify(where) !== JSON.stringify(startWhere);
+  const leansOnStored = initial !== undefined && !byCluster && sameType
+    && ((authType === "bearer" && token === "" && !!stored?.has_token) || (authType === "basic" && password === "" && !!stored?.has_password));
+  const retype = leansOnStored && connectionChanged && (authType === "bearer" || authType === "basic") ? RETYPE_TO_TEST[authType] : null;
 
   /** The connection as entered, or the words for what is missing (the backend's own). */
-  function build(): { body: GrafanaIn; patch: GrafanaPatch; standalone: boolean } | string {
+  function build(): { body: GrafanaIn; patch: GrafanaPatch } | string {
     const typed = plain.name.trim();
     if (byCluster) {
       const where = [plain.clusterId, plain.namespace.trim(), plain.service.trim(), plain.port.trim()];
@@ -132,22 +145,19 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
         ...(preset?.path_prefix ? { path_prefix: preset.path_prefix } : {}), auth: { type: "none" },
       };
       const patch: GrafanaPatch = { ...(typed ? { name: typed } : {}), cluster_id, namespace, service, port, scheme };
-      return { body, patch, standalone: true };
+      return { body, patch };
     }
     const url = plain.url.trim();
     if (url === "") return URL_RULE;
     const auth: GrafanaAuthIn = { type: authType };
-    let standalone = true;
     if (authType === "bearer") {
       if (token === "" && !(sameType && stored?.has_token)) return TOKEN_NEEDED;
       if (token !== "") auth.token = token;
-      else standalone = false;
     } else if (authType === "basic") {
       const username = plain.username.trim();
       if (username === "" || (password === "" && !(sameType && stored?.has_password))) return BASIC_NEEDS;
       auth.username = username;
       if (password !== "") auth.password = password;
-      else standalone = false;
     }
     const body: GrafanaIn = {
       reach: "url", ...(typed ? { name: typed } : {}), url,
@@ -155,7 +165,7 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
     };
     // A secret left out keeps the stored one while the sign-in stays the same.
     const patch: GrafanaPatch = { ...(typed ? { name: typed } : {}), url, auth };
-    return { body, patch, standalone };
+    return { body, patch };
   }
 
   async function submit(e: FormEvent) {
@@ -184,18 +194,19 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
   }
 
   async function test() {
-    if (busyRef.current || testing) return;
+    if (busyRef.current || testing || retype) return;
     setError(null);
     setResult(null);
     const built = build();
     if (typeof built === "string") return setError(built);
+    const run = ++testRun.current;
     setTesting(true);
     try {
-      // As entered, unless it leans on a stored secret: then the saved connection is tested.
-      const out = initial && (!changed || !built.standalone) ? await testGrafana(initial.id) : await testNewGrafana(built.body);
-      setResult(testWords(out));
+      // As entered; a rename that leans on the stored secret tests the saved connection.
+      const out = initial && leansOnStored ? await testGrafana(initial.id) : await testNewGrafana(built.body);
+      if (run === testRun.current) setResult(testWords(out));
     } catch (err) {
-      setResult({ ok: false, text: failure(err, "test again") });
+      if (run === testRun.current) setResult({ ok: false, text: failure(err, "test again") });
     } finally {
       setTesting(false);
     }
@@ -278,7 +289,7 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
           </select>
           {byCluster && <span id={`${ids}-anon`} className={s.hint}>{CLUSTER_ANONYMOUS}</span>}
         </div>
-        {authType === "bearer" && <Secret label="Token" value={token} onChange={setToken} saved={sameType && !!stored?.has_token} />}
+        {authType === "bearer" && <Secret label="Token" value={token} onChange={typeToken} saved={sameType && !!stored?.has_token} />}
         {authType === "basic" && (
           <>
             <div className={s.field}>
@@ -286,16 +297,18 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
               <input id={`${ids}-user`} className={s.input} type="text" autoComplete="off" spellCheck={false}
                 value={plain.username} onChange={(e) => edit({ username: e.target.value })} />
             </div>
-            <Secret label="Password" value={password} onChange={setPassword} saved={sameType && !!stored?.has_password} />
+            <Secret label="Password" value={password} onChange={typePassword} saved={sameType && !!stored?.has_password} />
           </>
         )}
       </div>
 
       {error && <p className={s.error} role="alert">{error}</p>}
       {result && <p className={result.ok ? s.ok : s.error} role="status">{result.text}</p>}
+      {retype && <p id={`${ids}-retype`} className={s.hint}>{retype}</p>}
       <div className={s.actions}>
         {/* aria-disabled, not disabled: a pressed button keeps the keyboard while it waits. */}
-        <button type="button" className={s.secondary} onClick={() => void test()} aria-disabled={busy || testing || undefined}>
+        <button type="button" className={s.secondary} onClick={() => void test()} aria-disabled={busy || testing || !!retype || undefined}
+          aria-describedby={retype ? `${ids}-retype` : undefined}>
           {testing ? "Testing…" : "Test connection"}
         </button>
         <span className={s.spacer} />

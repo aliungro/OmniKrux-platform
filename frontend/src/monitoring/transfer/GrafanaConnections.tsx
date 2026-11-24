@@ -1,13 +1,13 @@
 // The Sources page's Grafana connections: one row each (where it is, how many dashboards came from
 // it) with Test, Edit and Remove; Connect a Grafana opens the form in a dialog. Removing asks first
 // and keeps the dashboards imported from it.
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { failure } from "../../api/http";
 import { DialogShell } from "../../features/dock/ConfirmDialog";
 import { DeleteReviewDialog } from "../DeleteReviewDialog";
 import { testGrafana, useDeleteGrafana, useGrafanaConnections, type GrafanaOut } from "./api";
 import { GrafanaForm } from "./GrafanaForm";
-import { grafanaWhere, importedWords, testWords } from "./grafanaLabels";
+import { GRAFANA_GONE, grafanaWhere, importedWords, testWords } from "./grafanaLabels";
 import s from "./GrafanaConnections.module.css";
 
 type Editing = { kind: "new" } | { kind: "edit"; id: string } | null;
@@ -24,6 +24,7 @@ export function GrafanaConnections({ tabId }: { tabId: string }) {
   const [tests, setTests] = useState<Record<string, { ok: boolean; text: string } | "busy">>({});
   const [removing, setRemoving] = useState<GrafanaOut | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [gone, setGone] = useState(false);
 
   /** The keyboard back where the user was; if that row is gone, on the section's heading. */
   const returnFocus = useCallback(() => {
@@ -33,7 +34,7 @@ export function GrafanaConnections({ tabId }: { tabId: string }) {
     }, 0);
   }, []);
 
-  const openForm = (next: Editing, from: HTMLElement) => { opener.current = from; setEditing(next); };
+  const openForm = (next: Editing, from: HTMLElement) => { opener.current = from; setGone(false); setEditing(next); };
   const closeForm = () => { setEditing(null); returnFocus(); };
   // Esc and a click outside ask the form first: it asks before discarding what was entered.
   const askClose = () => { if (cancelForm.current) cancelForm.current(closeForm); else closeForm(); };
@@ -65,6 +66,15 @@ export function GrafanaConnections({ tabId }: { tabId: string }) {
   const formTitle = editingOne ? `Edit ${editingOne.name}` : "Connect a Grafana";
   const showForm = editing?.kind === "new" || editingOne !== undefined;
 
+  // The connection being edited went (removed in another tab): close the form and say why.
+  const vanished = editing?.kind === "edit" && list !== undefined && editingOne === undefined;
+  useEffect(() => {
+    if (!vanished) return;
+    setEditing(null);
+    setGone(true);
+    returnFocus();
+  }, [vanished, returnFocus]);
+
   return (
     <section className={s.section} aria-labelledby={`${ids}-h`}>
       <header className={s.head}>
@@ -80,6 +90,7 @@ export function GrafanaConnections({ tabId }: { tabId: string }) {
         </div>
       )}
       {!list && !connections.isError && <p className={s.note} role="status">Loading Grafana connections…</p>}
+      {gone && <p className={s.note} role="status">{GRAFANA_GONE}</p>}
       {list && list.length === 0 && <p className={s.empty}>No Grafana connected. Connect one here or from Import.</p>}
 
       {list && list.length > 0 && (

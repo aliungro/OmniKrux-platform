@@ -26,6 +26,7 @@ from omnikrux.monitoring.sources.transport import (
     _DNS_LABEL,
     _PORT,
     HEADER_VALUE_RULE,
+    URL_RULE,
     validate_header,
     validate_path_prefix,
     validate_url,
@@ -158,6 +159,8 @@ async def export(request: Request) -> ExportOut:
 GRAFANA_GONE = "That Grafana connection no longer exists."
 REACH_FIXED = "A connection's reach can't change. Add a new one instead."
 CLUSTER_PICK = "Pick the cluster, namespace, service and port."
+# M1's address rule with a Grafana example (its own names a Prometheus one).
+GRAFANA_URL_RULE = "Use an http or https address with a host, like http://grafana.example:3000."
 CLUSTER_NO_SIGN_IN = (
     "A Grafana reached through its cluster is read without a sign-in. Use its address to sign in."
 )
@@ -289,7 +292,7 @@ def _url(url: str | None) -> str:
     try:
         return validate_url(url or "")
     except ValueError as exc:
-        raise _refuse(str(exc)) from None
+        raise _refuse(GRAFANA_URL_RULE if str(exc) == URL_RULE else str(exc)) from None
 
 
 def _path_prefix(path_prefix: str) -> str:

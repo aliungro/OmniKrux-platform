@@ -6,12 +6,12 @@ import logging
 from datetime import datetime
 
 from omnikrux.monitoring.sources import messages
-from omnikrux.monitoring.sources.transport import URL_RULE
 from omnikrux.monitoring.transfer.api import (
     BASIC_NEEDS,
     CLUSTER_NO_SIGN_IN,
     CLUSTER_PICK,
     GRAFANA_GONE,
+    GRAFANA_URL_RULE,
     REACH_FIXED,
     TOKEN_NEEDED,
 )
@@ -157,8 +157,8 @@ async def test_cluster_reach_refuses_a_sign_in(kube_cluster, monitoring_app):
 async def test_the_rules_of_a_connection(kube_cluster, monitoring_app):
     http, _ = monitoring_app
     cases = [
-        ({"reach": "url"}, URL_RULE),
-        ({"reach": "url", "url": "ftp://grafana.example"}, URL_RULE),
+        ({"reach": "url"}, GRAFANA_URL_RULE),
+        ({"reach": "url", "url": "ftp://grafana.example"}, GRAFANA_URL_RULE),
         ({"reach": "cluster", "cluster_id": kube_cluster, "namespace": "monitoring"}, CLUSTER_PICK),
         ({"reach": "url", "url": "http://g.example", "auth": {"type": "bearer"}}, TOKEN_NEEDED),
         (

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { failure } from "../../api/http";
 import type { GrafanaDashboardOut, GrafanaDashboardsOut } from "./api";
-import { MAX_PICK, PICK_LIMIT } from "./grafanaLabels";
+import { MAX_PICK, NO_MATCH, PICK_LIMIT } from "./grafanaLabels";
 import s from "./GrafanaDashboardList.module.css";
 
 export interface GrafanaDashboardListProps {
@@ -31,13 +31,18 @@ export function GrafanaDashboardList({ load, loadKey, selected, onChange, name, 
   const [active, setActive] = useState<string | null>(null);
   const boxes = useRef(new Map<string, HTMLInputElement>());
   const tryAgain = useRef<HTMLButtonElement>(null);
-  const retried = useRef(false);
+  const root = useRef<HTMLDivElement>(null);
+  const note = useRef<HTMLParagraphElement>(null);
+  /** The keyboard was in here when a load began (Try again, or a new `loadKey`): it stays in here. */
+  const keep = useRef(false);
   // The latest of these without making the load run again when they change.
   const latest = useRef({ load, onChange, selected, defaultAll });
   latest.current = { load, onChange, selected, defaultAll };
 
   useEffect(() => {
     let current = true;
+    const active = document.activeElement;
+    if (active && active !== document.body && root.current?.contains(active)) keep.current = true;
     setLoaded({ state: "loading" });
     latest.current.load().then(
       (data) => {
@@ -59,13 +64,12 @@ export function GrafanaDashboardList({ load, loadKey, selected, onChange, name, 
     return () => { current = false; };
   }, [loadKey, attempt]);
 
-  // Try again keeps the keyboard: on the loading note, then the first checkbox (or the empty
-  // note, or the button again), never on <body>.
-  const note = useRef<HTMLParagraphElement>(null);
+  // A load the keyboard was in keeps it: on the loading note, then the first checkbox (or the
+  // empty note, or Try again), never on <body>.
   useLayoutEffect(() => {
-    if (!retried.current) return;
+    if (!keep.current) return;
     if (loaded.state === "loading") return note.current?.focus();
-    retried.current = false;
+    keep.current = false;
     if (loaded.state === "failed") tryAgain.current?.focus();
     else (boxes.current.values().next().value ?? note.current)?.focus();
   }, [loaded.state]);
@@ -115,50 +119,58 @@ export function GrafanaDashboardList({ load, loadKey, selected, onChange, name, 
     boxes.current.get(uid)?.focus();
   };
 
-  if (loaded.state === "loading") return <p className={s.note} role="status">Loading dashboards…</p>;
-  if (loaded.state === "failed") {
+  return <div ref={root} className={s.root}>{body()}</div>;
+
+  function body() {
+    if (loaded.state === "loading") return <p ref={note} tabIndex={-1} className={s.note} role="status">Loading dashboards…</p>;
+    if (loaded.state === "failed") {
+      return (
+        <div className={s.failed} role="alert">
+          <p>{loaded.message}</p>
+          <button ref={tryAgain} type="button" className={s.secondary} onClick={() => { keep.current = true; setAttempt((n) => n + 1); }}>
+            Try again
+          </button>
+        </div>
+      );
+    }
+    if (items.length === 0) return <p ref={note} tabIndex={-1} className={s.note}>This Grafana has no dashboards.</p>;
+    return checklist(loaded.data);
+  }
+
+  function checklist(data: GrafanaDashboardsOut) {
+    const capped = items.length > MAX_PICK;
     return (
-      <div className={s.failed} role="alert">
-        <p>{loaded.message}</p>
-        <button ref={tryAgain} type="button" className={s.secondary} onClick={() => { retried.current = true; setAttempt((n) => n + 1); }}>
-          Try again
-        </button>
+      <div className={s.wrap}>
+        <div className={s.tools}>
+          <button type="button" className={s.quiet} onClick={selectAll}>Select all</button>
+          <button type="button" className={s.quiet} onClick={selectNone}>Select none</button>
+          {items.length > SHOW_FILTER_ABOVE && (
+            <input className={s.filter} type="search" aria-label="Filter dashboards" placeholder="Filter dashboards" autoComplete="off"
+              spellCheck={false} value={filter} onChange={(e) => setFilter(e.target.value)} />
+          )}
+        </div>
+        {data.truncated && <p className={s.hint}>Showing the first 5000 dashboards.</p>}
+        {capped && <p className={s.hint}>{PICK_LIMIT}</p>}
+        {visible.length === 0 && <p className={s.hint} role="status">{NO_MATCH}</p>}
+        <div className={s.list} role="group" aria-label={`Dashboards in ${name}`} onKeyDown={onKey} hidden={visible.length === 0}>
+          {visible.map((d: GrafanaDashboardOut) => {
+            const on = selected.has(d.uid);
+            const full = !on && selected.size >= MAX_PICK;
+            const base = `${ids}-${d.uid}`;
+            return (
+              <label key={d.uid} className={s.item} data-checked={on || undefined}>
+                <input ref={(el) => { if (el) boxes.current.set(d.uid, el); else boxes.current.delete(d.uid); }}
+                  type="checkbox" checked={on} tabIndex={d.uid === tabStop ? 0 : -1} aria-disabled={full || undefined}
+                  aria-labelledby={`${base}-t`} aria-describedby={d.folder ? `${base}-f` : undefined}
+                  onFocus={() => setActive(d.uid)} onChange={() => toggle(d.uid)} />
+                <span id={`${base}-t`} className={s.title}>{d.title}</span>
+                {d.folder && <span id={`${base}-f`} className={s.folder}>{d.folder}</span>}
+              </label>
+            );
+          })}
+        </div>
+        <p className={s.count} aria-live="polite">{selected.size} selected</p>
       </div>
     );
   }
-  if (items.length === 0) return <p ref={note} tabIndex={-1} className={s.note}>This Grafana has no dashboards.</p>;
-
-  const capped = items.length > MAX_PICK;
-  return (
-    <div className={s.wrap}>
-      <div className={s.tools}>
-        <button type="button" className={s.quiet} onClick={selectAll}>Select all</button>
-        <button type="button" className={s.quiet} onClick={selectNone}>Select none</button>
-        {items.length > SHOW_FILTER_ABOVE && (
-          <input className={s.filter} type="search" aria-label="Filter dashboards" placeholder="Filter dashboards" autoComplete="off"
-            spellCheck={false} value={filter} onChange={(e) => setFilter(e.target.value)} />
-        )}
-      </div>
-      {loaded.data.truncated && <p className={s.hint}>Showing the first 5000 dashboards.</p>}
-      {capped && <p className={s.hint}>{PICK_LIMIT}</p>}
-      <div className={s.list} role="group" aria-label={`Dashboards in ${name}`} onKeyDown={onKey}>
-        {visible.map((d: GrafanaDashboardOut) => {
-          const on = selected.has(d.uid);
-          const full = !on && selected.size >= MAX_PICK;
-          const base = `${ids}-${d.uid}`;
-          return (
-            <label key={d.uid} className={s.item} data-checked={on || undefined}>
-              <input ref={(el) => { if (el) boxes.current.set(d.uid, el); else boxes.current.delete(d.uid); }}
-                type="checkbox" checked={on} tabIndex={d.uid === tabStop ? 0 : -1} aria-disabled={full || undefined}
-                aria-labelledby={`${base}-t`} aria-describedby={d.folder ? `${base}-f` : undefined}
-                onFocus={() => setActive(d.uid)} onChange={() => toggle(d.uid)} />
-              <span id={`${base}-t`} className={s.title}>{d.title}</span>
-              {d.folder && <span id={`${base}-f`} className={s.folder}>{d.folder}</span>}
-            </label>
-          );
-        })}
-      </div>
-      <p className={s.count} aria-live="polite">{selected.size} selected</p>
-    </div>
-  );
 }

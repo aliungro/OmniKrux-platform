@@ -118,7 +118,7 @@ describe("Grafana connections on the Sources page", () => {
     await user.click(await screen.findByRole("button", { name: "Connect a Grafana" }));
     const dialog = screen.getByRole("dialog", { name: "Connect a Grafana" });
     await user.click(within(dialog).getByRole("button", { name: "Test connection" }));
-    expect(within(dialog).getByRole("alert").textContent).toBe("Use an http or https address with a host, like http://prometheus.example:9090.");
+    expect(within(dialog).getByRole("alert").textContent).toBe("Use an http or https address with a host, like http://grafana.example:3000.");
     await user.type(within(dialog).getByLabelText("Address"), "http://grafana.example.invalid:3000");
     await user.selectOptions(within(dialog).getByLabelText("Sign-in"), "bearer");
     await user.click(within(dialog).getByRole("button", { name: "Test connection" }));
@@ -145,6 +145,87 @@ describe("Grafana connections on the Sources page", () => {
     open();
     await user.click(await screen.findByRole("button", { name: "Test Main" }));
     expect(await screen.findByText("Connected · Grafana 13.3.0 · 1 dashboard")).toBeTruthy();
+  });
+
+  it("an edited address is never tested with the old settings", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ transfer: { grafana: [grafana("g1", "Main", { auth: bearer })] } }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Main" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Main" });
+    const test = within(dialog).getByRole("button", { name: "Test connection" });
+    // A rename leans on nothing new: the saved connection is tested.
+    await user.type(within(dialog).getByLabelText("Name"), "Renamed");
+    await user.click(test);
+    expect(await within(dialog).findByText("Connected · Grafana 11.0.0 · 0 dashboards")).toBeTruthy();
+    expect(api.requests.filter((r) => r.url === "/api/monitoring/grafana/g1/test")).toHaveLength(1);
+    // A new address with the stored token: not tested, and says why.
+    const address = within(dialog).getByLabelText("Address");
+    await user.clear(address);
+    await user.type(address, "http://other.example.invalid:3000");
+    expect(within(dialog).queryByText(/^Connected/)).toBeNull();
+    const why = "Type the token again to test these changes, or save them and use Test on its row.";
+    expect(within(dialog).getByText(why)).toBeTruthy();
+    expect(test.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(test.getAttribute("aria-describedby")!)?.textContent).toBe(why);
+    await user.click(test);
+    expect(api.requests.filter((r) => r.url.endsWith("/test"))).toHaveLength(1);
+    // The token typed again: the form is tested as entered.
+    await user.type(within(dialog).getByLabelText("Token"), TOKEN);
+    expect(within(dialog).queryByText(why)).toBeNull();
+    await user.click(test);
+    expect(await within(dialog).findByText("Connected · Grafana 11.0.0 · 0 dashboards")).toBeTruthy();
+    const sent = api.requests.filter((r) => r.url === "/api/monitoring/grafana/test");
+    expect(sent).toHaveLength(1);
+    expect((sent[0].body as { url: string }).url).toBe("http://other.example.invalid:3000");
+  });
+
+  it("the words for a basic sign-in ask for the password", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({
+      transfer: { grafana: [grafana("g1", "Main", { auth: { type: "basic", username: "viewer", has_password: true, has_token: false } })] },
+    }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Main" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Main" });
+    await user.type(within(dialog).getByLabelText("User name"), "2");
+    expect(within(dialog).getByText("Type the password again to test these changes, or save them and use Test on its row.")).toBeTruthy();
+  });
+
+  it("a test answer that comes back after an edit is not shown", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    const real = globalThis.fetch;
+    let release = () => {};
+    vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === "/api/monitoring/grafana/test") await new Promise<void>((r) => { release = r; });
+      return real(url, init);
+    });
+    open();
+    await user.click(await screen.findByRole("button", { name: "Connect a Grafana" }));
+    const dialog = screen.getByRole("dialog", { name: "Connect a Grafana" });
+    const address = within(dialog).getByLabelText("Address");
+    await user.type(address, "http://grafana.example.invalid:3000");
+    await user.click(within(dialog).getByRole("button", { name: "Test connection" }));
+    expect(within(dialog).getByRole("button", { name: "Testing…" })).toBeTruthy();
+    await user.type(address, "1");
+    await act(async () => release());
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Test connection" })).toBeTruthy());
+    expect(within(dialog).queryByText(/^Connected/)).toBeNull();
+  });
+
+  it("an edit whose connection went away closes and says why", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ transfer: { grafana: [grafana("g1", "Main")] } }, fallback);
+    const { client } = open();
+    await user.click(await screen.findByRole("button", { name: "Edit Main" }));
+    expect(screen.getByRole("dialog", { name: "Edit Main" })).toBeTruthy();
+    api.state.transfer.grafana = [];
+    await act(async () => { await client.invalidateQueries({ queryKey: ["monitoring", "grafana"] }); });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("That Grafana connection no longer exists.")).toBeTruthy();
+    await frame();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Grafana connections" }));
   });
 
   it("removing a connection asks first and opens on its button", async () => {
@@ -319,14 +400,46 @@ describe("Grafana dashboard checklist", () => {
 
   it("a failed load offers Try again", async () => {
     const user = userEvent.setup();
+    let answer: (out: GrafanaDashboardsOut) => void = () => {};
     const load = vi.fn<() => Promise<GrafanaDashboardsOut>>()
       .mockRejectedValueOnce(new TransferRequestError(502, "grafana", SIGN_IN))
-      .mockResolvedValueOnce(boards(3));
+      .mockImplementationOnce(() => new Promise((r) => { answer = r; }));
     render(<Checklist load={load} />);
     expect((await screen.findByRole("alert")).textContent).toContain(SIGN_IN);
     await user.click(screen.getByRole("button", { name: "Try again" }));
+    // While it reloads the keyboard waits on the loading note, never on <body>.
+    expect(document.activeElement).toBe(screen.getByText("Loading dashboards…"));
+    await act(async () => answer(boards(3)));
     const group = await screen.findByRole("group", { name: "Dashboards in Main" });
     expect(load).toHaveBeenCalledTimes(2);
     expect(document.activeElement).toBe(within(group).getAllByRole("checkbox")[0]);
+  });
+
+  it("a new loadKey keeps the keyboard in the list while it reloads", async () => {
+    let answer: (out: GrafanaDashboardsOut) => void = () => {};
+    const load = vi.fn<() => Promise<GrafanaDashboardsOut>>()
+      .mockResolvedValueOnce(boards(3))
+      .mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    function Keyed({ k }: { k: string }) {
+      const [selected, setSelected] = useState<Set<string>>(new Set());
+      return <GrafanaDashboardList load={load} loadKey={k} selected={selected} onChange={setSelected} name="Main" />;
+    }
+    const view = render(<Keyed k="a" />);
+    const group = await screen.findByRole("group", { name: "Dashboards in Main" });
+    act(() => within(group).getAllByRole("checkbox")[1].focus());
+    view.rerender(<Keyed k="b" />);
+    expect(document.activeElement).toBe(screen.getByText("Loading dashboards…"));
+    await act(async () => answer(boards(2)));
+    const again = await screen.findByRole("group", { name: "Dashboards in Main" });
+    expect(document.activeElement).toBe(within(again).getAllByRole("checkbox")[0]);
+  });
+
+  it("a filter that matches nothing says so", async () => {
+    const user = userEvent.setup();
+    render(<Checklist load={async () => boards(12)} />);
+    await screen.findByRole("group", { name: "Dashboards in Main" });
+    await user.type(screen.getByLabelText("Filter dashboards"), "zzz");
+    expect(screen.getByText("No dashboard matches. Try other words.")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Dashboards in Main" })).toBeNull();
   });
 });
