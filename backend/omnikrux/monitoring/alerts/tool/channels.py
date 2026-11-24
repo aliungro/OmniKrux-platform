@@ -3,6 +3,7 @@
 A channel is a receiver together with the labels an alert needs to reach it. OmniKrux can add
 equality labels to an alert, so only routes matched by equality are usable."""
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -22,6 +23,9 @@ CONTRADICTS_REASON = "Its labels contradict the routes above it, so no alert can
 UNREADABLE = "{name}'s configuration couldn't be read, so its channels can't be listed."
 PROBE_SECONDS = 10.0
 MAX_DEPTH = 20
+# The Prometheus Operator names the receivers of an AlertmanagerConfig `{namespace}/{name}/...`:
+# those of OmniKrux's own contact points (M5) aren't channels to pick.
+OWN_CONTACT_POINTS = re.compile(r"[^/]+/omnikrux-contact-points/")
 
 
 class ChannelsUnreadable(Exception):
@@ -180,8 +184,8 @@ def _silent_receivers(receivers: Any) -> set[str]:
 
 
 async def read_channels(transport: SourceTransport, name: str) -> list[Channel]:
-    """The channels of the Alertmanager behind `transport`; `ChannelsUnreadable` when its
-    configuration can't be read. `SourceUnreachable` is raised as the transport does."""
+    """The channels of the Alertmanager behind `transport` (without the receivers of OmniKrux's
+    own contact points); `ChannelsUnreadable` when its configuration can't be read. `SourceUnreachable` is raised as the transport does."""
     got = await transport.request("GET", "/api/v2/status", timeout=PROBE_SECONDS)
     data = json_object(got.body) if got.status == 200 else None
     config = data.get("config") if data is not None else None
@@ -189,6 +193,7 @@ async def read_channels(transport: SourceTransport, name: str) -> list[Channel]:
     if not isinstance(original, str):
         raise ChannelsUnreadable(UNREADABLE.format(name=name))
     try:
-        return parse_channels(original)
+        channels = parse_channels(original)
     except ChannelsUnreadable:
         raise ChannelsUnreadable(UNREADABLE.format(name=name)) from None
+    return [c for c in channels if not OWN_CONTACT_POINTS.match(c.receiver)]

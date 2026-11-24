@@ -191,3 +191,37 @@ UNINSTALL_STEP_FAILED = (
 )
 DELETE_OBJECT_STEP = "delete the {kind} {name}"
 REMOVE_SOURCE_STEP = "The source {name} couldn't be removed. What was already removed stays removed. Uninstall again to finish."
+
+# Contact points in OmniKrux's own Alertmanager (an AlertmanagerConfig and its Secret, through a
+# review).
+CONTACTS_CREATE_TITLE = "Send alerts to {n} contact points from {namespace}'s Alertmanager"
+# Not in the plan's copy list: one contact point.
+CONTACTS_CREATE_TITLE_ONE = "Send alerts to 1 contact point from {namespace}'s Alertmanager"
+CONTACTS_UPDATE_TITLE = "Update the contact points in {namespace}'s Alertmanager"
+CONTACTS_DELETE_TITLE = "Remove the contact points from {namespace}'s Alertmanager"
+CONTACTS_SUMMARY = "Routes alerts from rules that run in Prometheus in {cluster} to OmniKrux's contact points, through the Alertmanager OmniKrux installed."
+CONTACTS_LINE = "{name} ({type}) for {rules}"
+CONTACTS_SECRET_LINE = (
+    "Secret omnikrux-contact-points holds {k} values; they are hidden here and never shown again."
+)
+# Not in the plan's copy list: the summary of a removal (nothing is left to route).
+CONTACTS_DELETE_SUMMARY = "No rule that runs in the tools OmniKrux installed in {cluster} notifies a contact point now, so the AlertmanagerConfig and Secret omnikrux-contact-points are removed."
+CONTACTS_SKIPPED = "{name} can't be sent from Alertmanager: {reason}"
+EMAIL_TLS_PORT = "Alertmanager uses direct TLS only on port 465. Change the port, or use STARTTLS."
+CONTACTS_APPLY_LABEL = "Apply"
+CONTACTS_UPDATE_LABEL = "Update"
+CONTACTS_REMOVE_LABEL = "Remove"
+CONTACTS_STALE = "The contact points or rules changed since you reviewed this. Review it again."
+CONTACTS_UPDATED = "Updated the contact points in {namespace}'s Alertmanager."
+NO_ALERTMANAGER = "OmniKrux didn't install an Alertmanager in this cluster, so it has nowhere to send contact points."
+# Not in the plan's copy list: an object with OmniKrux's name it didn't make, the settings moving
+# while the review read them, the change a rule or contact-point save reports, and a contact
+# point or source that went while the settings were worked out.
+CONTACTS_NOT_OURS = "{kind} {namespace}/omnikrux-contact-points wasn't made by OmniKrux, so OmniKrux won't change or remove it. Remove or rename it with kubectl, then review again."
+CONTACTS_RACED = (
+    "The contact-point settings in {namespace} changed while OmniKrux read them. Try again."
+)
+CONTACTS_NEED_REVIEW = "The contact points in {namespace}'s Alertmanager need a review."
+CONTACTS_UNKNOWN = "A contact point or source changed while OmniKrux worked out what to send to {namespace}'s Alertmanager. Try again."
+CONTACTS_WRITE_SECRET_STEP = "write the Secret {namespace}/omnikrux-contact-points"
+CONTACTS_DELETE_SECRET_STEP = "remove the Secret {namespace}/omnikrux-contact-points"

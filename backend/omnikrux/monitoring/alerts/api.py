@@ -434,6 +434,9 @@ class CapabilityOut(BaseModel):
     source_name: str | None
     tool: ToolKind | None
     reason: str | None
+    # The source is one of the tools OmniKrux installed, with its own Alertmanager: a rule that
+    # runs there can notify OmniKrux's contact points (through that Alertmanager's review).
+    installed_by_omnikrux: bool = False
 
 
 class TargetRefOut(BaseModel):
@@ -1727,6 +1730,14 @@ async def capabilities(
             raise _invalid(wrong_type_copy(source_type), "source").http()
     projects = await sync.scope_projects(scope_kind, scope_id)
     probe = _probe_rule(scope_kind, scope_id, source_type, source_id)
+    # The Prometheus and Loki sources of installs that have their own Alertmanager.
+    with_alertmanager = {
+        id
+        for record in await services.installs.list()
+        if record.alertmanager_source_id is not None
+        for id in (record.prometheus_source_id, record.loki_source_id)
+        if id is not None
+    }
     out: list[CapabilityOut] = []
     for project in projects:
         found = await sync.source_for(probe, project)
@@ -1762,6 +1773,8 @@ async def capabilities(
                 source_name=source.name,
                 tool=tool,
                 reason=reason,
+                installed_by_omnikrux=source.installed_by_omnikrux
+                and source.id in with_alertmanager,
             )
         )
     return out

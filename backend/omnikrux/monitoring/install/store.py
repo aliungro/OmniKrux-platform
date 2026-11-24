@@ -250,6 +250,15 @@ class InstallStore:
             row.updated_at = now()
             return _record(row)
 
+    async def set_contacts_message(self, cluster_id: str, message: str | None) -> None:
+        """Keep (or clear) why the contact points couldn't be worked out or applied, leaving
+        the digest of what was last applied as it is. A cluster without a record is fine."""
+        async with self._sessionmaker.begin() as session:
+            row = await _by_cluster(session, cluster_id)
+            if row is not None:
+                row.contacts_message = message
+                row.updated_at = now()
+
     async def mark_interrupted(self, at: datetime) -> int:
         """At startup nothing is running: every install or uninstall still marked as running
         stopped with OmniKrux. Returns how many records changed."""

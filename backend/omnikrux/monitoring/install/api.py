@@ -1,6 +1,7 @@
-"""Routes under /api/monitoring/install: whether the pinned tools are here, the install review
-and the uninstall review (server-built plans the browser applies through
-`POST /api/actions/{plan_id}/apply`), and what a cluster's tools look like now."""
+"""Routes under /api/monitoring/install: whether the pinned tools are here, the install review,
+the uninstall review and the review of the contact points in OmniKrux's own Alertmanager
+(server-built plans the browser applies through `POST /api/actions/{plan_id}/apply`), and what a
+cluster's tools look like now."""
 
 from __future__ import annotations
 
@@ -15,6 +16,17 @@ from omnikrux.actions.pipeline import PlanOut, Target, make_plan
 from omnikrux.audit.store import actor_of
 from omnikrux.monitoring.install import messages
 from omnikrux.monitoring.install.action import KIND_KEY, InstallAction, ordered
+from omnikrux.monitoring.install.contacts import KIND_KEY as CONTACTS_KIND_KEY
+from omnikrux.monitoring.install.contacts import (
+    ContactSyncAction,
+    DesiredContacts,
+    PlanState,
+    amc_path,
+    desired_contacts,
+    in_sync,
+    problem_words,
+    read_object,
+)
 from omnikrux.monitoring.install.pins import CHARTS
 from omnikrux.monitoring.install.settings import (
     Component,
@@ -29,6 +41,8 @@ from omnikrux.monitoring.install.status import (
 )
 from omnikrux.monitoring.install.store import InstallRecord, InstallState
 from omnikrux.monitoring.install.uninstall import UninstallAction
+from omnikrux.monitoring.install.values import AMC_NAME
+from omnikrux.monitoring.models import now
 from omnikrux.monitoring.projects.api import SourceRefOut
 from omnikrux.monitoring.projects.store import UnknownProject
 from omnikrux.monitoring.query.run import PROJECT_GONE
@@ -155,13 +169,26 @@ class InstallPlanOut(BaseModel):
 
 
 class ContactsOut(BaseModel):
-    """How OmniKrux's contact points stand in its own Alertmanager (Task 8; `none` until then)."""
+    """How OmniKrux's contact points stand in its own Alertmanager: `none` (nothing to route and
+    nothing applied), `in_sync` (what is applied is what OmniKrux wants), `needs_review` (that
+    changed since), `failed` (it can't be worked out, or the last apply failed: `message`).
+    `contact_points` and `rules` count what OmniKrux wants there now."""
 
     state: Literal["none", "in_sync", "needs_review", "failed"]
     message: str | None
     applied_at: datetime | None
     contact_points: int
     rules: int
+
+
+class ContactsSyncReviewOut(BaseModel):
+    kind: Literal["review"]
+    plan: PlanOut
+
+
+class ContactsSyncDoneOut(BaseModel):
+    kind: Literal["done"]
+    contacts: ContactsOut
 
 
 class InstallOut(BaseModel):
@@ -232,9 +259,42 @@ async def _tools_out(services: MonitoringServices) -> ToolsOut:
     )
 
 
-def contacts_out(record: InstallRecord) -> ContactsOut:
-    """Nothing synced yet (Task 8 reads the record's contact-point digest)."""
-    return ContactsOut(state="none", message=None, applied_at=None, contact_points=0, rules=0)
+def contacts_out(
+    record: InstallRecord, desired: DesiredContacts | None, problem: str | None = None
+) -> ContactsOut:
+    """The record's contact points against what OmniKrux wants now (`desired`; None with
+    `problem` when that can't be worked out)."""
+    applied_at = record.contacts_applied_at
+    if desired is None:
+        return ContactsOut(
+            state="failed", message=problem, applied_at=applied_at, contact_points=0, rules=0
+        )
+    counts = {"contact_points": len(desired.contact_points), "rules": len(desired.rules)}
+    if desired.amc is None and record.contacts_digest is None:
+        return ContactsOut(state="none", message=None, applied_at=applied_at, **counts)
+    if in_sync(desired, record):
+        return ContactsOut(state="in_sync", message=None, applied_at=applied_at, **counts)
+    if record.contacts_message is not None:
+        return ContactsOut(
+            state="failed", message=record.contacts_message, applied_at=applied_at, **counts
+        )
+    return ContactsOut(state="needs_review", message=None, applied_at=applied_at, **counts)
+
+
+async def _contacts(services: MonitoringServices, record: InstallRecord) -> ContactsOut:
+    if record.alertmanager_source_id is None:
+        return ContactsOut(
+            state="none",
+            message=None,
+            applied_at=record.contacts_applied_at,
+            contact_points=0,
+            rules=0,
+        )
+    try:
+        desired = await desired_contacts(services, record)
+    except Exception as exc:  # noqa: BLE001 (said in words; never a value)
+        return contacts_out(record, None, problem_words(exc, record))
+    return contacts_out(record, desired)
 
 
 async def _install_out(services: MonitoringServices, record: InstallRecord) -> InstallOut:
@@ -257,7 +317,7 @@ async def _install_out(services: MonitoringServices, record: InstallRecord) -> I
         shipped=shipped(record),
         update_available=update_available(record),
         sources=sources,
-        contacts=contacts_out(record),
+        contacts=await _contacts(services, record),
     )
 
 
@@ -350,6 +410,69 @@ async def plan_uninstall(
         ),
         params={"delete_data": body.delete_data if body is not None else False},
     )
+
+
+@router.post("/clusters/{cluster_id}/contacts/sync")
+async def sync_contacts(
+    cluster_id: str, request: Request
+) -> ContactsSyncReviewOut | ContactsSyncDoneOut:
+    """Bring the contact points in OmniKrux's own Alertmanager in line: the answer is the review
+    of the AlertmanagerConfig and its Secret (a plan applied through
+    `POST /api/actions/{plan_id}/apply`), or `done` when what is applied is what OmniKrux
+    wants. 409 in words when there is no Alertmanager OmniKrux installed there, or the contact
+    points can't be sent to it; nothing is written then."""
+    state = request.app.state
+    services = _services(request)
+    try:
+        await state.registry.get(cluster_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=CLUSTER_GONE) from None
+    record = await services.installs.get(cluster_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=messages.NOT_INSTALLED)
+    if record.alertmanager_source_id is None:
+        raise HTTPException(status_code=409, detail=messages.NO_ALERTMANAGER)
+    try:
+        desired = await desired_contacts(services, record)
+    except Exception as exc:  # noqa: BLE001 (in words: the secret rule, an unreadable secret)
+        raise HTTPException(status_code=409, detail=problem_words(exc, record)) from None
+    if in_sync(desired, record):
+        return ContactsSyncDoneOut(kind="done", contacts=contacts_out(record, desired))
+    mode = "delete" if desired.amc is None else "upsert"
+    exists = await _amc_exists(state, cluster_id, record.namespace)
+    if mode == "delete" and exists is False:
+        # Nothing is left in the cluster to remove: the record says so.
+        record = await services.installs.set_contacts(
+            cluster_id, digest=None, message=None, at=now()
+        )
+        return ContactsSyncDoneOut(kind="done", contacts=contacts_out(record, desired))
+    if exists is None:  # the plan reads it again and says why it can't
+        exists = record.contacts_digest is not None
+    action = "delete" if mode == "delete" else ("edit" if exists else "create")
+    plan = await make_plan(
+        PlanState(state),
+        actor=actor_of(request),
+        action=action,
+        handler=ContactSyncAction(services),
+        target=Target(
+            cluster_id=cluster_id,
+            kind_key=CONTACTS_KIND_KEY,
+            namespace=record.namespace,
+            name=AMC_NAME,
+        ),
+        params={"mode": mode, "exists": exists},
+    )
+    return ContactsSyncReviewOut(kind="review", plan=plan)
+
+
+async def _amc_exists(state, cluster_id: str, namespace: str) -> bool | None:
+    """Whether OmniKrux's AlertmanagerConfig is in the namespace; None when the cluster can't
+    tell now (the plan reads it again and answers in words)."""
+    try:
+        async with state.connections.api(cluster_id) as api:
+            return await read_object(api, amc_path(namespace)) is not None
+    except Exception:  # noqa: BLE001 (the plan reads it again and answers in words)
+        return None
 
 
 @router.get("/tools")

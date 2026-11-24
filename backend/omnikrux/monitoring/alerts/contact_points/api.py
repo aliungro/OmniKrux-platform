@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from omnikrux.monitoring.alerts.contact_points.senders import (
@@ -30,6 +30,7 @@ from omnikrux.monitoring.alerts.contact_points.types import (
     summary_of,
 )
 from omnikrux.monitoring.alerts.store import RuleRef
+from omnikrux.monitoring.alerts.sync import AlertChangeOut, change_out
 from omnikrux.monitoring.audit import begin_change, finish_change
 from omnikrux.monitoring.dashboards.api import drop_contact_point
 from omnikrux.monitoring.models import now
@@ -93,6 +94,17 @@ class ContactPointOut(BaseModel):
     last_delivery: DeliveryOut | None
     created_at: datetime
     updated_at: datetime
+
+
+class ContactPointChangedOut(ContactPointOut):
+    """The PATCH answer: the contact point, and what its change asks for elsewhere (the
+    contact points in an Alertmanager OmniKrux installed that now need a review)."""
+
+    alert_changes: list[AlertChangeOut]
+
+
+class ContactPointDeleteOut(BaseModel):
+    alert_changes: list[AlertChangeOut]
 
 
 class ContactPointDeleteReviewOut(BaseModel):
@@ -178,6 +190,12 @@ def _out(cp: ContactPoint, used_by: list[RuleRef]) -> ContactPointOut:
     )
 
 
+async def _alert_changes(request: Request) -> list[AlertChangeOut]:
+    """The installs whose contact points now need a review (never raises)."""
+    changes = await _services(request).alert_sync.contact_changes()
+    return [change_out(c) for c in changes]
+
+
 async def _send_test(request: Request, cp: ContactPoint) -> TestOut:
     """One attempt (no retries), so the answer comes within the send limit."""
     try:
@@ -256,7 +274,7 @@ async def test_unsaved_contact_point(body: ContactPointIn, request: Request) -> 
 @router.patch("/{id}")
 async def change_contact_point(
     id: str, body: ContactPointPatch, request: Request
-) -> ContactPointOut:
+) -> ContactPointChangedOut:
     store = _store(request)
     old = await _contact_point(store, id)
     if body.type is not None and body.type != old.type:
@@ -296,7 +314,8 @@ async def change_contact_point(
         await finish_change(request, record, False, NOT_SAVED)
         raise
     await finish_change(request, record, True)
-    return _out(updated, await store.used_by(id))
+    out = _out(updated, await store.used_by(id))
+    return ContactPointChangedOut(**dict(out), alert_changes=await _alert_changes(request))
 
 
 @router.post("/{id}/test")
@@ -330,8 +349,8 @@ async def contact_point_delete_review(id: str, request: Request) -> ContactPoint
     )
 
 
-@router.delete("/{id}", status_code=204)
-async def remove_contact_point(id: str, token: str, request: Request) -> Response:
+@router.delete("/{id}")
+async def remove_contact_point(id: str, token: str, request: Request) -> ContactPointDeleteOut:
     store = _store(request)
     try:
         review = await store.delete_review(id)
@@ -358,4 +377,4 @@ async def remove_contact_point(id: str, token: str, request: Request) -> Respons
     await finish_change(request, record, True)
     # Panel alerts name it in their dashboards' documents: those are saved without it.
     await drop_contact_point(request, id, review.name)
-    return Response(status_code=204)
+    return ContactPointDeleteOut(alert_changes=await _alert_changes(request))

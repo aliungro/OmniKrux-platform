@@ -32,7 +32,7 @@ from omnikrux.monitoring.sources.store import NewSource, SourceStore
 from omnikrux.monitoring.sources.transport import TransportFactory
 from omnikrux.monitoring.sources.types import SourceConfig, SourceSecrets
 from omnikrux.security.secrets import SecretBox
-from tests.fakekube import kubeconfig_for
+from tests.fakekube import kubeconfig_for, prometheus_operator
 from tests.monitoring.alert_env import CONTACT_POINTS, EngineEnv, no_sleep
 from tests.monitoring.fake_helm import AvailableTools, FakeHelm
 from tests.monitoring.fake_receivers import serve_fake_smtp, serve_fake_webhook
@@ -473,4 +473,81 @@ async def installed_cluster(
     }
     return InstalledCluster(
         cluster_id=kube_cluster, namespace="monitoring", project_id=None, sources=sources, job=job
+    )
+
+
+# A Slack address with a secret in its path: it must never leave the backend except into the
+# Secret OmniKrux writes into its own Alertmanager.
+WEBHOOK_URL = "https://hooks.slack.example.test/services/T000/B000/XXXX-SECRET"
+HOOK_URL = "https://hooks.example.test/omnikrux/XXXX-SECRET-HOOK"
+
+
+@dataclass(frozen=True)
+class ToolRuleWithContacts:
+    """A rule that runs in the installed Prometheus and notifies two contact points."""
+
+    rule_id: str
+    cp_id: str  # Slack, at WEBHOOK_URL
+    hook_id: str  # a webhook, at HOOK_URL
+    project_id: str
+    cluster_id: str
+
+
+@pytest.fixture
+async def tool_rule_with_contacts(
+    monitoring_app, installed_cluster, fake_api
+) -> ToolRuleWithContacts:
+    """On `installed_cluster`: the Prometheus Operator's resources served (as the chart's CRDs
+    serve them) with OmniKrux's Prometheus behind its Service; a project linked to the installed
+    Prometheus; a Slack contact point (at `WEBHOOK_URL`) and a webhook (at `HOOK_URL`); and a
+    rule that runs in Prometheus notifying both."""
+    http, app = monitoring_app
+    services = app.state.monitoring
+    prometheus_operator(
+        fake_api,
+        name="omnikrux-metrics-prometheus",
+        service="omnikrux-metrics-prometheus",
+        rule_selector={"matchLabels": {"release": "omnikrux-metrics"}},
+    )
+    prometheus_id = installed_cluster.sources["prometheus"]
+    services.capabilities.forget(prometheus_id)
+    project = await http.post(
+        "/api/monitoring/setup",
+        json={
+            "name": "Cluster apps",
+            "kind": "custom",
+            "sources": [{"source_id": prometheus_id, "filter": 'namespace="shop"'}],
+        },
+    )
+    assert project.status_code == 201, project.text
+    project_id = project.json()["id"]
+    ids = []
+    for body in (
+        {"name": "Ops Slack", "type": "slack", "secrets": {"webhook_url": WEBHOOK_URL}},
+        {"name": "Ops hook", "type": "webhook", "secrets": {"url": HOOK_URL}},
+    ):
+        created = await http.post(CONTACT_POINTS, json=body)
+        assert created.status_code == 201, created.text
+        ids.append(created.json()["id"])
+    rule = await http.post(
+        "/api/monitoring/alerts/rules",
+        json={
+            "name": "API latency high",
+            "scope": {"kind": "project", "id": project_id},
+            "source": {"type": "prometheus", "id": prometheus_id},
+            "expr": "rate(http_seconds_sum[5m])",
+            "condition": {"op": "above", "threshold": 0.3, "for": "5m", "every": "1m"},
+            "engine": "tool",
+            "contact_point_ids": ids,
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    [target] = rule.json()["rule"]["targets"]
+    assert target["engine"] == "tool", target
+    return ToolRuleWithContacts(
+        rule_id=rule.json()["rule"]["id"],
+        cp_id=ids[0],
+        hook_id=ids[1],
+        project_id=project_id,
+        cluster_id=installed_cluster.cluster_id,
     )

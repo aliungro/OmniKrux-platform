@@ -468,7 +468,8 @@ async def test_delete_review_lists_rules_and_stale_token(monitoring_app, fake_we
     again = (await http.get(f"{BASE}/{ops['id']}/delete-review")).json()
     assert [r["name"] for r in again["used_by"]] == ["CPU high", "Disk full"]
     removed = await http.delete(f"{BASE}/{ops['id']}", params={"token": again["token"]})
-    assert removed.status_code == 204
+    assert removed.status_code == 200
+    assert removed.json() == {"alert_changes": []}
     assert [cp["name"] for cp in (await http.get(BASE)).json()] == ["Other"]
 
     after_cpu = await alerts.get_rule(cpu.id)

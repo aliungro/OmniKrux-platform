@@ -429,6 +429,11 @@ class Discovery:
         self._probe_seconds = probe_seconds
         self._concurrency = concurrency
 
+    @property
+    def registry(self) -> ClusterRegistry:
+        """The clusters OmniKrux knows (read-only use: their names)."""
+        return self._registry
+
     def probe(self, cluster_id: str) -> KubeClusterProbe:
         """The probe that asks this cluster what it serves."""
         return KubeClusterProbe(self._connections, cluster_id, timeout=self._probe_seconds)

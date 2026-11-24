@@ -346,7 +346,7 @@ async def test_deleting_a_contact_point_saves_the_dashboards_that_name_it(
     assert [r["name"] for r in review["used_by"]] == ["API latency high"]
 
     gone = await http.delete(f"{CONTACT_POINTS}/{cp_id}", params={"token": review["token"]})
-    assert gone.status_code == 204, gone.text
+    assert gone.status_code == 200, gone.text
     now = (await http.get(f"{DASHBOARDS}/{made['id']}")).json()
     assert now["version"] == 2
     assert now["spec"]["panels"][0]["alert"]["notify"] == []
@@ -582,7 +582,7 @@ async def add_contact_point(http, fake_webhook, name: str = "Ops hook") -> str:
 async def delete_contact_point(http, cp_id: str) -> None:
     review = (await http.get(f"{CONTACT_POINTS}/{cp_id}/delete-review")).json()
     gone = await http.delete(f"{CONTACT_POINTS}/{cp_id}", params={"token": review["token"]})
-    assert gone.status_code == 204, gone.text
+    assert gone.status_code == 200, gone.text
 
 
 async def test_restore_leaves_out_contact_points_deleted_since(

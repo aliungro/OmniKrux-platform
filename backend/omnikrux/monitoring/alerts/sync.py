@@ -35,7 +35,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SerializerFunctionWrapHandler, model_serializer
 from sqlalchemy import select
 
 from omnikrux.monitoring.alerts.engine import no_source_copy
@@ -80,7 +80,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-AlertChangeKind = Literal["review", "written", "failed", "removed"]
+# "contacts": the contact points in an Alertmanager OmniKrux installed need a review (M5).
+AlertChangeKind = Literal["review", "written", "failed", "removed", "contacts"]
 
 UNKNOWN_CAPABILITY = "Couldn't check whether {source} can run rules: {message}"
 TOOL_FAILED = "OmniKrux couldn't bring this rule up to date in the tool. Try again."
@@ -133,10 +134,15 @@ class AlertChange:
     message: str | None
     # The tool the change is in (a PrometheusRule or a Loki ruler rule); None when unknown.
     tool: ToolKind | None = None
+    # A `contacts` change: the cluster whose Alertmanager needs the review (the other fields are
+    # empty strings, and `project_name` is the cluster's name).
+    cluster_id: str | None = None
 
 
 class AlertChangeOut(BaseModel):
-    """An `AlertChange` in an answer (a rule's change, a dashboard's save)."""
+    """An `AlertChange` in an answer (a rule's change, a dashboard's save). `cluster_id` is left
+    out of the JSON when it is None, so every answer without a `contacts` change reads as it
+    always did."""
 
     target_id: str
     rule_id: str
@@ -146,6 +152,14 @@ class AlertChangeOut(BaseModel):
     kind: AlertChangeKind
     message: str | None
     tool: ToolKind | None = None
+    cluster_id: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_empty_cluster(self, handler: SerializerFunctionWrapHandler) -> dict:
+        data = handler(self)
+        if self.cluster_id is None:
+            data.pop("cluster_id", None)
+        return data
 
 
 def change_out(change: AlertChange) -> AlertChangeOut:
@@ -158,6 +172,7 @@ def change_out(change: AlertChange) -> AlertChangeOut:
         kind=change.kind,
         message=change.message,
         tool=change.tool,
+        cluster_id=change.cluster_id,
     )
 
 
@@ -511,15 +526,36 @@ class AlertSync:
                 del self._waiting[rule_id]
                 del self._locks[rule_id]
 
+    async def contact_changes(self) -> list[AlertChange]:
+        """The installs whose contact points need a review now (never raises)."""
+        from omnikrux.monitoring.install.contacts import contact_changes
+
+        return await contact_changes(self._services)
+
     async def reconcile_rule(
-        self, rule_id: str, *, changed: bool = False, memo: Memo | None = None
+        self,
+        rule_id: str,
+        *,
+        changed: bool = False,
+        memo: Memo | None = None,
+        contacts: bool = True,
     ) -> list[AlertChange]:
         """Bring the rule's targets in line with `desired` and hand tool work to the ToolSync.
         `changed`: what the rule says changed (a save), so every target in a tool is handed over
         too, even one whose own fields stayed the same. Nothing for a rule that is gone.
+        `contacts`: the installs whose contact points now need a review are added (once per
+        call; the callers that reconcile many rules add them once themselves).
 
         Cancelling it never lands between writing the targets and handing them to the tool
         sync: that part runs to its end first."""
+        changes = await self._reconcile_rule(rule_id, changed=changed, memo=memo)
+        if contacts:
+            changes += await self.contact_changes()
+        return changes
+
+    async def _reconcile_rule(
+        self, rule_id: str, *, changed: bool = False, memo: Memo | None = None
+    ) -> list[AlertChange]:
         async with self._lock(rule_id):
             alerts = self._services.alerts
             for attempt in range(ATTEMPTS):
@@ -688,7 +724,12 @@ class AlertSync:
         return self._lock(f"dashboard:{dashboard_id}")
 
     async def reconcile_dashboard(
-        self, dashboard_id: str, *, deleted: bool = False, memo: Memo | None = None
+        self,
+        dashboard_id: str,
+        *,
+        deleted: bool = False,
+        memo: Memo | None = None,
+        contacts: bool = True,
     ) -> list[AlertChange]:
         """Bring the rules of the dashboard's panels in line with its document as stored now:
         each panel with an alert has its rule (origin "panel", scoped to the dashboard's owner,
@@ -754,8 +795,13 @@ class AlertSync:
                     if written is not None:
                         touched.append(written)
         for rule_id, changed in touched:
-            changes += await self.reconcile_rule(rule_id, changed=changed, memo=memo)
-        return sorted(changes, key=lambda c: (c.project_name.casefold(), c.rule_name, c.target_id))
+            changes += await self._reconcile_rule(rule_id, changed=changed, memo=memo)
+        changes = sorted(
+            changes, key=lambda c: (c.project_name.casefold(), c.rule_name, c.target_id)
+        )
+        if contacts:
+            changes += await self.contact_changes()
+        return changes
 
     async def _detach(self, rule_id: str) -> bool:
         try:
@@ -870,7 +916,7 @@ class AlertSync:
             for rule_id in dict.fromkeys(rule_ids):
                 # `changed`: the targets' own fields didn't change, but their tool has to be
                 # written again.
-                await self.reconcile_rule(rule_id, changed=True)
+                await self.reconcile_rule(rule_id, changed=True, contacts=False)
         except Exception as exc:  # noqa: BLE001 (they read "not applied"; the next start retries)
             log.warning("Writing Loki ruler rules back failed (%s)", type(exc).__name__)
 
@@ -901,8 +947,8 @@ class AlertSync:
                     rules += await alerts.list_rules(scope_kind="group", scope_id=group.id)
         changes: list[AlertChange] = []
         for rule_id in dict.fromkeys(r.id for r in rules):
-            changes += await self.reconcile_rule(rule_id)
-        return changes
+            changes += await self._reconcile_rule(rule_id)
+        return changes + await self.contact_changes()
 
     async def reconcile_all(self) -> None:
         """Every rule, deleted ones still removing their targets included (at startup, after the
@@ -921,7 +967,7 @@ class AlertSync:
             for dashboard_id in boards + sorted(gone):
                 try:
                     await self.reconcile_dashboard(
-                        dashboard_id, deleted=dashboard_id in gone, memo=memo
+                        dashboard_id, deleted=dashboard_id in gone, memo=memo, contacts=False
                     )
                 except Exception as exc:  # noqa: BLE001 (the others carry on; logged by type)
                     log.warning(
@@ -942,7 +988,7 @@ class AlertSync:
             }
             for rule in await self._services.alerts.list_rules(include_deleted=True):
                 try:
-                    await self.reconcile_rule(rule.id, changed=rule.id in unwritten, memo=memo)
+                    await self._reconcile_rule(rule.id, changed=rule.id in unwritten, memo=memo)
                 except Exception as exc:  # noqa: BLE001 (the others carry on; logged by type)
                     log.warning(
                         "Bringing alert rule %s's targets up to date failed (%s)",
