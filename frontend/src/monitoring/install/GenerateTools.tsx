@@ -41,6 +41,8 @@ export const WAITING = "Waiting for the tools to answer…";
 export const GAVE_UP = "Still waiting. Check that the tools are running and the ports are open, then wait again.";
 export const STOPPED = "Stopped waiting for the tools.";
 export const ANSWERED = "The tools answer. They're added to this project's sources.";
+/** Said while the tools are being added, or when adding them didn't work: only what is true. */
+export const ANSWER_ONLY = "The tools answer.";
 export const COPIED = "Copied.";
 export const NOT_COPIED = "Couldn't copy. Select the text and copy it yourself.";
 
@@ -50,13 +52,18 @@ const ports = (list: number[]): string =>
 /** A Blob download of the file's text; the object URL is released at once. */
 function download(file: GeneratedFile): void {
   const url = URL.createObjectURL(new Blob([file.content], { type: "text/plain" }));
+  const a = document.createElement("a");
   try {
-    const a = document.createElement("a");
     a.href = url;
     a.download = file.name;
+    document.body.appendChild(a);
     a.click();
   } finally {
-    URL.revokeObjectURL(url);
+    // After the click has been handled: some browsers drop a download whose address is gone at once.
+    window.setTimeout(() => {
+      a.remove();
+      URL.revokeObjectURL(url);
+    }, 0);
   }
 }
 
@@ -92,15 +99,15 @@ function Field({ id, label, error, children }: { id: string; label: ReactNode; e
   );
 }
 
-function Waiting({ urls, results, waiting, answered, gaveUp, onStop, onAgain, again, status }: {
-  urls: Partial<Record<ToolType, string>>; results: ProbeResultOut[]; waiting: boolean; gaveUp: boolean; answered: boolean;
+function Waiting({ urls, results, waiting, answered, gaveUp, added, onStop, onAgain, again, status }: {
+  urls: Partial<Record<ToolType, string>>; results: ProbeResultOut[]; waiting: boolean; gaveUp: boolean; answered: boolean; added: boolean;
   onStop(): void; onAgain(): void; again: RefObject<HTMLButtonElement | null>; status: RefObject<HTMLDivElement | null>;
 }) {
   const by = new Map(results.map((r) => [r.type, r]));
-  const message = answered ? ANSWERED : waiting ? WAITING : gaveUp ? GAVE_UP : STOPPED;
+  const message = answered ? (added ? ANSWERED : ANSWER_ONLY) : waiting ? WAITING : gaveUp ? GAVE_UP : STOPPED;
   return (
-    <div ref={status} className={s.waiting} tabIndex={-1} role="status" data-state={answered ? "answered" : waiting ? "waiting" : "ended"}>
-      <p className={s.waitLine}>{message}</p>
+    <div ref={status} className={s.waiting} tabIndex={-1} data-state={answered ? "answered" : waiting ? "waiting" : "ended"}>
+      <p className={s.waitLine} role="status">{message}</p>
       <ul className={s.tools}>
         {ORDER.filter((t) => urls[t]).map((t) => {
           const r = by.get(t);
@@ -120,7 +127,13 @@ function Waiting({ urls, results, waiting, answered, gaveUp, onStop, onAgain, ag
   );
 }
 
-export function GenerateTools({ kind, onAnswered }: { kind: Kind; onAnswered(tools: AnsweredTools): void | Promise<void> }) {
+/**
+ * `connected` is for a page that adds the answered tools itself: until it says `done`, the block claims
+ * only that the tools answer. Left out (setup, where they become picks at once), that is `done`.
+ */
+export function GenerateTools({ kind, onAnswered, connected = "done" }: {
+  kind: Kind; onAnswered(tools: AnsweredTools): void; connected?: "pending" | "done" | "failed";
+}) {
   const words = WORDS[kind];
   const ids = useId();
   const [address, setAddress] = useState("");
@@ -151,7 +164,7 @@ export function GenerateTools({ kind, onAnswered }: { kind: Kind; onAnswered(too
     told.current = made.out;
     const byType = new Map(probe.results.map((r) => [r.type, r]));
     const tools = ORDER.flatMap((t) => { const r = byType.get(t); return r ? [{ type: t, url: r.url, version: r.version }] : []; });
-    void onAnsweredRef.current(tools);
+    onAnsweredRef.current(tools);
   }, [made, answered, probe.results]);
 
   // The button that was pressed leaves with the wait ending: the keyboard stays inside the block.
@@ -257,7 +270,7 @@ export function GenerateTools({ kind, onAnswered }: { kind: Kind; onAnswered(too
           <pre className={s.file} aria-label={file.name} tabIndex={0}>{file.content}</pre>
           <span className={s.said} aria-live="polite">{said}</span>
           <Instructions kind={kind} file={file} address={made.address} portList={made.out.ports} />
-          <Waiting urls={made.out.urls} results={probe.results} waiting={probe.waiting} gaveUp={probe.gaveUp} answered={answered}
+          <Waiting urls={made.out.urls} results={probe.results} waiting={probe.waiting} gaveUp={probe.gaveUp} answered={answered} added={connected === "done"}
             onStop={probe.stop} onAgain={probe.again} again={again} status={status} />
         </div>
       )}

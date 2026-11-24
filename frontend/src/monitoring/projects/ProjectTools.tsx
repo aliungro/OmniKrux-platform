@@ -2,12 +2,12 @@
 // project's cluster, read live, with the way to the cluster's Monitoring tools page. Honest state:
 // a read that failed says so and shows nothing old as current.
 
-import { useCallback, useState, type MouseEvent } from "react";
+import { useCallback, useRef, useState, type MouseEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../api/http";
-import { createSource, linkSource } from "../api/client";
+import { createSource, linkSource, listSources } from "../api/client";
 import { invalidateMonitoring } from "../api/hooks";
-import type { ProjectOut } from "../api/types";
+import type { ProjectOut, SourceOut } from "../api/types";
 import { GenerateTools, type AnsweredTools } from "../install/GenerateTools";
 import { installKeys, installStatus, type InstallStatusOut } from "../install/api";
 import { componentState } from "../install/toolsModel";
@@ -92,41 +92,69 @@ export function ProjectTools({ clusterId, clusterName, nav, openInNewTab }: {
   );
 }
 
+/** Whether a source already reaches this tool at this address (no sign-in): it is reused, not made again. */
+const reaches = (x: SourceOut, t: AnsweredTools[number]): boolean => x.reach === "url" && x.type === t.type && x.url === t.url && x.auth.type === "none";
+
+type Connection = { state: "idle" | "pending" | "done" | "failed"; connected: number; failed: { name: string; why: string }[] };
+
 /**
  * A Docker or servers project's Monitoring tools: the generator, and once the tools answer each one
- * becomes a source of the project (its filter empty). A tool the project already has is left alone.
+ * becomes a source of this project (filter empty). A source that already reaches the address is
+ * reused, never made twice; one tool failing doesn't stop the others, and what failed is named.
  */
 export function ProjectGenerate({ project }: { project: ProjectOut }) {
   const client = useQueryClient();
-  const [said, setSaid] = useState<string | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
   const kind = project.kind === "servers" ? "servers" : "docker";
-  const connect = useCallback(async (tools: AnsweredTools) => {
-    setSaid(null);
-    setProblem(null);
-    const have = new Set(project.links.map((l) => l.source_name));
-    let n = 0;
-    try {
-      for (const t of tools) {
-        if (have.has(answeredLabel(t))) continue;
-        const made = await createSource(answeredSource(t));
-        await linkSource(project.id, made.id, "", "none");
-        n += 1;
-      }
-      await invalidateMonitoring(client);
-      if (n > 0) setSaid(`Connected ${n} ${n === 1 ? "source" : "sources"} to ${project.name}.`);
-    } catch (err) {
-      await invalidateMonitoring(client);
-      setProblem(`Couldn't connect the tools: ${failure(err, "try again")}`);
-    }
-  }, [client, project.id, project.name, project.links]);
+  const [conn, setConn] = useState<Connection>({ state: "idle", connected: 0, failed: [] });
+  const tools = useRef<AnsweredTools>([]);
+  const linked = useRef(new Set<string>());
+  linked.current = new Set(project.links.map((l) => l.source_id));
+  const running = useRef(false);
+  const projectId = project.id;
 
+  const connect = useCallback(async (answered: AnsweredTools) => {
+    if (running.current) return;
+    running.current = true;
+    tools.current = answered;
+    setConn({ state: "pending", connected: 0, failed: [] });
+    let connected = 0;
+    const failed: Connection["failed"] = [];
+    let known: SourceOut[] | null = null;
+    for (const t of answered) {
+      try {
+        known ??= await listSources();
+        let source = known.find((x) => reaches(x, t));
+        if (!source) {
+          source = await createSource(answeredSource(t));
+          known.push(source);
+        }
+        if (!linked.current.has(source.id)) await linkSource(projectId, source.id, "", "none");
+        connected += 1;
+      } catch (err) {
+        failed.push({ name: answeredLabel(t), why: failure(err, "try again") });
+      }
+    }
+    try { await invalidateMonitoring(client); } catch { /* the lists refresh on their own */ }
+    running.current = false;
+    setConn({ state: failed.length === 0 ? "done" : "failed", connected, failed });
+  }, [client, projectId]);
+
+  const said = conn.state === "done" || conn.state === "failed"
+    ? (conn.connected > 0 ? `Connected ${conn.connected} ${conn.connected === 1 ? "source" : "sources"} to ${project.name}.` : "")
+    : "";
   return (
     <section aria-labelledby="monitoring-project-tools" className={s.section}>
       <h2 id="monitoring-project-tools" className={s.heading}>Monitoring tools</h2>
-      <GenerateTools kind={kind} onAnswered={connect} />
-      <p className={s.ok} role="status">{said ?? ""}</p>
-      {problem && <p className={s.bad} role="alert">{problem}</p>}
+      <GenerateTools kind={kind} onAnswered={(t) => void connect(t)} connected={conn.state === "idle" ? "done" : conn.state === "pending" ? "pending" : conn.state} />
+      <p className={s.ok} role="status">{said}</p>
+      {conn.state === "failed" && (
+        <div className={s.toolsLine} role="alert">
+          <div>
+            {conn.failed.map((f) => <p key={f.name} className={s.toolsText}>{`Couldn't connect ${f.name}: ${f.why}`}</p>)}
+          </div>
+          <button type="button" className={s.secondary} onClick={() => void connect(tools.current)}>Try again</button>
+        </div>
+      )}
     </section>
   );
 }

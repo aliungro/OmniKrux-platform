@@ -7,7 +7,9 @@ import { GenerateTools, type AnsweredTools } from "./GenerateTools";
 import type { ProbeResultOut } from "./api";
 
 beforeEach(() => localStorage.clear());
+const restore: (() => void)[] = [];
 afterEach(() => {
+  restore.splice(0).forEach((f) => f());
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -62,6 +64,14 @@ describe("Generated files", () => {
     expect(file.textContent).toBe("services:\n  prometheus: {}\n");
 
     const written: string[] = [];
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const create = URL.createObjectURL;
+    const revoke = URL.revokeObjectURL;
+    restore.push(() => {
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard); else Reflect.deleteProperty(navigator, "clipboard");
+      URL.createObjectURL = create;
+      URL.revokeObjectURL = revoke;
+    });
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => { written.push(t); } } });
     await user.click(screen.getByRole("button", { name: "Copy" }));
     expect(written).toEqual(["services:\n  prometheus: {}\n"]);
@@ -74,6 +84,7 @@ describe("Generated files", () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { clicked.push(this.download); });
     await user.click(screen.getByRole("button", { name: "Download docker-compose.yml" }));
     expect(clicked).toEqual(["docker-compose.yml"]);
+    await waitFor(() => expect(document.querySelector("a[download]")).toBeNull());
     expect(blobs).toHaveLength(1);
     const text = await new Promise<string>((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.readAsText(blobs[0]); });
     expect(text).toBe("services:\n  prometheus: {}\n");
