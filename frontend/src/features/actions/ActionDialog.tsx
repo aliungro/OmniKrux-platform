@@ -16,7 +16,7 @@ export const PRODUCTION = "This is a production cluster.";
 export const typeToConfirm = (name: string) => `Type ${name} to confirm`;
 
 /** Applies that take something away get the danger colour on their button, and open on Cancel. */
-const DESTRUCTIVE = new Set(["delete", "drain", "evict"]);
+const DESTRUCTIVE = new Set(["delete", "drain", "evict", "uninstall"]);
 
 /**
  * Where a review's focus starts: Cancel for what takes something away and for a review that can't
@@ -41,11 +41,17 @@ export function ActionDialog({
   plan,
   onDone,
   onReview,
+  options,
+  renderProgress,
 }: {
   plan: Plan;
   onDone: (outcome?: ActionOutcome) => void;
   /** Plans the same change again, with `params` changed (a drain's options); rejects with the server's words. */
   onReview: (params?: Record<string, unknown>) => Promise<void>;
+  /** Options shown in the review (in place of a drain's); `review(params)` plans it again with them. */
+  options?: (ctx: { busy: boolean; review(params: Record<string, unknown>): Promise<boolean> }) => ReactNode;
+  /** The body once the apply started a job; a drain's progress when left out. */
+  renderProgress?: (p: { jobId: string; onClose(): void; onOutcome(o: ActionOutcome | null): void }) => ReactNode;
 }) {
   const id = useId();
   const actions = useActions();
@@ -125,7 +131,8 @@ export function ActionDialog({
 
   let body: ReactNode;
   if (started !== null) {
-    body = <DrainProgress jobId={started.jobId} onClose={close} onOutcome={(o) => { ended.current = o; }} />;
+    const p = { jobId: started.jobId, onClose: close, onOutcome: (o: ActionOutcome | null) => { ended.current = o; } };
+    body = renderProgress ? renderProgress(p) : <DrainProgress {...p} />;
   } else {
     body = (
       <>
@@ -154,7 +161,7 @@ export function ActionDialog({
             ))}
           </ul>
         )}
-        {plan.action === "drain" && (
+        {options ? options({ busy, review }) : plan.action === "drain" && (
           <DrainOptions disabled={busy} onChange={(flags: DrainFlags) => review({ ...flags })} />
         )}
         {plan.diff && <DiffView before={plan.diff.before} after={plan.diff.after} />}

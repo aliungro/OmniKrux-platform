@@ -24,6 +24,7 @@ import { ToolReviewHost } from "./alerts/reviews/ToolReviewHost";
 import {
   clearAlertForms, endRuleForm, FORM_LEAVE_BODY, heldFormLeave, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY,
 } from "./alerts/rules/formSessions";
+import { ComingLater } from "./pages/ComingLater";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
@@ -84,6 +85,7 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   explore: ExplorePage,
   alerts: AlertsPage,
   dashboard: DashboardPage,
+  tools: ComingLater,
 };
 
 /** Opening a project, group or dashboard (in this tab or a new one) puts it first in Recently opened. */
@@ -194,14 +196,14 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     return {
       label: (v: MonitoringView) => monitoringTabLabel(v, {
         project: (id) => projects.get(id)?.name, group: (id) => groups.get(id), source: (id) => sourceNames.get(id),
-        dashboard: (id) => dashboards.get(id),
+        dashboard: (id) => dashboards.get(id), cluster: (id) => clusterNames[id],
       }),
       color: (v: MonitoringView) => {
         const p = v.page === "project" ? projects.get(v.id) : undefined;
         return p ? DOT[p.color] : "var(--focus)";
       },
     };
-  }, [tree.data, sources.data]);
+  }, [tree.data, sources.data, clusterNames]);
 
   // A page about to be replaced takes the keyboard with it: hand it to the workspace first, so it
   // never falls to <body>. The tree and Find keep their own focus.

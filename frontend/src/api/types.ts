@@ -523,7 +523,7 @@ export interface NodeMetrics {
 
 /* Actions — mirrors backend/omnikrux/actions (pipeline.py PlanIn / PlanOut / ApplyOut, jobs.py JobOut, workloads.py Revision). */
 
-export type ActionName = "create" | "edit" | "scale" | "restart" | "rollback" | "delete" | "cordon" | "uncordon" | "drain" | "evict";
+export type ActionName = "create" | "edit" | "scale" | "restart" | "rollback" | "delete" | "cordon" | "uncordon" | "drain" | "evict" | "install" | "uninstall";
 
 /** What a change acts on; a null namespace is a cluster-scoped kind. */
 export interface ActionTarget {

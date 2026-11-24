@@ -9,6 +9,7 @@ export type MonitoringView =
   | { page: "sources" }
   | { page: "source"; id: string }
   | { page: "setup"; clusterId?: string }
+  | { page: "tools"; clusterId: string }
   | { page: "project"; id: string }
   | { page: "group"; id: string }
   | { page: "newGroup" }
@@ -91,7 +92,7 @@ export function sameMonitoringView(a: MonitoringView, b: MonitoringView): boolea
   if (a.page === "dashboard" && b.page === "dashboard") return a.id === b.id && (a.tab ?? "dashboard") === (b.tab ?? "dashboard");
   if ("id" in a && "id" in b) return a.id === b.id;
   if (a.page === "explore" && b.page === "explore") return a.project === b.project;
-  if (a.page === "setup" && b.page === "setup") return a.clusterId === b.clusterId;
+  if (a.page === "setup" || a.page === "tools") return a.clusterId === (b as typeof a).clusterId;
   // Alerts: the tab and the selected rule are view state, not another place.
   return true;
 }
@@ -261,6 +262,8 @@ function parseView(x: unknown): MonitoringView | null {
     case "setup":
       if (x.clusterId === undefined) return { page: "setup" };
       return validId(x.clusterId) ? { page: "setup", clusterId: x.clusterId } : null;
+    case "tools":
+      return validId(x.clusterId) ? { page: "tools", clusterId: x.clusterId } : null;
     case "dashboard":
       return parseDashboard(x);
     default:
@@ -310,6 +313,7 @@ export interface MonitoringNames {
   group?(id: string): string | undefined;
   source?(id: string): string | undefined;
   dashboard?(id: string): string | undefined;
+  cluster?(id: string): string | undefined;
 }
 
 export function monitoringTabLabel(view: MonitoringView, names: MonitoringNames): string {
@@ -322,6 +326,7 @@ export function monitoringTabLabel(view: MonitoringView, names: MonitoringNames)
     case "group": return names.group?.(view.id) ?? "Group";
     case "source": return names.source?.(view.id) ?? "Source";
     case "setup": return "New project";
+    case "tools": { const name = names.cluster?.(view.clusterId); return name ? `Tools · ${name}` : "Monitoring tools"; }
     case "newGroup": return "New group";
     case "dashboard": return names.dashboard?.(view.id) ?? "Dashboard";
   }

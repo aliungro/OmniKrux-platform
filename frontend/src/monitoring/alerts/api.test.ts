@@ -8,9 +8,9 @@ import { NETWORK_MESSAGE, UNREADABLE_ANSWER } from "../api/query";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { emptyAlertsState, type FakeRefusal } from "../test/fakeAlertsApi";
 import {
-  AlertRequestError, alertOverview, createContactPoint, createRule, deleteRule, dryRunAlert, expireSilence, getRule, listContactPoints,
+  AlertRequestError, alertOverview, createContactPoint, createRule, deleteContactPoint, deleteRule, dryRunAlert, expireSilence, getRule, listContactPoints,
   listRules, ruleDeleteReview, ruleRefs, saveRule, syncTarget, testUnsavedContactPoint, updateContactPoint, useAlertOverview, useCreateRule,
-  alertsKeys, refreshAlerts, useDryRun, useRules, type DryRunIn, type RuleIn, type RuleOut, type TargetOut,
+  alertsKeys, refreshAlerts, useDryRun, useRules, type AlertChangeOut, type DryRunIn, type RuleIn, type RuleOut, type TargetOut,
 } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -53,6 +53,25 @@ describe("alerts client", () => {
     expect(await deleteRule(made.rule!.id, review.token)).toEqual({ rule: null, changes: [] });
     expect(api.state.rules).toEqual([]);
     expect(api.requests.map((r) => `${r.method} ${r.url}`)).toContain("DELETE /api/monitoring/alerts/rules/r1?token=review-token");
+  });
+
+  it("deleting a contact point returns its alert changes", async () => {
+    const change: AlertChangeOut = {
+      target_id: "", rule_id: "", rule_name: "", project_id: "", project_name: "kind-dev", kind: "contacts", message: null,
+      tool: null, cluster_id: "c1",
+    };
+    const api = installFakeMonitoringApi();
+    const made = await createContactPoint({ name: "Ops", type: "webhook", settings: { url: "http://hooks.example.test/a" } });
+    api.state.contactPointChanges = [change];
+    expect(await deleteContactPoint(made.id, "review-token")).toEqual({ alert_changes: [change] });
+    api.state.contactPointChanges = [];
+    const other = await createContactPoint({ name: "Pager", type: "webhook", settings: { url: "http://hooks.example.test/b" } });
+    const out = await deleteContactPoint(other.id, "review-token");
+    expect(out.alert_changes).toEqual([]);
+    expect(api.requests.filter((r) => r.method === "DELETE").map((r) => r.url)).toEqual([
+      `/api/monitoring/alerts/contact-points/${made.id}?token=review-token`,
+      `/api/monitoring/alerts/contact-points/${other.id}?token=review-token`,
+    ]);
   });
 
   it("reads a rule conflict with the current version", async () => {

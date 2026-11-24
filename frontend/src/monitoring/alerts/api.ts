@@ -33,7 +33,7 @@ export type Every = "30s" | "1m" | "5m";
 export type TargetState = "ok" | "pending" | "firing" | "no_data" | "unreachable" | "error" | "paused" | "waiting" | "not_applied";
 export type ToolState = "in_sync" | "needs_review" | "failed";
 export type HistoryKind = "firing" | "resolved" | "cant_check" | "checking_again" | "error" | "applied" | "apply_failed" | "removed";
-export type AlertChangeKind = "review" | "written" | "failed" | "removed";
+export type AlertChangeKind = "review" | "written" | "failed" | "removed" | "contacts";
 export type ContactPointType = "slack" | "email" | "teams" | "pagerduty" | "webhook";
 
 // --- Shapes (mirrors of the backend's models, named as they are) ---------------------------------
@@ -140,6 +140,8 @@ export interface AlertChangeOut {
   message: string | null;
   /** The tool the change is in; absent or null when unknown (a failed change reads as Loki's). */
   tool?: ToolKind | null;
+  /** A `contacts` change: the cluster whose OmniKrux-installed Alertmanager needs a review (absent otherwise). */
+  cluster_id?: string | null;
 }
 
 export interface RuleChangeOut {
@@ -196,6 +198,8 @@ export interface CapabilityOut {
   source_name: string | null;
   tool: ToolKind | null;
   reason: string | null;
+  /** The source is one of the tools OmniKrux installed, with its own Alertmanager (the server always sends it). */
+  installed_by_omnikrux?: boolean;
 }
 
 export interface TargetRefOut {
@@ -325,6 +329,14 @@ export interface ContactPointOut {
   last_delivery: { at: string; ok: boolean; message: string | null } | null;
   created_at: string;
   updated_at: string;
+}
+
+/** The PATCH answer: the contact point and what it changed in the rules' tools (a `contacts` review). */
+export type ContactPointChangedOut = ContactPointOut & { alert_changes: AlertChangeOut[] };
+
+/** The DELETE answer: what removing the contact point changed in the rules' tools. */
+export interface ContactPointDeleteOut {
+  alert_changes: AlertChangeOut[];
 }
 
 export interface ContactPointDeleteReviewOut {
@@ -527,10 +539,11 @@ export const dryRunAlert = (body: DryRunIn, signal?: AbortSignal) => request<Dry
 export const listContactPoints = () => request<ContactPointOut[]>("GET", "/contact-points");
 export const createContactPoint = (body: ContactPointIn) => request<ContactPointOut>("POST", "/contact-points", body);
 export const updateContactPoint = (id: string, body: ContactPointPatch) =>
-  request<ContactPointOut>("PATCH", `/contact-points/${enc(id)}`, body);
+  request<ContactPointChangedOut>("PATCH", `/contact-points/${enc(id)}`, body);
 export const contactPointDeleteReview = (id: string) =>
   request<ContactPointDeleteReviewOut>("GET", `/contact-points/${enc(id)}/delete-review`);
-export const deleteContactPoint = (id: string, token: string) => request<void>("DELETE", `/contact-points/${enc(id)}?token=${enc(token)}`);
+export const deleteContactPoint = (id: string, token: string) =>
+  request<ContactPointDeleteOut>("DELETE", `/contact-points/${enc(id)}?token=${enc(token)}`);
 /** A test of the saved contact point. */
 export const testContactPoint = (id: string) => request<ContactPointTestOut>("POST", `/contact-points/${enc(id)}/test`);
 /** A test of a contact point as entered; nothing is stored. */
@@ -641,7 +654,7 @@ export const useResumeRule = (): Mutation<string, RuleOut> => useAlertsMutation(
 export const useDeleteRule = (): Mutation<{ id: string; token: string }, RuleChangeOut> => useAlertsMutation((v) => deleteRule(v.id, v.token));
 export const useAttachRule = (): Mutation<{ id: string; body: AttachIn }, AttachOut> => useAlertsMutation((v) => attachRule(v.id, v.body));
 export const useSyncTarget = (): Mutation<string, SyncOut> => useAlertsMutation(syncTarget);
-export const useDeleteContactPoint = (): Mutation<{ id: string; token: string }, void> => useAlertsMutation((v) => deleteContactPoint(v.id, v.token));
+export const useDeleteContactPoint = (): Mutation<{ id: string; token: string }, ContactPointDeleteOut> => useAlertsMutation((v) => deleteContactPoint(v.id, v.token));
 export const useCreateSilence = (): Mutation<SilenceIn, SilenceOut> => useAlertsMutation(createSilence);
 export const useExpireSilence = (): Mutation<{ kind: "omnikrux" | "alertmanager"; id: string; sourceId?: string | null }, void> =>
   useAlertsMutation((v) => expireSilence(v.kind, v.id, v.sourceId));

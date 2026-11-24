@@ -103,6 +103,30 @@ describe("monitoring tab state", () => {
     expect(monitoringTabLabel({ page: "newGroup" }, {})).toBe("New group");
   });
 
+  it("a tools view round-trips and is named", () => {
+    const view: MonitoringView = { page: "tools", clusterId: "k1" };
+    const tab = (id: string, v: unknown) => ({ id, view: v, back: [], forward: [], scrollTop: 0 });
+    const { tabs, dropped } = parseMonitoringTabs(JSON.parse(JSON.stringify({
+      tabs: [tab("a", view), tab("b", { page: "tools" }), tab("c", { page: "tools", clusterId: "k".repeat(201) }), tab("d", { page: "tools", clusterId: "" })],
+      active: "a",
+      closed: [],
+    })));
+    expect(dropped).toBe(3);
+    expect(tabs.tabs.map((t) => t.view)).toEqual([view]);
+    expect(monitoringTabLabel(view, { cluster: (id) => (id === "k1" ? "kind-dev" : undefined) })).toBe("Tools · kind-dev");
+    expect(monitoringTabLabel(view, {})).toBe("Monitoring tools");
+    expect(monitoringTabLabel({ page: "tools", clusterId: "gone" }, { cluster: () => undefined })).toBe("Monitoring tools");
+    expect(sameMonitoringView(view, { page: "tools", clusterId: "k1" })).toBe(true);
+    expect(sameMonitoringView(view, { page: "tools", clusterId: "k2" })).toBe(false);
+    expect(sameMonitoringView(view, { page: "setup", clusterId: "k1" })).toBe(false);
+    // A push to the same cluster's tools changes nothing; another cluster's is a new place.
+    let state = defaultMonitoringTabs();
+    const id = state.active;
+    state = monitoringTabsReducer(state, { type: "navigate", id, view, mode: "push" });
+    const same = monitoringTabsReducer(state, { type: "navigate", id, view: { page: "tools", clusterId: "k1" }, mode: "push" });
+    expect(same).toBe(state);
+  });
+
   it("compares views by page and id", () => {
     expect(sameMonitoringView(project("a"), project("a"))).toBe(true);
     expect(sameMonitoringView(project("a"), project("b"))).toBe(false);

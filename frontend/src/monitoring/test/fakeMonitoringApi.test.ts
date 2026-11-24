@@ -228,4 +228,18 @@ describe("fake Monitoring API", () => {
     expect((await getJson<{ silences: unknown[] }>("/api/monitoring/alerts/silences")).silences).toHaveLength(1);
     expect((await fetch(`/api/monitoring/alerts/silences/omnikrux/${made.id}`, { method: "DELETE" })).status).toBe(204);
   });
+
+  it("install answers are seeded in part and a contact point's PATCH and DELETE carry its alert changes", async () => {
+    const api = installFakeMonitoringApi({ install: { probe: { "http://192.0.2.1:9090": { ok: true } } } });
+    expect(api.state.install.tools.available).toBe(false);
+    expect(api.state.install.plans).toEqual([]);
+    expect(api.state.install.probe).toEqual({ "http://192.0.2.1:9090": { ok: true } });
+    const point = await postJson<{ id: string }>("/api/monitoring/alerts/contact-points", { name: "Ops", type: "webhook", settings: {} });
+    const patched = await patchJson<{ name: string; alert_changes: unknown[] }>(`/api/monitoring/alerts/contact-points/${point.id}`, { name: "Ops 2" });
+    expect(patched).toMatchObject({ name: "Ops 2", alert_changes: [] });
+    const res = await fetch(`/api/monitoring/alerts/contact-points/${point.id}?token=review-token`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ alert_changes: [] });
+    expect(api.state.contactPoints).toEqual([]);
+  });
 });

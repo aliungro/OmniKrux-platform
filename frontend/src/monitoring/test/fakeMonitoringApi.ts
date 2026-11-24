@@ -9,7 +9,9 @@ import type {
 } from "../api/types";
 import type { CatalogOut } from "../catalog/api";
 import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut } from "../dashboards/api";
-import { alertsRoute, emptyAlertsState, type FakeAlertsState } from "./fakeAlertsApi";
+import { alertsRoute, emptyAlertsState, type FakeAlertsState, type FakeRefusal } from "./fakeAlertsApi";
+import type { Plan } from "../../api/types";
+import type { ContactsSyncOut, GeneratedOut, InstallPlanOut, InstallStatusOut, ProbeResultOut, ToolsOut } from "../install/api";
 import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem } from "../dashboards/schema";
 import { autoTypeName } from "../sources/sourceLabels";
 
@@ -23,7 +25,37 @@ export interface FakeDashboard {
   versions: { out: VersionOut; spec: DashboardSpec }[];
 }
 
+/** The install routes' answers (`/install/*`). */
+export interface FakeInstallState {
+  /** `GET /install/tools`, and `tools` in each status answer. Unavailable by default (M1's setup copy stays). */
+  tools: ToolsOut;
+  /** `GET /install/clusters/{id}` by cluster id; none seeded answers 404 (the cluster is gone). */
+  status: Record<string, Omit<InstallStatusOut, "tools">>;
+  /** `POST /install/plan` answers, used in order (the last one repeats); none answers a refusal. */
+  plans: (InstallPlanOut | FakeRefusal)[];
+  /** `POST /install/clusters/{id}/uninstall/plan` answers, used in order (the last one repeats). */
+  uninstallPlans: (Plan | FakeRefusal)[];
+  /** `POST /install/clusters/{id}/contacts/sync` by cluster id; none seeded answers 404. */
+  contacts: Record<string, ContactsSyncOut | FakeRefusal>;
+  /** `POST /install/generate`; null answers a small file for the kind asked for. */
+  generated: GeneratedOut | FakeRefusal | null;
+  /** `POST /install/probe` results by URL; an unseeded URL answers that nothing replied. */
+  probe: Record<string, Partial<ProbeResultOut>>;
+}
+
+/** Installing isn't possible here: the backend's words when Helm isn't found (no path configured). */
+export const FAKE_TOOLS_MISSING =
+  "Installing needs Helm, which ships in the OmniKrux image. It wasn't found. Run OmniKrux from its image, or run scripts/dev-monitoring-tools.sh.";
+
+export function emptyInstallState(): FakeInstallState {
+  return {
+    tools: { available: false, message: FAKE_TOOLS_MISSING, helm_version: null, charts: [] },
+    status: {}, plans: [], uninstallPlans: [], contacts: {}, generated: null, probe: {},
+  };
+}
+
 export interface FakeMonitoringState extends FakeAlertsState {
+  install: FakeInstallState;
   sources: SourceOut[];
   projects: ProjectOut[];
   groups: GroupOut[];
@@ -48,6 +80,9 @@ export interface FakeMonitoringState extends FakeAlertsState {
   catalogs: Record<string, CatalogOut>;
 }
 
+/** A seed: any part of the state; `install` may be seeded in part (the rest keeps its defaults). */
+export type FakeMonitoringSeed = Partial<Omit<FakeMonitoringState, "install">> & { install?: Partial<FakeInstallState> };
+
 export interface FakeMonitoringApi {
   state: FakeMonitoringState;
   requests: { method: string; url: string; body: unknown }[];
@@ -61,6 +96,8 @@ const PROJECT_GONE = "That project doesn't exist anymore. It may have been remov
 const GROUP_GONE = "That group doesn't exist anymore. It may have been removed.";
 const NOT_LINKED = "This source isn't linked to that project.";
 const REVIEW_CHANGED = "That changed since you looked. Review it again.";
+const CLUSTER_GONE = "That cluster isn't connected to OmniKrux any more.";
+const NOT_INSTALLED = "OmniKrux hasn't installed anything in this cluster.";
 const TOKEN = "review-token";
 const DASHBOARD_GONE = "That dashboard no longer exists.";
 const VERSION_GONE = "That version of the dashboard no longer exists.";
@@ -117,13 +154,14 @@ function color(kind: ProjectKind, provider: string | null): TreeColor {
   return kind === "docker" || kind === "servers" ? "onprem" : "custom";
 }
 
-export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}, fallback?: Fallback): FakeMonitoringApi {
+export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback?: Fallback): FakeMonitoringApi {
   const state: FakeMonitoringState = {
     sources: [], projects: [], groups: [], health: {}, discovery: {}, fields: {}, queries: {},
     suggestion: { filter: "", origin: "none", reason: null },
     queryAnswers: {}, dashboards: {}, readyMade: {}, labelValues: {}, catalogs: {},
     ...emptyAlertsState(),
     ...seed,
+    install: { ...emptyInstallState(), ...seed.install },
   };
   const requests: FakeMonitoringApi["requests"] = [];
   let counter = 0;
@@ -401,6 +439,7 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
 
     // --- dashboards, ready-made views, batches and label values
     if (a === "dashboards") return dashboardRoute(method, seg, query, body);
+    if (a === "install") return installRoute(method, seg.slice(1), body);
     if (a === "alerts") {
       const found = (id: string) => (state.dashboards[id] ? { version: state.dashboards[id].out.version, out: dashboardOut(state.dashboards[id]) } : undefined);
       return alertsRoute({ state, nextId, project, group: (id) => state.groups.find((g) => g.id === id) }, method, seg.slice(1), query, body, found);
@@ -638,6 +677,56 @@ export function installFakeMonitoringApi(seed: Partial<FakeMonitoringState> = {}
     if (is("POST", "query")) {
       const got = answer(body as unknown as QueryRequest);
       return "response" in got ? json(got.response) : queryError(got.status, got.error.code, got.error.message);
+    }
+    return refuse("Not found", 404);
+  }
+
+  // --- install
+
+  const isRefusal = (x: object): x is FakeRefusal => "error" in x && "status" in x;
+  const seeded = (x: object) => (isRefusal(x) ? refuse(x.error.message, x.status) : json(x));
+  /** The next answer of a queue: used in order, the last one repeats. */
+  const next = <T,>(queue: T[]): T | undefined => (queue.length > 1 ? queue.shift() : queue[0]);
+
+  function installRoute(method: string, seg: string[], body: Obj): Response {
+    const inst = state.install;
+    const [x, id, y, z] = seg;
+    if (method === "GET" && seg.length === 1 && x === "tools") return json(inst.tools);
+    if (method === "POST" && seg.length === 1 && x === "plan") {
+      const out = next(inst.plans);
+      return out ? seeded(out) : refuse("This fake has no install plan seeded.", 500);
+    }
+    if (method === "POST" && seg.length === 1 && x === "generate") {
+      if (inst.generated) return seeded(inst.generated);
+      const docker = body.kind !== "servers";
+      const out: GeneratedOut = {
+        kind: docker ? "docker" : "servers",
+        files: [docker
+          ? { name: "docker-compose.yml", content: "services: {}\n", executable: false }
+          : { name: "install-monitoring.sh", content: "#!/usr/bin/env bash\n", executable: true }],
+        urls: { prometheus: `http://${String(body.address)}:9090`, alertmanager: `http://${String(body.address)}:9093`, loki: `http://${String(body.address)}:3100` },
+        ports: [9090, 9093, 3100],
+      };
+      return json(out);
+    }
+    if (method === "POST" && seg.length === 1 && x === "probe") {
+      const tools = Array.isArray(body.tools) ? (body.tools as { type: ProbeResultOut["type"]; url: string }[]) : [];
+      return json({
+        results: tools.map((t) => ({ type: t.type, url: t.url, ok: false, version: null, message: "Nothing answered at that address.", ...inst.probe[t.url] })),
+      });
+    }
+    if (x !== "clusters" || !id) return refuse("Not found", 404);
+    if (method === "GET" && seg.length === 2) {
+      const found = inst.status[id];
+      return found ? json({ ...found, tools: inst.tools }) : refuse(CLUSTER_GONE, 404);
+    }
+    if (method === "POST" && seg.length === 4 && y === "uninstall" && z === "plan") {
+      const out = next(inst.uninstallPlans);
+      return out ? seeded(out) : refuse(NOT_INSTALLED, 404);
+    }
+    if (method === "POST" && seg.length === 4 && y === "contacts" && z === "sync") {
+      const out = inst.contacts[id];
+      return out ? seeded(out) : refuse(NOT_INSTALLED, 404);
     }
     return refuse("Not found", 404);
   }

@@ -543,6 +543,21 @@ describe("monitoring entries", () => {
     for (const [, , label] of pairs) expect(labels).toContain(label);
   });
 
+  it("install and uninstall read in words", async () => {
+    serve(() => ({ records: [
+      record(2, { action: "uninstall", namespace: null, kind: "namespaces", name: "monitoring", cluster_name: "kind-dev", provider: "kind", message: null }),
+      record(1, { action: "install", namespace: null, kind: "namespaces", name: "monitoring", cluster_name: "kind-dev", provider: "kind", message: null }),
+    ], next_before: null }));
+    show();
+    expect(await screen.findByRole("row", { name: /Uninstalled/ })).toBeTruthy();
+    const installed = screen.getAllByRole("row").filter((r) => /Installed/.test(r.textContent ?? "") && !/Uninstalled/.test(r.textContent ?? ""));
+    expect(installed).toHaveLength(1);
+    expect(within(installed[0]).getByText("monitoring")).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    expect(labels.slice(labels.indexOf("Created"), labels.indexOf("Created") + 4)).toEqual(["Created", "Installed", "Uninstalled", "Deleted"]);
+  });
+
   it("the action filter offers the monitoring actions", async () => {
     serve(() => ({ records: [record(1)], next_before: null }));
     show();

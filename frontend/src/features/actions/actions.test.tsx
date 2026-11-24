@@ -1968,3 +1968,102 @@ describe("codemirror", () => {
     expect(screen.queryByText("Loading the diff…")).toBeNull();
   });
 });
+
+describe("install and uninstall reviews", () => {
+  const install = (over: Partial<Plan> = {}) =>
+    plan({
+      plan_id: "ip1", action: "install", target: { cluster_id: "c1", kind_key: "namespaces", namespace: null, name: "monitoring" },
+      kind: "Namespace", title: "Install monitoring tools in monitoring", summary: ["Creates the namespace monitoring."], apply_label: "Install",
+      ...over,
+    });
+
+  it("options render for any action and review again with params", async () => {
+    const onReview = vi.fn(() => Promise.resolve());
+    const results: boolean[] = [];
+    const seen: boolean[] = [];
+    wrap(
+      <ActionDialog
+        plan={install()}
+        onDone={vi.fn()}
+        onReview={onReview}
+        options={({ busy, review }) => {
+          seen.push(busy);
+          return (
+            <label>
+              Keep data for
+              <input
+                disabled={busy}
+                onKeyDown={(e) => { if (e.key === "Enter") void review({ retention_days: 14 }).then((ok) => results.push(ok)); }}
+              />
+            </label>
+          );
+        }}
+      />,
+    );
+    // Focus opens on Install, as for any review that isn't destructive.
+    expect(document.activeElement).toBe(button("Install", dialog()));
+    const field = screen.getByLabelText("Keep data for");
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(results).toEqual([true]));
+    expect(onReview).toHaveBeenCalledWith({ retention_days: 14 });
+    // Busy while it planned again, idle after.
+    expect(seen).toContain(true);
+    expect(seen[seen.length - 1]).toBe(false);
+    // No drain options for an install; a drain with options shows the slot instead of its own.
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    cleanup();
+    wrap(<ActionDialog plan={plan({ action: "drain", apply_label: "Drain" })} onDone={vi.fn()} onReview={onReview} options={() => <p>Own options</p>} />);
+    expect(screen.getByText("Own options")).toBeTruthy();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("a refused review from the options says why and keeps the dialog", async () => {
+    const onReview = vi.fn(() => Promise.reject(new Error("Keep data for 1 to 90 days.")));
+    let again: ((p: Record<string, unknown>) => Promise<boolean>) | null = null;
+    wrap(<ActionDialog plan={install()} onDone={vi.fn()} onReview={onReview} options={({ review }) => { again = review; return null; }} />);
+    let ok: boolean | null = null;
+    await act(async () => { ok = await again!({ retention_days: 0 }); });
+    expect(ok).toBe(false);
+    expect(within(dialog()).getByRole("alert").textContent).toBe("Keep data for 1 to 90 days.");
+    expect(within(dialog()).queryByRole("button", { name: "Review again" })).toBeNull();
+  });
+
+  it("renderProgress replaces the drain progress", async () => {
+    const calls = serve({ "POST /api/actions/ip1/apply": [ok({ outcome: "started", message: "Installing the monitoring tools in monitoring…", job_id: "j9", audit_id: 3 })] });
+    const onDone = vi.fn();
+    wrap(
+      <ActionDialog
+        plan={install()}
+        onDone={onDone}
+        onReview={vi.fn()}
+        renderProgress={({ jobId, onClose, onOutcome }) => (
+          <div>
+            <p>Install job {jobId}</p>
+            <button type="button" onClick={() => { onOutcome({ message: "Installed.", tone: "ok" }); onClose(); }}>Done</button>
+          </div>
+        )}
+      />,
+    );
+    fireEvent.click(button("Install", dialog()));
+    expect(await screen.findByText("Install job j9")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel drain" })).toBeNull();
+    expect(screen.queryByText(/pods evicted/)).toBeNull();
+    expect(calls.filter((c) => c.url.startsWith("/api/actions/jobs"))).toEqual([]);
+    fireEvent.click(button("Done", dialog()));
+    expect(onDone).toHaveBeenCalledWith({ message: "Installed.", tone: "ok" });
+  });
+
+  it("an uninstall review opens on Cancel", () => {
+    expect(reviewFocus({ action: "uninstall", blocked: [], confirm_text: null })).toBe("cancel");
+    expect(reviewFocus({ action: "uninstall", blocked: [], confirm_text: "monitoring" })).toBe("cancel");
+    expect(reviewFocus({ action: "install", blocked: [], confirm_text: null })).toBe("apply");
+    expect(reviewFocus({ action: "install", blocked: [], confirm_text: "monitoring" })).toBe("typed");
+    wrap(<ActionDialog plan={install({ action: "uninstall", apply_label: "Uninstall", title: "Uninstall monitoring tools" })} onDone={vi.fn()} onReview={vi.fn()} />);
+    expect(document.activeElement).toBe(button("Cancel", dialog()));
+    expect(button("Uninstall", dialog()).className).toMatch(/danger/);
+    cleanup();
+    wrap(<ActionDialog plan={install()} onDone={vi.fn()} onReview={vi.fn()} />);
+    expect(button("Install", dialog()).className).not.toMatch(/danger/);
+    expect(within(dialog()).getByTestId("action-where").textContent).toBe("aks-prod-east / Namespace monitoring");
+  });
+});

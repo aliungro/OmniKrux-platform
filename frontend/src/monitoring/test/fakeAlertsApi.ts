@@ -35,6 +35,8 @@ export interface FakeAlertsState {
   ruleChanges: AlertChangeOut[];
   /** What a rule delete answers as `changes`. */
   ruleDeleteChanges: AlertChangeOut[];
+  /** What a contact-point PATCH or DELETE answers as `alert_changes`. */
+  contactPointChanges: AlertChangeOut[];
   /** By project or group id: the rules its delete review names (an empty list is left out, as the server does). */
   ownerRules: Record<string, { alert_rules?: { id: string; name: string }[]; cluster_rules?: { id: string; name: string }[] }>;
 }
@@ -74,6 +76,7 @@ export function emptyAlertsState(): FakeAlertsState {
     alertChangesOnSave: [],
     ruleChanges: [],
     ruleDeleteChanges: [],
+    contactPointChanges: [],
     ownerRules: {},
   };
 }
@@ -227,14 +230,14 @@ export function alertsRoute(
           if (value === "") found.secrets_set = found.secrets_set.filter((k) => k !== key);
           else if (typeof value === "string" && !found.secrets_set.includes(key)) found.secrets_set.push(key);
         }
-        return json(found);
+        return json({ ...found, alert_changes: state.contactPointChanges });
       }
       if (is("POST", "contact-points", b, "test")) return json({ ok: true, message: SENT });
       if (is("GET", "contact-points", b, "delete-review")) return json({ id: found.id, name: found.name, used_by: found.used_by, token: TOKEN });
       if (is("DELETE", "contact-points", b)) {
         if (query.get("token") !== TOKEN) return refuse(REVIEW_CHANGED, 409);
         state.contactPoints = points.filter((p) => p !== found);
-        return new Response(null, { status: 204 });
+        return json({ alert_changes: state.contactPointChanges });
       }
     }
   }
