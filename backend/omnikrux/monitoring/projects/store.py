@@ -17,11 +17,13 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnikrux.clusters.models import ClusterRecord
 from omnikrux.monitoring.alerts.store import AlertStore
 from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.models import (
@@ -49,6 +51,7 @@ from omnikrux.monitoring.projects.types import (
     RulesInCluster,
     SourceDeleteReview,
     SourceRef,
+    ToolsStayRef,
     UnknownGroup,
     UnknownProject,
     review_token,
@@ -61,6 +64,9 @@ from omnikrux.monitoring.sources.types import (
     SourceConfig,
     clean_name,
 )
+
+if TYPE_CHECKING:
+    from omnikrux.monitoring.install.store import InstallStore
 
 
 @dataclass(frozen=True)
@@ -316,12 +322,31 @@ class ProjectStore:
 
     # -- reviews and deletes -------------------------------------------------------------------
 
+    @staticmethod
+    async def _tools_stay(
+        session: AsyncSession, cluster_id: str | None, installs: InstallStore | None
+    ) -> ToolsStayRef | None:
+        """The tools OmniKrux installed in the project's cluster (read in the review's session),
+        while OmniKrux still knows that cluster."""
+        if installs is None or cluster_id is None:
+            return None
+        record = await installs.get(cluster_id, session=session)
+        if record is None:
+            return None
+        name = await session.scalar(
+            select(ClusterRecord.name).where(ClusterRecord.id == cluster_id)
+        )
+        if name is None:
+            return None
+        return ToolsStayRef(cluster_id=cluster_id, cluster_name=name, namespace=record.namespace)
+
     async def _review(
         self,
         session: AsyncSession,
         id: str,
         dashboards: DashboardStore | None = None,
         alerts: AlertStore | None = None,
+        installs: InstallStore | None = None,
     ) -> ProjectDeleteReview:
         project = await _project_row(session, id)
         linked = set(
@@ -376,6 +401,7 @@ class ProjectStore:
             token="",
             alert_rules=alert_rules,
             cluster_rules=cluster_rules,
+            tools_stay=await self._tools_stay(session, project.cluster_id, installs),
         )
         return _sealed(review)
 
@@ -384,10 +410,12 @@ class ProjectStore:
         id: str,
         dashboards: DashboardStore | None = None,
         alerts: AlertStore | None = None,
+        installs: InstallStore | None = None,
     ) -> ProjectDeleteReview:
-        """What deleting the project would do. UnknownProject if it doesn't exist."""
+        """What deleting the project would do. UnknownProject if it doesn't exist. With
+        `installs`, it says which tools OmniKrux installed in the project's cluster stay."""
         async with self._sessionmaker() as session:
-            return await self._review(session, id, dashboards, alerts)
+            return await self._review(session, id, dashboards, alerts, installs)
 
     async def delete(
         self,
@@ -396,12 +424,15 @@ class ProjectStore:
         sources: SourceStore,
         dashboards: DashboardStore | None = None,
         alerts: AlertStore | None = None,
+        installs: InstallStore | None = None,
     ) -> ProjectDeleteReview:
         """Delete the project, the sources only it used and created, its links, its group
         memberships, its alert rules (its own and its dashboards', with their targets), its
         targets in group rules and its dashboards with their versions, in one transaction.
         ReviewChanged (nothing changed) when the review no longer matches `token`;
-        RulesInCluster (nothing changed) while a rule of it is still applied in a cluster."""
+        RulesInCluster (nothing changed) while a rule of it is still applied in a cluster.
+        Tools OmniKrux installed in the project's cluster are never touched (`installs` is only
+        read, for the review's token)."""
         async with self._sessionmaker.begin() as session:
             # Write first: SQLite then holds the write lock, so nothing can change in between.
             locked = await session.scalar(
@@ -412,7 +443,7 @@ class ProjectStore:
             )
             if locked is None:
                 raise UnknownProject(id)
-            review = await self._review(session, id, dashboards, alerts)
+            review = await self._review(session, id, dashboards, alerts, installs)
             if review.token != token:
                 raise ReviewChanged()
             if review.cluster_rules:

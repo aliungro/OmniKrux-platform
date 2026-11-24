@@ -1,16 +1,19 @@
-"""Routes under /api/monitoring/install: whether the pinned tools are here, and the install
-review (a server-built plan the browser applies through `POST /api/actions/{plan_id}/apply`)."""
+"""Routes under /api/monitoring/install: whether the pinned tools are here, the install review
+and the uninstall review (server-built plans the browser applies through
+`POST /api/actions/{plan_id}/apply`), and what a cluster's tools look like now."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, replace
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from omnikrux.actions.pipeline import PlanOut, Target, make_plan
 from omnikrux.audit.store import actor_of
+from omnikrux.monitoring.install import messages
 from omnikrux.monitoring.install.action import KIND_KEY, InstallAction, ordered
 from omnikrux.monitoring.install.pins import CHARTS
 from omnikrux.monitoring.install.settings import (
@@ -18,9 +21,19 @@ from omnikrux.monitoring.install.settings import (
     InstallSettings,
     validate_settings,
 )
+from omnikrux.monitoring.install.status import (
+    InstallStatus,
+    read_status,
+    shipped,
+    update_available,
+)
+from omnikrux.monitoring.install.store import InstallRecord, InstallState
+from omnikrux.monitoring.install.uninstall import UninstallAction
+from omnikrux.monitoring.projects.api import SourceRefOut
 from omnikrux.monitoring.projects.store import UnknownProject
 from omnikrux.monitoring.query.run import PROJECT_GONE
 from omnikrux.monitoring.services import MonitoringServices
+from omnikrux.monitoring.sources.api import FoundToolOut
 from omnikrux.monitoring.sources.discovery import CLUSTER_GONE
 from omnikrux.resources.kinds import object_name_problem
 
@@ -141,13 +154,73 @@ class InstallPlanOut(BaseModel):
     facts: FactsOut
 
 
+class ContactsOut(BaseModel):
+    """How OmniKrux's contact points stand in its own Alertmanager (Task 8; `none` until then)."""
+
+    state: Literal["none", "in_sync", "needs_review", "failed"]
+    message: str | None
+    applied_at: datetime | None
+    contact_points: int
+    rules: int
+
+
+class InstallOut(BaseModel):
+    namespace: str
+    components: list[Component]
+    settings: InstallSettingsOut
+    state: InstallState
+    message: str | None
+    job_id: str | None
+    charts: dict[str, str]  # chart key -> the version installed
+    shipped: dict[str, str]  # chart key -> the version this OmniKrux ships
+    update_available: bool
+    sources: dict[str, SourceRefOut | None]  # prometheus, alertmanager, loki
+    contacts: ContactsOut
+
+
+class WorkloadOut(BaseModel):
+    kind: str
+    name: str
+    label: str
+    ready: int
+    desired: int
+    why: str | None
+
+
+class ReleaseOut(BaseModel):
+    release: str
+    label: str
+    chart: str
+    version: str | None
+    status: str  # Helm's, or "missing" when Helm has no record of it
+    revision: int | None
+    deployed_at: datetime | None
+    workloads: list[WorkloadOut]
+
+
+class InstallStatusOut(BaseModel):
+    cluster_id: str
+    cluster_name: str
+    tools: ToolsOut
+    install: InstallOut | None
+    releases: list[ReleaseOut]
+    others: list[FoundToolOut]  # Prometheus, Loki and Alertmanager the user runs elsewhere
+    checked_at: datetime
+    problem: str | None
+
+
+class UninstallPlanIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    delete_data: bool = False
+
+
 def _services(request: Request) -> MonitoringServices:
     return request.app.state.monitoring
 
 
-@router.get("/tools")
-async def install_tools(request: Request) -> ToolsOut:
-    status = await _services(request).install_tools.status()
+async def _tools_out(services: MonitoringServices) -> ToolsOut:
+    status = await services.install_tools.status()
     return ToolsOut(
         available=status.available,
         message=status.message,
@@ -157,6 +230,131 @@ async def install_tools(request: Request) -> ToolsOut:
             for key, pin in CHARTS.items()
         ],
     )
+
+
+def contacts_out(record: InstallRecord) -> ContactsOut:
+    """Nothing synced yet (Task 8 reads the record's contact-point digest)."""
+    return ContactsOut(state="none", message=None, applied_at=None, contact_points=0, rules=0)
+
+
+async def _install_out(services: MonitoringServices, record: InstallRecord) -> InstallOut:
+    sources: dict[str, SourceRefOut | None] = {}
+    for kind in ("prometheus", "alertmanager", "loki"):
+        source_id = getattr(record, f"{kind}_source_id")
+        try:
+            source = await services.sources.get(source_id) if source_id else None
+        except KeyError:
+            source = None
+        sources[kind] = SourceRefOut(id=source.id, name=source.name) if source else None
+    return InstallOut(
+        namespace=record.namespace,
+        components=list(record.components),
+        settings=InstallSettingsOut.of(record.settings),
+        state=record.state,
+        message=record.message,
+        job_id=record.job_id,
+        charts=dict(record.charts),
+        shipped=shipped(record),
+        update_available=update_available(record),
+        sources=sources,
+        contacts=contacts_out(record),
+    )
+
+
+async def _status_out(services: MonitoringServices, status: InstallStatus) -> InstallStatusOut:
+    record = status.record
+    return InstallStatusOut(
+        cluster_id=status.cluster_id,
+        cluster_name=status.cluster_name,
+        tools=await _tools_out(services),
+        install=await _install_out(services, record) if record is not None else None,
+        releases=[
+            ReleaseOut(
+                release=r.release,
+                label=r.label,
+                chart=r.chart,
+                version=r.version,
+                status=r.status,
+                revision=r.revision,
+                deployed_at=r.deployed_at,
+                workloads=[
+                    WorkloadOut(
+                        kind=w.kind,
+                        name=w.name,
+                        label=w.label,
+                        ready=w.ready,
+                        desired=w.desired,
+                        why=w.why,
+                    )
+                    for w in r.workloads
+                ],
+            )
+            for r in status.releases
+        ],
+        others=[
+            FoundToolOut(
+                type=t.type,
+                state=t.state,
+                namespace=t.namespace,
+                service=t.service,
+                port=t.port,
+                scheme=t.scheme,
+                version=t.version,
+                message=t.message,
+                existing_source_id=t.existing_source_id,
+                detail=t.detail,
+            )
+            for t in status.others
+        ],
+        checked_at=status.checked_at,
+        problem=status.problem,
+    )
+
+
+@router.get("/clusters/{cluster_id}")
+async def install_status(cluster_id: str, request: Request) -> InstallStatusOut:
+    """The cluster's monitoring tools, read live now (`checked_at`); a read that fails gives
+    `problem` in words and no releases."""
+    state = request.app.state
+    services = _services(request)
+    try:
+        status = await read_status(
+            services, cluster_id, connections=state.connections, registry=state.registry
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=CLUSTER_GONE) from None
+    return await _status_out(services, status)
+
+
+@router.post("/clusters/{cluster_id}/uninstall/plan")
+async def plan_uninstall(
+    cluster_id: str, request: Request, body: UninstallPlanIn | None = None
+) -> PlanOut:
+    """The uninstall review of what OmniKrux installed in the cluster."""
+    state = request.app.state
+    services = _services(request)
+    try:
+        await state.registry.get(cluster_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=CLUSTER_GONE) from None
+    record = await services.installs.get(cluster_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=messages.NOT_INSTALLED)
+    return await make_plan(
+        state,
+        actor=actor_of(request),
+        action="uninstall",
+        handler=UninstallAction(services, state),
+        target=Target(
+            cluster_id=cluster_id, kind_key=KIND_KEY, namespace=None, name=record.namespace
+        ),
+        params={"delete_data": body.delete_data if body is not None else False},
+    )
+
+
+@router.get("/tools")
+async def install_tools(request: Request) -> ToolsOut:
+    return await _tools_out(_services(request))
 
 
 @router.post("/plan")

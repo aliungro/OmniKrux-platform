@@ -108,6 +108,16 @@ class GroupRef:
 
 
 @dataclass(frozen=True)
+class ToolsStayRef:
+    """The monitoring tools OmniKrux installed in the project's cluster: deleting the project
+    leaves them installed (uninstalling is its own action)."""
+
+    cluster_id: str
+    cluster_name: str
+    namespace: str
+
+
+@dataclass(frozen=True)
 class ProjectDeleteReview:
     project_id: str
     name: str
@@ -122,6 +132,8 @@ class ProjectDeleteReview:
     alert_rules: tuple[RuleRef, ...] = ()
     # Rules with a target of this project still applied in a cluster: they block the delete.
     cluster_rules: tuple[RuleRef, ...] = ()
+    # The tools OmniKrux installed in the project's cluster, which stay (None: none there).
+    tools_stay: ToolsStayRef | None = None
 
 
 @dataclass(frozen=True)
@@ -151,10 +163,11 @@ class SourceDeleteReview:
 
 def review_token(review_without_token: dict) -> str:
     """A fingerprint of what a review shows: it changes whenever the review would. An empty
-    `dashboards`, `alert_rules` or `cluster_rules` list stays out of it, so a review without
-    them keeps the fingerprint it had before owners had dashboards and alert rules."""
+    `dashboards`, `alert_rules` or `cluster_rules` list, and no `tools_stay`, stay out of it, so a
+    review without them keeps the fingerprint it had before owners had dashboards, alert rules
+    and installed tools."""
     fields = dict(review_without_token)
-    for key in ("dashboards", "alert_rules", "cluster_rules"):
+    for key in ("dashboards", "alert_rules", "cluster_rules", "tools_stay"):
         if key in fields and not fields[key]:
             del fields[key]
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()

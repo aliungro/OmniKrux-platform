@@ -1,6 +1,7 @@
 """Helpers for the install job's tests (and Tasks 7–8): plan an install through the API, wait for
 a job, make the installed workloads ready on the fake Kubernetes API, and a FakeHelm whose
-upgrades leave Helm's release records on that API, as the real Helm does."""
+upgrades leave Helm's release records on that API and whose uninstalls take them (and the
+workloads) away, as the real Helm does."""
 
 import asyncio
 import time
@@ -12,7 +13,7 @@ import yaml
 from omnikrux.monitoring.install.helm import HelmResult
 from omnikrux.monitoring.install.pins import CHARTS
 from omnikrux.monitoring.install.values import RELEASES
-from tests.fakekube import FakeKubeApi, helm_release_secret, storage_class
+from tests.fakekube import FakeKubeApi, FakeResource, helm_release_secret, storage_class
 from tests.monitoring.fake_helm import FakeHelm
 
 PLAN = "/api/monitoring/install/plan"
@@ -92,6 +93,78 @@ def helm_writes_releases(
         return HelmResult(0, f'Release "{release}" has been upgraded.\n', "")
 
     fake_helm.script["upgrade"] = upgrade
+
+
+def helm_uninstall_removes(
+    fake_helm: FakeHelm, fake_api: FakeKubeApi, *, fail: dict[str, str] | None = None
+) -> None:
+    """Script `uninstall`: the release's records and the workloads it ran leave the fake API (as
+    Helm and the garbage collector do); a release with no record answers Helm's not-found error;
+    a release in `fail` answers `fail[release]` (its stderr) with exit code 1."""
+    failing = fail or {}
+
+    async def uninstall(args: list[str]) -> HelmResult:
+        release, namespace = args[1], _namespace(args)
+        if release in failing:
+            return HelmResult(1, "", failing[release])
+        prefix = f"sh.helm.release.v1.{release}.v"
+        records = [
+            k for k in fake_api.objects["secrets"] if k[0] == namespace and k[1].startswith(prefix)
+        ]
+        if not records:
+            return HelmResult(
+                1, "", f"Error: uninstall: Release not loaded: {release}: release: not found\n"
+            )
+        for key in records:
+            del fake_api.objects["secrets"][key]
+        for specs in RELEASES.values():
+            for spec in specs:
+                if spec.release == release:
+                    for w in spec.workloads:
+                        fake_api.objects[_KIND_KEYS[w.kind]].pop((namespace, w.name), None)
+        fake_helm.releases.pop((release, namespace), None)
+        return HelmResult(0, f'release "{release}" uninstalled\n', "")
+
+    fake_helm.script["uninstall"] = uninstall
+
+
+def data_volume(fake_api: FakeKubeApi, namespace: str, name: str, instance: str) -> None:
+    """A PersistentVolumeClaim labelled as a StatefulSet of `instance` labels its claims."""
+    fake_api.objects["persistentvolumeclaims"][(namespace, name)] = {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-pvc-{name}",
+            "labels": {"app.kubernetes.io/instance": instance},
+        },
+        "spec": {"accessModes": ["ReadWriteOnce"]},
+    }
+
+
+def contact_settings(fake_api: FakeKubeApi, namespace: str, *, ours: bool = True) -> None:
+    """OmniKrux's AlertmanagerConfig and its Secret (served kind added), labelled as OmniKrux's
+    unless `ours` is False."""
+    group = "monitoring.coreos.com"
+    if not any(r.plural == "alertmanagerconfigs" for r in fake_api.resources):
+        fake_api.resources.append(
+            FakeResource(group, "v1alpha1", "alertmanagerconfigs", "AlertmanagerConfig", True)
+        )
+    labels = {"app.kubernetes.io/managed-by": "omnikrux"} if ours else {}
+    meta = {"name": "omnikrux-contact-points", "namespace": namespace, "labels": labels}
+    fake_api.objects[f"alertmanagerconfigs.{group}"][(namespace, "omnikrux-contact-points")] = {
+        "apiVersion": f"{group}/v1alpha1",
+        "kind": "AlertmanagerConfig",
+        "metadata": {**meta, "uid": "u-amc"},
+        "spec": {"route": {"receiver": "x"}, "receivers": [{"name": "x"}]},
+    }
+    fake_api.objects["secrets"][(namespace, "omnikrux-contact-points")] = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {**meta, "uid": "u-amc-secret"},
+        "data": {},
+    }
 
 
 def _labels(release: str, name: str) -> dict[str, str]:

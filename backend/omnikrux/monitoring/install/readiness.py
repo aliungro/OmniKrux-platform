@@ -155,23 +155,53 @@ async def _why_not(api: ApiClient, namespace: str, obj: dict) -> str:
     return messages.NOT_READY_YET
 
 
-async def _look(api: ApiClient, namespace: str, workload: WorkloadRef) -> _Seen:
-    path = (
+@dataclass(frozen=True)
+class Look:
+    """One read of a workload: `found` True (it exists: `obj`), False (the cluster says it isn't
+    there) or None (it couldn't be read: `why` says so); `ready` as `is_ready` judges it; `why`
+    it isn't ready, in words."""
+
+    found: bool | None
+    obj: dict | None
+    ready: bool
+    why: str
+
+
+def workload_path(namespace: str, workload: WorkloadRef) -> str:
+    return (
         f"/apis/apps/v1/namespaces/{quote(namespace, safe='')}/{_PLURAL[workload.kind]}/"
         f"{quote(workload.name, safe='')}"
     )
+
+
+async def look(api: ApiClient, namespace: str, workload: WorkloadRef) -> Look:
+    """Read the workload by name, and why it isn't ready (its first Pod's reason)."""
     try:
-        obj = await call_json(api, "GET", path, timeout=REQUEST_TIMEOUT)
+        obj = await call_json(
+            api, "GET", workload_path(namespace, workload), timeout=REQUEST_TIMEOUT
+        )
     except ApiException as exc:
         if exc.status == 404:
-            return _Seen(False, messages.NOT_CREATED)
-        return _Seen(False, _read_failed(exc))
+            return Look(False, None, False, messages.NOT_CREATED)
+        return Look(None, None, False, _read_failed(exc))
+    if not isinstance(obj, dict):
+        return Look(None, None, False, messages.READ_NO_ANSWER)
     if is_ready(workload.kind, obj):
-        return _Seen(True, "")
+        return Look(True, obj, True, "")
     try:
-        return _Seen(False, _trim(await _why_not(api, namespace, obj)))
+        return Look(True, obj, False, _trim(await _why_not(api, namespace, obj)))
     except Exception as exc:  # noqa: BLE001 (a failed read only means "not ready yet")
-        return _Seen(False, _read_failed(exc))
+        return Look(True, obj, False, _read_failed(exc))
+
+
+def read_failed(exc: Exception) -> str:
+    """A failed read in words (see `_read_failed`)."""
+    return _read_failed(exc)
+
+
+async def _look(api: ApiClient, namespace: str, workload: WorkloadRef) -> _Seen:
+    seen = await look(api, namespace, workload)
+    return _Seen(seen.ready, seen.why)
 
 
 async def _look_all(

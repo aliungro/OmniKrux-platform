@@ -376,6 +376,44 @@ async def test_deleting_a_project_takes_its_dashboards(monitoring_app):
     ]
 
 
+async def test_project_delete_never_uninstalls(installed_cluster, monitoring_app, fake_helm):
+    """Deleting a project in a cluster with installed tools: its review says they stay, and the
+    delete takes only the project's links (no Helm, the install record and sources remain)."""
+    http, app = monitoring_app
+    cluster = installed_cluster.cluster_id
+    installed = installed_cluster.sources
+    shop = await set_up(
+        http,
+        "Shop",
+        [{"source_id": installed["prometheus"]}, {"source_id": installed["loki"]}],
+        kind="kubernetes",
+        cluster_id=cluster,
+    )
+    review = (await http.get(f"{API}/projects/{shop['id']}/delete-review")).json()
+    name = (await app.state.registry.get(cluster)).name
+    assert review["tools_stay"] == {
+        "cluster_id": cluster,
+        "cluster_name": name,
+        "namespace": "monitoring",
+    }
+    assert review["sources_removed"] == [] and len(review["sources_unlinked"]) == 2
+    calls = len(fake_helm.calls)
+
+    gone = await http.delete(f"{API}/projects/{shop['id']}", params={"token": review["token"]})
+    assert gone.status_code == 204, gone.text
+    assert len(fake_helm.calls) == calls
+    record = await app.state.monitoring.installs.get(cluster)
+    assert record is not None and record.state == "installed"
+    ours = {
+        s["id"] for s in (await http.get(f"{API}/sources")).json() if s["installed_by_omnikrux"]
+    }
+    assert ours == set(installed.values())
+    assert (await http.get(f"{API}/projects/{shop['id']}")).status_code == 404
+    for source_id in ours:  # the project's links went with it
+        assert await app.state.monitoring.projects.projects_using(source_id) == []
+    assert not [r for r in await monitoring_records(http) if r["action"] == "source_remove"]
+
+
 async def test_no_audit_no_project_delete(monitoring_app, monkeypatch):
     http, app = monitoring_app
     shop = await set_up(http, "Shop", [new("Own")])

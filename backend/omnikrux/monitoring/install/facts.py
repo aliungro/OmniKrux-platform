@@ -165,7 +165,7 @@ def decode_release(secret: dict) -> ReleaseRef:
     name = str(labels.get("name") or "")
     status = str(labels.get("status") or "")
     data = secret.get("data") if isinstance(secret.get("data"), dict) else {}
-    owner, chart_version = None, None
+    owner, chart_version, deployed_at = None, None, None
     try:
         release = _unpack(str(data.get("release") or ""))
     except Exception:  # noqa: BLE001 (any record that can't be read is not ours)
@@ -182,13 +182,22 @@ def decode_release(secret: dict) -> ReleaseRef:
         info = release.get("info") if isinstance(release.get("info"), dict) else {}
         if not status and isinstance(info.get("status"), str):
             status = info["status"]
+        if isinstance(info.get("last_deployed"), str):
+            deployed_at = info["last_deployed"]
     return ReleaseRef(
         name=name,
         revision=_revision(secret),
         status=status,
         owner_label=owner,
         chart_version=chart_version,
+        deployed_at=deployed_at,
     )
+
+
+async def read_releases(api: ApiClient, namespace: str) -> dict[str, ReleaseRef]:
+    """The latest revision of each release with one of OmniKrux's names in the namespace (a
+    valid namespace name), read from Helm's own records."""
+    return await _releases(api, namespace)
 
 
 async def _releases(api: ApiClient, namespace: str) -> dict[str, ReleaseRef]:

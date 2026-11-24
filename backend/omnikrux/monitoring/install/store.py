@@ -121,9 +121,16 @@ class InstallStore:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
 
-    async def get(self, cluster_id: str) -> InstallRecord | None:
-        async with self._sessionmaker() as session:
+    async def get(
+        self, cluster_id: str, *, session: AsyncSession | None = None
+    ) -> InstallRecord | None:
+        """The cluster's record; read in `session` when given (a review that must see the
+        record in its own transaction)."""
+        if session is not None:
             row = await _by_cluster(session, cluster_id)
+            return _record(row) if row is not None else None
+        async with self._sessionmaker() as own:
+            row = await _by_cluster(own, cluster_id)
             return _record(row) if row is not None else None
 
     async def list(self) -> list[InstallRecord]:
@@ -218,11 +225,18 @@ class InstallStore:
             row.updated_at = now()
             return _record(row)
 
-    async def remove(self, cluster_id: str) -> None:
+    async def remove(self, cluster_id: str, *, job_id: str | None = None) -> bool:
+        """Delete the cluster's record. With `job_id`, only while that job's uninstall holds it
+        (a newer job's record is never removed). Whether a record was removed."""
         async with self._sessionmaker.begin() as session:
+            await lock_first(session)
             row = await _by_cluster(session, cluster_id)
-            if row is not None:
-                await session.delete(row)
+            if row is None:
+                return False
+            if job_id is not None and (row.job_id != job_id or row.state != "uninstalling"):
+                return False
+            await session.delete(row)
+            return True
 
     async def set_contacts(
         self, cluster_id: str, *, digest: str | None, message: str | None, at: datetime | None

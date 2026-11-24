@@ -10,6 +10,17 @@ from omnikrux.monitoring.install.pins import ChartKey
 from omnikrux.monitoring.install.settings import Component, InstallSettings, Resources
 
 MANAGED_BY = "omnikrux"
+# OmniKrux's contact-point settings in its own Alertmanager: the AlertmanagerConfig and the
+# Secret it reads share this name (Task 8 writes them; uninstalling removes them).
+AMC_NAME = "omnikrux-contact-points"
+# The `app.kubernetes.io/instance` label of each component's data volumes (a StatefulSet gives
+# its claims its selector's labels): Prometheus and Alertmanager (made by the Operator), Loki.
+DATA_INSTANCES: Mapping[Component, tuple[str, ...]] = MappingProxyType(
+    {
+        "metrics": ("omnikrux-metrics-prometheus", "omnikrux-metrics-alertmanager"),
+        "logs": ("omnikrux-loki",),
+    }
+)
 
 
 @dataclass(frozen=True)

@@ -177,9 +177,16 @@ class RuleRefOut(BaseModel):
     name: str
 
 
+class ToolsStayRefOut(BaseModel):
+    cluster_id: str
+    cluster_name: str
+    namespace: str
+
+
 class ProjectDeleteReviewOut(BaseModel):
     """`alert_rules` and `cluster_rules` are left out of the answer when empty (read them as
-    `[]`), as they are left out of the token: a review without them reads as it always did."""
+    `[]`), and `tools_stay` when there are none, as they are left out of the token: a review
+    without them reads as it always did."""
 
     project_id: str
     name: str
@@ -193,6 +200,8 @@ class ProjectDeleteReviewOut(BaseModel):
     alert_rules: list[RuleRefOut] = []
     # Rules still applied in a cluster for this project: each is removed first, by its review.
     cluster_rules: list[RuleRefOut] = []
+    # The monitoring tools OmniKrux installed in the project's cluster: they stay installed.
+    tools_stay: ToolsStayRefOut | None = None
 
 
 class GroupDeleteReviewOut(BaseModel):
@@ -408,6 +417,15 @@ def _review_out(review: ProjectDeleteReview) -> ProjectDeleteReviewOut:
         token=review.token,
         alert_rules=_rule_outs(review.alert_rules),
         cluster_rules=_rule_outs(review.cluster_rules),
+        tools_stay=(
+            ToolsStayRefOut(
+                cluster_id=review.tools_stay.cluster_id,
+                cluster_name=review.tools_stay.cluster_name,
+                namespace=review.tools_stay.namespace,
+            )
+            if review.tools_stay is not None
+            else None
+        ),
     )
 
 
@@ -675,7 +693,9 @@ async def unlink_source(id: str, source_id: str, request: Request) -> Response:
 async def project_delete_review(id: str, request: Request) -> ProjectDeleteReviewOut:
     services = _services(request)
     try:
-        review = await services.projects.delete_review(id, services.dashboards, services.alerts)
+        review = await services.projects.delete_review(
+            id, services.dashboards, services.alerts, services.installs
+        )
     except UnknownProject:
         raise _gone(PROJECT_GONE) from None
     return _review_out(review)
@@ -689,7 +709,9 @@ async def remove_project(id: str, token: str, request: Request) -> Response:
     still applied in a cluster; 502 (nothing deleted) when a Loki ruler rule can't be removed."""
     services, registry = _services(request), _registry(request)
     try:
-        review = await services.projects.delete_review(id, services.dashboards, services.alerts)
+        review = await services.projects.delete_review(
+            id, services.dashboards, services.alerts, services.installs
+        )
     except UnknownProject:
         raise _gone(PROJECT_GONE) from None
     if review.cluster_rules:
@@ -729,7 +751,7 @@ async def remove_project(id: str, token: str, request: Request) -> Response:
     )
     try:
         await services.projects.delete(
-            id, token, services.sources, services.dashboards, services.alerts
+            id, token, services.sources, services.dashboards, services.alerts, services.installs
         )
     except ReviewChanged:
         detail = await _written_back(request, loki, "project", id, REVIEW_CHANGED)

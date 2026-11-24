@@ -40,6 +40,7 @@ class ReleaseRef:
     status: str
     owner_label: str | None
     chart_version: str | None = None  # the chart version Helm recorded for the revision
+    deployed_at: str | None = None  # Helm's `info.last_deployed` for the revision (RFC 3339)
 
 
 @dataclass(frozen=True)

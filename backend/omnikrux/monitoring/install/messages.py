@@ -116,3 +116,70 @@ NOT_CREATED = "Not created yet"
 NOT_READY_YET = "Its Pods aren't ready yet"
 READ_REFUSED = "OmniKrux couldn't read it (the cluster answered {status})"
 READ_NO_ANSWER = "OmniKrux couldn't read it: the cluster didn't answer"
+
+# The Monitoring tools page: what each Helm release holds, and reading it live (not in the plan's
+# copy list: `READ_TOOLS_STEP` completes "Couldn't ...", the pipeline's words for a failed read).
+RELEASE_LABELS = {
+    "omnikrux-metrics": "Prometheus and Alertmanager",
+    "omnikrux-loki": "Loki",
+    "omnikrux-alloy": "Grafana Alloy",
+}
+READ_TOOLS_STEP = "read the monitoring tools in {namespace}"
+# A release OmniKrux installed that Helm has no record of any more (its `status`).
+RELEASE_MISSING = "missing"
+NOT_INSTALLED = "OmniKrux hasn't installed anything in this cluster."
+
+# The uninstall review.
+UNINSTALL_TITLE = "Uninstall monitoring tools from {namespace}"
+UNINSTALL_LABEL = "Uninstall"
+SUMMARY_REMOVES_RELEASES = "Removes the Helm releases {names} from {cluster}."
+# Not in the plan's copy list: one release left to remove.
+SUMMARY_REMOVES_RELEASE = "Removes the Helm release {names} from {cluster}."
+SUMMARY_REMOVES_CONTACTS = "Removes OmniKrux's contact-point settings from its Alertmanager (AlertmanagerConfig and Secret omnikrux-contact-points)."
+SUMMARY_REMOVES_SOURCES = "Removes the sources {names}. These projects lose them: {projects}."
+SUMMARY_REMOVES_SOURCES_UNUSED = "Removes the sources {names}. No project uses them."
+# Not in the plan's copy list: one source (logs alone).
+SUMMARY_REMOVES_SOURCE = "Removes the source {names}. These projects lose it: {projects}."
+SUMMARY_REMOVES_SOURCE_UNUSED = "Removes the source {names}. No project uses it."
+SUMMARY_KEEPS_DATA = (
+    'Keeps the stored data ({n} volumes). Turn on "Also delete the stored data" to remove it.'
+)
+# Not in the plan's copy list: one volume (logs alone).
+SUMMARY_KEEPS_DATA_ONE = (
+    'Keeps the stored data (1 volume). Turn on "Also delete the stored data" to remove it.'
+)
+SUMMARY_DELETES_DATA = "Deletes the stored data: {names}. This can't be undone."
+SUMMARY_KEEPS_NAMESPACE = "Keeps the namespace {namespace} and the monitoring.coreos.com resource definitions, so objects other tools made aren't touched."
+BLOCK_RULES_IN_TOOLS = "Move or remove the alert rules that run in these tools first: {names}. Each opens its own review."
+
+# The uninstall job (each step shown while it runs) and how it ends.
+UNINSTALL_STARTED = "Uninstalling the monitoring tools from {namespace}…"
+UNINSTALL_NO_JOBS = "OmniKrux is shutting down; nothing was uninstalled."
+# Not in the plan's copy list: the record couldn't be marked before the job started.
+UNINSTALL_NOT_SAVED = (
+    "OmniKrux couldn't save the install record, so nothing was uninstalled. Try again."
+)
+STEP_HELM_REMOVE = "Removing {release} with Helm…"
+STEP_STOP = "Waiting for {label} to stop…"
+STEP_REMOVE_CONTACTS = "Removing the contact-point settings…"
+STEP_DELETE_DATA = "Deleting the stored data…"
+STEP_REMOVE_SOURCES = "Removing the sources…"
+UNINSTALLED = "Uninstalled from {namespace}. {kept}"
+UNINSTALLED_KEPT = "The stored data stays."
+UNINSTALLED_DELETED = "The stored data was deleted."
+UNINSTALL_HELM_FAILED = (
+    "{helm_words} What Helm removed stays removed. Check {namespace}, then uninstall again."
+)
+UNINSTALL_CANCELLED = "Uninstall cancelled while {step}. What was already removed stays removed. Uninstall again to finish."
+# HELM_FAILED's / HELM_TIMEOUT's `step` for an uninstall.
+HELM_UNINSTALL_STEP = "uninstall {release}"
+HELM_UNINSTALLING_STEP = "uninstalling {release}"
+# Not in the plan's copy list: what can stop the uninstall after Helm ran.
+HELM_NOT_STARTED_UNINSTALL = "OmniKrux couldn't run Helm to uninstall {release}."
+UNINSTALL_NOT_STOPPED = "{label} was still there after 5 minutes: {why}. What was already removed stays removed. Check {namespace}, then uninstall again."
+STILL_STOPPING = "Kubernetes is still removing it"
+UNINSTALL_STEP_FAILED = (
+    "{words} What was already removed stays removed. Check the cluster, then uninstall again."
+)
+DELETE_OBJECT_STEP = "delete the {kind} {name}"
+REMOVE_SOURCE_STEP = "The source {name} couldn't be removed. What was already removed stays removed. Uninstall again to finish."
