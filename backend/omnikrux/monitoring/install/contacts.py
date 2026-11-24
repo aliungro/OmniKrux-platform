@@ -36,7 +36,6 @@ from omnikrux.actions.pipeline import (
     ClusterRef,
     Planned,
     Target,
-    _failure,
     is_conflict,
 )
 from omnikrux.exec.debug import finish_even_if_cancelled
@@ -321,7 +320,7 @@ async def contact_changes(services: MonitoringServices) -> list[AlertChange]:
         return []
     changes: list[AlertChange] = []
     for record in records:
-        if record.alertmanager_source_id is None or record.state == "uninstalling":
+        if record.alertmanager_source_id is None or record.state != "installed":
             continue
         try:
             change = await _change(services, record)
@@ -473,6 +472,121 @@ async def _served(api: ApiClient) -> bool:
     )
 
 
+OUR_ALERTMANAGER = "omnikrux-metrics-alertmanager"  # the Alertmanager the metrics release asks for
+ALERTMANAGERS_PATH = f"/apis/{GROUP}/v1/alertmanagers"
+NAMESPACE_PATH = "/api/v1/namespaces/{namespace}"
+
+
+def state_problem(record: InstallRecord) -> str | None:
+    """Why the record's tools can't take contact points now (an install or uninstall running,
+    or one that didn't finish); None when they are installed."""
+    if record.state == "installed":
+        return None
+    if record.state == "uninstalling":
+        return messages.CONTACTS_UNINSTALLING.format(namespace=record.namespace)
+    if record.state == "installing":
+        return messages.CONTACTS_INSTALLING.format(namespace=record.namespace)
+    return messages.CONTACTS_NOT_INSTALLED.format(namespace=record.namespace)
+
+
+def selector_matches(selector: Any, labels: Mapping[str, str]) -> bool:
+    """Whether a label selector selects an object with `labels` (`{}` selects everything). A
+    selector OmniKrux can't read is taken to select it: the check errs on the side of refusing."""
+    if not isinstance(selector, dict):
+        return True
+    match = selector.get("matchLabels") or {}
+    if not isinstance(match, dict):
+        return True
+    if any(labels.get(k) != v for k, v in match.items()):
+        return False
+    for term in selector.get("matchExpressions") or []:
+        if not isinstance(term, dict):
+            return True
+        key, op = term.get("key"), term.get("operator")
+        values = term.get("values") or []
+        has = key in labels
+        if op == "In" and not (has and labels[key] in values):
+            return False
+        if op == "NotIn" and has and labels[key] in values:
+            return False
+        if op == "Exists" and not has:
+            return False
+        if op == "DoesNotExist" and has:
+            return False
+    return True
+
+
+async def other_readers(api: ApiClient, namespace: str) -> list[str]:
+    """The Alertmanagers other than OmniKrux's that would select its AlertmanagerConfig in
+    `namespace` ("{namespace}/{name}"): a config selector that matches its labels (none: it
+    selects nothing; `{}`: everything) and a namespace selector that matches the namespace
+    (none: only the Alertmanager's own namespace). Raises when they can't be read."""
+    listed = await call_json(api, "GET", ALERTMANAGERS_PATH, timeout=REQUEST_TIMEOUT)
+    items = listed.get("items") if isinstance(listed, dict) else None
+    if not isinstance(items, list):
+        raise TypeError("not a list of Alertmanagers")
+    ours = {MANAGED_LABEL: MANAGED_BY}
+    namespace_labels: dict[str, str] | None = None
+    found: list[str] = []
+    for item in items:
+        md = _meta(item if isinstance(item, dict) else None)
+        where = (md.get("namespace"), md.get("name"))
+        if where == (namespace, OUR_ALERTMANAGER):
+            continue
+        spec = item.get("spec") if isinstance(item, dict) else None
+        spec = spec if isinstance(spec, dict) else {}
+        selector = spec.get("alertmanagerConfigSelector")
+        if selector is None or not selector_matches(selector, ours):
+            continue
+        by_namespace = spec.get("alertmanagerConfigNamespaceSelector")
+        if by_namespace is None:
+            selects = where[0] == namespace
+        else:
+            if namespace_labels is None:
+                namespace_labels = await _namespace_labels(api, namespace)
+            selects = selector_matches(by_namespace, namespace_labels)
+        if selects:
+            found.append(f"{where[0]}/{where[1]}")
+    return sorted(found)
+
+
+async def _namespace_labels(api: ApiClient, namespace: str) -> dict[str, str]:
+    path = NAMESPACE_PATH.format(namespace=_q(namespace))
+    obj = await call_json(api, "GET", path, timeout=REQUEST_TIMEOUT)
+    labels = _meta(obj).get("labels") if isinstance(obj, dict) else None
+    out = {str(k): str(v) for k, v in labels.items()} if isinstance(labels, dict) else {}
+    # Kubernetes sets this label on every namespace itself.
+    out["kubernetes.io/metadata.name"] = namespace
+    return out
+
+
+async def reader_problems(api: ApiClient, namespace: str) -> list[str]:
+    """Why the contact points can't go to `namespace`'s Alertmanager now: another
+    Alertmanager would read them, or that can't be checked (in words; never proceeds)."""
+    try:
+        readers = await other_readers(api, namespace)
+    except Exception as exc:  # noqa: BLE001 (can't check: refused in words; logged by type)
+        log.info("Checking which Alertmanagers read contact points failed (%s)", type(exc).__name__)
+        words = kube_error_message(exc, messages.CONTACTS_LIST_ALERTMANAGERS_STEP).rstrip(".")
+        return [messages.CONTACTS_ALERTMANAGERS_UNCHECKED.format(words=words)]
+    return [
+        messages.CONTACTS_OTHER_ALERTMANAGER.format(where=where, namespace=namespace)
+        for where in readers
+    ]
+
+
+def _apply_words(exc: Exception, action: str, target: Target) -> str:
+    """A failed apply in the pipeline's words (never a value), for the install record."""
+    if isinstance(exc, ActionError):
+        return exc.message
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, str):
+        return detail
+    if is_conflict(exc):
+        return CONFLICT.format(kind="AlertmanagerConfig", name=target.name)
+    return kube_error_message(exc, f"{action} AlertmanagerConfig {target.namespace}/{target.name}")
+
+
 def _and(words: Sequence[str]) -> str:
     return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
 
@@ -492,6 +606,8 @@ class ContactSyncAction:
         record = await self._services.installs.get(cluster_id)
         if record is None or record.alertmanager_source_id is None:
             raise ActionError(409, messages.NO_ALERTMANAGER)
+        if (problem := state_problem(record)) is not None:
+            raise ActionError(409, problem)
         return record
 
     async def _desired(self, record: InstallRecord) -> DesiredContacts:
@@ -513,7 +629,7 @@ class ContactSyncAction:
         secret = await read_object(api, secret_path(namespace))
         raced = ActionError(409, messages.CONTACTS_RACED.format(namespace=namespace))
         if mode == "delete":
-            if desired.amc is not None or live is None:
+            if desired.amc is not None or (live is None and secret is None):
                 raise raced
         elif desired.amc is None or (live is not None) != bool(params.get("exists")):
             raise raced
@@ -534,6 +650,7 @@ class ContactSyncAction:
             "uids": {"amc": _meta(live).get("uid"), "secret": _meta(secret).get("uid")},
         }
         if mode == "delete":
+            # Nothing leaves OmniKrux in a removal: no other Alertmanager to check.
             return Planned(
                 title=messages.CONTACTS_DELETE_TITLE.format(namespace=namespace),
                 summary=[messages.CONTACTS_DELETE_SUMMARY.format(cluster=cluster.name)],
@@ -556,6 +673,7 @@ class ContactSyncAction:
             messages.CONTACTS_SKIPPED.format(name=name, reason=reason)
             for name, reason in desired.skipped
         ]
+        blocked += await reader_problems(api, namespace)
         n = len(desired.contact_points)
         if live is None:
             if n == 1:
@@ -567,6 +685,7 @@ class ContactSyncAction:
             title = messages.CONTACTS_UPDATE_TITLE.format(namespace=namespace)
             label = messages.CONTACTS_UPDATE_LABEL
             before, after = _shown(live), _updated(live, desired.amc)
+        state["body"] = after  # exactly what the apply writes (it names Secret keys, no values)
         return Planned(
             title=title,
             summary=summary,
@@ -585,24 +704,30 @@ class ContactSyncAction:
         the Secret before the AlertmanagerConfig that reads it, or remove the AlertmanagerConfig
         before its Secret. The install record keeps the digest of what was applied, or the words
         of what failed."""
-        state = planned.state
+        # Held from the check of the record's state to the last write: no install or uninstall
+        # begins meanwhile (`InstallStore.begin` and `begin_uninstall` wait for it).
+        async with self._services.installs.held(target.cluster_id):
+            return await self._apply(ctx, target, planned.state)
+
+    async def _apply(self, ctx: ApplyContext, target: Target, state: dict) -> Applied:
         record = await self._record(target.cluster_id)
         namespace = target.namespace or record.namespace
         desired = await self._desired(record)
         if desired.digest != state["digest"]:
             raise ActionError(409, messages.CONTACTS_STALE)
         mode: Mode = state["mode"]
+        if mode == "upsert" and (problems := await reader_problems(ctx.api, namespace)):
+            raise ActionError(409, " ".join(problems))
         action = "delete" if mode == "delete" else ("edit" if state["exists"]["amc"] else "create")
         try:
             if mode == "delete":
                 await self._remove(ctx.api, namespace, state)
             else:
-                assert desired.amc is not None
                 await self._write_secret(ctx.api, namespace, desired, state)
-                await self._write_amc(ctx.api, namespace, desired.amc, state)
+                await self._write_amc(ctx.api, namespace, state)
         except BaseException as exc:
             if isinstance(exc, Exception):
-                words = str(_failure(exc, action, spec, target).detail)
+                words = _apply_words(exc, action, target)
             else:
                 words = CANCELLED
             await finish_even_if_cancelled(self._failed(record, words))
@@ -648,8 +773,8 @@ class ContactSyncAction:
         except Exception as exc:  # noqa: BLE001 (raised again in the pipeline's words)
             raise _secret_failure(exc, namespace, messages.CONTACTS_WRITE_SECRET_STEP) from None
 
-    async def _write_amc(self, api: ApiClient, namespace: str, amc: dict, state: dict) -> None:
-        body = copy.deepcopy(amc)
+    async def _write_amc(self, api: ApiClient, namespace: str, state: dict) -> None:
+        body = copy.deepcopy(state["body"])
         if state["exists"]["amc"]:
             body["metadata"]["resourceVersion"] = state["resourceVersions"]["amc"]
             await call_json(api, "PUT", amc_path(namespace), timeout=REQUEST_TIMEOUT, body=body)
@@ -659,7 +784,8 @@ class ContactSyncAction:
             )
 
     async def _remove(self, api: ApiClient, namespace: str, state: dict) -> None:
-        await _delete(api, amc_path(namespace), state["uids"]["amc"])
+        if state["exists"]["amc"]:
+            await _delete(api, amc_path(namespace), state["uids"]["amc"])
         if state["exists"]["secret"]:
             try:
                 await _delete(api, secret_path(namespace), state["uids"]["secret"])

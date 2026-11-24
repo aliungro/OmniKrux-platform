@@ -3,6 +3,7 @@ Secret written through a review (create, edit, delete); the secret values go onl
 Secret, never into a plan, a diff, the audit, a log or an answer; an apply refuses what changed
 since the review; rule and contact-point saves say when the contact points need a review."""
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -176,7 +177,8 @@ async def test_contact_sync_review_hides_values(
 
     audit = (await http.get("/api/audit")).text
     assert "omnikrux-contact-points" in audit
-    for text in (json.dumps(plan), audit, caplog.text, json.dumps(amc), applied.text):
+    status = (await http.get(f"/api/monitoring/install/clusters/{env.cluster_id}")).text
+    for text in (json.dumps(plan), audit, caplog.text, json.dumps(amc), applied.text, status):
         for secret_value in (WEBHOOK_URL, HOOK_URL, "XXXX-SECRET"):
             assert secret_value not in text
     record = await _record(monitoring_app, installed_cluster.cluster_id)
@@ -656,3 +658,223 @@ receivers:
 """
     t = direct(fake_alertmanager.url, type="alertmanager", name="Alerts")
     assert [c.receiver for c in await read_channels(t, "Alerts")] == ["ops-slack"]
+
+
+# -- fix round 1: never during an install or uninstall; never where another Alertmanager reads --
+
+ALERTMANAGERS = "alertmanagers.monitoring.coreos.com"
+UNINSTALLING = (
+    "The monitoring tools in monitoring are being uninstalled, so OmniKrux sends no contact "
+    "points there."
+)
+NOT_INSTALLED = (
+    "The monitoring tools in monitoring didn't finish installing. Install again, then sync the "
+    "contact points."
+)
+
+
+def other_alertmanager(where: str) -> str:
+    return (
+        f"Alertmanager {where} would also read OmniKrux's contact points: its "
+        "alertmanagerConfigSelector and alertmanagerConfigNamespaceSelector select "
+        "monitoring/omnikrux-contact-points, so the addresses and keys would reach it. Narrow "
+        "those selectors, then review again."
+    )
+
+
+def alertmanager(fake_api, namespace: str, name: str, **spec) -> None:
+    """An Alertmanager resource with these spec fields (`config`/`namespaces`: its
+    alertmanagerConfigSelector and alertmanagerConfigNamespaceSelector)."""
+    body: dict = {}
+    if "config" in spec:
+        body["alertmanagerConfigSelector"] = spec["config"]
+    if "namespaces" in spec:
+        body["alertmanagerConfigNamespaceSelector"] = spec["namespaces"]
+    fake_api.objects[ALERTMANAGERS][(namespace, name)] = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "Alertmanager",
+        "metadata": {"name": name, "namespace": namespace, "uid": f"u-am-{name}"},
+        "spec": body,
+    }
+
+
+def contact_writes(fake_api) -> list[dict]:
+    return [w for w in fake_api.writes if "omnikrux-contact-points" in w["path"]] + [
+        o
+        for o in fake_api.created_objects
+        if (o.get("metadata") or {}).get("name") == "omnikrux-contact-points"
+    ]
+
+
+async def test_no_sync_while_uninstalling_or_after_a_failed_install(
+    monitoring_app, installed_cluster, fake_api, tool_rule_with_contacts
+):
+    http, app = monitoring_app
+    installs = app.state.monitoring.installs
+    cluster = installed_cluster.cluster_id
+    plan = (await sync(http, cluster))["plan"]  # reviewed before the uninstall begins
+    await installs.begin_uninstall(cluster, job_id="uninstall-job")
+    r = await http.post(sync_url(cluster))
+    assert (r.status_code, r.json()["detail"]) == (409, UNINSTALLING)
+    applied = await apply(http, plan)
+    assert (applied.status_code, applied.json()["detail"]) == (409, UNINSTALLING)
+    assert contact_writes(fake_api) == []
+    # A save while the uninstall runs reports nothing to review there.
+    saved = await rule_with(http, tool_rule_with_contacts.rule_id, [tool_rule_with_contacts.cp_id])
+    assert [c for c in saved["changes"] if c["kind"] == "contacts"] == []
+
+    await installs.finish(cluster, "failed", "stopped", job_id="uninstall-job")
+    r = await http.post(sync_url(cluster))
+    assert (r.status_code, r.json()["detail"]) == (409, NOT_INSTALLED)
+
+
+async def test_an_uninstall_waits_for_a_running_sync(
+    monitoring_app, installed_cluster, fake_api, tool_rule_with_contacts, monkeypatch
+):
+    http, app = monitoring_app
+    installs = app.state.monitoring.installs
+    cluster = installed_cluster.cluster_id
+    plan = (await sync(http, cluster))["plan"]
+    writing, go_on = asyncio.Event(), asyncio.Event()
+    real = contacts_module.call_json
+
+    async def slow(api, method, path, **kwargs):
+        if method == "POST" and path.endswith("/secrets"):
+            writing.set()
+            await go_on.wait()
+        return await real(api, method, path, **kwargs)
+
+    monkeypatch.setattr(contacts_module, "call_json", slow)
+    applying = asyncio.create_task(apply(http, plan))
+    await asyncio.wait_for(writing.wait(), 10)
+    uninstalling = asyncio.create_task(installs.begin_uninstall(cluster, job_id="u"))
+    await asyncio.sleep(0.2)
+    assert not uninstalling.done()  # it waits for the sync's writes
+    assert (await installs.get(cluster)).state == "installed"
+    go_on.set()
+    assert (await applying).status_code == 200
+    record = await asyncio.wait_for(uninstalling, 10)
+    assert record.state == "uninstalling"
+    # Both objects were written before the uninstall began, so its own step removes them.
+    assert KEY in fake_api.objects["secrets"] and KEY in fake_api.objects[AMC]
+
+
+async def test_another_alertmanager_that_reads_the_settings_blocks(
+    monitoring_app, installed_cluster, fake_api, tool_rule_with_contacts
+):
+    http, _ = monitoring_app
+    cluster = installed_cluster.cluster_id
+    # OmniKrux's own selects everything: fine. One in another namespace with a config selector
+    # but no namespace selector reads only its own namespace; one without a config selector
+    # reads none; one whose labels don't match reads none.
+    alertmanager(fake_api, NS, "omnikrux-metrics-alertmanager", config={}, namespaces={})
+    alertmanager(fake_api, "other", "own-namespace-only", config={})
+    alertmanager(fake_api, "other", "no-selector", namespaces={})
+    alertmanager(
+        fake_api, "other", "team-only", config={"matchLabels": {"team": "a"}}, namespaces={}
+    )
+    plan = (await sync(http, cluster))["plan"]
+    assert plan["blocked"] == []
+
+    # A later kube-prometheus-stack's defaults: everything, everywhere.
+    alertmanager(fake_api, "kps", "kps-alertmanager", config={}, namespaces={})
+    # Matching labels, and a namespace selector that picks OmniKrux's namespace.
+    alertmanager(
+        fake_api,
+        "team",
+        "picky",
+        config={
+            "matchExpressions": [{"key": "app.kubernetes.io/managed-by", "operator": "Exists"}]
+        },
+        namespaces={"matchLabels": {"kubernetes.io/metadata.name": NS}},
+    )
+    # The same Alertmanager in OmniKrux's namespace without a namespace selector.
+    alertmanager(fake_api, NS, "next-door", config={})
+    plan = (await sync(http, cluster))["plan"]
+    assert plan["blocked"] == [
+        other_alertmanager("kps/kps-alertmanager"),
+        other_alertmanager("monitoring/next-door"),
+        other_alertmanager("team/picky"),
+    ]
+    refused = await apply(http, plan)
+    assert refused.status_code == 422
+    assert contact_writes(fake_api) == []
+
+
+async def test_an_alertmanager_that_appears_after_the_review_is_refused(
+    monitoring_app, installed_cluster, fake_api, tool_rule_with_contacts
+):
+    http, _ = monitoring_app
+    plan = (await sync(http, installed_cluster.cluster_id))["plan"]
+    assert plan["blocked"] == []
+    alertmanager(fake_api, "kps", "kps-alertmanager", config={}, namespaces={})
+    refused = await apply(http, plan)
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == other_alertmanager("kps/kps-alertmanager")
+    assert contact_writes(fake_api) == []
+
+
+async def test_alertmanagers_that_cant_be_read_block(
+    monitoring_app, installed_cluster, fake_api, tool_rule_with_contacts
+):
+    http, _ = monitoring_app
+    plan = (await sync(http, installed_cluster.cluster_id))["plan"]
+    fake_api.forbidden_kinds.add(ALERTMANAGERS)
+    refused = await apply(http, plan)
+    assert refused.status_code == 409
+    words = refused.json()["detail"]
+    assert words.startswith(
+        "OmniKrux sends contact points only where no other Alertmanager can read them, and it "
+        "couldn't check that: Not allowed to list the Alertmanagers in the cluster"
+    )
+    assert words.endswith(". Try again.")
+    blocked = (await sync(http, installed_cluster.cluster_id))["plan"]["blocked"]
+    assert blocked == [words]
+    assert contact_writes(fake_api) == []
+
+
+async def test_a_secret_left_without_its_alertmanagerconfig_is_removed(
+    monitoring_app, installed_cluster, fake_api, tool_rule_with_contacts
+):
+    http, _ = monitoring_app
+    env = tool_rule_with_contacts
+    await synced(http, installed_cluster.cluster_id)
+    del fake_api.objects[AMC][KEY]  # removed by an earlier delete whose Secret step failed
+    await rule_with(http, env.rule_id, [])
+    out = await sync(http, installed_cluster.cluster_id)
+    assert out["kind"] == "review" and out["plan"]["action"] == "delete"
+    assert (await apply(http, out["plan"])).status_code == 200
+    assert KEY not in fake_api.objects["secrets"]
+    assert (await sync(http, installed_cluster.cluster_id))["kind"] == "done"
+
+
+async def test_an_update_writes_what_its_review_shows(
+    monitoring_app, installed_cluster, fake_api, tool_rule_with_contacts
+):
+    http, _ = monitoring_app
+    env = tool_rule_with_contacts
+    await synced(http, installed_cluster.cluster_id)
+    live = fake_api.objects[AMC][KEY]["metadata"]
+    live["labels"]["team"] = "ops"
+    live["annotations"] = {"note": "kept"}
+    await rule_with(http, env.rule_id, [env.hook_id])
+    plan = (await sync(http, installed_cluster.cluster_id))["plan"]
+    assert "team: ops" in plan["diff"]["after"] and "note: kept" in plan["diff"]["after"]
+    assert (await apply(http, plan)).status_code == 200
+    written = fake_api.objects[AMC][KEY]
+    assert written["metadata"]["labels"] == {
+        "app.kubernetes.io/managed-by": "omnikrux",
+        "team": "ops",
+    }
+    assert written["metadata"]["annotations"] == {"note": "kept"}
+    assert [r["name"] for r in written["spec"]["receivers"]] == [
+        "omnikrux-none",
+        f"cp-{env.hook_id}",
+    ]
+
+
+def test_alert_change_schema_keeps_its_fields():
+    from omnikrux.monitoring.alerts.sync import AlertChangeOut
+
+    schema = AlertChangeOut.model_json_schema(mode="serialization")
+    assert "cluster_id" in schema["properties"] and "target_id" in schema["properties"]

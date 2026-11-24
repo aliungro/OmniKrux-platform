@@ -225,3 +225,11 @@ CONTACTS_NEED_REVIEW = "The contact points in {namespace}'s Alertmanager need a 
 CONTACTS_UNKNOWN = "A contact point or source changed while OmniKrux worked out what to send to {namespace}'s Alertmanager. Try again."
 CONTACTS_WRITE_SECRET_STEP = "write the Secret {namespace}/omnikrux-contact-points"
 CONTACTS_DELETE_SECRET_STEP = "remove the Secret {namespace}/omnikrux-contact-points"
+# Fix round 1: a sync only while the tools are installed (not during an install or uninstall, nor
+# after one that didn't finish), and only where no other Alertmanager would read the settings.
+CONTACTS_UNINSTALLING = "The monitoring tools in {namespace} are being uninstalled, so OmniKrux sends no contact points there."
+CONTACTS_INSTALLING = "The monitoring tools in {namespace} are still being installed. Sync the contact points once the install has finished."
+CONTACTS_NOT_INSTALLED = "The monitoring tools in {namespace} didn't finish installing. Install again, then sync the contact points."
+CONTACTS_OTHER_ALERTMANAGER = "Alertmanager {where} would also read OmniKrux's contact points: its alertmanagerConfigSelector and alertmanagerConfigNamespaceSelector select {namespace}/omnikrux-contact-points, so the addresses and keys would reach it. Narrow those selectors, then review again."
+CONTACTS_ALERTMANAGERS_UNCHECKED = "OmniKrux sends contact points only where no other Alertmanager can read them, and it couldn't check that: {words}. Try again."
+CONTACTS_LIST_ALERTMANAGERS_STEP = "list the Alertmanagers in the cluster"

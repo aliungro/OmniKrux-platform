@@ -4,6 +4,7 @@ digest of what was last applied)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Mapping, Sequence
@@ -120,6 +121,13 @@ def _check_free(row: InstallRow, job_id: str) -> None:
 class InstallStore:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
+        self._held: dict[str, asyncio.Lock] = {}
+
+    def held(self, cluster_id: str) -> asyncio.Lock:
+        """The cluster's lock: a contact-point sync holds it from its check of the record's
+        state to its last write, and `begin`/`begin_uninstall` take it, so no install or
+        uninstall starts while it writes (and none it doesn't see has started)."""
+        return self._held.setdefault(cluster_id, asyncio.Lock())
 
     async def get(
         self, cluster_id: str, *, session: AsyncSession | None = None
@@ -150,9 +158,10 @@ class InstallStore:
         project_id: str | None,
     ) -> InstallRecord:
         """Create the cluster's record or update it, in state `installing`. InstallBusy when
-        another job's install or uninstall is running there."""
+        another job's install or uninstall is running there. Waits while the cluster is `held`
+        (a contact-point sync writing into it)."""
         moment = now()
-        async with self._sessionmaker.begin() as session:
+        async with self.held(cluster_id), self._sessionmaker.begin() as session:
             await lock_first(session)
             row = await _by_cluster(session, cluster_id)
             if row is None:
@@ -214,8 +223,9 @@ class InstallStore:
             return True
 
     async def begin_uninstall(self, cluster_id: str, *, job_id: str) -> InstallRecord:
-        """State `uninstalling`. KeyError without a record; InstallBusy when another job runs."""
-        async with self._sessionmaker.begin() as session:
+        """State `uninstalling`. KeyError without a record; InstallBusy when another job runs.
+        Waits while the cluster is `held` (a contact-point sync writing into it)."""
+        async with self.held(cluster_id), self._sessionmaker.begin() as session:
             await lock_first(session)
             row = await _existing(session, cluster_id)
             _check_free(row, job_id)

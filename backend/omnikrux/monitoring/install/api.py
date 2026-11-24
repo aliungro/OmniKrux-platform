@@ -26,6 +26,8 @@ from omnikrux.monitoring.install.contacts import (
     in_sync,
     problem_words,
     read_object,
+    secret_path,
+    state_problem,
 )
 from omnikrux.monitoring.install.pins import CHARTS
 from omnikrux.monitoring.install.settings import (
@@ -432,6 +434,8 @@ async def sync_contacts(
         raise HTTPException(status_code=404, detail=messages.NOT_INSTALLED)
     if record.alertmanager_source_id is None:
         raise HTTPException(status_code=409, detail=messages.NO_ALERTMANAGER)
+    if (problem := state_problem(record)) is not None:
+        raise HTTPException(status_code=409, detail=problem)
     try:
         desired = await desired_contacts(services, record)
     except Exception as exc:  # noqa: BLE001 (in words: the secret rule, an unreadable secret)
@@ -439,8 +443,8 @@ async def sync_contacts(
     if in_sync(desired, record):
         return ContactsSyncDoneOut(kind="done", contacts=contacts_out(record, desired))
     mode = "delete" if desired.amc is None else "upsert"
-    exists = await _amc_exists(state, cluster_id, record.namespace)
-    if mode == "delete" and exists is False:
+    exists, secret = await _live(state, cluster_id, record.namespace)
+    if mode == "delete" and exists is False and secret is False:
         # Nothing is left in the cluster to remove: the record says so.
         record = await services.installs.set_contacts(
             cluster_id, digest=None, message=None, at=now()
@@ -465,14 +469,16 @@ async def sync_contacts(
     return ContactsSyncReviewOut(kind="review", plan=plan)
 
 
-async def _amc_exists(state, cluster_id: str, namespace: str) -> bool | None:
-    """Whether OmniKrux's AlertmanagerConfig is in the namespace; None when the cluster can't
-    tell now (the plan reads it again and answers in words)."""
+async def _live(state, cluster_id: str, namespace: str) -> tuple[bool | None, bool | None]:
+    """Whether OmniKrux's AlertmanagerConfig and its Secret are in the namespace; None when the
+    cluster can't tell now (the plan reads them again and answers in words)."""
     try:
         async with state.connections.api(cluster_id) as api:
-            return await read_object(api, amc_path(namespace)) is not None
-    except Exception:  # noqa: BLE001 (the plan reads it again and answers in words)
-        return None
+            amc = await read_object(api, amc_path(namespace)) is not None
+            secret = await read_object(api, secret_path(namespace)) is not None
+            return amc, secret
+    except Exception:  # noqa: BLE001 (the plan reads them again and answers in words)
+        return None, None
 
 
 @router.get("/tools")

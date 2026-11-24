@@ -142,7 +142,8 @@ class AlertChange:
 class AlertChangeOut(BaseModel):
     """An `AlertChange` in an answer (a rule's change, a dashboard's save). `cluster_id` is left
     out of the JSON when it is None, so every answer without a `contacts` change reads as it
-    always did."""
+    always did. The serializer has no return annotation, so the answer's schema keeps every
+    field."""
 
     target_id: str
     rule_id: str
@@ -155,7 +156,7 @@ class AlertChangeOut(BaseModel):
     cluster_id: str | None = None
 
     @model_serializer(mode="wrap")
-    def _without_empty_cluster(self, handler: SerializerFunctionWrapHandler) -> dict:
+    def _without_empty_cluster(self, handler: SerializerFunctionWrapHandler):
         data = handler(self)
         if self.cluster_id is None:
             data.pop("cluster_id", None)
