@@ -25,7 +25,7 @@ import yaml
 from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 
-from omnikrux.actions.jobs import REMOVED, STOPPED, UNEXPECTED, Job, JobFailed
+from omnikrux.actions.jobs import REMOVED, UNEXPECTED, Job, JobFailed
 from omnikrux.actions.pipeline import ClusterRef
 from omnikrux.exec.debug import finish_even_if_cancelled
 from omnikrux.kube.connections import ClusterConnections, cloud_kube_error, kube_error_message
@@ -43,6 +43,7 @@ from omnikrux.monitoring.install.kubeconfig import (
     secrets_and_hosts,
 )
 from omnikrux.monitoring.install.settings import COMPONENT_ORDER, InstallSettings, Resources
+from omnikrux.monitoring.install.store import INTERRUPTED
 from omnikrux.monitoring.install.values import RELEASES, ReleaseSpec, values_for
 from omnikrux.monitoring.projects.store import UnknownProject
 
@@ -252,6 +253,8 @@ async def helm_install(
     if result.truncated and result.timeout is None:
         words = messages.HELM_ANSWER_TOO_LONG.format(step=helm_step)
     else:
+        if result.timeout is not None:  # "Helm didn't finish installing omnikrux-loki within…"
+            helm_step = messages.HELM_INSTALLING_STEP.format(release=spec.release)
         words = helm_error_message(
             result, step=helm_step, secrets=secrets, hosts=hosts, cloud=cloud
         )
@@ -296,79 +299,103 @@ async def run_install(
     plan_state: Mapping,
     actor: str,
     crds: Sequence[Mapping] = (),
+    record_job: str | None = None,
 ) -> str:
     """Install what the review planned (`plan_state`, the plan's kept state; `crds`, the chart's
     CustomResourceDefinitions read at apply). Returns INSTALLED; raises JobFailed in words. The
-    install record (begun before) is finished in every case, unless a newer job owns it."""
+    install record (begun before, under `record_job` until this job takes it over) is finished in
+    every case, unless a newer job owns it."""
     components = list(plan_state["components"])
     specs = release_specs(components)
     settings = settings_from_dict(plan_state["settings"])
     project_id = plan_state.get("project_id")
     job.total = total_steps(components)
     job.done = 0
-    ending: tuple[str, str] = ("failed", STOPPED.format(action=ACTION))
+    # Stopped with OmniKrux (or before the job ran): the words startup would give the record.
+    ending: tuple[str, str] = ("failed", INTERRUPTED.format(what=ACTION))
     sources: Mapping[str, str | None] | None = None
     try:
-        message, sources = await _steps(
-            job,
-            services=services,
-            connections=connections,
-            catalog=catalog,
-            cluster=cluster,
-            cloud=cloud,
-            namespace=namespace,
-            components=components,
-            specs=specs,
-            settings=settings,
-            plan_state=plan_state,
-            project_id=project_id,
-            actor=actor,
-            crds=crds,
-        )
+        try:
+            taken = record_job is None or record_job == job.id
+            if not taken and not await services.installs.attach_job(cluster.id, record_job, job.id):
+                # Another job holds the record now: this one does nothing.
+                raise JobFailed(
+                    messages.BLOCK_BUSY.format(doing="installing", cluster=cluster.name)
+                )
+            message, sources = await _steps(
+                job,
+                services=services,
+                connections=connections,
+                catalog=catalog,
+                cluster=cluster,
+                cloud=cloud,
+                namespace=namespace,
+                components=components,
+                specs=specs,
+                settings=settings,
+                plan_state=plan_state,
+                project_id=project_id,
+                actor=actor,
+                crds=crds,
+            )
+        except connect.ConnectFailed as exc:
+            sources = exc.sources
+            ending = ("failed", exc.message)
+            raise
+        except JobFailed as exc:
+            ending = ("failed", exc.message)
+            raise
+        except asyncio.CancelledError:
+            if job.stop == "cancel":
+                ending = ("cancelled", job.cancelled_message)
+            elif job.stop == "removed":
+                ending = ("failed", REMOVED.format(action=ACTION))
+            raise
+        except Exception as exc:
+            ending = ("failed", UNEXPECTED.format(action=ACTION, error=type(exc).__name__))
+            raise
         ending = ("installed", message)
-        return message
-    except connect.ConnectFailed as exc:
-        sources = exc.sources
-        ending = ("failed", exc.message)
-        raise
-    except JobFailed as exc:
-        ending = ("failed", exc.message)
-        raise
-    except asyncio.CancelledError:
-        if job.stop == "cancel":
-            ending = ("cancelled", job.cancelled_message)
-        elif job.stop == "removed":
-            ending = ("failed", REMOVED.format(action=ACTION))
-        raise
-    except Exception as exc:
-        ending = ("failed", UNEXPECTED.format(action=ACTION, error=type(exc).__name__))
-        raise
     finally:
         job.blocked = []
         if catalog is not None:
             catalog.forget(cluster.id)  # the kinds the CRDs serve are read again
-        await finish_even_if_cancelled(
-            _finish(services, cluster.id, job.id, ending, sources=sources)
-        )
+        # The record is this job's, or still under the id it was begun with (a stop that
+        # landed while it was being handed over); a newer job's record is never touched.
+        holders = [job.id] + ([record_job] if record_job not in (None, job.id) else [])
+        try:
+            await finish_even_if_cancelled(
+                _finish(services, cluster.id, holders, ending, sources=sources)
+            )
+        except asyncio.CancelledError:
+            # A cancel that lands once the install is done and its record written changes
+            # nothing: the job ends as installed, like its record.
+            if ending[0] != "installed":
+                raise
+            if (task := asyncio.current_task()) is not None:
+                task.uncancel()
+    return message
 
 
 async def _finish(
     services: MonitoringServices,
     cluster_id: str,
-    job_id: str,
+    job_ids: Sequence[str],
     ending: tuple[str, str],
     *,
     sources: Mapping[str, str | None] | None,
 ) -> None:
     state, message = ending
     try:
-        await services.installs.finish(
-            cluster_id,
-            state,  # type: ignore[arg-type]
-            message,
-            sources={k: v for k, v in (sources or {}).items() if v is not None},
-            job_id=job_id,
-        )
+        for job_id in job_ids:
+            finished = await services.installs.finish(
+                cluster_id,
+                state,  # type: ignore[arg-type]
+                message,
+                sources={k: v for k, v in (sources or {}).items() if v is not None},
+                job_id=job_id,
+            )
+            if finished is not None:
+                return
     except KeyError:  # the record went with its cluster
         pass
     except Exception as exc:  # noqa: BLE001 (startup marks a record left running)

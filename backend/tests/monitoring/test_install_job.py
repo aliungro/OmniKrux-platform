@@ -9,9 +9,11 @@ import pytest
 
 from omnikrux.actions.jobs import REMOVED
 from omnikrux.monitoring.install import job as install_job
-from omnikrux.monitoring.install.helm import HelmResult
+from omnikrux.monitoring.install.helm import HelmResult, timed_out
 from omnikrux.monitoring.install.kubeconfig import LONGEST_HELM_CALL_SECONDS
+from omnikrux.monitoring.install.readiness import is_ready
 from omnikrux.monitoring.install.settings import InstallSettings
+from omnikrux.monitoring.install.store import INTERRUPTED
 from tests.fakekube import CRDS_KEY, TOKEN
 from tests.monitoring.install_env import (
     CRD_NAMES,
@@ -22,6 +24,7 @@ from tests.monitoring.install_env import (
     install_plan,
     mark_all_ready,
     prepare_install,
+    rolled_out,
     wait_job,
     wait_until,
     waiting_pod,
@@ -283,7 +286,7 @@ async def test_cancel_terminates_helm_and_says_what_stays(env):
     assert r.status_code == 200, r.text
     job = r.json()
     message = (
-        "Install cancelled while installing omnikrux-metrics with helm. What was already applied "
+        "Install cancelled while installing omnikrux-metrics with Helm. What was already applied "
         "stays as Helm left it. Install again to finish, or uninstall the tools."
     )
     assert (job["state"], job["message"]) == ("cancelled", message)
@@ -424,9 +427,10 @@ async def test_one_job_per_cluster(env):
     await http.post(f"{JOBS}/{out['job_id']}/cancel")
 
 
-async def test_a_raced_apply_that_loses_the_record_is_busy(env, monkeypatch):
-    """Both applies pass the early check; the record says which job runs, and the other job
-    ends at once with the busy words (its audit record failed), writing nothing."""
+async def test_a_raced_apply_that_loses_the_record_is_busy(env, monkeypatch, caplog):
+    """Both applies pass the early check; the record says which job runs, and the other apply
+    is refused with the busy words before any job starts (its audit record finished once, as
+    failed), writing nothing."""
     http, app, cluster, _, fake_helm = env
     fake_helm.hang = {"upgrade"}
     first = await install_plan(http, cluster, ["logs"])
@@ -450,6 +454,8 @@ async def test_a_raced_apply_that_loses_the_record_is_busy(env, monkeypatch):
     assert [(r["outcome"], r["message"]) for r in installs_audit if r["outcome"] != "started"] == [
         ("failed", busy)
     ]
+    assert "isn't open" not in caplog.text  # finished once
+    assert len(_upgrades(fake_helm)) == 1
     await http.post(f"{JOBS}/{out['job_id']}/cancel")
 
 
@@ -539,3 +545,145 @@ async def test_installed_cluster_fixture(installed_cluster, monitoring_app):
     assert set(installed_cluster.sources) == {"prometheus", "alertmanager", "loki"}
     record = await app.state.monitoring.installs.get(installed_cluster.cluster_id)
     assert record.state == "installed"
+
+
+async def test_a_stop_says_what_stays(env):
+    """OmniKrux stopping mid-install (a graceful shutdown) leaves the record with the words a
+    restart gives: what stays, and the next step."""
+    http, app, cluster, _, fake_helm = env
+    fake_helm.hang = {"upgrade"}
+    out = await apply(http, await install_plan(http, cluster, ["logs"]))
+    await wait_until(lambda: bool(_upgrades(fake_helm)))
+    await app.state.jobs.close()
+    record = await app.state.monitoring.installs.get(cluster)
+    message = INTERRUPTED.format(what="install")
+    assert message == (
+        "OmniKrux stopped during the install. What Helm applied stays as Helm left it. "
+        "Open Monitoring tools to see what's there, then run it again."
+    )
+    assert (record.state, record.message) == ("failed", message)
+    assert app.state.jobs.get(out["job_id"]).state == "failed"
+    [call] = _upgrades(fake_helm)
+    assert not call.kubeconfig.parent.exists()
+
+
+async def test_helm_timeout_reads_naturally(env):
+    http, _, cluster, _, fake_helm = env
+
+    async def too_long(args):
+        return timed_out("", "", 720.0)
+
+    fake_helm.script["upgrade"] = too_long
+    out = await apply(http, await install_plan(http, cluster, ["logs"]))
+    job = await wait_job(http, out["job_id"])
+    assert job["message"] == (
+        "Helm didn't finish installing omnikrux-loki within 12 minutes. What Helm applied stays "
+        "as Helm left it (unknown). Check the Pods in monitoring, then install again, or "
+        "uninstall the tools."
+    )
+
+
+async def test_cancel_while_waiting_keeps_the_names(env):
+    http, _, cluster, fake_api, _ = env
+    mark_all_ready(fake_api, NS, except_=("omnikrux-loki",))
+    out = await apply(http, await install_plan(http, cluster, ["logs"]))
+    job_id = out["job_id"]
+    while not (await http.get(f"{JOBS}/{job_id}")).json()["blocked"]:
+        await asyncio.sleep(0.01)
+    job = (await http.post(f"{JOBS}/{job_id}/cancel")).json()
+    assert job["state"] == "cancelled"
+    assert job["message"].startswith("Install cancelled while waiting for Loki to be ready. ")
+
+
+def _sized(generation: int, status: dict) -> dict:
+    return {"metadata": {"generation": generation}, "spec": {"replicas": 1}, "status": status}
+
+
+def _upgrade_status(**status) -> dict:
+    return {"observedGeneration": 2, "replicas": 1, "readyReplicas": 1, **status}
+
+
+@pytest.mark.parametrize(
+    ("kind", "obj", "ready"),
+    [
+        ("Deployment", _sized(1, rolled_out("Deployment", ready=True)), True),
+        # The controller hasn't seen the new spec yet: the old version's status says nothing.
+        ("Deployment", _sized(2, rolled_out("Deployment", ready=True)), False),
+        # A 1-replica upgrade: the old Pod still ready, the new one not (2 replicas, 1 updated).
+        (
+            "Deployment",
+            _sized(2, _upgrade_status(replicas=2, updatedReplicas=1, availableReplicas=1)),
+            False,
+        ),
+        ("Deployment", _sized(2, _upgrade_status(availableReplicas=1)), False),
+        ("StatefulSet", _sized(1, rolled_out("StatefulSet", ready=True)), True),
+        (
+            "StatefulSet",
+            _sized(2, _upgrade_status(updatedReplicas=0, currentRevision="a", updateRevision="b")),
+            False,
+        ),
+        (
+            "StatefulSet",
+            _sized(2, _upgrade_status(updatedReplicas=1, currentRevision="a", updateRevision="b")),
+            False,
+        ),
+        (
+            "DaemonSet",
+            {"metadata": {"generation": 1}, "status": rolled_out("DaemonSet", ready=True)},
+            True,
+        ),
+        (
+            "DaemonSet",
+            {
+                "metadata": {"generation": 2},
+                "status": {
+                    "observedGeneration": 2,
+                    "desiredNumberScheduled": 1,
+                    "updatedNumberScheduled": 0,
+                    "numberReady": 1,
+                    "numberAvailable": 1,
+                },
+            },
+            False,
+        ),
+        ("DaemonSet", {"status": {"desiredNumberScheduled": 0}}, False),
+    ],
+)
+def test_ready_means_the_new_version_is_rolled_out(kind, obj, ready):
+    assert is_ready(kind, obj) is ready
+
+
+async def test_an_upgrade_whose_new_pods_fail_is_not_ready(env):
+    """Install again: the new Alloy version's Pod can't pull its image while the old one still
+    runs. The job waits, names why, and never says the tools are running."""
+    http, _, cluster, fake_api, _ = env
+    mark_all_ready(fake_api, NS)
+    out = await apply(http, await install_plan(http, cluster, ["logs"]))
+    assert (await wait_job(http, out["job_id"]))["state"] == "succeeded"
+
+    plan = await install_plan(http, cluster, ["logs"])
+    alloy = fake_api.objects["deployments.apps"][(NS, "omnikrux-alloy")]
+    alloy["metadata"]["generation"] = 2  # what Helm's upgrade does to the spec
+    alloy["status"] = _upgrade_status(replicas=2, updatedReplicas=1, availableReplicas=1)
+    labels = alloy["spec"]["selector"]["matchLabels"]
+    fake_api.pods[(NS, "omnikrux-alloy-new")] = waiting_pod(
+        NS, "omnikrux-alloy-new", labels, "ImagePullBackOff", "Back-off pulling image"
+    )
+    out = await apply(http, plan)
+    job_id = out["job_id"]
+    while True:
+        job = (await http.get(f"{JOBS}/{job_id}")).json()
+        assert job["state"] == "running", job
+        if job["blocked"] and job["blocked"][0]["name"] == "Deployment omnikrux-alloy":
+            break
+        await asyncio.sleep(0.01)
+    assert job["blocked"] == [
+        {
+            "namespace": NS,
+            "name": "Deployment omnikrux-alloy",
+            "message": "ImagePullBackOff: Back-off pulling image",
+        }
+    ]
+    assert job["message"] == "Waiting for Grafana Alloy to be ready (0 of 1)…"
+    alloy["status"] = rolled_out("Deployment", ready=True, generation=2)
+    assert (await wait_job(http, job_id))["state"] == "succeeded"

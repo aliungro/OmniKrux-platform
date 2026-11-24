@@ -194,6 +194,18 @@ class InstallStore:
                 setattr(row, _SOURCE_COLUMNS[key], source_id)
             return _record(row)
 
+    async def attach_job(self, cluster_id: str, old: str, new: str) -> bool:
+        """Hand the running record begun under `old` to job `new`. False when it isn't
+        running under `old` any more (another job holds it, or it was finished)."""
+        async with self._sessionmaker.begin() as session:
+            await lock_first(session)
+            row = await _by_cluster(session, cluster_id)
+            if row is None or row.job_id != old or row.state not in _RUNNING:
+                return False
+            row.job_id = new
+            row.updated_at = now()
+            return True
+
     async def begin_uninstall(self, cluster_id: str, *, job_id: str) -> InstallRecord:
         """State `uninstalling`. KeyError without a record; InstallBusy when another job runs."""
         async with self._sessionmaker.begin() as session:

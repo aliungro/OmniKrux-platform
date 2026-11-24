@@ -82,6 +82,8 @@ STEP_WAIT_WORDS = "Waiting for {label} to be ready…"
 STEP_CONNECT = "Connecting the sources…"
 # HELM_FAILED's `step` for an upgrade ("Helm couldn't install omnikrux-loki: ...").
 HELM_INSTALL_STEP = "install {release}"
+# HELM_TIMEOUT's `step` for an upgrade ("Helm didn't finish installing omnikrux-loki within ...").
+HELM_INSTALLING_STEP = "installing {release}"
 
 # How the install job ends. `tools` e.g. "Prometheus, Alertmanager, Loki and Grafana Alloy";
 # `project` is " to {project name}" when the sources were added to a project, else empty.

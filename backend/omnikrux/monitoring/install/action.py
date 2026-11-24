@@ -17,13 +17,14 @@ import hashlib
 import json
 import logging
 import re
+import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from kubernetes_asyncio.client import ApiClient
 
-from omnikrux.actions.jobs import Job, JobFailed, JobRunner
+from omnikrux.actions.jobs import Job
 from omnikrux.actions.pipeline import (
     ActionError,
     Applied,
@@ -67,39 +68,6 @@ log = logging.getLogger(__name__)
 
 KIND_KEY = "namespaces"
 _RUNNING = {"installing": "installing", "uninstalling": "uninstalling"}
-# How often the apply looks whether a job stopped before it could begin the install record.
-_BEGUN_POLL_SECONDS = 0.2
-
-
-def _settle(future: asyncio.Future[None], outcome: BaseException | None) -> None:
-    if future.done():
-        return
-    if outcome is None:
-        future.set_result(None)
-    else:
-        future.set_exception(outcome)
-
-
-def _not_started() -> ActionError:
-    return ActionError(503, messages.INSTALL_NO_JOBS)
-
-
-async def _begun(started: asyncio.Future[None], jobs: JobRunner, job_id: str, busy: str) -> None:
-    """Wait until the job has begun the install record. A job stopped before it ran (the
-    console shutting down) never settles `started`: its state says so."""
-    while not started.done():
-        await asyncio.wait({started}, timeout=_BEGUN_POLL_SECONDS)
-        if not started.done() and jobs.get(job_id).state != "running":
-            raise _not_started()
-    try:
-        started.result()
-    except InstallBusy:
-        raise ActionError(409, busy) from None
-    except ActionError:
-        raise
-    except Exception as exc:  # noqa: BLE001 (a store failure: in words, logged by type)
-        log.warning("The install record couldn't be begun (%s)", type(exc).__name__)
-        raise ActionError(503, messages.INSTALL_NOT_SAVED) from None
 
 
 def ordered(components: Sequence[str]) -> list[Component]:
@@ -342,9 +310,9 @@ class InstallAction:
     async def apply(
         self, ctx: ApplyContext, target: Target, spec: KindSpec, planned: Planned
     ) -> Applied:
-        """Check that the review still holds (nothing is written otherwise), then start the
-        install job. The job begins the install record itself, so the record names the job, and
-        the apply waits for that: a job already running there answers 409 with the busy words."""
+        """Check that the review still holds (nothing is written otherwise), begin the install
+        record (a job already running there answers 409 with the busy words), then start the
+        install job, which takes the record over under its own id."""
         jobs = ctx.jobs
         if jobs is None or jobs.closed:
             raise ActionError(503, messages.INSTALL_NO_JOBS)
@@ -357,26 +325,26 @@ class InstallAction:
         crd_docs = await self._still_as_reviewed(ctx.api, cluster, record, state)
         components = ordered(state["components"])
         specs = release_specs(components)
-        started: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        # The record is begun here, before the job (a job already running there is refused with
+        # 409, nothing started); the job takes it over under its own id as its first step.
+        pending = f"pending-{secrets.token_urlsafe(12)}"
+        try:
+            await services.installs.begin(
+                cluster.id,
+                namespace,
+                components,
+                settings_from_dict(state["settings"]),
+                {r.chart: CHARTS[r.chart].version for r in specs},
+                job_id=pending,
+                project_id=state.get("project_id"),
+            )
+        except InstallBusy as exc:
+            raise ActionError(409, self._busy(exc.state, cluster)) from None
+        except Exception as exc:  # noqa: BLE001 (a store failure: in words, logged by type)
+            log.warning("The install record couldn't be begun (%s)", type(exc).__name__)
+            raise ActionError(503, messages.INSTALL_NOT_SAVED) from None
 
         async def work(job: Job) -> str:
-            try:
-                await services.installs.begin(
-                    cluster.id,
-                    namespace,
-                    components,
-                    settings_from_dict(state["settings"]),
-                    {r.chart: CHARTS[r.chart].version for r in specs},
-                    job_id=job.id,
-                    project_id=state.get("project_id"),
-                )
-            except InstallBusy as exc:
-                _settle(started, exc)
-                raise JobFailed(self._busy(exc.state, cluster)) from None
-            except BaseException as exc:
-                _settle(started, exc if isinstance(exc, Exception) else _not_started())
-                raise
-            _settle(started, None)
             return await run_install(
                 job,
                 services=services,
@@ -388,6 +356,7 @@ class InstallAction:
                 plan_state=state,
                 actor=ctx.actor,
                 crds=crd_docs,
+                record_job=pending,
             )
 
         first = messages.STEP_NAMESPACE.format(namespace=namespace)
@@ -401,9 +370,11 @@ class InstallAction:
                 message=first,
                 cluster_id=cluster.id,
             )
-        except RuntimeError:  # the runner closed since the check
+        except RuntimeError:  # the runner closed while the record was begun
+            await services.installs.finish(
+                cluster.id, "failed", messages.INSTALL_NO_JOBS, job_id=pending
+            )
             raise ActionError(503, messages.INSTALL_NO_JOBS) from None
-        await _begun(started, jobs, job_id, self._busy("installing", cluster))
         return Applied(messages.INSTALL_STARTED.format(namespace=namespace), job_id=job_id)
 
     # -- parts -----------------------------------------------------------------------------

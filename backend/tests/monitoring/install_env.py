@@ -98,17 +98,46 @@ def _labels(release: str, name: str) -> dict[str, str]:
     return {"app.kubernetes.io/instance": release, "app.kubernetes.io/name": name}
 
 
-def workload(kind: str, namespace: str, name: str, release: str, *, ready: bool) -> dict:
-    labels = _labels(release, name)
-    status: dict
+def rolled_out(kind: str, *, ready: bool, generation: int = 1) -> dict:
+    """A workload's status with its current version (`generation`) rolled out on one replica
+    (Node): ready, or created but not ready."""
+    n = 1 if ready else 0
     if kind == "DaemonSet":
-        status = {"desiredNumberScheduled": 1, "numberReady": 1 if ready else 0}
+        return {
+            "observedGeneration": generation,
+            "desiredNumberScheduled": 1,
+            "currentNumberScheduled": 1,
+            "updatedNumberScheduled": 1,
+            "numberReady": n,
+            "numberAvailable": n,
+        }
+    status = {
+        "observedGeneration": generation,
+        "replicas": 1,
+        "updatedReplicas": 1,
+        "readyReplicas": n,
+    }
+    if kind == "Deployment":
+        status["availableReplicas"] = n
     else:
-        status = {"replicas": 1, "readyReplicas": 1 if ready else 0}
+        status["currentRevision"] = status["updateRevision"] = f"{generation}"
+    return status
+
+
+def workload(
+    kind: str, namespace: str, name: str, release: str, *, ready: bool, generation: int = 1
+) -> dict:
+    labels = _labels(release, name)
+    status = rolled_out(kind, ready=ready, generation=generation)
     return {
         "apiVersion": "apps/v1",
         "kind": kind,
-        "metadata": {"name": name, "namespace": namespace, "uid": f"u-{kind}-{name}"},
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-{kind}-{name}",
+            "generation": generation,
+        },
         "spec": {
             **({} if kind == "DaemonSet" else {"replicas": 1}),
             "selector": {"matchLabels": labels},

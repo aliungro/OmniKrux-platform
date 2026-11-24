@@ -41,16 +41,41 @@ def _int(value: object) -> int:
 
 
 def is_ready(kind: str, obj: dict) -> bool:
-    """Deployment and StatefulSet: every wanted replica ready. DaemonSet: every Node it should
-    run on has a ready Pod (and there is at least one)."""
+    """Whether the workload's current version is rolled out and ready, as `kubectl rollout
+    status` judges it, so an upgrade isn't read as ready while its old Pods still answer:
+
+    - the controller has seen the latest spec (`observedGeneration >= generation`);
+    - Deployment: every wanted replica updated, ready and available, and no old replica left;
+    - StatefulSet: every wanted replica updated and ready, and the update revision current;
+    - DaemonSet: on every Node it should run on (at least one), an updated, ready and available
+      Pod."""
+    meta = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
     spec = obj.get("spec") if isinstance(obj.get("spec"), dict) else {}
     status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
+    generation = meta.get("generation")
+    if isinstance(generation, int) and _int(status.get("observedGeneration")) < generation:
+        return False
     if kind == "DaemonSet":
         desired = _int(status.get("desiredNumberScheduled"))
-        return desired > 0 and _int(status.get("numberReady")) >= desired
+        return (
+            desired > 0
+            and _int(status.get("updatedNumberScheduled")) >= desired
+            and _int(status.get("numberReady")) >= desired
+            and _int(status.get("numberAvailable")) >= desired
+        )
     replicas = spec.get("replicas", 1)
     replicas = _int(replicas) if replicas is not None else 1
-    return _int(status.get("readyReplicas")) >= replicas
+    updated = _int(status.get("updatedReplicas"))
+    if updated < replicas or _int(status.get("readyReplicas")) < replicas:
+        return False
+    if kind == "Deployment":
+        # Old replicas still terminating, or new ones not available yet: the rollout isn't over.
+        total = status.get("replicas")
+        if isinstance(total, int) and total > updated:
+            return False
+        return _int(status.get("availableReplicas")) >= replicas
+    current, update = status.get("currentRevision"), status.get("updateRevision")
+    return not (isinstance(update, str) and update and current != update)
 
 
 def _one_line(text: str) -> str:
@@ -214,5 +239,7 @@ async def wait_ready(
 
 
 def step_words(message: str) -> str:
-    """A step's message as INSTALL_CANCELLED names it: lower case, without the ellipsis."""
-    return message.removesuffix("…").lower()
+    """A step's message as INSTALL_CANCELLED names it: its first letter in lower case (names
+    such as Helm and Loki keep theirs), without the ellipsis."""
+    text = message.removesuffix("…")
+    return text[:1].lower() + text[1:]
