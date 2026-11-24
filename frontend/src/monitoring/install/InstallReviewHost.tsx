@@ -23,7 +23,7 @@ import { UninstallOptions } from "./UninstallOptions";
 import { InstallSettingsPanel } from "./InstallSettingsPanel";
 import {
   contactsAppliedWords, contactsCancelledWords, installingWords, InstallReviewsContext, notInstalledWords, notUninstalledWords,
-  reviewFailedWords, stoppingWords, uninstallingWords, type InstallOutcome, type InstallReviews,
+  reviewFailedWords, stoppingWords, uninstallingWords, type FocusAfter, type InstallOutcome, type InstallReviews,
 } from "./useInstallReviews";
 
 type Kind = "install" | "uninstall" | "contacts";
@@ -35,7 +35,7 @@ interface Item {
   clusterId: string;
   components: Component[];
   projectId?: string;
-  focusAfter?: HTMLElement | null;
+  focusAfter?: FocusAfter;
   /** The install settings last edited: every plan of this review is made with them. */
   settings?: InstallSettingsIn;
   /** Edits in the settings panel not sent yet (null: none, or not sendable): Review again uses them. */
@@ -103,7 +103,7 @@ export function InstallReviewHost({ children, place }: {
   /** Where the job of the review on screen stands; null until an apply started one. */
   const jobState = useRef<InstallJobState | null>(null);
   /** Where the keyboard goes once the closed review's dialog is gone. */
-  const backTo = useRef<{ el: HTMLElement | null | undefined } | null>(null);
+  const backTo = useRef<{ el: FocusAfter | undefined } | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const lineId = useRef(0);
 
@@ -272,7 +272,8 @@ export function InstallReviewHost({ children, place }: {
     if (open !== null || backTo.current === null) return;
     const { el } = backTo.current;
     backTo.current = null;
-    if (el?.isConnected) el.focus();
+    const target = typeof el === "function" ? el() : el;
+    if (target?.isConnected) target.focus();
     else if (el || focusLost()) focusMainFrom(region.current);
   }, [open]);
 

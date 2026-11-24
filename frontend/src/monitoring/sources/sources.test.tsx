@@ -356,3 +356,24 @@ describe("Esc closes the source forms", () => {
     expect(doc.seen).toEqual([]);
   });
 });
+
+describe("Sources OmniKrux installed", () => {
+  it("installed sources show the chip", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({
+      sources: [
+        source("s1", "Prometheus · kind", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "kind", namespace: "monitoring", service: "prom", installed_by_omnikrux: true }),
+        source("s2", "Central"),
+      ],
+    }, fallback);
+    const { current } = open();
+    const rows = await screen.findAllByRole("listitem");
+    const ours = rows.find((r) => within(r).queryByText("Prometheus · kind")) as HTMLElement;
+    const theirs = rows.find((r) => within(r).queryByText("Central")) as HTMLElement;
+    expect(within(ours).getByText("Installed by OmniKrux")).toBeTruthy();
+    expect(within(theirs).queryByText("Installed by OmniKrux")).toBeNull();
+    expect(within(theirs).queryByRole("button", { name: "Monitoring tools" })).toBeNull();
+    await user.click(within(ours).getByRole("button", { name: "Monitoring tools" }));
+    await waitFor(() => expect(current().tabs[0].view).toEqual({ page: "tools", clusterId: "c1" }));
+  });
+});

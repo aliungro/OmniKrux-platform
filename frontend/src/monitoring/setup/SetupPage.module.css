@@ -369,6 +369,76 @@
   color: var(--warn);
 }
 
+.chip[data-tone="focus"] {
+  border-color: color-mix(in srgb, var(--focus) 55%, transparent);
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
+  color: var(--focus);
+}
+
+/* A missing tool chosen for install: the row is marked as something that will happen. */
+.row[data-install] {
+  background: color-mix(in srgb, var(--focus) 6%, var(--surf));
+  box-shadow: inset 3px 0 0 var(--focus);
+}
+
+.installAct {
+  grid-column: 2 / -1;
+}
+
+/* "Install Loki…": a toggle (aria-pressed). Off, an offer; on, chosen. */
+.install {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 50%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.install:hover {
+  background: color-mix(in srgb, var(--focus) 8%, transparent);
+}
+
+.install[aria-pressed="true"] {
+  border-style: solid;
+  border-color: var(--focus);
+  background: color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.install[aria-pressed="true"]::before {
+  content: "✓";
+  font-size: 11px;
+}
+
+.installLine {
+  grid-column: 2 / -1;
+  max-width: 62ch;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
 .why {
   flex-basis: 100%;
   color: var(--ink-3);
@@ -547,6 +617,17 @@
   font: 12px/1.45 "Geist Mono", ui-monospace, monospace;
 }
 
+.summaryInstall {
+  box-shadow: inset 3px 0 0 var(--focus);
+  color: var(--ink);
+}
+
+.installNext {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
 /* --- Footer ----------------------------------------------------------------------------------- */
 
 .foot {
@@ -633,7 +714,9 @@
 .primary:focus-visible,
 .secondary:focus-visible,
 .quiet:focus-visible,
-.addHand:focus-visible {
+.addHand:focus-visible,
+.install:focus-visible,
+.link:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }

@@ -113,6 +113,8 @@ export interface SourceOut {
   health: HealthOut;
   created_at: string;
   updated_at: string;
+  /** Whether OmniKrux installed the tool it reaches (Monitoring tools); left out reads as no. */
+  installed_by_omnikrux?: boolean;
 }
 
 export interface TestOut {
@@ -272,6 +274,8 @@ export interface ProjectDeleteReviewOut {
   alert_rules?: { id: string; name: string }[];
   /** Rules still applied in a cluster, removed first; left out when none. */
   cluster_rules?: { id: string; name: string }[];
+  /** The monitoring tools OmniKrux installed in the project's cluster: they stay. Left out when none. */
+  tools_stay?: { cluster_id: string; cluster_name: string; namespace: string };
 }
 
 /** A dashboard an owner's deletion takes with it. */

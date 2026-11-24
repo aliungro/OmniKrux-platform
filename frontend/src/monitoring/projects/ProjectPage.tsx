@@ -17,6 +17,7 @@ import { SourceForm } from "../sources/SourceForm";
 import { isQueryable, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
 import { FilterField, validFilter } from "./FilterField";
 import { ProjectDeleteReview } from "./ProjectDeleteReview";
+import { ProjectTools } from "./ProjectTools";
 import s from "./ProjectPage.module.css";
 
 const UNKNOWN: HealthOut = { state: "unknown", message: null, version: null, checked_at: null };
@@ -398,6 +399,10 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
           </div>
         )}
       </section>
+
+      {project.kind === "kubernetes" && project.cluster_id !== null && !clusterGone && (
+        <ProjectTools clusterId={project.cluster_id} clusterName={clusterName ?? project.cluster_id} nav={nav} openInNewTab={openInNewTab} />
+      )}
 
       <section aria-labelledby="monitoring-project-dashboards" className={s.section}>
         <h2 id="monitoring-project-dashboards" className={s.heading}>Dashboards</h2>

@@ -30,6 +30,7 @@ import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
 import SetupPage from "./setup/SetupPage";
 import { buildSearchIndex } from "./search/search";
+import { pruneSetupDrafts } from "./setup/setupDraftStore";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
 import {
   equalMonitoringView, MONITORING_HOME, monitoringTabLabel, setMonitoringLeaveCheck, setMonitoringSwitchCheck, type MonitoringTabAction,
@@ -183,6 +184,9 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   const view = nav.view;
   // A heading the page after a delete never took is dropped as the tab moves on.
   useEffect(() => { settleHeadingFocus(view); }, [view]);
+  // A closed tab's setup draft goes with it.
+  const tabIds = JSON.stringify(tabs.tabs.map((t) => t.id));
+  useEffect(() => { pruneSetupDrafts(JSON.parse(tabIds) as string[]); }, [tabIds]);
 
   const clusterNames = useMemo(() => Object.fromEntries((clusters ?? []).map((c) => [c.id, c.name])), [clusters]);
   const index = useMemo(

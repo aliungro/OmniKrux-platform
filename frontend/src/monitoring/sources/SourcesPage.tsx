@@ -16,7 +16,7 @@ const STALE_REVIEW = "Something changed since the review. Review it again.";
 
 type Editing = { kind: "new" } | { kind: "edit"; id: string } | null;
 
-export default function SourcesPage() {
+export default function SourcesPage({ nav, openInNewTab }: MonitoringPageProps) {
   const client = useQueryClient();
   const sources = useSources();
   const healthQuery = useSourceHealth();
@@ -138,6 +138,18 @@ export default function SourcesPage() {
                   <span className={s.name}>{x.name}</span>
                   <span className={s.kind}>{sourceTypeLabel(x.type)}</span>
                   <span className={s.where}>{whereLabel(x)}</span>
+                  {x.installed_by_omnikrux && (
+                    <span className={s.ours}>
+                      <span className={s.chip}>Installed by OmniKrux</span>
+                      {x.cluster_id && (
+                        <button type="button" className={s.link} onClick={(e) => {
+                          const target = { page: "tools", clusterId: x.cluster_id as string } as const;
+                          if (e.ctrlKey || e.metaKey) openInNewTab(target);
+                          else nav.navigate(target, "push");
+                        }}>Monitoring tools</button>
+                      )}
+                    </span>
+                  )}
                 </div>
                 <div className={s.meta}>
                   <span className={s.health} data-state={state} title={state === "down" ? (h.message ?? undefined) : undefined}>

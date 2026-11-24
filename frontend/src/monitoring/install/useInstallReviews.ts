@@ -17,9 +17,14 @@ export interface InstallRequest {
   clusterId: string;
   components: Component[];
   projectId?: string;
-  /** Where the keyboard goes when the review closes; the Monitoring workspace when it's gone. */
-  focusAfter?: HTMLElement | null;
+  /**
+   * Where the keyboard goes when the review closes; the Monitoring workspace when it's gone. A
+   * function is asked as the review closes (for a page that wasn't drawn yet when it was asked for).
+   */
+  focusAfter?: FocusAfter;
 }
+
+export type FocusAfter = HTMLElement | null | (() => HTMLElement | null);
 
 export interface InstallReviews {
   install(req: InstallRequest): Promise<InstallOutcome>;

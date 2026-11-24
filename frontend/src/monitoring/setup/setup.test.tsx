@@ -4,8 +4,12 @@ import userEvent from "@testing-library/user-event";
 import type { DiscoveryOut, FoundTool, SourceOut, SuggestOut } from "../api/types";
 import { readRecent } from "../home/recent";
 import { BAD_FILTER } from "../projects/FilterField";
-import { installFakeMonitoringApi, type FakeMonitoringState } from "../test/fakeMonitoringApi";
+import { FAKE_TOOLS_MISSING, installFakeMonitoringApi, type FakeMonitoringSeed } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
+import type { Plan } from "../../api/types";
+import type { InstallPlanOut } from "../install/api";
+import { SETTINGS, status, TOOLS } from "../install/toolsFixtures";
+import { SECRET_NOT_KEPT, SETUP_DRAFT_PREFIX } from "./setupDraftStore";
 import { picksFromDiscovery, setupBody, type SetupDraft } from "./setupModel";
 
 beforeEach(() => localStorage.clear());
@@ -42,7 +46,21 @@ function source(id: string, name: string): SourceOut {
 const KEEPS: SuggestOut = { filter: 'cluster="kind"', origin: "auto", reason: "This source holds several clusters; the filter keeps kind." };
 const PROM_AND_LOKI = found(tool("prometheus", "reachable"), tool("loki", "unreachable"));
 
-function install(extra: Partial<FakeMonitoringState> = {}) {
+const GENERATES = "OmniKrux connects to tools that already run there, or writes the files to install them for you to run.";
+const METRICS_LINE = "Installs Prometheus, Alertmanager, node-exporter and kube-state-metrics with Helm after you create the project. You review it first.";
+const LOGS_LINE = "Installs Loki and Grafana Alloy (collects Pod logs) with Helm after you create the project. You review it first.";
+const installPlan = (over: Partial<Plan> = {}): InstallPlanOut => ({
+  plan: {
+    plan_id: "plan-1", action: "install",
+    target: { cluster_id: "c1", kind_key: "omnikrux.monitoring/install", namespace: null, name: "monitoring" },
+    kind: "Monitoring tools", cluster: { id: "c1", name: CLUSTER, provider: "kind", environment: "development" },
+    title: "Install monitoring tools in monitoring", summary: ["Installs logs into the cluster, namespace monitoring."],
+    warnings: [], blocked: [], diff: null, confirm_text: null, apply_label: "Install", expires_at: "2026-11-24T10:05:00Z", ...over,
+  },
+  settings: SETTINGS, problems: [], facts: { default_storage_class: "standard", kube_version: "1.31.0" },
+});
+
+function install(extra: FakeMonitoringSeed = {}) {
   return installFakeMonitoringApi({ discovery: { c1: PROM_AND_LOKI }, ...extra }, clustersFallback);
 }
 const startFromCluster = () => renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }) });
@@ -52,7 +70,7 @@ const setupPosts = (api: ReturnType<typeof install>) => api.requests.filter((r) 
 
 const PROD = "prod-east";
 const twoClusters = [...clusters, { id: "c2", name: PROD, provider: "aks", state: "ready" }];
-function installTwo(extra: Partial<FakeMonitoringState> = {}) {
+function installTwo(extra: FakeMonitoringSeed = {}) {
   return installFakeMonitoringApi({
     discovery: { c1: PROM_AND_LOKI, c2: { ...found(tool("prometheus", "reachable")), cluster_id: "c2", cluster_name: PROD } },
     suggestion: KEEPS, ...extra,
@@ -114,17 +132,37 @@ describe("Setup page", () => {
     expect(continueButton().disabled).toBe(false);
   });
 
-  it("missing tools say install comes later", async () => {
+  // M5 (F18): replaces M1's "missing tools say install comes later"; its Grafana line (M6's) stays.
+  it("missing rows offer install and the footer counts it", async () => {
+    const user = userEvent.setup();
     install({
       sources: [source("s9", "Loki · central")],
       discovery: { c1: found(tool("prometheus", "reachable", { existing_source_id: "s9" }), tool("grafana", "reachable"), tool("loki", "missing")) },
+      install: { tools: TOOLS },
     });
     startFromCluster();
     const loki = await screen.findByRole("group", { name: "Loki" });
     expect(within(loki).getByText("Missing")).toBeTruthy();
     expect(within(loki).getByText("Not found in this cluster")).toBeTruthy();
-    expect(within(loki).getByText("Installing it from here comes in a later update.")).toBeTruthy();
     expect(within(loki).queryByRole("checkbox")).toBeNull();
+    const toggle = await within(loki).findByRole("button", { name: "Install Loki…" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByText("OmniKrux looked inside the cluster. Use what's there, install what's missing, or add a source by hand.")).toBeTruthy();
+    expect(screen.getByText("1 source in use")).toBeTruthy();
+
+    await user.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(within(loki).getByText("To install")).toBeTruthy();
+    expect(within(loki).queryByText("Missing")).toBeNull();
+    expect(within(loki).getByText(LOGS_LINE)).toBeTruthy();
+    expect(screen.getByText("1 source in use · 1 to install")).toBeTruthy();
+    expect(document.activeElement).toBe(toggle);
+
+    await user.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(within(loki).queryByText(LOGS_LINE)).toBeNull();
+    expect(screen.getByText("1 source in use")).toBeTruthy();
+
     const grafana = screen.getByRole("group", { name: "Grafana" });
     expect(within(grafana).getByText("Found")).toBeTruthy();
     expect(within(grafana).getByText("Importing its dashboards comes in a later update.")).toBeTruthy();
@@ -248,7 +286,8 @@ describe("Setup page", () => {
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "What to monitor" }));
 
     await user.click(screen.getByRole("radio", { name: /A Docker host/ }));
-    expect(screen.getByText("OmniKrux connects to tools that already run there. Generating files to install them comes in a later update.")).toBeTruthy();
+    // M5 (F18): the Docker host line now says OmniKrux writes the files to install the tools.
+    expect(screen.getByText(GENERATES)).toBeTruthy();
     await user.click(screen.getByRole("radio", { name: /Something of your own/ }));
     await user.click(continueButton());
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Sources" }));
@@ -380,5 +419,271 @@ describe("Setup focus on arrival", () => {
     await user.click(screen.getByRole("button", { name: "Create project" }));
     await waitFor(() => expect(selectedTab().textContent).toContain(CLUSTER));
     expect(document.activeElement?.tagName).toBe("MAIN");
+  });
+});
+
+describe("Setup installs what's missing", () => {
+  const LOKI_MISSING = found(tool("loki", "missing"));
+  const BOTH_MISSING = found(tool("prometheus", "missing"), tool("loki", "missing"));
+  const PROM_AND_LOKI_MISSING = found(tool("prometheus", "reachable"), tool("loki", "missing"));
+  const installPosts = (api: ReturnType<typeof install>) => api.requests.filter((r) => r.method === "POST" && r.url === "/api/monitoring/install/plan");
+
+  it("install alone lets you continue", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: LOKI_MISSING }, install: { tools: TOOLS } });
+    startFromCluster();
+    const toggle = await screen.findByRole("button", { name: "Install Loki…" });
+    expect(screen.getByText("0 sources in use")).toBeTruthy();
+    expect(continueButton().disabled).toBe(true);
+    expect(screen.getByText("Pick at least one source, install one, or add one by hand.")).toBeTruthy();
+
+    await user.click(toggle);
+    expect(screen.getByText("0 sources in use · 1 to install")).toBeTruthy();
+    expect(continueButton().disabled).toBe(false);
+    expect(screen.queryByText("Pick at least one source, install one, or add one by hand.")).toBeNull();
+  });
+
+  it("step 4 lists the install and renames the button", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: BOTH_MISSING }, install: { tools: TOOLS } });
+    startFromCluster();
+    await user.click(await screen.findByRole("button", { name: "Install Prometheus…" }));
+    expect(within(screen.getByRole("group", { name: "Prometheus" })).getByText(METRICS_LINE)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Install Loki…" }));
+    expect(screen.getByText("0 sources in use · 2 to install")).toBeTruthy();
+    await user.click(continueButton());
+
+    await screen.findByRole("heading", { name: "Name and review" });
+    const summary = screen.getByRole("list", { name: "Summary" });
+    expect(within(summary).getByText("Install: Prometheus, Alertmanager, node-exporter and kube-state-metrics into the cluster")).toBeTruthy();
+    expect(within(summary).getByText("Install: Loki and Grafana Alloy into the cluster")).toBeTruthy();
+    expect(screen.getByText("You review the install right after the project is created.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create project and review the install" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Create project" })).toBeNull();
+    expect(within(screen.getByRole("list", { name: "Steps" })).getByText("0 sources in use · 2 to install")).toBeTruthy();
+
+    // Back on step 2, nothing to install: the button reads as before.
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByRole("button", { name: "Install Prometheus…" }));
+    await user.click(screen.getByRole("button", { name: "Install Loki…" }));
+    expect(continueButton().disabled).toBe(true);
+  });
+
+  it("create then opens the install review over the project", async () => {
+    const user = userEvent.setup();
+    const api = install({ discovery: { c1: PROM_AND_LOKI_MISSING }, install: { tools: TOOLS, plans: [installPlan()], status: { c1: status({ cluster_name: CLUSTER }) } } });
+    startFromCluster();
+    await user.click(await screen.findByRole("button", { name: "Install Loki…" }));
+    await user.click(continueButton());
+    await user.click(await screen.findByRole("button", { name: "Create project and review the install" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Install monitoring tools in monitoring")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Install" })));
+    expect(selectedTab().textContent).toContain(CLUSTER);
+    expect(screen.getByRole("heading", { level: 1, name: CLUSTER })).toBeTruthy();
+
+    expect(setupPosts(api)).toHaveLength(1);
+    const plans = installPosts(api);
+    expect(plans).toHaveLength(1);
+    const projectId = api.state.projects[0].id;
+    expect(plans[0].body).toEqual({ cluster_id: "c1", components: ["logs"], project_id: projectId });
+    expect(api.requests.indexOf(setupPosts(api)[0])).toBeLessThan(api.requests.indexOf(plans[0]));
+    // The setup went with the project: nothing is kept for this tab any more.
+    expect(Object.keys(localStorage).filter((k) => k.startsWith(SETUP_DRAFT_PREFIX))).toEqual([]);
+  });
+
+  it("a cancelled install review leaves the project and says nothing was installed", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI_MISSING }, install: { tools: TOOLS, plans: [installPlan()], status: { c1: status({ cluster_name: CLUSTER }) } } });
+    startFromCluster();
+    await user.click(await screen.findByRole("button", { name: "Install Loki…" }));
+    await user.click(continueButton());
+    await user.click(await screen.findByRole("button", { name: "Create project and review the install" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText(`Nothing was installed in ${CLUSTER}.`)).toBeTruthy();
+    const heading = screen.getByRole("heading", { level: 1, name: CLUSTER });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(document.activeElement).not.toBe(document.body);
+    expect(selectedTab().textContent).toContain(CLUSTER);
+  });
+
+  it("unavailable tools replace the install buttons with the reason", async () => {
+    install({ discovery: { c1: LOKI_MISSING } });
+    startFromCluster();
+    const loki = await screen.findByRole("group", { name: "Loki" });
+    expect(await within(loki).findByText(`Installing isn't available here: ${FAKE_TOOLS_MISSING}`)).toBeTruthy();
+    expect(within(loki).queryByRole("button", { name: /Install/ })).toBeNull();
+    expect(screen.getByText("OmniKrux looked inside the cluster. Use what's there, or add a source by hand.")).toBeTruthy();
+    expect(screen.getByText("Pick at least one source, or add one by hand.")).toBeTruthy();
+  });
+
+  it("installed tools show the chip and link", async () => {
+    const user = userEvent.setup();
+    const ours = { ...source("s7", "Prometheus · kind"), reach: "cluster" as const, url: null, cluster_id: "c1", installed_by_omnikrux: true };
+    install({
+      sources: [ours, source("s8", "Central")],
+      discovery: { c1: found(tool("prometheus", "reachable", { existing_source_id: "s7" }), tool("loki", "reachable", { existing_source_id: "s8" })) },
+      install: { tools: TOOLS, status: { c1: status({ cluster_name: CLUSTER }) } },
+    });
+    const { current } = startFromCluster();
+    const prom = await screen.findByRole("group", { name: "Prometheus" });
+    expect(await within(prom).findByText("Installed by OmniKrux")).toBeTruthy();
+    expect(within(prom).getByText("Reachable")).toBeTruthy();
+    const loki = screen.getByRole("group", { name: "Loki" });
+    expect(within(loki).queryByText("Installed by OmniKrux")).toBeNull();
+    expect(within(loki).queryByRole("button", { name: "Monitoring tools" })).toBeNull();
+
+    await user.click(within(prom).getByRole("button", { name: "Monitoring tools" }));
+    await waitFor(() => expect(current().tabs[0].view).toEqual({ page: "tools", clusterId: "c1" }));
+  });
+
+  it("docker and servers line in step 1", async () => {
+    const user = userEvent.setup();
+    install();
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await screen.findByRole("heading", { name: "What to monitor" });
+    await user.click(screen.getByRole("radio", { name: /A Docker host/ }));
+    expect(screen.getByText(GENERATES)).toBeTruthy();
+    await user.click(screen.getByRole("radio", { name: /Servers/ }));
+    expect(screen.getByText(GENERATES)).toBeTruthy();
+    await user.click(screen.getByRole("radio", { name: /Something of your own/ }));
+    expect(screen.queryByText(GENERATES)).toBeNull();
+  });
+});
+
+describe("Setup draft in this browser", () => {
+  const PASSWORD = "pa55-word-typed-here";
+  const HEADER_VALUE = "header-value-typed-here";
+  const LOKI_MISSING = found(tool("prometheus", "reachable"), tool("loki", "missing"));
+  const stored = () => Object.entries(localStorage).filter(([k]) => k.startsWith(SETUP_DRAFT_PREFIX));
+
+  async function addByHand(user: ReturnType<typeof userEvent.setup>, url: string, fill?: () => Promise<void>) {
+    await user.click(await screen.findByRole("button", { name: "+ Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), url);
+    if (fill) await fill();
+    await user.click(screen.getByRole("button", { name: "Use this source" }));
+    await screen.findByRole("button", { name: "+ Add a source by hand" });
+  }
+
+  it("a setup left mid-way comes back", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: LOKI_MISSING }, install: { tools: TOOLS } });
+    const { navigate } = startFromCluster();
+    const field = await screen.findByRole("textbox", { name: "Filter for Prometheus" });
+    await user.type(field, 'job="api"');
+    await user.click(screen.getByRole("button", { name: "Install Loki…" }));
+    await addByHand(user, "http://prom.example:9090");
+    expect(screen.getByText("2 sources in use · 1 to install")).toBeTruthy();
+    await user.click(continueButton());
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    await user.clear(name);
+    await user.type(name, "Shop");
+
+    navigate({ page: "home" }, "push");
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Name and review" })).toBeNull());
+    navigate({ page: "setup", clusterId: "c1" }, "push");
+
+    expect(await screen.findByRole("heading", { name: "Name and review" })).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Shop");
+    expect(screen.getByText("Install: Loki and Grafana Alloy into the cluster")).toBeTruthy();
+    expect(screen.getByText("Prometheus · prom.example · new")).toBeTruthy();
+    expect(screen.getByText('Filter: job="api"')).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create project and review the install" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByRole("heading", { name: `What we found in ${CLUSTER}` })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Install Loki…" }).getAttribute("aria-pressed")).toBe("true");
+    expect((await screen.findByRole("textbox", { name: "Filter for Prometheus" }) as HTMLInputElement).value).toBe('job="api"');
+    expect(screen.getByText("2 sources in use · 1 to install")).toBeTruthy();
+    // The name typed stays the user's: it doesn't follow the cluster again.
+    await user.click(continueButton());
+    expect(((await screen.findByRole("textbox", { name: "Name" })) as HTMLInputElement).value).toBe("Shop");
+  });
+
+  it("secrets never reach browser storage", async () => {
+    const user = userEvent.setup();
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    try {
+      install({ discovery: { c1: LOKI_MISSING } });
+      const { navigate } = startFromCluster();
+      await screen.findByRole("group", { name: "Prometheus" });
+      await addByHand(user, "http://basic.example:9090", async () => {
+        await user.selectOptions(screen.getByLabelText("Authentication"), "basic");
+        await user.type(screen.getByLabelText("User name"), "reader");
+        await user.type(screen.getByLabelText("Password"), PASSWORD);
+      });
+      await addByHand(user, "http://bearer.example:9090", async () => {
+        await user.selectOptions(screen.getByLabelText("Authentication"), "bearer");
+        await user.type(screen.getByLabelText("Token"), TOKEN);
+      });
+      await addByHand(user, "http://header.example:9090", async () => {
+        await user.click(screen.getByRole("button", { name: "Add header" }));
+        await user.type(screen.getByLabelText("Header 1 name"), "X-Scope-OrgID");
+        await user.type(screen.getByLabelText("Header 1 value"), HEADER_VALUE);
+      });
+      // A form being typed is never kept either.
+      await user.click(screen.getByRole("button", { name: "+ Add a source by hand" }));
+      await user.selectOptions(screen.getByLabelText("Authentication"), "bearer");
+      await user.type(screen.getByLabelText("Token"), "half-typed-token-value");
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await user.click(continueButton());
+      await screen.findByRole("heading", { name: "Name and review" });
+      navigate({ page: "home" }, "push");
+      await waitFor(() => expect(screen.queryByRole("heading", { name: "Name and review" })).toBeNull());
+
+      const drafts = setItem.mock.calls.filter(([k]) => String(k).startsWith(SETUP_DRAFT_PREFIX));
+      expect(drafts.length).toBeGreaterThan(0);
+      for (const [k, v] of setItem.mock.calls) {
+        for (const secret of [PASSWORD, TOKEN, HEADER_VALUE, "half-typed-token-value"]) {
+          expect(String(k)).not.toContain(secret);
+          expect(String(v)).not.toContain(secret);
+        }
+      }
+      for (const [, v] of Object.entries(localStorage)) {
+        for (const secret of [PASSWORD, TOKEN, HEADER_VALUE, "half-typed-token-value"]) expect(v).not.toContain(secret);
+      }
+      const [[, last]] = stored();
+      const kept = JSON.parse(last) as { draft: SetupDraft };
+      const hand = kept.draft.picks.filter((p) => p.key.startsWith("hand:"));
+      expect(hand.map((p) => p.secretsDropped)).toEqual([true, true, true]);
+      expect(hand.map((p) => ("new" in p.source ? p.source.new.auth : null))).toEqual([
+        { type: "basic", username: "reader" }, { type: "bearer" }, { type: "none" },
+      ]);
+      expect("new" in hand[2].source && hand[2].source.new.headers).toEqual([{ name: "X-Scope-OrgID" }]);
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it("a restored pick without its secret isn't used", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: found(tool("loki", "missing")) } });
+    const { navigate } = startFromCluster();
+    await screen.findByRole("group", { name: "Loki" });
+    await addByHand(user, "http://bearer.example:9090", async () => {
+      await user.selectOptions(screen.getByLabelText("Authentication"), "bearer");
+      await user.type(screen.getByLabelText("Token"), TOKEN);
+    });
+    await addByHand(user, "http://open.example:9090");
+    expect(screen.getByText("2 sources in use")).toBeTruthy();
+
+    navigate({ page: "home" }, "push");
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Loki" })).toBeNull());
+    navigate({ page: "setup", clusterId: "c1" }, "push");
+
+    const lost = await screen.findByRole("group", { name: "Prometheus · bearer.example" });
+    expect(within(lost).getByText(SECRET_NOT_KEPT)).toBeTruthy();
+    expect(within(lost).queryByRole("textbox")).toBeNull();
+    const kept = screen.getByRole("group", { name: "Prometheus · open.example" });
+    expect(within(kept).queryByText(SECRET_NOT_KEPT)).toBeNull();
+    expect(screen.getByText("1 source in use")).toBeTruthy();
+
+    await user.click(within(lost).getByRole("button", { name: "Enter it again" }));
+    expect(screen.queryByRole("group", { name: "Prometheus · bearer.example" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Address")));
   });
 });

@@ -41,6 +41,9 @@ export function ProjectDeleteReview({ review, busy, error, clusterName, restoreF
       <OwnerRuleLines alertRules={review.alert_rules} clusterRules={review.cluster_rules} owner={{ kind: "project", id: review.project_id }}
         clusterOf={() => clusterName} fallbackCluster={clusterName ?? "its cluster"} onOpenRule={onOpenRule} onReviewed={onReviewed} />
       {lines.map((line) => <p key={line}>{line}</p>)}
+      {review.tools_stay && (
+        <p>{`Monitoring tools OmniKrux installed in ${review.tools_stay.cluster_name} stay. Uninstall them from Monitoring tools.`}</p>
+      )}
     </DeleteReviewDialog>
   );
 }

@@ -582,6 +582,11 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
           dashboards: refsOf("project", p.id),
           token: TOKEN,
           ...ownerRuleLists(p.id),
+          // The tools OmniKrux installed in the project's cluster stay (from the seeded status).
+          ...(() => {
+            const st = p.cluster_id ? state.install.status[p.cluster_id] : undefined;
+            return st?.install ? { tools_stay: { cluster_id: st.cluster_id, cluster_name: st.cluster_name, namespace: st.install.namespace } } : {};
+          })(),
         });
       }
       if (is("DELETE", "projects", b)) {

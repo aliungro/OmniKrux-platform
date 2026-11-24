@@ -8,6 +8,7 @@ import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import { panel, seedDashboard, spec } from "../test/dashboardSeeds";
 import { editSessions } from "../dashboards/editor/useDashboardEditor";
+import { record, release, status, TOOLS } from "../install/toolsFixtures";
 
 beforeEach(() => { localStorage.clear(); editSessions.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -617,5 +618,73 @@ describe("An empty filter", () => {
     open("p1");
     const field = await screen.findByRole("textbox", { name: "Filter for Prom" });
     expect(field.getAttribute("placeholder")).toBe('No filter · label="value", …');
+  });
+});
+
+describe("Project page and the cluster's monitoring tools", () => {
+  const withCluster = async (url: string) => json(url === "/api/clusters" ? [{ id: "c1", name: "kind-dev", provider: "kind", state: "ready" }] : []);
+  const kube = (id: string, name: string) => project(id, name, [], { kind: "kubernetes", cluster_id: "c1", cluster_name: "kind-dev", cluster_provider: "kind" });
+  const tools = (section: HTMLElement) => within(section);
+  const toolsSection = async () => (await screen.findByRole("heading", { name: "Monitoring tools" })).closest("section") as HTMLElement;
+
+  it("the project page shows its cluster's tools", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: [kube("p1", "Dev")], install: { tools: TOOLS, status: { c1: status({ cluster_name: "kind-dev" }) } } }, withCluster);
+    const { current } = open("p1");
+    let section = await toolsSection();
+    expect(await tools(section).findByText("OmniKrux hasn't installed anything in kind-dev.")).toBeTruthy();
+    await user.click(tools(section).getByRole("button", { name: "Install what's missing…" }));
+    await waitFor(() => expect(current().tabs[0].view).toEqual({ page: "tools", clusterId: "c1" }));
+    cleanup();
+
+    installFakeMonitoringApi({
+      projects: [kube("p1", "Dev")],
+      install: { tools: TOOLS, status: { c1: status({ cluster_name: "kind-dev", install: record(), releases: [release()] }) } },
+    }, withCluster);
+    const again = open("p1");
+    section = await toolsSection();
+    expect(await tools(section).findByText("Installed by OmniKrux in monitoring · Running")).toBeTruthy();
+    await user.click(tools(section).getByRole("button", { name: "Open Monitoring tools" }));
+    await waitFor(() => expect(again.current().tabs[0].view).toEqual({ page: "tools", clusterId: "c1" }));
+    cleanup();
+
+    // A release that isn't up says so; a read that fails says so and shows nothing old.
+    installFakeMonitoringApi({
+      projects: [kube("p1", "Dev")],
+      install: { tools: TOOLS, status: { c1: status({ cluster_name: "kind-dev", install: record(), releases: [release({ status: "failed" })] }) } },
+    }, withCluster);
+    open("p1");
+    expect(await tools(await toolsSection()).findByText("Installed by OmniKrux in monitoring · Not healthy")).toBeTruthy();
+    cleanup();
+    installFakeMonitoringApi({ projects: [kube("p1", "Dev")] }, withCluster);
+    open("p1");
+    section = await toolsSection();
+    expect(await tools(section).findByText(/^Couldn't read the monitoring tools: /)).toBeTruthy();
+    expect(tools(section).queryByText(/Installed by OmniKrux/)).toBeNull();
+    cleanup();
+
+    // Not a Kubernetes project: no such section (Docker hosts and servers get their files later).
+    installFakeMonitoringApi({ projects: [project("p2", "Box", [], { kind: "docker" })] }, withCluster);
+    open("p2");
+    await screen.findByRole("heading", { name: "Sources" });
+    expect(screen.queryByRole("heading", { name: "Monitoring tools" })).toBeNull();
+  });
+
+  it("project delete says the tools stay", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({
+      projects: [kube("p1", "Dev")],
+      install: { tools: TOOLS, status: { c1: status({ cluster_name: "kind-dev", install: record(), releases: [release()] }) } },
+    }, withCluster);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Monitoring tools OmniKrux installed in kind-dev stay. Uninstall them from Monitoring tools.")).toBeTruthy();
+    cleanup();
+
+    installFakeMonitoringApi({ projects: [kube("p1", "Dev")], install: { tools: TOOLS, status: { c1: status({ cluster_name: "kind-dev" }) } } }, withCluster);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    expect(within(await screen.findByRole("alertdialog")).queryByText(/stay\. Uninstall them/)).toBeNull();
   });
 });
