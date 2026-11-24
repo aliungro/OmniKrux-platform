@@ -16,7 +16,7 @@ from omnikrux.monitoring.install.kubeconfig import LONGEST_HELM_CALL_SECONDS
 from omnikrux.monitoring.install.settings import InstallSettings
 from omnikrux.monitoring.install.values import AMC_NAME
 from tests.actions.clusters import kubeconfig_named
-from tests.fakekube import CRDS_KEY, TOKEN
+from tests.fakekube import CRDS_KEY, TOKEN, FakeResource, PodStore, helm_release_secret
 from tests.monitoring.install_env import (
     JOBS,
     apply,
@@ -102,6 +102,7 @@ async def _names(http, ids) -> list[str]:
 async def test_uninstall_review_lists_what_goes(env):
     http, _, installed, fake_api, fake_helm, cluster = env
     _seed_volumes(fake_api)
+    contact_settings(fake_api, NS)
     sources = installed.sources
     await _project(http, "Shop", [sources["prometheus"], sources["loki"]])
     names = await _names(http, [sources["prometheus"], sources["alertmanager"], sources["loki"]])
@@ -260,7 +261,8 @@ async def test_uninstall_removes_releases_settings_and_sources(env):
     job = await wait_job(http, out["job_id"])
     assert job["state"] == "succeeded", job
     assert job["message"] == "Uninstalled from monitoring. The stored data stays."
-    assert job["done"] == job["total"] == 3 + 7 + 1 + 1
+    # 3 releases + 7 workloads + the Operator's resources + contact settings + sources.
+    assert job["done"] == job["total"] == 3 + 7 + 1 + 1 + 1
     assert job["blocked"] == []
 
     calls = _uninstalls(fake_helm)
@@ -283,9 +285,7 @@ async def test_uninstall_removes_releases_settings_and_sources(env):
         {"uid": "u-amc-secret"},
     ]
     # The namespace and the CRDs stay.
-    assert ("", NS) in fake_api.objects["namespaces"] or any(
-        o["kind"] == "Namespace" for o in fake_api.created_objects
-    )
+    assert ("", NS) in fake_api.objects["namespaces"]
     assert not any(
         "/namespaces/monitoring" == p or "customresourcedefinitions" in p for p in deleted
     )
@@ -360,19 +360,160 @@ async def test_uninstall_review_opens_on_cancel_shape(env):
 
 
 async def test_a_release_already_gone_counts_as_removed(env):
-    http, app, installed, fake_api, fake_helm, _ = env
+    http, app, installed, fake_api, fake_helm, cluster = env
     del fake_api.objects["secrets"][(NS, "sh.helm.release.v1.omnikrux-loki.v1")]
-    for name in ("omnikrux-loki",):
-        fake_api.objects["statefulsets.apps"].pop((NS, name), None)
-    out = await apply(http, await uninstall_plan(http, installed.cluster_id))
-    job = await wait_job(http, out["job_id"])
+    fake_api.objects["statefulsets.apps"].pop((NS, "omnikrux-loki"), None)
+    plan = await uninstall_plan(http, installed.cluster_id)
+    assert plan["summary"][0] == (
+        f"Removes the Helm releases omnikrux-alloy and omnikrux-metrics from {cluster}."
+    )
+    job = await wait_job(http, (await apply(http, plan))["job_id"])
     assert job["state"] == "succeeded", job
-    assert [c.args[1] for c in _uninstalls(fake_helm)] == [
-        "omnikrux-alloy",
-        "omnikrux-loki",
-        "omnikrux-metrics",
-    ]
+    assert [c.args[1] for c in _uninstalls(fake_helm)] == ["omnikrux-alloy", "omnikrux-metrics"]
     assert await app.state.monitoring.installs.get(installed.cluster_id) is None
+
+
+def _unmark(fake_api, release: str) -> None:
+    """The release's record without OmniKrux's mark (a `helm upgrade` without --reuse-values)."""
+    chart = {"omnikrux-loki": "loki", "omnikrux-alloy": "alloy"}.get(release, "kps")
+    fake_api.objects["secrets"][(NS, f"sh.helm.release.v1.{release}.v1")] = helm_release_secret(
+        NS, release, 1, "deployed", chart=chart, version="1.0.0", managed_by_omnikrux=False
+    )
+
+
+async def test_a_release_without_our_mark_is_never_removed(env):
+    http, _, installed, fake_api, fake_helm, cluster = env
+    _unmark(fake_api, "omnikrux-loki")
+    plan = await uninstall_plan(http, installed.cluster_id)
+    assert plan["summary"][:2] == [
+        f"Removes the Helm releases omnikrux-alloy and omnikrux-metrics from {cluster}.",
+        (
+            "Keeps the Helm release omnikrux-loki in monitoring: it doesn't carry OmniKrux's "
+            "mark, so OmniKrux leaves it as it is."
+        ),
+    ]
+    before = plan["diff"]["before"]
+    assert "\n  omnikrux-alloy:" in before and "\n  omnikrux-loki:" not in before
+    job = await wait_job(http, (await apply(http, plan))["job_id"])
+    assert job["state"] == "succeeded", job
+    assert [c.args[1] for c in _uninstalls(fake_helm)] == ["omnikrux-alloy", "omnikrux-metrics"]
+    assert (NS, "sh.helm.release.v1.omnikrux-loki.v1") in fake_api.objects["secrets"]
+    assert (NS, "omnikrux-loki") in fake_api.objects["statefulsets.apps"]
+
+
+async def test_a_mark_lost_after_the_review_is_refused(env):
+    http, app, installed, fake_api, fake_helm, _ = env
+    plan = await uninstall_plan(http, installed.cluster_id)
+    _unmark(fake_api, "omnikrux-alloy")  # same revision, mark gone
+    r = await http.post(f"/api/actions/{plan['plan_id']}/apply", json={})
+    assert (r.status_code, r.json()["detail"]) == (
+        409,
+        "The monitoring tools in monitoring changed since you reviewed this. Review it again.",
+    )
+    assert _uninstalls(fake_helm) == []
+    assert (await app.state.monitoring.installs.get(installed.cluster_id)).state == "installed"
+
+
+def _operator_resources(fake_api, *, finalizers: list[str] | None = None) -> None:
+    """The metrics release's Prometheus and Alertmanager (served kinds added)."""
+    group = "monitoring.coreos.com"
+    for plural, kind in (("prometheuses", "Prometheus"), ("alertmanagers", "Alertmanager")):
+        if not any(r.plural == plural for r in fake_api.resources):
+            fake_api.resources.append(FakeResource(group, "v1", plural, kind, True))
+        name = f"omnikrux-metrics-{kind.lower()}"
+        meta = {
+            "name": name,
+            "namespace": NS,
+            "uid": f"u-{plural}",
+            "labels": {"app.kubernetes.io/instance": "omnikrux-metrics"},
+        }
+        if finalizers:
+            meta["finalizers"] = finalizers
+            meta["deletionTimestamp"] = "2026-11-24T10:00:00Z"
+        fake_api.objects[f"{plural}.{group}"][(NS, name)] = {
+            "apiVersion": f"{group}/v1",
+            "kind": kind,
+            "metadata": meta,
+        }
+
+
+async def test_the_operator_resources_go_before_the_operator(env):
+    http, _, installed, fake_api, fake_helm, _ = env
+    _operator_resources(fake_api)
+    removes = fake_helm.script["uninstall"]
+    seen: dict[str, bool] = {}
+
+    async def watch(args):
+        if args[1] == "omnikrux-metrics":
+            seen["left"] = bool(fake_api.objects["prometheuses.monitoring.coreos.com"])
+        return await removes(args)
+
+    fake_helm.script["uninstall"] = watch
+    job = await wait_job(
+        http, (await apply(http, await uninstall_plan(http, installed.cluster_id)))["job_id"]
+    )
+    assert job["state"] == "succeeded", job
+    assert seen == {"left": False}
+    paths = [d["path"] for d in fake_api.deletes]
+    assert paths[:2] == [
+        f"/apis/monitoring.coreos.com/v1/namespaces/{NS}/prometheuses/omnikrux-metrics-prometheus",
+        (
+            f"/apis/monitoring.coreos.com/v1/namespaces/{NS}/alertmanagers/"
+            "omnikrux-metrics-alertmanager"
+        ),
+    ]
+
+
+class _Sticky(PodStore):
+    """Objects a DELETE never removes (held by a finalizer)."""
+
+    def pop(self, key, *default):
+        return self[key]
+
+
+async def test_a_resource_held_by_a_finalizer_is_named(env, monkeypatch):
+    http, app, installed, fake_api, fake_helm, _ = env
+    ticks = itertools.count(0, 200)
+    monkeypatch.setattr(uninstall_job, "CLOCK", lambda: next(ticks))
+    _operator_resources(fake_api, finalizers=["example.test/hold"])
+    key = "prometheuses.monitoring.coreos.com"
+    sticky = _Sticky()
+    sticky.update(fake_api.objects[key])
+    fake_api.objects[key] = sticky
+    job = await wait_job(
+        http, (await apply(http, await uninstall_plan(http, installed.cluster_id)))["job_id"]
+    )
+    assert job["state"] == "failed"
+    assert job["message"] == (
+        "The Prometheus monitoring/omnikrux-metrics-prometheus was still being deleted after 5 "
+        "minutes; it waits for example.test/hold. OmniKrux never removes that by force. What was "
+        "already removed stays removed. Check it in monitoring, then uninstall again."
+    )
+    # Never by force: no write to the object beyond its delete.
+    assert not any("prometheuses" in w["path"] for w in fake_api.writes)
+    assert "omnikrux-metrics" not in [c.args[1] for c in _uninstalls(fake_helm)]
+    assert (await app.state.monitoring.installs.get(installed.cluster_id)).state == "failed"
+
+
+async def test_a_cancel_while_removing_sources_finishes_their_audit(env, monkeypatch):
+    http, app, installed, _, _, _ = env
+    services = app.state.monitoring
+    entered = asyncio.Event()
+    delete = services.sources.delete
+
+    async def slow_delete(source_id, **kw):
+        await delete(source_id, **kw)  # committed
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(services.sources, "delete", slow_delete)
+    out = await apply(http, await uninstall_plan(http, installed.cluster_id))
+    await asyncio.wait_for(entered.wait(), 10)
+    job = (await http.post(f"{JOBS}/{out['job_id']}/cancel")).json()
+    assert job["state"] == "cancelled"
+    assert job["message"].startswith("Uninstall cancelled while removing the sources. ")
+    [removed] = [r for r in await _audit(http) if r["action"] == "source_remove"]
+    assert removed["outcome"] == "succeeded"  # its delete had committed
 
 
 async def test_helm_failure_says_what_stays_removed(env):
@@ -484,7 +625,9 @@ async def test_workloads_that_never_stop(env, monkeypatch):
 async def test_contact_settings_someone_else_made_stay(env):
     http, _, installed, fake_api, _, _ = env
     contact_settings(fake_api, NS, ours=False)
-    out = await apply(http, await uninstall_plan(http, installed.cluster_id))
+    plan = await uninstall_plan(http, installed.cluster_id)
+    assert CONTACTS not in plan["summary"]  # nothing of OmniKrux's to remove
+    out = await apply(http, plan)
     assert (await wait_job(http, out["job_id"]))["state"] == "succeeded"
     assert fake_api.deletes == []
     assert (NS, AMC_NAME) in fake_api.objects["secrets"]

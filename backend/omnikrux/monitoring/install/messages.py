@@ -135,6 +135,9 @@ UNINSTALL_LABEL = "Uninstall"
 SUMMARY_REMOVES_RELEASES = "Removes the Helm releases {names} from {cluster}."
 # Not in the plan's copy list: one release left to remove.
 SUMMARY_REMOVES_RELEASE = "Removes the Helm release {names} from {cluster}."
+# Not in the plan's copy list: a release with OmniKrux's name that doesn't carry its mark (or
+# whose Helm record can't be read) is left in place.
+SUMMARY_KEEPS_RELEASE = "Keeps the Helm release {release} in {namespace}: it doesn't carry OmniKrux's mark, so OmniKrux leaves it as it is."
 SUMMARY_REMOVES_CONTACTS = "Removes OmniKrux's contact-point settings from its Alertmanager (AlertmanagerConfig and Secret omnikrux-contact-points)."
 SUMMARY_REMOVES_SOURCES = "Removes the sources {names}. These projects lose them: {projects}."
 SUMMARY_REMOVES_SOURCES_UNUSED = "Removes the sources {names}. No project uses them."
@@ -178,6 +181,11 @@ HELM_UNINSTALLING_STEP = "uninstalling {release}"
 HELM_NOT_STARTED_UNINSTALL = "OmniKrux couldn't run Helm to uninstall {release}."
 UNINSTALL_NOT_STOPPED = "{label} was still there after 5 minutes: {why}. What was already removed stays removed. Check {namespace}, then uninstall again."
 STILL_STOPPING = "Kubernetes is still removing it"
+# Not in the plan's copy list: the Operator's own resources go first, while it still runs; one
+# held by a finalizer is named with what it waits for (never removed by force).
+STEP_OPERATOR_RESOURCES = "Removing the Prometheus and Alertmanager resources…"
+UNINSTALL_STUCK = "The {kind} {name} was still being deleted after 5 minutes; it waits for {waits}. OmniKrux never removes that by force. What was already removed stays removed. Check it in {namespace}, then uninstall again."
+NOTHING_NAMED = "nothing it names"
 UNINSTALL_STEP_FAILED = (
     "{words} What was already removed stays removed. Check the cluster, then uninstall again."
 )

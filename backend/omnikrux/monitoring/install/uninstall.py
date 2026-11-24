@@ -88,6 +88,15 @@ AMC_PATH = "/apis/monitoring.coreos.com/v1alpha1/namespaces/{namespace}/alertman
 SECRET_PATH = "/api/v1/namespaces/{namespace}/secrets/{name}"
 PVC_LIST = "/api/v1/namespaces/{namespace}/persistentvolumeclaims"
 SOURCE_KINDS = ("prometheus", "alertmanager", "loki")
+METRICS_RELEASE = "omnikrux-metrics"
+# The Prometheus and Alertmanager the metrics release asks the Operator for: removed (and waited
+# for) while the Operator still runs, so it can finish its own clean-up before Helm removes it.
+OPERATOR_RESOURCES = (
+    ("Prometheus", "prometheuses", "omnikrux-metrics-prometheus"),
+    ("Alertmanager", "alertmanagers", "omnikrux-metrics-alertmanager"),
+)
+OPERATOR_RESOURCE_PATH = "/apis/monitoring.coreos.com/v1/namespaces/{namespace}/{plural}/{name}"
+INSTANCE_LABEL = "app.kubernetes.io/instance"
 # Helm's words for a release it has no record of (`helm uninstall` of one already removed).
 _RELEASE_NOT_FOUND = re.compile(r"release: not found", re.IGNORECASE)
 
@@ -227,12 +236,18 @@ class UninstallAction:
         services = self._services
         namespace = record.namespace
         components = ordered(record.components)
-        names = {s.release for s in uninstall_specs(components)}
+        specs = uninstall_specs(components)
         releases = await read_releases(api, namespace)
-        ours = {
-            name: ref.revision
-            for name, ref in releases.items()
-            if name in names and ref.owner_label == MANAGED_BY
+        # Every release with one of the names, as Helm has it: removed only when it carries
+        # OmniKrux's marker; one that doesn't (or whose record can't be read) stays.
+        found = {
+            s.release: {
+                "revision": releases[s.release].revision,
+                "ours": releases[s.release].owner_label == MANAGED_BY,
+                "version": releases[s.release].chart_version,
+            }
+            for s in specs
+            if s.release in releases
         }
         sources = await _sources(services, record)
         projects: set[str] = set()
@@ -241,7 +256,13 @@ class UninstallAction:
         return {
             "namespace": namespace,
             "components": components,
-            "revisions": ours,
+            "releases": found,
+            # What the job removes, in uninstall order: exactly the releases the review names.
+            "remove": [s.release for s in specs if found.get(s.release, {}).get("ours")],
+            "keep": [
+                s.release for s in specs if s.release in found and not found[s.release]["ours"]
+            ],
+            "contacts": "metrics" in components and await contact_settings_ours(api, namespace),
             "volumes": await read_volumes(api, namespace, components),
             "sources": [s.id for s in sources],
             "source_names": [s.name for s in sources],
@@ -268,10 +289,13 @@ class UninstallAction:
             blocked.append(_busy(record.state, cluster))
 
         summary: list[str] = []
-        present = [s.release for s in specs if s.release in seen["revisions"]]
-        if present:
-            summary.append(_releases_line(present, cluster.name))
-        if "metrics" in seen["components"]:
+        if seen["remove"]:
+            summary.append(_releases_line(seen["remove"], cluster.name))
+        summary += [
+            messages.SUMMARY_KEEPS_RELEASE.format(release=r, namespace=namespace)
+            for r in seen["keep"]
+        ]
+        if seen["contacts"]:
             summary.append(messages.SUMMARY_REMOVES_CONTACTS)
         if seen["source_names"]:
             summary.append(_sources_line(seen["source_names"], seen["projects"]))
@@ -284,12 +308,13 @@ class UninstallAction:
             "releases": {
                 s.release: {
                     "chart": s.chart,
-                    "version": record.charts.get(s.chart),
+                    "version": seen["releases"][s.release]["version"],
                     "values": values_for(
                         s.release, record.settings, namespace=namespace, cluster_name=cluster.name
                     ),
                 }
                 for s in specs
+                if s.release in seen["remove"]
             },
             "volumes": [v["name"] for v in seen["volumes"]],
         }
@@ -327,7 +352,7 @@ class UninstallAction:
         now = await self._review(ctx.api, record, delete_data=state["delete_data"])
         if now["rules"]:
             raise ActionError(409, messages.BLOCK_RULES_IN_TOOLS.format(names=_and(now["rules"])))
-        keys = ("components", "revisions", "volumes", "sources", "projects")
+        keys = ("components", "releases", "contacts", "volumes", "sources", "projects")
         if any(now[key] != state.get(key) for key in keys):
             raise stale
 
@@ -357,9 +382,7 @@ class UninstallAction:
                 record_job=pending,
             )
 
-        first = messages.STEP_HELM_REMOVE.format(
-            release=uninstall_specs(state["components"])[0].release
-        )
+        first = first_step(state)
         try:
             job_id = jobs.start(
                 ACTION,
@@ -385,14 +408,35 @@ def step(job: Job, message: str) -> None:
     job.cancelled_message = messages.UNINSTALL_CANCELLED.format(step=step_words(message))
 
 
-def total_steps(components: Sequence[str], *, delete_data: bool) -> int:
-    """One per Helm release and one per workload it ran, the contact-point settings (metrics),
+def _removed_specs(plan_state: Mapping) -> list[ReleaseSpec]:
+    """The releases the review listed for removal, in uninstall order."""
+    remove = set(plan_state["remove"])
+    return [s for s in uninstall_specs(plan_state["components"]) if s.release in remove]
+
+
+def first_step(plan_state: Mapping) -> str:
+    specs = _removed_specs(plan_state)
+    if specs and specs[0].release == METRICS_RELEASE:
+        return messages.STEP_OPERATOR_RESOURCES
+    if specs:
+        return messages.STEP_HELM_REMOVE.format(release=specs[0].release)
+    if plan_state["contacts"]:
+        return messages.STEP_REMOVE_CONTACTS
+    if plan_state["delete_data"]:
+        return messages.STEP_DELETE_DATA
+    return messages.STEP_REMOVE_SOURCES
+
+
+def total_steps(plan_state: Mapping) -> int:
+    """One per Helm release removed and one per workload it ran (and, for the metrics, one for
+    the Operator's Prometheus and Alertmanager), the contact-point settings (when there are),
     the stored data (when asked), and the sources."""
-    specs = uninstall_specs(components)
+    specs = _removed_specs(plan_state)
     return (
         sum(1 + len(s.workloads) for s in specs)
-        + (1 if "metrics" in components else 0)
-        + (1 if delete_data else 0)
+        + (1 if any(s.release == METRICS_RELEASE for s in specs) else 0)
+        + (1 if plan_state["contacts"] else 0)
+        + (1 if plan_state["delete_data"] else 0)
         + 1
     )
 
@@ -506,20 +550,124 @@ async def wait_gone(
         await sleep(interval)  # type: ignore[misc]
 
 
-async def _delete_if_ours(api: ApiClient, path: str) -> None:
-    """Delete the object at `path` when it carries OmniKrux's `managed-by` label (by its uid, so
-    one made meanwhile is never touched); one that isn't there counts as removed."""
+async def _read(api: ApiClient, path: str) -> dict | None:
+    """The object at `path`; None when the cluster says it isn't there (or its kind isn't
+    served)."""
     try:
         obj = await call_json(api, "GET", path, timeout=REQUEST_TIMEOUT)
     except ApiException as exc:
         if exc.status == 404:
-            return
+            return None
         raise
-    meta = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
-    labels = meta.get("labels") if isinstance(meta.get("labels"), dict) else {}
-    if labels.get(MANAGED_LABEL) != MANAGED_BY:
-        return
-    await _delete(api, path, str(meta.get("uid") or ""))
+    return obj if isinstance(obj, dict) else None
+
+
+def _meta(obj: dict) -> dict:
+    return obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+
+
+def _labelled(obj: dict | None, label: str, value: str) -> bool:
+    labels = _meta(obj).get("labels") if obj is not None else None
+    return isinstance(labels, dict) and labels.get(label) == value
+
+
+async def _delete_if_labelled(api: ApiClient, path: str, label: str, value: str) -> None:
+    """Delete the object at `path` when it carries `label: value` (by its uid, so one made
+    meanwhile is never touched); one that isn't there counts as removed."""
+    obj = await _read(api, path)
+    if obj is not None and _labelled(obj, label, value):
+        await _delete(api, path, str(_meta(obj).get("uid") or ""))
+
+
+async def _delete_if_ours(api: ApiClient, path: str) -> None:
+    """Delete the object at `path` when it carries OmniKrux's `managed-by` label."""
+    await _delete_if_labelled(api, path, MANAGED_LABEL, MANAGED_BY)
+
+
+def _contact_paths(namespace: str) -> tuple[tuple[str, str], ...]:
+    return (
+        ("AlertmanagerConfig", AMC_PATH.format(namespace=_q(namespace), name=AMC_NAME)),
+        ("Secret", SECRET_PATH.format(namespace=_q(namespace), name=AMC_NAME)),
+    )
+
+
+async def contact_settings_ours(api: ApiClient, namespace: str) -> bool:
+    """Whether OmniKrux's contact-point settings (its AlertmanagerConfig or their Secret) are in
+    the namespace: only then does the review say they go."""
+    for _, path in _contact_paths(namespace):
+        if _labelled(await _read(api, path), MANAGED_LABEL, MANAGED_BY):
+            return True
+    return False
+
+
+def _operator_path(namespace: str, plural: str, name: str) -> str:
+    return OPERATOR_RESOURCE_PATH.format(namespace=_q(namespace), plural=plural, name=name)
+
+
+async def _operator_left(api: ApiClient, namespace: str) -> list[tuple[str, str, dict]]:
+    """The metrics release's Prometheus and Alertmanager still there: (kind, name, object)."""
+    left = []
+    for kind, plural, name in OPERATOR_RESOURCES:
+        obj = await _read(api, _operator_path(namespace, plural, name))
+        if obj is not None and _labelled(obj, INSTANCE_LABEL, METRICS_RELEASE):
+            left.append((kind, name, obj))
+    return left
+
+
+async def remove_operator_resources(
+    connections: ClusterConnections,
+    cluster: ClusterRef,
+    cloud: bool,
+    namespace: str,
+    job: Job,
+    *,
+    timeout: float = STOP_TIMEOUT_SECONDS,
+    interval: float = readiness.READY_INTERVAL_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], object] = asyncio.sleep,
+) -> None:
+    """Before Helm removes the metrics release (and with it the Operator): delete the Prometheus
+    and Alertmanager the release made, and wait until they are gone, so the Operator still runs
+    to finish whatever it holds them for. Finalizers are never removed: past `timeout` the job
+    stops with words naming the object still being deleted and what it waits for."""
+    step(job, messages.STEP_OPERATOR_RESOURCES)
+    for kind, plural, name in OPERATOR_RESOURCES:
+        action = messages.DELETE_OBJECT_STEP.format(kind=kind, name=f"{namespace}/{name}")
+        path = _operator_path(namespace, plural, name)
+        await _cluster_step(
+            connections,
+            cluster,
+            cloud,
+            action,
+            lambda api, p=path: _delete_if_labelled(api, p, INSTANCE_LABEL, METRICS_RELEASE),
+        )
+    deadline = clock() + timeout
+    action = messages.READ_TOOLS_STEP.format(namespace=namespace)
+    while True:
+        left = await _cluster_step(
+            connections, cluster, cloud, action, lambda api: _operator_left(api, namespace)
+        )
+        if not left:
+            job.blocked = []
+            return
+        job.blocked = [
+            {"namespace": namespace, "name": f"{kind} {name}", "message": messages.STILL_STOPPING}
+            for kind, name, _ in left
+        ]
+        if clock() >= deadline:
+            kind, name, obj = left[0]
+            finalizers = _meta(obj).get("finalizers")
+            waits = (
+                ", ".join(str(f) for f in finalizers)
+                if isinstance(finalizers, list) and finalizers
+                else messages.NOTHING_NAMED
+            )
+            raise JobFailed(
+                messages.UNINSTALL_STUCK.format(
+                    kind=kind, name=f"{namespace}/{name}", waits=waits, namespace=namespace
+                )
+            )
+        await sleep(interval)  # type: ignore[misc]
 
 
 async def _delete(api: ApiClient, path: str, uid: str) -> None:
@@ -540,10 +688,10 @@ async def _cluster_step(
     cloud: bool,
     action: str,
     work: Callable[[ApiClient], Any],
-) -> None:
+) -> Any:
     try:
         async with connections.api(cluster.id) as api:
-            await work(api)
+            return await work(api)
     except Exception as exc:  # noqa: BLE001 (said in words; logged by type)
         log.warning("The uninstall couldn't %s (%s)", action.split(" ")[0], type(exc).__name__)
         raise JobFailed(
@@ -555,10 +703,7 @@ async def remove_contact_settings(
     connections: ClusterConnections, cluster: ClusterRef, cloud: bool, namespace: str
 ) -> None:
     """OmniKrux's AlertmanagerConfig and its Secret, when they are OmniKrux's."""
-    for kind, path in (
-        ("AlertmanagerConfig", AMC_PATH.format(namespace=_q(namespace), name=AMC_NAME)),
-        ("Secret", SECRET_PATH.format(namespace=_q(namespace), name=AMC_NAME)),
-    ):
+    for kind, path in _contact_paths(namespace):
         action = messages.DELETE_OBJECT_STEP.format(kind=kind, name=f"{namespace}/{AMC_NAME}")
         await _cluster_step(
             connections, cluster, cloud, action, lambda api, p=path: _delete_if_ours(api, p)
@@ -583,6 +728,19 @@ async def delete_volumes(
         await _cluster_step(
             connections, cluster, cloud, action, lambda api, p=path, u=uid: _delete(api, p, u)
         )
+
+
+async def _finish_after_stop(services: MonitoringServices, record: int, source_id: str) -> None:
+    """A removal stopped mid-way: succeeded when the source is gone (its delete committed),
+    failed when it is still there."""
+    try:
+        await services.sources.get(source_id)
+    except KeyError:
+        await services.audit.finish(record, "succeeded")
+        return
+    except Exception as exc:  # noqa: BLE001 (unknown: say it failed)
+        log.info("Reading a source after a stop failed (%s)", type(exc).__name__)
+    await services.audit.finish(record, "failed", None)
 
 
 async def remove_sources(
@@ -613,13 +771,14 @@ async def remove_sources(
             await services.audit.finish(record, "failed", None)
             continue
         except Exception as exc:  # noqa: BLE001 (said in words; logged by type)
-            await services.audit.finish(record, "failed", None)
+            await finish_even_if_cancelled(services.audit.finish(record, "failed", None))
             log.warning("Removing an installed source failed (%s)", type(exc).__name__)
             raise JobFailed(messages.REMOVE_SOURCE_STEP.format(name=source.name)) from None
         except BaseException:
-            await services.audit.finish(record, "failed", None)
+            # Stopped (a cancel, a shutdown): the record says what happened to the source.
+            await finish_even_if_cancelled(_finish_after_stop(services, record, source_id))
             raise
-        await services.audit.finish(record, "succeeded")
+        await finish_even_if_cancelled(services.audit.finish(record, "succeeded"))
         services.health.forget(source_id)
         services.transports.forget(source_id)
         services.capabilities.forget(source_id)
@@ -650,9 +809,7 @@ async def run_uninstall(
     words. The record (marked before, under `record_job` until this job takes it over) is
     removed when everything went, else finished with how it ended (never left `uninstalling`),
     unless a newer job owns it."""
-    components = list(plan_state["components"])
-    delete_data = bool(plan_state["delete_data"])
-    job.total = total_steps(components, delete_data=delete_data)
+    job.total = total_steps(plan_state)
     job.done = 0
     # Stopped with OmniKrux (or before the job ran): the words startup would give the record.
     ending: tuple[str, str] = ("failed", INTERRUPTED.format(what=ACTION))
@@ -742,11 +899,23 @@ async def _steps(
     actor: str,
 ) -> str:
     namespace: str = plan_state["namespace"]
-    components = list(plan_state["components"])
     delete_data = bool(plan_state["delete_data"])
 
-    # 1. Each Helm release, then what it ran stops.
-    for spec in uninstall_specs(components):
+    # 1. Each Helm release the review listed (no other), then what it ran stops. For the
+    # metrics, the Operator's Prometheus and Alertmanager go first, while the Operator runs.
+    for spec in _removed_specs(plan_state):
+        if spec.release == METRICS_RELEASE:
+            await remove_operator_resources(
+                connections,
+                cluster,
+                cloud,
+                namespace,
+                job,
+                timeout=STOP_TIMEOUT_SECONDS,
+                interval=readiness.READY_INTERVAL_SECONDS,
+                clock=CLOCK,
+            )
+            job.done += 1
         step(job, messages.STEP_HELM_REMOVE.format(release=spec.release))
         await helm_uninstall(
             services,
@@ -769,8 +938,8 @@ async def _steps(
                 clock=CLOCK,
             )
 
-    # 2. OmniKrux's contact-point settings in its Alertmanager.
-    if "metrics" in components:
+    # 2. OmniKrux's contact-point settings in its Alertmanager, when the review listed them.
+    if plan_state["contacts"]:
         step(job, messages.STEP_REMOVE_CONTACTS)
         await remove_contact_settings(connections, cluster, cloud, namespace)
         job.done += 1
