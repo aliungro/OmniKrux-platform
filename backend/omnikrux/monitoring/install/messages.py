@@ -235,3 +235,17 @@ CONTACTS_NOT_INSTALLED = "The monitoring tools in {namespace} didn't finish inst
 CONTACTS_OTHER_ALERTMANAGER = "Alertmanager {where} would also read OmniKrux's contact points: its alertmanagerConfigSelector and alertmanagerConfigNamespaceSelector select {namespace}/omnikrux-contact-points, so the addresses and keys would reach it. Narrow those selectors, then review again."
 CONTACTS_ALERTMANAGERS_UNCHECKED = "OmniKrux sends contact points only where no other Alertmanager can read them, and it couldn't check that: {words}. Try again."
 CONTACTS_LIST_ALERTMANAGERS_STEP = "list the Alertmanagers in the cluster"
+
+# Generated files for Docker hosts and servers: what a field must be, and what the install
+# script says when it stops. `$tool` and `$file` are filled in by the script itself.
+GENERATE_ADDRESS = "Use a host name or IP address, without http:// or a port."
+GENERATE_SERVERS = "Use one host or host:port per line."
+SCRIPT_MISSING_TOOL = "Missing $tool. Install it, then run this again."
+SCRIPT_ARCH = "This script supports amd64 and arm64 servers."
+SCRIPT_CHECKSUM = "Checksum mismatch for $file. Nothing was installed."
+# Not in the plan's copy list: the script's other stops.
+SCRIPT_NOT_ROOT = "Run this as root, for example with sudo."
+SCRIPT_DOWNLOAD = "Couldn't download $file. Check the network, then run this again."
+SCRIPT_USAGE = "Usage: $0 --role central|agent [--central ADDRESS] | --uninstall [--purge]"
+SCRIPT_NO_SIGN_IN = "These ports have no sign-in: 9090 (Prometheus), 9093 (Alertmanager), 3100 (Loki) and 9100 (node exporter). Keep them on a private network or behind a firewall."
+COMPOSE_NO_SIGN_IN = "The published ports (9090, 9093, 3100) have no sign-in. Keep them on a private network or behind a firewall."

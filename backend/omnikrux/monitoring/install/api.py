@@ -29,7 +29,10 @@ from omnikrux.monitoring.install.contacts import (
     secret_path,
     state_problem,
 )
+from omnikrux.monitoring.install.generate import GeneratedOut, GenerateIn, generate
 from omnikrux.monitoring.install.pins import CHARTS
+from omnikrux.monitoring.install.probe import ProbeIn, ProbeOut, probe
+from omnikrux.monitoring.install.probe import check as check_probe
 from omnikrux.monitoring.install.settings import (
     Component,
     InstallSettings,
@@ -479,6 +482,25 @@ async def _live(state, cluster_id: str, namespace: str) -> tuple[bool | None, bo
             return amc, secret
     except Exception:  # noqa: BLE001 (the plan reads them again and answers in words)
         return None, None
+
+
+@router.post("/generate")
+async def generate_files(body: GenerateIn) -> GeneratedOut:
+    """The files for a Docker host or for servers. Nothing is stored or audited."""
+    try:
+        return generate(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.post("/probe")
+async def probe_tools(body: ProbeIn, request: Request) -> ProbeOut:
+    """Whether the tools answer at these addresses. Nothing is stored or audited."""
+    try:
+        check_probe(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return await probe(_services(request), body)
 
 
 @router.get("/tools")
