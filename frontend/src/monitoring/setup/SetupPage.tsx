@@ -6,6 +6,7 @@ import { useClusters } from "../../api/useClusters";
 import { setupProject, suggestFilter } from "../api/client";
 import { invalidateMonitoring, useDiscovery, useSources } from "../api/hooks";
 import type { FoundTool, ProjectKind, SourceIn, SourceOut, SuggestIn } from "../api/types";
+import { GenerateTools, type AnsweredTools } from "../install/GenerateTools";
 import { installKeys, installTools, type Component } from "../install/api";
 import { useInstallReviews } from "../install/useInstallReviews";
 import type { MonitoringPageProps } from "../MonitoringApp";
@@ -15,7 +16,7 @@ import { SourceForm } from "../sources/SourceForm";
 import { autoTypeName, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
 import { readSetupDraft, removeSetupDraft, SECRET_NOT_KEPT, writeSetupDraft } from "./setupDraftStore";
 import {
-  blockedBy, foundDetail, foundKey, installComponents, INSTALLS, inUse, NO_INSTALL, picksFromDiscovery, setupBody, TOOL_NAMES,
+  blockedBy, foundDetail, foundKey, installComponents, INSTALLS, inUse, isAnswered, NO_INSTALL, picksFromAnswered, picksFromDiscovery, setupBody, TOOL_NAMES,
   type SetupDraft, type SetupPick, type SetupStep,
 } from "./setupModel";
 import s from "./SetupPage.module.css";
@@ -215,6 +216,31 @@ function HandRow({ pick, onChange, onRemove, onEnterAgain }: {
   );
 }
 
+/** A tool the generated files brought up: answering at its address, in use until removed. */
+function AnsweredRow({ pick, focusRow, onChange, onRemove }: {
+  pick: SetupPick; focusRow: RefObject<string | null>; onChange(patch: Partial<SetupPick>): void; onRemove(): void;
+}) {
+  const type = "new" in pick.source ? pick.source.new.type : "prometheus";
+  return (
+    <div role="group" aria-label={pick.label} tabIndex={-1} className={s.row}
+      ref={(el) => { if (el && focusRow.current === pick.key) { focusRow.current = null; el.focus(); } }}>
+      <Badge type={type} />
+      <div className={s.what}>
+        <span className={s.toolName}>{pick.label}</span>
+        <span className={s.detail}>{pick.detail}</span>
+      </div>
+      <div className={s.state}>
+        <Chip tone="ok">Answering</Chip>
+        <button type="button" className={s.quiet} onClick={onRemove}>Remove</button>
+      </div>
+      <div className={s.filter}>
+        <FilterField value={pick.filter} origin={pick.origin} reason={pick.reason} forName={pick.label}
+          onChange={(filter, origin) => onChange({ filter, origin })} />
+      </div>
+    </div>
+  );
+}
+
 interface StepProps {
   draft: SetupDraft;
   setDraft(update: (d: SetupDraft) => SetupDraft): void;
@@ -275,7 +301,8 @@ function KindStep({ draft, setDraft, heading, clusters, onOpenSettings }: StepPr
   );
 }
 
-function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existing, onAddByHand, handOpen, addButton, form, offer, onOpenTools }: StepProps & {
+function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existing, onAddByHand, handOpen, addButton, form, offer, onOpenTools, onAnswered, focusRow }: StepProps & {
+  onAnswered(tools: AnsweredTools): void; focusRow: RefObject<string | null>;
   clusterName: string; discovery: ReturnType<typeof useDiscovery>; existing: ReturnType<typeof useSources>; handOpen: boolean;
   onAddByHand(): void; addButton: RefObject<HTMLButtonElement | null>; form: ReactNode; offer: Offer;
   onOpenTools(e: MouseEvent<HTMLButtonElement>): void;
@@ -346,6 +373,18 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
         <>
           <h2 ref={heading} tabIndex={-1} className={s.stepTitle}>Sources</h2>
           <p className={s.lead}>Add the tools this project reads from.</p>
+          {(draft.kind === "docker" || draft.kind === "servers") && (
+            <>
+              <GenerateTools kind={draft.kind} onAnswered={onAnswered} />
+              {draft.picks.some(isAnswered) && (
+                <div className={s.rows}>
+                  {draft.picks.filter(isAnswered).map((p) => (
+                    <AnsweredRow key={p.key} pick={p} focusRow={focusRow} onChange={edit(p.key)} onRemove={() => remove(p.key)} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
           <fieldset className={s.existing}>
             <legend>Use an existing source</legend>
             {existing.isPending && <p className={s.note} role="status">Loading sources…</p>}
@@ -541,6 +580,14 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     }));
   };
 
+  // The tools the generated files brought up become picks, in use; the keyboard goes to the first.
+  const focusRow = useRef<string | null>(null);
+  const onAnswered = useCallback((tools: AnsweredTools) => {
+    const fresh = picksFromAnswered(tools);
+    focusRow.current = fresh[0]?.key ?? null;
+    setDraftState((d) => ({ ...d, picks: [...d.picks.filter((p) => !isAnswered(p)), ...fresh] }));
+  }, []);
+
   const collect = (body: SourceIn) => {
     const n = ++handCount.current;
     const label = body.name?.trim() || `${autoTypeName(body.type)} · ${hostOf(body.url) || "address"}`;
@@ -630,7 +677,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
           {draft.step === 1 && <KindStep {...stepProps} clusters={clusters} onOpenSettings={onOpenSettings} />}
           {draft.step === 2 && (
             <SourcesStep {...stepProps} clusterName={clusterName} discovery={discovery} existing={sources} handOpen={handOpen} addButton={addButton}
-              onAddByHand={() => setHandOpen(true)} offer={offer}
+              onAddByHand={() => setHandOpen(true)} offer={offer} onAnswered={onAnswered} focusRow={focusRow}
               onOpenTools={(e) => {
                 if (draft.clusterId === null) return;
                 const target = { page: "tools", clusterId: draft.clusterId } as const;

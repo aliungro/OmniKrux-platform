@@ -663,9 +663,17 @@ describe("Project page and the cluster's monitoring tools", () => {
     expect(tools(section).queryByText(/Installed by OmniKrux/)).toBeNull();
     cleanup();
 
-    // Not a Kubernetes project: no such section (Docker hosts and servers get their files later).
+    // A Docker host's section holds the file generator, not the cluster's tools.
     installFakeMonitoringApi({ projects: [project("p2", "Box", [], { kind: "docker" })] }, withCluster);
     open("p2");
+    await screen.findByRole("heading", { name: "Sources" });
+    expect(screen.getByRole("heading", { name: "Install the tools on the Docker host" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open Monitoring tools" })).toBeNull();
+    cleanup();
+
+    // Something of your own: no such section.
+    installFakeMonitoringApi({ projects: [project("p3", "Own", [], { kind: "custom" })] }, withCluster);
+    open("p3");
     await screen.findByRole("heading", { name: "Sources" });
     expect(screen.queryByRole("heading", { name: "Monitoring tools" })).toBeNull();
   });

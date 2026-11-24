@@ -5,7 +5,7 @@
 // dropped before anything is written (the pick comes back unticked), and the "add by hand" form
 // being typed is never kept. Nothing here goes in a query or mutation cache.
 import type { DiscoveryOut, FilterOrigin, FoundTool, ProjectKind, SetupIn, SetupSourceIn, SourceIn, SourceOut, SourceType } from "../api/types";
-import type { Component } from "../install/api";
+import type { Component, ToolType } from "../install/api";
 import { validFilter } from "../projects/FilterField";
 
 /** Step 3 (import) comes in a later update, so the page skips it. */
@@ -77,6 +77,30 @@ export function picksFromDiscovery(d: DiscoveryOut, existing: SourceOut[]): Setu
       };
     });
 }
+
+/** A tool that answered at the address a generated file gave it. */
+export type AnsweredTool = { type: ToolType; url: string; version: string | null };
+
+export function hostOfUrl(url: string): string {
+  try { return new URL(url.trim()).hostname; } catch { return url; }
+}
+
+/** `Prometheus · docker-host.example`: the name of a source made from an answered tool. */
+export const answeredLabel = (t: AnsweredTool): string => `${TOOL_NAMES[t.type]} · ${hostOfUrl(t.url)}`;
+
+/** The source an answered tool becomes: its address, no sign-in (the generated tools have none). */
+export const answeredSource = (t: AnsweredTool): SourceIn => ({ name: answeredLabel(t), type: t.type, reach: "url", url: t.url });
+
+/** Key of a pick made from an answered tool: one per tool type, so writing the file again replaces it. */
+export const answeredKey = (type: ToolType): string => `generated:${type}`;
+
+export const isAnswered = (p: Pick<SetupPick, "key">): boolean => p.key.startsWith("generated:");
+
+/** One pick per answered tool, in use. */
+export const picksFromAnswered = (tools: AnsweredTool[]): SetupPick[] =>
+  tools.map((t) => ({
+    key: answeredKey(t.type), label: answeredLabel(t), detail: t.url, use: true, source: { new: answeredSource(t) }, filter: "", origin: "none", reason: null,
+  }));
 
 export const inUse = (draft: Pick<SetupDraft, "picks">): SetupPick[] => draft.picks.filter((p) => p.use);
 
