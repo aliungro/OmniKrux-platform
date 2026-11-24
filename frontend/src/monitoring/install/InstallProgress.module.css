@@ -1,0 +1,184 @@
+/* An install as it runs: the step in words, one thin bar with its count in mono beside it, what it
+   waits for set off by a warm rule, and the way out. The bar is the one moving thing; it takes the
+   cluster's focus colour while it runs and the outcome's colour when it ends. */
+.progress {
+  margin-top: 14px;
+}
+
+.step {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.meter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surf-2);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--focus);
+  transition: width 0.4s ease-out;
+}
+
+.fill[data-state="succeeded"] {
+  background: var(--ok);
+}
+
+.fill[data-state="failed"],
+.fill[data-state="cancelled"] {
+  background: var(--warn);
+}
+
+.count {
+  color: var(--ink-3);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.blocked {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--warn);
+  border-radius: 0 7px 7px 0;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  list-style: none;
+}
+
+.blocked li {
+  display: grid;
+  gap: 2px;
+}
+
+.what {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.why {
+  color: var(--ink-2);
+}
+
+.end {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.end[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.end[data-tone="bad"] {
+  color: color-mix(in srgb, var(--warn) 70%, var(--ink));
+}
+
+.stopping {
+  margin: 12px 0 0;
+  color: var(--ink-2);
+}
+
+.error {
+  margin: 12px 0 0;
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+}
+
+/* The question before a cancel: inline, so the dialog stays one dialog. */
+.ask {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--rule));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+}
+
+.question {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.askActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.note {
+  flex: 1 1 220px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.btn {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--ink-3);
+}
+
+.btn:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.quietDanger {
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--rule));
+  color: color-mix(in srgb, var(--bad) 70%, var(--ink));
+}
+
+.danger {
+  border-color: var(--bad);
+  background: var(--bad);
+  color: var(--bg);
+}
+
+.danger:hover:not(:disabled),
+.quietDanger:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill {
+    transition: none;
+  }
+}

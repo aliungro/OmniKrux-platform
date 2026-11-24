@@ -1,0 +1,308 @@
+/* The install's settings inside its review: closed, one line under a hairline that reads like the
+   plan's own summary; open, a quiet two-column form and a small table of quantities set in mono
+   (they are Kubernetes values, typed the way kubectl reads them). Nothing here outshouts the plan. */
+.panel {
+  margin-top: 14px;
+  border-top: 1px solid var(--rule);
+  padding-top: 10px;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 6px 2px 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  color: var(--focus);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* A small caret drawn with borders: right when closed, down when open. */
+.chevron {
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 140ms ease-out;
+}
+
+.panel[data-open] .chevron {
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.line {
+  min-width: 0;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+/* Edits not in the plan yet: the hollow ring of "pending", in words too. */
+.pending {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 0;
+  color: color-mix(in srgb, var(--warn) 55%, var(--ink));
+  font-size: 12px;
+}
+
+.pending::before {
+  content: "";
+  flex: none;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--warn);
+  border-radius: 50%;
+}
+
+.body {
+  margin-top: 12px;
+}
+
+.body[hidden] {
+  display: none;
+}
+
+.strays {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-weight: 600;
+}
+
+.rows {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px 14px;
+}
+
+.label {
+  color: var(--ink-2);
+}
+
+.cell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.input:disabled {
+  color: var(--ink-3);
+}
+
+.input[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--bad) 65%, var(--rule));
+}
+
+.mono {
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.days {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.number {
+  width: 76px;
+  font-variant-numeric: tabular-nums;
+}
+
+.unit {
+  color: var(--ink-2);
+}
+
+.problem {
+  color: color-mix(in srgb, var(--bad) 60%, var(--ink));
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.storage {
+  margin-top: 14px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.check input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--focus);
+}
+
+.check input:disabled,
+.check:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.check:has(input:disabled) span {
+  color: var(--ink-3);
+}
+
+.sizes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+  padding-left: 23px;
+}
+
+.size {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sizeLabel {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.table {
+  width: 100%;
+  margin-top: 16px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.caption {
+  margin-bottom: 6px;
+  color: var(--ink);
+  font-weight: 600;
+  text-align: left;
+}
+
+.table th {
+  padding: 0 8px 4px 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.table tbody th {
+  padding-top: 4px;
+  color: var(--ink-2);
+  font-size: 13px;
+  vertical-align: top;
+  line-height: 30px;
+}
+
+.table td {
+  padding: 4px 8px 0 0;
+  vertical-align: top;
+}
+
+.table td:last-child {
+  padding-right: 0;
+}
+
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.update {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--focus) 55%, var(--rule));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.update:hover:not(:disabled) {
+  border-color: var(--focus);
+}
+
+.update:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.update:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 560px) {
+  .rows {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .sizes {
+    grid-template-columns: minmax(0, 1fr);
+    padding-left: 0;
+  }
+
+  .table tbody th {
+    font-size: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}

@@ -48,9 +48,16 @@ export function ActionDialog({
   onDone: (outcome?: ActionOutcome) => void;
   /** Plans the same change again, with `params` changed (a drain's options); rejects with the server's words. */
   onReview: (params?: Record<string, unknown>) => Promise<void>;
-  /** Options shown in the review (in place of a drain's); `review(params)` plans it again with them. */
+  /**
+   * Options shown in the review (in place of a drain's); `review(params)` plans it again with them.
+   * Called as a plain function, not rendered as a component: it must not use hooks. Return an
+   * element (e.g. `<InstallSettingsPanel …/>`) whose own body uses them.
+   */
   options?: (ctx: { busy: boolean; review(params: Record<string, unknown>): Promise<boolean> }) => ReactNode;
-  /** The body once the apply started a job; a drain's progress when left out. */
+  /**
+   * The body once the apply started a job; a drain's progress when left out. Called as a plain
+   * function: it must not use hooks; return an element (e.g. `<InstallProgress …/>`) that does.
+   */
   renderProgress?: (p: { jobId: string; onClose(): void; onOutcome(o: ActionOutcome | null): void }) => ReactNode;
 }) {
   const id = useId();

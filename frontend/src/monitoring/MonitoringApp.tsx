@@ -21,6 +21,7 @@ import { currentOwner, type Owner } from "./dashboards/create/currentOwner";
 import { NewDashboardDialog } from "./dashboards/create/NewDashboardDialog";
 import { pageLetter } from "./dashboards/page/keys";
 import { ToolReviewHost } from "./alerts/reviews/ToolReviewHost";
+import { InstallReviewHost } from "./install/InstallReviewHost";
 import {
   clearAlertForms, endRuleForm, FORM_LEAVE_BODY, heldFormLeave, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY,
 } from "./alerts/rules/formSessions";
@@ -385,6 +386,9 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView };
   return (
     <div ref={root} className={s.app}>
+      {/* Install, uninstall and contact-point reviews, one at a time; around the tool review queue,
+          which hands it the contact points' review (F21). */}
+      <InstallReviewHost place={`${tabs.active}:${view.page}`}>
       {/* Cluster reviews of tool-run alert rules, one at a time, for every page of the app. */}
       <ToolReviewHost place={`${tabs.active}:${view.page}`}>
         <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
@@ -409,6 +413,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
             onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />
         )}
       </ToolReviewHost>
+      </InstallReviewHost>
     </div>
   );
 }
