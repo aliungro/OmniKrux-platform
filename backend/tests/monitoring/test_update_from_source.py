@@ -6,8 +6,14 @@ and where it runs, and an alert the source dropped goes through M4's removal rev
 
 import copy
 import json
+from dataclasses import replace
 
 from omnikrux.monitoring.alerts.store import ToolObject
+from omnikrux.monitoring.transfer import update
+from omnikrux.monitoring.transfer.grafana.convert import convert_grafana
+from omnikrux.monitoring.transfer.grafana.datasources import GrafanaContext
+from omnikrux.monitoring.transfer.origins import MappingChoice
+from omnikrux.monitoring.transfer.types import SkippedItem, digest
 from tests.monitoring.conftest import GRAFANA_TOKEN
 from tests.monitoring.test_import_commit import committed, create
 from tests.monitoring.test_import_preview import (
@@ -24,6 +30,7 @@ from tests.monitoring.test_import_preview import (
     text_input,
     with_last_reducer,
 )
+from tests.monitoring.test_panel_alerts import delete_contact_point
 from tests.monitoring.test_rules_api import as_tool, monitoring_records, refusal
 
 RULES = f"{API}/alerts/rules"
@@ -156,7 +163,12 @@ async def test_update_from_a_grafana_instance_shows_the_change(
     }
     origin = await app.state.monitoring.origins.get(did)
     assert (origin.updated_version, origin.grafana_version, origin.imported_version) == (2, 4, 1)
-    assert origin.digest == p["digest"]
+    # The origin keeps the source's own digest; the review's also covers what it made here.
+    converted = convert_grafana(
+        upstream(raw, 4, panel_title="p95 latency (all routes)"), GrafanaContext(), key="api-lat"
+    )
+    assert origin.digest == digest(converted) != p["digest"]
+    assert p["digest"][:32] == origin.digest[:32]
     # The re-read went to Grafana with the saved sign-in, which never comes back.
     texts = [json.dumps(p), r.text, (await http.get("/api/audit")).text]
     assert all(GRAFANA_TOKEN not in t for t in texts)
@@ -649,3 +661,233 @@ async def test_update_keeps_a_tool_run_alert_and_reviews_its_removal(
     [left] = (await http.get(RULES)).json()
     [leaving] = left["targets"]
     assert leaving["leaving"] is True and leaving["tool_state"] == "needs_review"
+
+
+# --- what the review saw -----------------------------------------------------------------------
+
+CHANGED_SINCE = '"Requests" changed since you checked it. Check again.'
+
+
+async def contact_point(http, name: str, url: str) -> str:
+    r = await http.post(
+        f"{API}/alerts/contact-points",
+        json={"name": name, "type": "webhook", "secrets": {"url": f"{url}/h"}},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def export_text(http, did: str) -> dict:
+    out = (await http.post(f"{API}/export", json={"kind": "dashboard", "id": did})).json()
+    return text_input(json.dumps(out["export"]), "requests.omnikrux.json")
+
+
+async def unchanged_after_refusal(http, app, did: str) -> None:
+    assert (await dashboard(http, did))["version"] == 1
+    assert len(await versions(http, did)) == 1
+    assert await updates(http) == []
+    assert (await app.state.monitoring.origins.get(did)).updated_version is None
+
+
+async def test_a_contact_point_changed_since_the_review_is_refused(
+    monitoring_app, two_projects_on_one_source, fake_webhook
+):
+    """An OmniKrux export's new alert names its contact points; renaming or removing one between
+    the review and the apply would change who the alert tells, so the apply is refused."""
+    http, app = monitoring_app
+    pair = two_projects_on_one_source
+    cp = await contact_point(http, "Ops hook", fake_webhook.url)
+    first = await create(http, "project", pair.a, board("Requests", None))
+    did = await from_file_text(http, pair.b, (await export_text(http, first["id"]))["text"])
+    alert = {"name": "Requests high", "query": "A", "op": "above", "threshold": 5, "notify": [cp]}
+    await save(http, first["id"], board("Requests", None, alert=alert))
+    text = await export_text(http, first["id"])
+
+    p = await update_preview(http, did, {"input": text})
+    assert p["incoming"]["panels"][0]["alert"]["notify"] == [cp]
+    renamed = await http.patch(f"{API}/alerts/contact-points/{cp}", json={"name": "Ops pager"})
+    assert renamed.status_code == 200, renamed.text
+    r = await apply(http, did, p, input=text)
+    assert refusal(r) == (409, "changed", CHANGED_SINCE)
+    await unchanged_after_refusal(http, app, did)
+
+    await http.patch(f"{API}/alerts/contact-points/{cp}", json={"name": "Ops hook"})
+    p = await update_preview(http, did, {"input": text})
+    await delete_contact_point(http, cp)
+    r = await apply(http, did, p, input=text)
+    assert refusal(r) == (409, "changed", CHANGED_SINCE)
+    await unchanged_after_refusal(http, app, did)
+
+    # Reviewed again, it goes through as shown: the alert tells no one.
+    p = await update_preview(http, did, {"input": text})
+    assert p["incoming"]["panels"][0]["alert"]["notify"] == []
+    assert (await applied(http, did, p, input=text))["version"] == 2
+
+
+def with_second_prometheus(raw: dict) -> dict:
+    out = upstream(raw, 4)
+    added = copy.deepcopy(out["panels"][1]) | {"id": 40, "title": "Second Prometheus"}
+    added["datasource"] = {"type": "prometheus", "uid": "prom-2"}
+    added["gridPos"] = {"x": 0, "y": 40, "w": 12, "h": 4}
+    out["panels"].append(added)
+    return out
+
+
+async def test_a_suggestion_changed_since_the_review_is_refused(
+    monitoring_app, linked_project, fake_prometheus
+):
+    http, app = monitoring_app
+    pid = linked_project.project_id
+    raw = load("gridpos_v22_inputs")
+    did = await from_file(http, pid, raw)
+    text = text_input(json.dumps(with_second_prometheus(raw)))
+    p = await update_preview(http, did, {"input": text})
+    [new] = p["new_sources"]
+    assert new["suggestion"] is None
+    # A source with the reference's name is linked meanwhile: the suggestion (and so the panel's
+    # source) would change.
+    made = await http.post(
+        f"{API}/sources",
+        json={
+            "type": "prometheus",
+            "reach": "url",
+            "url": fake_prometheus.url,
+            "name": new["name"],
+        },
+    )
+    assert made.status_code == 201, made.text
+    linked = await http.put(
+        f"{API}/projects/{pid}/sources/{made.json()['id']}", json={"filter": ""}
+    )
+    assert linked.status_code == 200, linked.text
+    r = await apply(http, did, p, input=text)
+    assert refusal(r)[:2] == (409, "changed")
+    assert (await dashboard(http, did))["version"] == 1 and await updates(http) == []
+    again = await update_preview(http, did, {"input": text})
+    assert again["new_sources"][0]["suggestion"] == made.json()["id"]
+    assert again["digest"][:32] == p["digest"][:32] != again["digest"][32:]
+    assert again["digest"] != p["digest"]
+    assert (await app.state.monitoring.origins.get(did)).updated_version is None
+
+
+async def test_saved_mapping_choices_changed_since_the_review_are_refused(
+    monitoring_app, linked_project
+):
+    http, app = monitoring_app
+    raw = load("gridpos_v22_inputs")
+    did = await from_file(http, linked_project.project_id, raw)
+    text = text_input(json.dumps(with_second_prometheus(raw)))
+    mapping = [{"key": "grafana:uid:prom-2", "source_id": linked_project.source_id}]
+    p = await update_preview(http, did, {"input": text, "mapping": mapping})
+    await applied(http, did, p, input=text, mapping=mapping)
+    # The stored choice is what a preview without a mapping uses now.
+    newer = with_second_prometheus(raw) | {"description": "Newer"}
+    text = text_input(json.dumps(newer))
+    p = await update_preview(http, did, {"input": text})
+    second = next(x for x in p["incoming"]["panels"] if x["title"] == "Second Prometheus")
+    assert second["queries"][0]["source"]["id"] == linked_project.source_id
+    # The stored choices change before the apply (another update chose otherwise).
+    origins = app.state.monitoring.origins
+    origin = await origins.get(did)
+    changed = origin.mapping | {"grafana:uid:prom-2": MappingChoice(None)}
+    await origins.record(replace(origin, mapping=changed))
+    r = await apply(http, did, p, input=text)
+    assert refusal(r) == (
+        409,
+        "changed",
+        '"API latency" changed since you checked it. Check again.',
+    )
+    assert (await dashboard(http, did))["version"] == 2
+    assert len(await updates(http)) == 1
+
+
+# --- panels added here, and alert settings that no longer fit -----------------------------------
+
+
+async def test_panels_added_here_are_named_as_local(
+    monitoring_app, linked_project, fake_grafana_auth
+):
+    http, _ = monitoring_app
+    raw = load("gridpos_v22_inputs")
+    did, _ = await from_grafana(http, fake_grafana_auth, linked_project.project_id, raw)
+    spec = (await dashboard(http, did))["spec"]
+    local = copy.deepcopy(spec["panels"][1]) | {"id": "p-9", "title": "Mine"}
+    local["layout"] = local["layout"] | {"y": 60}
+    with_alert = copy.deepcopy(local) | {"id": "p-10", "title": "Mine too"}
+    with_alert["layout"] = with_alert["layout"] | {"y": 70}
+    with_alert["alert"] = {"name": "Mine high", "query": "A", "op": "above", "threshold": 5}
+    await save(http, did, spec | {"panels": [*spec["panels"], local, with_alert]})
+    p = await update_preview(http, did)
+    assert {
+        "where": 'Panel "Mine"',
+        "what": "The whole panel",
+        "reason": "It was added here and isn't in the source, so the update leaves it out.",
+    } in p["skipped"]
+    assert {
+        "where": 'Panel "Mine too"',
+        "what": "The whole panel",
+        "reason": "It was added here and isn't in the source, so the update leaves it out; its "
+        'alert "Mine high" keeps running as a rule on the Alerts page.',
+    } in p["skipped"]
+    assert not any("gone from the source" in s["reason"] for s in p["skipped"])
+
+
+def _alert_panel(alert: dict | None, *, id: str = "p-1", x: int = 0) -> dict:
+    return {
+        "id": id,
+        "type": "timeseries",
+        "title": "Requests",
+        "layout": {"x": x, "y": 0, "w": 12, "h": 6},
+        "queries": [
+            {"ref": "A", "source": {"type": "prometheus", "id": None}, "expr": "rate(x[5m])"}
+        ],
+        "alert": alert,
+    }
+
+
+INCOMING = {
+    "name": "Requests high",
+    "query": "A",
+    "of": "each",
+    "op": "above",
+    "threshold": 5,
+    "for": "5m",
+    "every": "1m",
+    "severity": "warning",
+    "message": "",
+    "notify": [],
+    "engine": "omnikrux",
+    "channel": None,
+}
+
+
+def test_kept_settings_that_no_longer_fit_take_the_source_alert():
+    """The settings kept here are refused by M4's check with the source's new alert: the source's
+    alert is taken as it is, said in words that fit where it came from."""
+    current = {"panels": [_alert_panel(INCOMING | {"notify": ["not a valid id!"]})]}
+    for incoming, words in (
+        (INCOMING, update.ROUTING_RESET),
+        (INCOMING | {"notify": ["cp-1"]}, update.ROUTING_FROM_FILE),
+    ):
+        doc = {"panels": [_alert_panel(incoming)]}
+        out, items = update._merge_alerts(doc, current, {}, [])
+        assert out["panels"][0]["alert"] == incoming
+        assert items == [SkippedItem('Alert "Requests high"', "The rule", words)]
+    assert "tells no one" in update.ROUTING_RESET
+    assert "tells the contact points the file names" in update.ROUTING_FROM_FILE
+
+
+def test_runs_in_the_tool_items_are_matched_by_panel_id():
+    """Two panels with one title: only the item of the panel whose alert stays in the tool goes."""
+    tool = INCOMING | {"engine": "tool"}
+    current = {"panels": [_alert_panel(tool), _alert_panel(None, id="p-2", x=12)]}
+    doc = {"panels": [_alert_panel(INCOMING), _alert_panel(INCOMING, id="p-2", x=12)]}
+    where = 'Alert on panel "Requests"'
+    items = [
+        SkippedItem(where, "Runs in the tool", "first"),
+        SkippedItem(where, "Runs in the tool", "second"),
+    ]
+    out, kept = update._merge_alerts(doc, current, {}, items, ["p-1", "p-2"])
+    assert out["panels"][0]["alert"]["engine"] == "tool"
+    assert out["panels"][1]["alert"]["engine"] == "omnikrux"
+    assert kept == [items[1]]

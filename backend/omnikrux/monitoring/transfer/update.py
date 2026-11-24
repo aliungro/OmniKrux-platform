@@ -9,7 +9,9 @@ its alerts, keeps the dashboard's own title and panel ids, and shows the documen
 current one. Nothing is stored and nothing is audited.
 
 `POST /dashboards/{id}/update-from-source` does the same steps again and writes only when the
-source is what was reviewed (`digest`) and the dashboard is still at `base_version`; the save
+source and what it makes here are what was reviewed (`digest`: the source, the incoming document
+with its alerts' contact points and source choices, the suggestions and the skipped list) and
+the dashboard is still at `base_version`; the save
 and the origin's update commit together, and the replaced content stays in Versions.
 
 Each panel alert keeps who it tells, where it runs and how often it is checked (the user's
@@ -17,6 +19,8 @@ decision); its definition comes from the source (`merge_alert`). An alert the so
 goes: a tool-run one through M4's removal review, which the answer's `alert_changes` carries."""
 
 import copy
+import hashlib
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -50,6 +54,7 @@ from omnikrux.monitoring.transfer.grafana.convert import convert_grafana
 from omnikrux.monitoring.transfer.grafana_client import GrafanaError
 from omnikrux.monitoring.transfer.grafana_store import GrafanaConfig, UnknownGrafana
 from omnikrux.monitoring.transfer.importing import (
+    CHANGED,
     MappingIn,
     SkippedOut,
     TextInput,
@@ -99,11 +104,24 @@ PANEL_GONE = (
     'The panel is gone from the source, so its alert "{name}" keeps running as a rule on the '
     "Alerts page."
 )
+# Not in the plan's list: a panel added here after the import isn't in the source, so the update
+# leaves it out (it stays in Versions); its alert, if any, keeps running as a page rule.
+LOCAL_PANEL = "It was added here and isn't in the source, so the update leaves it out."
+LOCAL_PANEL_ALERT = (
+    "It was added here and isn't in the source, so the update leaves it out; its alert "
+    '"{name}" keeps running as a rule on the Alerts page.'
+)
 # Not in the plan's list: the alert's contact points, engine and check interval kept here no
-# longer fit the source's alert (M4's check refuses them), so the source's alert is taken as is.
+# longer fit the source's alert (M4's check refuses them), so the source's alert is taken as is
+# (a Grafana alert names no contact points; an OmniKrux file's may).
 ROUTING_RESET = (
     "Where it runs and who it tells here don't fit the source's new alert, so it runs on "
     "OmniKrux's engine and tells no one. Pick them again in the panel's Alert tab."
+)
+ROUTING_FROM_FILE = (
+    "Where it runs and who it tells here don't fit the source's new alert, so it runs on "
+    "OmniKrux's engine and tells the contact points the file names. Check them in the panel's "
+    "Alert tab."
 )
 _RUNS_IN_THE_TOOL = "Runs in the tool"
 
@@ -217,7 +235,9 @@ class _Source:
     identity_warning: str | None
 
 
-def _pick(origin: OriginRecord, found: Sequence[ConvertedDashboard], fmt: str, title: str):
+def _pick(
+    origin: OriginRecord, found: Sequence[ConvertedDashboard], fmt: str, title: str
+) -> tuple[ConvertedDashboard, str | None]:
     """The dashboard of the text that this one was imported from, and a warning when it may not
     be: a Grafana origin takes a Grafana dashboard (its uid should be the recorded one); an
     OmniKrux origin takes the dashboard with the recorded export id, else the only one."""
@@ -279,7 +299,22 @@ class _Update:
     new_sources: list[SourceRefOut]
     mapping: dict[str, MappingChoice]
     panels: dict[str, str]
-    digest: str
+    # The source's own content (T1's digest): what the origin keeps.
+    source_digest: str
+
+    @property
+    def digest(self) -> str:
+        """What the reviewer saw: the source (the first half, so a changed source is told apart)
+        and what the update makes of it here (the incoming document with its alerts' contact
+        points and source choices, the sources suggested, the skipped list)."""
+        payload = {
+            "doc": self.doc,
+            "new_sources": [s.model_dump() for s in self.new_sources],
+            "skipped": [[i.where, i.what, i.reason] for i in self.skipped],
+        }
+        text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        made = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return self.source_digest[:32] + made[:32]
 
     @property
     def same(self) -> bool:
@@ -328,19 +363,24 @@ def _rekey(
 
 
 def _merge_alerts(
-    doc: dict, current: dict, drafts: Mapping[str, AlertDraft], items: list[SkippedItem]
+    doc: dict,
+    current: dict,
+    drafts: Mapping[str, AlertDraft],
+    items: Sequence[SkippedItem],
+    tool_items: Sequence[str] = (),
 ) -> tuple[dict, list[SkippedItem]]:
     """Each panel's alert as the update leaves it: where the panel has an alert now, it keeps
     who it tells, where it runs and how often it is checked, and takes the rest from the source
     (`merge_alert`), checked again by M4's rules; when the kept part no longer fits, the
-    source's alert is taken as it is, in words. `items` are the attach step's: an item saying
-    an alert was moved to OmniKrux's engine goes when the alert stays in the tool."""
+    source's alert is taken as it is, in words. `items` are the attach step's; `tool_items`
+    names, in order, the panel id of each of its "Runs in the tool" items, and such an item goes
+    when that panel's alert stays in the tool."""
     out = copy.deepcopy(doc)
     before = {
         p["id"]: p["alert"] for p in current.get("panels", []) if isinstance(p.get("alert"), dict)
     }
     variables = out.get("variables", [])
-    dropped: set[str] = set()
+    stays_in_tool: set[str] = set()
     more: list[SkippedItem] = []
     for panel in out["panels"]:
         now_alert = before.get(panel["id"])
@@ -351,27 +391,39 @@ def _merge_alerts(
         try:
             validate_panel_alert(cast(dict, merged), panel, variables=variables)
         except DashboardInvalid:
-            more.append(SkippedItem(f'Alert "{incoming.get("name")}"', "The rule", ROUTING_RESET))
+            why = ROUTING_FROM_FILE if incoming.get("notify") else ROUTING_RESET
+            more.append(SkippedItem(f'Alert "{incoming.get("name")}"', "The rule", why))
             continue
         panel["alert"] = merged
         if cast(dict, merged).get("engine") == "tool":
-            dropped.add(f'Alert on panel "{panel.get("title", "")}"')
-    kept = [i for i in items if not (i.what == _RUNS_IN_THE_TOOL and i.where in dropped)]
+            stays_in_tool.add(panel["id"])
+    kept: list[SkippedItem] = []
+    tool_panels = iter(tool_items)
+    for item in items:
+        if item.what == _RUNS_IN_THE_TOOL and next(tool_panels, None) in stays_in_tool:
+            continue
+        kept.append(item)
     return out, kept + more
 
 
-def _gone_alerts(current: dict, incoming: dict) -> list[SkippedItem]:
-    """The alerts of panels the source no longer has: M4 keeps their rules on the Alerts page."""
+def _gone_panels(current: dict, incoming: dict, from_source: set[str]) -> list[SkippedItem]:
+    """The current panels the update leaves out, in words: a source panel the source no longer
+    has, with its alert (M4 keeps its rule on the Alerts page), and every panel added here after
+    the import (`from_source`: the ids the source's panels were given)."""
     ids = {p["id"] for p in incoming["panels"]}
-    return [
-        SkippedItem(
-            f'Panel "{p.get("title", "")}"',
-            "Its alert",
-            PANEL_GONE.format(name=p["alert"].get("name", "")),
-        )
-        for p in current.get("panels", [])
-        if p["id"] not in ids and isinstance(p.get("alert"), dict)
-    ]
+    items: list[SkippedItem] = []
+    for p in current.get("panels", []):
+        if p["id"] in ids:
+            continue
+        where = f'Panel "{p.get("title", "")}"'
+        alert = p.get("alert") if isinstance(p.get("alert"), dict) else None
+        name = alert.get("name", "") if alert is not None else ""
+        if p["id"] not in from_source:
+            why = LOCAL_PANEL if alert is None else LOCAL_PANEL_ALERT.format(name=name)
+            items.append(SkippedItem(where, "The whole panel", why))
+        elif alert is not None:
+            items.append(SkippedItem(where, "Its alert", PANEL_GONE.format(name=name)))
+    return items
 
 
 def _not_importable(title: str, problem) -> TransferError:
@@ -436,13 +488,21 @@ async def _prepare(
     attached, alert_items = attach_alerts(c, mapped, contact_points, panels_gone=gone)
     rekeyed, renamed, panels = _rekey(attached, c.panel_sources, origin.panels, current)
     drafts = {renamed[pid]: d for pid, d in c.alerts if pid in renamed}
-    merged, alert_items = _merge_alerts(rekeyed, current, drafts, alert_items)
+    # `import_alert` says "Runs in the tool" once for each alert of the mapped document that runs
+    # in the tool, in panel order: these are those panels, by their ids here.
+    tool_items = [
+        renamed[p["id"]]
+        for p in mapped["panels"]
+        if isinstance(p.get("alert"), dict) and p["alert"].get("engine") == "tool"
+    ]
+    merged, alert_items = _merge_alerts(rekeyed, current, drafts, alert_items, tool_items)
     merged["title"] = current["title"]
     try:
         doc = validate_dashboard(merged, owner_kind=target.kind)
     except DashboardInvalid as exc:
         raise _not_importable(record.title, exc.problems[0]) from None
-    skipped = [*c.skipped, *map_items, *alert_items, *_gone_alerts(current, doc)]
+    gone_items = _gone_panels(current, doc, set(origin.panels.values()))
+    skipped = [*c.skipped, *map_items, *alert_items, *gone_items]
     return _Update(
         imported=imported,
         source=source,
@@ -451,7 +511,7 @@ async def _prepare(
         new_sources=new_sources,
         mapping=dict(origin.mapping) | mapping,
         panels=panels,
-        digest=digest(c),
+        source_digest=digest(c),
     )
 
 
@@ -536,13 +596,17 @@ async def update_from_source(id: str, request: Request) -> DashboardOut:
     services = _services(request)
     try:
         u = await _prepare(services, request.app.state.registry, id, body.input, body.mapping)
-        if body.digest != u.digest:
+        if body.digest[:32] != u.digest[:32]:
             raise TransferError(409, "source_changed", SOURCE_CHANGED)
     except TransferError as exc:
         raise transfer_error(exc) from None
     record, owner, origin = u.imported.record, u.imported.owner, u.imported.origin
     if body.base_version != record.version:
         raise version_conflict(VersionConflict(record.version))
+    if body.digest != u.digest:
+        # The source is as reviewed, but what it makes here isn't: a contact point, a source
+        # choice or a suggestion changed meanwhile.
+        raise transfer_error(TransferError(409, "changed", CHANGED.format(title=record.title)))
     if u.same:
         return dashboard_out(record, owner.name)
     base = record.version
@@ -558,7 +622,7 @@ async def update_from_source(id: str, request: Request) -> DashboardOut:
         await services.origins.mark_updated(
             saved.id,
             version=saved.version,
-            digest=u.digest,
+            digest=u.source_digest,
             grafana_version=source_version,
             mapping=u.mapping,
             now=now(),
