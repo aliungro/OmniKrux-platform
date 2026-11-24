@@ -31,6 +31,8 @@ from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
 from omnikrux.monitoring.sources.store import NewSource, SourceStore
 from omnikrux.monitoring.sources.transport import TransportFactory
 from omnikrux.monitoring.sources.types import SourceConfig, SourceSecrets
+from omnikrux.monitoring.transfer.grafana_store import GrafanaStore
+from omnikrux.monitoring.transfer.origins import OriginStore
 from omnikrux.security.secrets import SecretBox
 from tests.fakekube import kubeconfig_for, prometheus_operator
 from tests.monitoring.alert_env import CONTACT_POINTS, EngineEnv, no_sleep
@@ -92,6 +94,8 @@ class Stores:
     alerts: AlertStore
     contact_points: ContactPointStore
     sessionmaker: async_sessionmaker[AsyncSession]
+    origins: OriginStore
+    grafana: GrafanaStore
 
 
 @dataclass(frozen=True)
@@ -134,6 +138,8 @@ async def stores(tmp_path, db_path):
         alerts=AlertStore(sessionmaker),
         contact_points=ContactPointStore(sessionmaker, box),
         sessionmaker=sessionmaker,
+        origins=OriginStore(sessionmaker),
+        grafana=GrafanaStore(sessionmaker, box),
     )
     await engine.dispose()
 

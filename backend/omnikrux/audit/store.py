@@ -68,6 +68,12 @@ Action = Literal[
     "silence_remove",
     "loki_rule_write",
     "loki_rule_remove",
+    "dashboard_import",
+    "dashboard_update",
+    "monitoring_export",
+    "grafana_add",
+    "grafana_change",
+    "grafana_remove",
 ]
 App = Literal["kubernetes", "monitoring"]
 Outcome = Literal["started", "succeeded", "failed", "ended", "unknown"]

@@ -301,6 +301,37 @@ async def test_alert_actions_are_recorded(audit_log):
     assert rec.details == {"severity": "warning"}
 
 
+async def test_transfer_actions_are_recorded(audit_log):
+    actions = {
+        "dashboard_import",
+        "dashboard_update",
+        "monitoring_export",
+        "grafana_add",
+        "grafana_change",
+        "grafana_remove",
+    }
+    assert actions <= set(get_args(Action))
+    entries = [
+        ("dashboard_import", "dashboard", "Node overview", {"from": "Grafana · kind"}),
+        ("grafana_add", "grafana", "Grafana · kind", {"reach": "url", "auth": "bearer"}),
+    ]
+    for action, kind, name, details in entries:
+        rid = await audit_log.begin_app(
+            AppAuditEntry("local", "monitoring", action, kind, name, details)
+        )
+        await audit_log.finish(rid, "succeeded")
+    for action, kind, name, details in entries:
+        [rec] = (await audit_log.list(action=action)).records
+        assert (rec.app, rec.action, rec.kind, rec.name, rec.outcome) == (
+            "monitoring",
+            action,
+            kind,
+            name,
+            "succeeded",
+        )
+        assert rec.details == details
+
+
 async def test_kubernetes_records_are_unchanged(setup):
     audit, info, _ = setup
     rid = await audit.begin(

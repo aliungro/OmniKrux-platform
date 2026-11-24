@@ -34,6 +34,8 @@ from omnikrux.monitoring.sources.discovery import Discovery
 from omnikrux.monitoring.sources.health import HealthCache
 from omnikrux.monitoring.sources.store import SourceStore
 from omnikrux.monitoring.sources.transport import TransportFactory
+from omnikrux.monitoring.transfer.grafana_store import GrafanaStore
+from omnikrux.monitoring.transfer.origins import OriginStore
 from omnikrux.security.secrets import SecretBox
 
 if TYPE_CHECKING:
@@ -108,6 +110,9 @@ class MonitoringServices:
     installs: InstallStore
     install_tools: ToolsCheck
     helm: HelmRunner
+    # Where imported dashboards came from, and the Grafana connections (M6).
+    origins: OriginStore
+    grafana: GrafanaStore
     # Set by `build_services` (they need the services themselves).
     notifier: Notifier = field(init=False)
     engine: AlertEngine = field(init=False)
@@ -215,6 +220,8 @@ def build_services(
         installs=InstallStore(sessionmaker),
         install_tools=install_tools,
         helm=LazyHelm(install_tools),
+        origins=OriginStore(sessionmaker),
+        grafana=GrafanaStore(sessionmaker, box),
     )
     services.notifier = Notifier(services)
     services.engine = AlertEngine(services, enabled=alert_engine)

@@ -5,7 +5,8 @@ for that owner. Every create, save and restore writes a new version row next to 
 current state, in one transaction. A save, a restore or a delete names the version it started
 from; when another save landed since, it is refused (`VersionConflict`) and nothing changes.
 
-The store trusts its caller to pass a validated, normalised document (`validate_dashboard`)."""
+The store trusts its caller to pass a validated, normalised document (`validate_dashboard`).
+Deleting a dashboard (alone or with its owner) also forgets where it was imported from (M6)."""
 
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnikrux.monitoring.dashboards.schema import OwnerKind, panel_count
 from omnikrux.monitoring.models import (
+    DashboardOriginRow,
     DashboardRow,
     DashboardVersionRow,
     GroupRecord,
@@ -33,7 +35,7 @@ from omnikrux.monitoring.models import (
 from omnikrux.monitoring.projects.types import UnknownGroup, UnknownProject
 from omnikrux.monitoring.sources.types import NameTaken
 
-Origin = Literal["created", "copied", "saved", "restored"]
+Origin = Literal["created", "copied", "saved", "restored", "imported", "updated"]
 
 MAX_TITLE = 120
 VERSION_CONFLICT = (
@@ -361,6 +363,7 @@ class DashboardStore:
         origin: Origin,
         *,
         restored_from: int | None = None,
+        copied_from: str | None = None,
     ) -> DashboardRecord:
         """Write `spec` as the version after `base_version`, inside the caller's (locked)
         transaction. UnknownDashboard, VersionConflict, NameTaken."""
@@ -388,7 +391,16 @@ class DashboardStore:
         if version is None:
             raise VersionConflict((await _current(session, id))[2])
         session.add(
-            _version_row(id, version, spec, text, moment, origin, restored_from=restored_from)
+            _version_row(
+                id,
+                version,
+                spec,
+                text,
+                moment,
+                origin,
+                restored_from=restored_from,
+                copied_from=copied_from,
+            )
         )
         await session.flush()
         return DashboardRecord(
@@ -403,17 +415,27 @@ class DashboardStore:
         )
 
     async def save(
-        self, id: str, base_version: int, spec: dict, *, session: AsyncSession | None = None
+        self,
+        id: str,
+        base_version: int,
+        spec: dict,
+        *,
+        session: AsyncSession | None = None,
+        origin: Origin = "saved",
+        copied_from: str | None = None,
     ) -> DashboardRecord:
-        """Save `spec` as the next version when the dashboard is still at `base_version`.
+        """Save `spec` as the next version when the dashboard is still at `base_version`; the
+        version records `origin` ("updated": from its source) and `copied_from`.
         UnknownDashboard, VersionConflict (nothing changed), NameTaken. With `session` (a
         transaction that already holds the write lock), the save is part of the caller's
         transaction and commits with it."""
         if session is not None:
-            return await self._advance(session, id, base_version, spec, "saved")
+            return await self._advance(
+                session, id, base_version, spec, origin, copied_from=copied_from
+            )
         async with self._sessionmaker.begin() as own:
             await lock_first(own)
-            return await self._advance(own, id, base_version, spec, "saved")
+            return await self._advance(own, id, base_version, spec, origin, copied_from=copied_from)
 
     async def restore(
         self,
@@ -460,7 +482,7 @@ class DashboardStore:
         )
 
     async def delete(self, id: str, version: int) -> None:
-        """Delete the dashboard and all its versions when it is still at `version`.
+        """Delete the dashboard, all its versions and its origin when it is still at `version`.
         UnknownDashboard, VersionConflict (nothing changed)."""
         async with self._sessionmaker.begin() as session:
             removed = await session.scalar(
@@ -472,6 +494,9 @@ class DashboardStore:
                 raise VersionConflict((await _current(session, id))[2])
             await session.execute(
                 delete(DashboardVersionRow).where(DashboardVersionRow.dashboard_id == id)
+            )
+            await session.execute(
+                delete(DashboardOriginRow).where(DashboardOriginRow.dashboard_id == id)
             )
 
     # -- owners --------------------------------------------------------------------------------
@@ -501,13 +526,16 @@ class DashboardStore:
     async def delete_owned(
         self, owner_kind: OwnerKind, owner_id: str, *, session: AsyncSession
     ) -> list[DashboardRef]:
-        """Delete the owner's dashboards and their versions inside the owner's delete
-        transaction (`session`; it commits); return what was deleted."""
+        """Delete the owner's dashboards, their versions and their origins inside the owner's
+        delete transaction (`session`; it commits); return what was deleted."""
         refs = await self._refs(session, owner_kind, owner_id)
         if refs:
             ids = [r.id for r in refs]
             await session.execute(
                 delete(DashboardVersionRow).where(DashboardVersionRow.dashboard_id.in_(ids))
+            )
+            await session.execute(
+                delete(DashboardOriginRow).where(DashboardOriginRow.dashboard_id.in_(ids))
             )
             await session.execute(delete(DashboardRow).where(DashboardRow.id.in_(ids)))
         return refs

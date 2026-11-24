@@ -1,5 +1,5 @@
-"""Monitoring tables. Kept identical to migrations 0007, 0008, 0009 and 0010 (`tests/test_db.py`
-compares them)."""
+"""Monitoring tables. Kept identical to migrations 0007, 0008, 0009, 0010 and 0011
+(`tests/test_db.py` compares them)."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -156,7 +156,8 @@ class DashboardVersionRow(Base):
     spec: Mapped[str] = mapped_column(Text)
     title: Mapped[str] = mapped_column(String)
     panel_count: Mapped[int] = mapped_column(Integer)
-    origin: Mapped[str] = mapped_column(String)  # created, copied, saved or restored
+    # created, copied, saved, restored, imported or updated (from its source)
+    origin: Mapped[str] = mapped_column(String)
     restored_from: Mapped[int | None] = mapped_column(Integer)
     copied_from: Mapped[str | None] = mapped_column(String)
     saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -344,6 +345,58 @@ class InstallRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GrafanaRow(Base):
+    """A Grafana OmniKrux reads dashboards from (M6). The password or token is SecretBox-encrypted
+    JSON and never leaves the backend."""
+
+    __tablename__ = "monitoring_grafana"
+    __table_args__ = (UniqueConstraint("name", name="uq_monitoring_grafana_name"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    reach: Mapped[str] = mapped_column(String)
+    url: Mapped[str | None] = mapped_column(String)
+    cluster_id: Mapped[str | None] = mapped_column(String)
+    namespace: Mapped[str | None] = mapped_column(String)
+    service: Mapped[str | None] = mapped_column(String)
+    port: Mapped[str | None] = mapped_column(String)
+    scheme: Mapped[str] = mapped_column(String, server_default="http")
+    path_prefix: Mapped[str] = mapped_column(String, server_default="")
+    auth_type: Mapped[str] = mapped_column(String)  # none, basic or bearer
+    username: Mapped[str | None] = mapped_column(String)
+    # SecretBox-encrypted JSON: password, token.
+    secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DashboardOriginRow(Base):
+    """Where an imported dashboard came from (an OmniKrux export or a Grafana), with the source
+    mapping and the digest of what was imported, so it can be updated from its source. Deleted
+    with its dashboard; a removed Grafana connection only clears `grafana_id`."""
+
+    __tablename__ = "monitoring_dashboard_origins"
+    __table_args__ = (Index("ix_monitoring_dashboard_origins_grafana_id", "grafana_id"),)
+
+    dashboard_id: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String)  # omnikrux or grafana
+    via: Mapped[str] = mapped_column(String)  # file, paste or grafana
+    label: Mapped[str] = mapped_column(String)
+    grafana_id: Mapped[str | None] = mapped_column(String)
+    grafana_uid: Mapped[str | None] = mapped_column(String)
+    grafana_version: Mapped[int | None] = mapped_column(Integer)
+    export_id: Mapped[str | None] = mapped_column(String)
+    source_title: Mapped[str] = mapped_column(String)
+    mapping: Mapped[str] = mapped_column(Text)  # JSON {ref key: {source_id, leave_out}}
+    # JSON {the source's panel identity: panel id}: keeps panel ids stable across updates.
+    panels: Mapped[str] = mapped_column(Text, server_default="{}")
+    digest: Mapped[str] = mapped_column(String)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    imported_version: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_version: Mapped[int | None] = mapped_column(Integer)
 
 
 async def lock_first(session: AsyncSession) -> None:

@@ -27,6 +27,7 @@ async def begin_change(
         "contact_point",
         "silence",
         "loki_rule",
+        "grafana",
     ],
     name: str,
     details: dict | None = None,
