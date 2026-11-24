@@ -1,6 +1,6 @@
 // What to import from: a file (chosen or dropped; read in the browser, never stored), pasted JSON,
 // or dashboards of a Grafana (a saved connection, or one connected here). The three choices are
-// each a tab stop (Space picks one); ↑/↓ also move between them.
+// one radio group: one Tab stop, ↑/↓ (and ←/→) move and pick.
 import { useEffect, useId, useRef, type DragEvent, type KeyboardEvent, type RefObject } from "react";
 import { grafanaDashboards, useGrafanaConnections, type GrafanaOut } from "./api";
 import { GrafanaDashboardList } from "./GrafanaDashboardList";
@@ -50,10 +50,11 @@ export function ImportInputPicker(p: ImportInputPickerProps) {
   const connections = useGrafanaConnections();
   const list = connections.data ?? [];
   const chosen: GrafanaOut | undefined = list.find((g) => g.id === p.grafanaId);
-  // The first saved connection is picked until another is.
+  // In Grafana mode, the first saved connection is picked until another is (never while a file or
+  // pasted JSON is being checked: that would close its review).
   const first = list[0]?.id;
-  const { grafanaId, onGrafana } = p;
-  useEffect(() => { if (grafanaId === "" && first) onGrafana(first); }, [grafanaId, first, onGrafana]);
+  const { grafanaId, onGrafana, mode } = p;
+  useEffect(() => { if (mode === "grafana" && grafanaId === "" && first) onGrafana(first); }, [mode, grafanaId, first, onGrafana]);
 
   const onRadioKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
@@ -90,9 +91,9 @@ export function ImportInputPicker(p: ImportInputPickerProps) {
         <span id={`${ids}-from`} className={s.label}>Import from</span>
         {MODES.map((m) => (
           <label key={m.mode} className={s.mode} data-checked={p.mode === m.mode || undefined}>
-            {/* No shared name: each choice is its own tab stop, so Tab and Space reach every one. */}
+            {/* One group: one Tab stop, the arrow keys move between the choices and pick. */}
             <input ref={(el) => { if (el) radios.current.set(m.mode, el); else radios.current.delete(m.mode); }}
-              type="radio" className={s.radio} checked={p.mode === m.mode} aria-labelledby={`${ids}-${m.mode}-t`} aria-describedby={`${ids}-${m.mode}`}
+              type="radio" name={`${ids}-from`} className={s.radio} checked={p.mode === m.mode} aria-labelledby={`${ids}-${m.mode}-t`} aria-describedby={`${ids}-${m.mode}`}
               onChange={() => p.onMode(m.mode)} />
             <span className={s.modeText}>
               <span id={`${ids}-${m.mode}-t`} className={s.modeTitle}>{m.title}</span>

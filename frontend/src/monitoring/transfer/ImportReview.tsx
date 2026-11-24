@@ -150,7 +150,7 @@ export function ImportReview(props: ImportReviewProps) {
                   <span>{panelsWords(d.panels)}</span>
                   {d.alerts > 0 && <span>{alertsWords(d.alerts)}</span>}
                   {k > 0 && (
-                    <button type="button" className={s.skippedButton} aria-expanded={!!open[d.key]} aria-controls={`${base}-s`}
+                    <button type="button" className={s.skippedButton} aria-expanded={!!open[d.key]} aria-controls={open[d.key] ? `${base}-s` : undefined}
                       onClick={() => setOpen((o) => ({ ...o, [d.key]: !o[d.key] }))}>
                       Skipped ({k})
                     </button>

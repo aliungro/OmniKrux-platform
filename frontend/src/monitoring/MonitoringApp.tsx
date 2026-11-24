@@ -416,7 +416,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
             onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
             onClose={(id) => dispatchTabs({ type: "closeTab", id }) === true}
             onNew={() => dispatchTabs({ type: "newTab" })} />
-          <div ref={scroller} className={s.page} data-monitoring-page onScroll={(e) => nav.setScroll(e.currentTarget.scrollTop)}>
+          <div ref={scroller} className={s.page} data-monitoring-page data-monitoring-tab={tabId} onScroll={(e) => nav.setScroll(e.currentTarget.scrollTop)}>
             <PageView key={tabId} page={page} onHome={goHome}
               tree={{ data: tree.data, fetching: tree.isFetching }} sources={{ data: sources.data, fetching: sources.isFetching }} />
           </div>

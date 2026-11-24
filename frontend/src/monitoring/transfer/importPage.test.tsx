@@ -3,7 +3,7 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFakeMonitoringApi, type FakeMonitoringSeed } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
-import { seedDashboard, spec } from "../test/dashboardSeeds";
+import { intercept, seedDashboard, serverFailure, spec } from "../test/dashboardSeeds";
 import { alertFormMarks, clearAlertForms } from "../alerts/rules/formSessions";
 import type { AlertChangeOut } from "../alerts/api";
 import type { GroupOut, LinkOut, ProjectOut } from "../api/types";
@@ -370,43 +370,107 @@ describe("the Import page", () => {
       transfer: { commits: [result(["d1", "Node overview"], ["d2", "Disks"])] },
     });
     const onBody = () => expect(document.activeElement).not.toBe(document.body);
+    /** One key press, then the keyboard is somewhere on the page. */
+    const press = async (keys: string) => { await user.keyboard(keys); onBody(); };
+    const tab = async () => { await user.tab(); onBody(); };
     const heading = await screen.findByRole("heading", { name: "Import dashboards" });
     await waitFor(() => expect(document.activeElement).toBe(heading));
-    await user.tab();
+    // One Tab stop for the group; ↓ moves to Pasted JSON and picks it.
+    await tab();
     expect(document.activeElement).toBe(screen.getByRole("radio", { name: "A file" }));
-    await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Pasted JSON" }));
-    await user.keyboard(" ");
-    expect((screen.getByRole("radio", { name: "Pasted JSON" }) as HTMLInputElement).checked).toBe(true);
-    await user.tab();
-    await user.tab();
+    await press("{ArrowDown}");
+    const pasted = screen.getByRole("radio", { name: "Pasted JSON" }) as HTMLInputElement;
+    expect(document.activeElement).toBe(pasted);
+    expect(pasted.checked).toBe(true);
+    await tab();
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "JSON to import" }));
     await user.paste(GRAFANA);
+    onBody();
     // Esc leaves the text for the check button; Enter checks.
-    await user.keyboard("{Escape}");
+    await press("{Escape}");
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Check what converts" }));
-    await user.keyboard("{Enter}");
+    await press("{Enter}");
     const review = await screen.findByRole("heading", { name: "Review" });
     await waitFor(() => expect(document.activeElement).toBe(review));
-    // Through the review to the Import button, never on <body>.
-    for (let i = 0; i < 12 && document.activeElement !== importButton(); i++) {
-      await user.tab();
-      onBody();
-    }
+    // Through the review to a title field, never on <body>.
+    const title = screen.getByRole("textbox", { name: "Title for Node overview" });
+    for (let i = 0; i < 12 && document.activeElement !== title; i++) await tab();
+    expect(document.activeElement).toBe(title);
+    await tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Skipped (3)" }));
+    await tab();
     expect(document.activeElement).toBe(importButton());
     expect(importButton().getAttribute("aria-keyshortcuts")).toBe("Control+Enter");
-    // Ctrl+Enter from the title field imports too.
-    screen.getByRole("textbox", { name: "Title for Node overview" }).focus();
-    await user.keyboard("{Control>}{Enter}{/Control}");
+    // Back to the title: Ctrl+Enter anywhere in the review imports.
+    await user.tab({ shift: true });
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(title);
+    await press("{Control>}{Enter}{/Control}");
     const imported = await screen.findByRole("heading", { name: "Imported" });
     await waitFor(() => expect(document.activeElement).toBe(imported));
     expect(commits(api)).toHaveLength(1);
-    await user.tab();
+    await tab();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open Node overview" }));
-    await user.keyboard("{Enter}");
+    await press("{Enter}");
     await screen.findByRole("heading", { name: "Node overview", level: 1 });
     expect(app.current().tabs[0].view).toEqual({ page: "dashboard", id: "d1" });
     await waitFor(onBody);
+  });
+
+  it("a failed re-check never leaves an old result importable", async () => {
+    const user = userEvent.setup();
+    const words = "OmniKrux couldn't check that just now. Try again.";
+    const stale = "This result is out of date. Check what converts again before importing.";
+    // The second preview fails: after a Goes to change.
+    const { api } = setUp({ groups: [group("g1", "fleet", ["p1", "p2"])] });
+    let n = 0;
+    intercept((url) => (url === "/api/monitoring/import/preview" && ++n === 2 ? serverFailure(500, "invalid_input", words) : null));
+    const review = await pasteAndCheck(user);
+    await user.selectOptions(within(review).getByLabelText("Goes to"), "fleet");
+    expect(await within(review).findByText(words)).toBeTruthy();
+    expect(within(review).getByText(stale)).toBeTruthy();
+    expect(importButton().getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(commits(api)).toHaveLength(0);
+    // Checking again makes it current.
+    await user.click(screen.getByRole("button", { name: "Check what converts" }));
+    await waitFor(() => expect(within(review).queryByText(stale)).toBeNull());
+    expect(within(review).getByText("In a group dashboard each project uses its own source.")).toBeTruthy();
+    expect(importButton().getAttribute("aria-disabled")).toBeNull();
+    cleanup();
+    vi.unstubAllGlobals();
+
+    // After a 409 `changed`: never "Here is the new result." over the old one.
+    const again = setUp({
+      transfer: { commits: { status: 409, detail: { code: "changed", message: "It changed.", key: "a", problems: [] } } },
+    });
+    n = 0;
+    intercept((url) => (url === "/api/monitoring/import/preview" && ++n === 2 ? serverFailure(500, "invalid_input", words) : null));
+    const second = await pasteAndCheck(user);
+    await user.click(importButton());
+    expect(await within(second).findByText(words)).toBeTruthy();
+    expect(within(second).getByText(stale)).toBeTruthy();
+    expect(within(second).queryByText(CHANGED)).toBeNull();
+    expect(importButton().getAttribute("aria-disabled")).toBe("true");
+    expect(commits(again.api)).toHaveLength(1);
+  });
+
+  it("a gone target and an unlinked source are named where they are", async () => {
+    const user = userEvent.setup();
+    const gone = "That project or group no longer exists.";
+    setUp({ transfer: { commits: { status: 404, detail: { code: "not_found", message: gone, key: null, problems: [] } } } });
+    let review = await pasteAndCheck(user);
+    await user.click(importButton());
+    expect(await within(review).findByText(gone)).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(within(review).getByLabelText("Goes to")));
+    cleanup();
+
+    const unlinked = "prom-main isn't linked to shop. Pick one of its sources.";
+    setUp({ transfer: { commits: { status: 422, detail: { code: "unlinked_source", message: unlinked, key: "prom", problems: [] } } } });
+    review = await pasteAndCheck(user);
+    await user.click(importButton());
+    expect(await within(review).findByText(unlinked)).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(within(review).getByRole("combobox", { name: "Source for Prometheus" })));
   });
 
   it("unsaved work holds the tab by its title only", async () => {

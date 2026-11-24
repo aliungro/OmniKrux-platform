@@ -22,7 +22,7 @@ import {
 import { CONNECTING, ImportInputPicker, type InputMode } from "./ImportInputPicker";
 import { ImportReview, type ReviewErrors, type ReviewRefs } from "./ImportReview";
 import {
-  CHANGED, LEAD, LEAVE_TITLE, MAX_FILE_BYTES, TOO_BIG, UNREADABLE, chosenCount, commitBody, initialReview, isNewGroup, rebaseReview,
+  CHANGED, LEAD, STALE, LEAVE_TITLE, MAX_FILE_BYTES, TOO_BIG, UNREADABLE, chosenCount, commitBody, initialReview, isNewGroup, rebaseReview,
   sameTarget, targetKind, titleProblem, type ReviewState, type ReviewTarget,
 } from "./importModel";
 import s from "./ImportPage.module.css";
@@ -34,7 +34,12 @@ interface Reviewing {
   state: ReviewState;
   input: ImportInput;
   sent: TargetIn | null;
+  /** A check of it failed: what shows is no longer known to be what would be imported. */
+  stale?: boolean;
 }
+
+/** The target a preview is made for: a new group is previewed with none. */
+const sentOf = (t: ReviewTarget | null): TargetIn | null => (t && !isNewGroup(t) ? t : null);
 
 const isAbort = (err: unknown) => err instanceof DOMException && err.name === "AbortError";
 
@@ -44,13 +49,14 @@ function exists(tree: TreeOut | undefined, t: TargetIn | null): boolean {
 }
 
 /**
- * Calls `then` with the heading of the page that replaced `own` once it shows (a dashboard loads
- * first), or with null when none shows within a while: the reviews then return to the workspace.
+ * Calls `then` with the heading of the page that replaced `own` in this tab once it shows (a
+ * dashboard loads first; another tab's page never counts), or with null when none shows within a
+ * while: the reviews then return to the workspace.
  */
-function whenHeadingShows(own: HTMLElement | null, then: (heading: HTMLElement | null) => void) {
+function whenHeadingShows(tabId: string, own: HTMLElement | null, then: (heading: HTMLElement | null) => void) {
   const started = Date.now();
   const look = () => {
-    const h = document.querySelector<HTMLElement>("[data-monitoring-page] h1");
+    const h = document.querySelector<HTMLElement>(`[data-monitoring-page][data-monitoring-tab="${CSS.escape(tabId)}"] h1`);
     if (h && h !== own && h.isConnected) return then(h);
     if (Date.now() - started > 10_000) return then(null);
     setTimeout(look, 40);
@@ -169,7 +175,7 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
 
   /** The same input previewed again for `target`; choices made by hand stay where they still fit. */
   async function recheck(base: Reviewing, target: ReviewTarget | null, sameTargetAsBefore: boolean): Promise<boolean> {
-    const sent = target && !isNewGroup(target) ? target : null;
+    const sent = sentOf(target);
     setCheckingWhat("recheck");
     try {
       const p = await previewFor(base.input, sent);
@@ -180,6 +186,9 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
       setCheckingWhat(null);
       return true;
     } catch (err) {
+      // What shows was made for another place or before a change: never importable as it is.
+      setReview((r) => (r && r.input === base.input ? { ...r, stale: true } : r));
+      setNotice(null);
       setErrors((e) => ({ ...e, general: failure(err, "check again") }));
       setCheckingWhat(null);
       return false;
@@ -191,7 +200,7 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
     setErrors((e) => ({ ...e, target: undefined, group: undefined }));
     const base = { ...review, state: { ...review.state, target: next } };
     setReview(base);
-    const sent = next && !isNewGroup(next) ? next : null;
+    const sent = sentOf(next);
     // Titles and suggestions depend on where the dashboards go: a new place is checked again.
     if (!sameTarget(sent, review.sent)) void recheck(base, next, false);
     else if (checkingWhat === "recheck") {
@@ -265,7 +274,9 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
     };
   }, [state?.preview, tree.data]);
 
-  const canImport = state !== null && chosenCount(state) > 0 && state.target !== null && Object.keys(problems).length === 0
+  // Only a review whose preview was made for this input and this place, and checked fine.
+  const current = review !== null && !review.stale && sameTarget(review.sent, sentOf(review.state.target));
+  const canImport = state !== null && current && chosenCount(state) > 0 && state.target !== null && Object.keys(problems).length === 0
     && !(isNewGroup(state.target) && state.target.newGroup.name.trim() === "");
 
   // --- Import -----------------------------------------------------------------------------------
@@ -295,7 +306,7 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
   function openOne(d: ImportedOut, out: ImportResultOut) {
     const own = heading.current;
     nav.navigate({ page: "dashboard", id: d.id }, "replace");
-    if (out.alert_changes.length > 0) whenHeadingShows(own, (h) => enqueue(out.alert_changes, { focus: h }));
+    if (out.alert_changes.length > 0) whenHeadingShows(tabId, own, (h) => enqueue(out.alert_changes, { focus: h }));
   }
 
   // Several: their reviews open over the list, and the keyboard comes back to its heading.
@@ -392,7 +403,7 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
 
           {review && (
             <ImportReview review={review.state} tree={tree.data} project={kind === "project" ? (project.data ?? null) : null}
-              newGroup={newGroup} problems={problems} errors={errors} notice={notice} checking={checkingWhat === "recheck"} importing={importing}
+              newGroup={newGroup} problems={problems} errors={errors} notice={review.stale ? STALE : notice} checking={checkingWhat === "recheck"} importing={importing}
               canImport={canImport} refs={refs} onTarget={onTarget} onMapping={onMapping} onChoose={onChoose}
               onImport={() => void commit()} onStartOver={() => { if (!importing) reset(); }} onSetUp={() => openInNewTab({ page: "setup" })} />
           )}

@@ -74,7 +74,7 @@ export function SourceMappingTable({ refs, project, ownerKind, value, onChange, 
                       value={current} onChange={(e) => onChange(r.key, mappingOf(r.key, e.target.value))}>
                       <option value={FIRST}>{linked.length > 0 ? `First ${label} source (${linked[0].source_name})` : `No ${label} source yet`}</option>
                       {linked.map((l) => <option key={l.source_id} value={`src:${l.source_id}`}>{l.source_name}</option>)}
-                      {stale && <option value={current}>{current.slice(4)}</option>}
+                      {stale && <option value={current}>{`A source no longer linked to ${project.name}`}</option>}
                       <option value={LEAVE}>Leave its panels out</option>
                     </select>
                     {error ? <span id={hint} className={s.fieldError}>{error}</span>

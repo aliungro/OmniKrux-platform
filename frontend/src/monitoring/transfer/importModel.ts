@@ -25,6 +25,7 @@ export const LEAD = "Bring in dashboards from an OmniKrux export or from Grafana
 export const TOO_BIG = "That file is larger than 10 MB. Export fewer dashboards at a time.";
 export const UNREADABLE = "Couldn't read that file. Choose it again.";
 export const CHANGED = "Something changed since you checked. Here is the new result.";
+export const STALE = "This result is out of date. Check what converts again before importing.";
 export const GROUP_LINE = "In a group dashboard each project uses its own source.";
 export const NO_PROJECT = "Set up a project first, then import into it.";
 export const NO_SECRETS = "Passwords and tokens aren't in exports. A source that needs them asks for them when you add it.";
