@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +22,7 @@ from omnikrux.monitoring.alerts.silences import SilenceStore
 from omnikrux.monitoring.alerts.store import AlertStore
 from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.explore.catalog import CatalogCache
-from omnikrux.monitoring.install.helm import HelmResult, HelmRunner, SubprocessHelm
+from omnikrux.monitoring.install.helm import MAX_OUTPUT, HelmResult, HelmRunner, SubprocessHelm
 from omnikrux.monitoring.install.kubeconfig import remove_leftover_folders
 from omnikrux.monitoring.install.store import InstallStore
 from omnikrux.monitoring.install.tools import ToolsCheck
@@ -52,6 +53,12 @@ log = logging.getLogger(__name__)
 STARTUP_RECONCILE_SECONDS = 15.0
 
 
+def helm_temp_root() -> Path:
+    """Where the startup sweep looks for Helm folders a hard stop left (tests point it at a
+    temporary folder)."""
+    return Path(tempfile.gettempdir())
+
+
 class LazyHelm(HelmRunner):
     """Runs the pinned Helm the tools check found, looked up at the first call (so a start
     without Helm still works and says why at the moment an install needs it)."""
@@ -66,7 +73,7 @@ class LazyHelm(HelmRunner):
         *,
         kubeconfig: Path | None,
         timeout: float,
-        max_output: int = 4 * 1024 * 1024,
+        max_output: int = MAX_OUTPUT,
     ) -> HelmResult:
         if self._runner is None:
             status = await self._tools.status()
@@ -117,7 +124,8 @@ class MonitoringServices:
     async def start_alerts(self, wait: float | None = None) -> None:
         """Bring every rule's targets up to date in the background, wait for that at most
         `wait` seconds (STARTUP_RECONCILE_SECONDS; it isn't cancelled when the time is up), then
-        start the engine. Never raises: `reconcile_all` logs its own failures."""
+        start the engine. Never raises: `reconcile_all` logs its own failures. First: installs left
+        running by a stop are marked failed, and stale Helm temp folders are removed."""
         await self._clean_up_after_a_stop()
         limit = STARTUP_RECONCILE_SECONDS if wait is None else wait
         task = asyncio.create_task(self.alert_sync.reconcile_all(), name="omnikrux-alert-reconcile")
@@ -135,10 +143,13 @@ class MonitoringServices:
         """Nothing runs at startup: an install or uninstall still marked as running was cut short
         with OmniKrux, and a hard stop may have left a Helm kubeconfig folder behind."""
         try:
-            await asyncio.to_thread(remove_leftover_folders)
             await self.installs.mark_interrupted(now())
         except Exception:
-            log.exception("Couldn't clean up after an install that was cut short")
+            log.exception("Couldn't mark the installs that were cut short")
+        try:
+            await asyncio.to_thread(remove_leftover_folders, helm_temp_root())
+        except Exception:
+            log.exception("Couldn't remove the temporary Helm folders a stop left")
 
     async def close(self) -> None:
         """Release what the services hold, before the database engine is disposed: the alert

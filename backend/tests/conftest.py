@@ -313,3 +313,13 @@ def cloud_pods_watch(cloud_cluster):
             await asyncio.wait_for(handler, 5)
 
     return running
+
+
+@pytest.fixture(autouse=True)
+def helm_temp_sweep_in_tmp(tmp_path, monkeypatch):
+    """No app lifespan in a test sweeps the real temporary folder for Helm folders."""
+    from omnikrux.monitoring import services
+
+    sweep = tmp_path / "helm-temp-sweep"
+    sweep.mkdir()
+    monkeypatch.setattr(services, "helm_temp_root", lambda: sweep)

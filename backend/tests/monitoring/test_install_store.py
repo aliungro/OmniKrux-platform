@@ -1,7 +1,9 @@
 """The install records on a real SQLite file: one per cluster, busy while a job runs, interrupted
 at startup, migration 0010; the audit actions; installed sources; leftover Helm folders."""
 
-import tempfile
+import asyncio
+import os
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -12,7 +14,11 @@ from omnikrux.audit.store import AuditEntry
 from omnikrux.config import Settings
 from omnikrux.db import MIGRATIONS_DIR, init_db, make_engine, make_sessionmaker
 from omnikrux.main import create_app
-from omnikrux.monitoring.install.kubeconfig import FOLDER_PREFIX, remove_leftover_folders
+from omnikrux.monitoring.install.kubeconfig import (
+    FOLDER_PREFIX,
+    STALE_FOLDER_SECONDS,
+    remove_leftover_folders,
+)
 from omnikrux.monitoring.install.settings import InstallSettings
 from omnikrux.monitoring.install.store import INTERRUPTED, InstallBusy, InstallStore
 from tests.monitoring.conftest import new_source
@@ -144,24 +150,71 @@ async def test_interrupted_installs_are_marked_on_start(tmp_path):
 
 
 def test_leftover_helm_folders_are_removed(tmp_path):
+    old = time.time() - STALE_FOLDER_SECONDS - 60
     mine = tmp_path / f"{FOLDER_PREFIX}abc"
     run = tmp_path / f"{FOLDER_PREFIX}run-xyz"
+    young = tmp_path / f"{FOLDER_PREFIX}young"
     other = tmp_path / "somebody-else"
-    for folder in (mine, run, other):
+    for folder in (mine, run, young, other):
         folder.mkdir()
         (folder / "kubeconfig").write_text("x")
+    for folder in (mine, run, other):
+        os.utime(folder, (old, old))
     plain = tmp_path / f"{FOLDER_PREFIX}file"
     plain.write_text("a file, not a folder")
     assert remove_leftover_folders(tmp_path) == 2
     assert not mine.exists() and not run.exists()
     assert other.exists() and plain.exists()
+    assert young.exists()  # may be another OmniKrux process running a call
     assert remove_leftover_folders(tmp_path / "missing") == 0
 
 
-def test_leftover_default_root_is_the_system_temp_folder(monkeypatch, tmp_path):
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    (tmp_path / f"{FOLDER_PREFIX}one").mkdir()
-    assert remove_leftover_folders() == 1
+def test_leftover_sweep_skips_links(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "keep").write_text("x")
+    link = tmp_path / f"{FOLDER_PREFIX}link"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("this system will not create a link")
+    assert remove_leftover_folders(tmp_path, older_than=0) == 0
+    assert (target / "keep").exists()
+
+
+async def test_start_sweeps_the_injected_folder_only(tmp_path):
+    from omnikrux.monitoring import services
+
+    old = time.time() - STALE_FOLDER_SECONDS - 60
+    stale = tmp_path / "helm-temp-sweep" / f"{FOLDER_PREFIX}stale"
+    stale.mkdir()
+    os.utime(stale, (old, old))
+    assert services.helm_temp_root() == tmp_path / "helm-temp-sweep"
+    app = create_app(
+        Settings(
+            data_dir=tmp_path / "data",
+            kubeconfig="",
+            in_container=False,
+            rewrite_loopback=False,
+            alert_engine=False,
+        )
+    )
+    async with app.router.lifespan_context(app):
+        assert not stale.exists()
+
+
+async def test_two_starts_at_once_give_one_busy(installs):
+    results = await asyncio.gather(
+        begin(installs, job="j1"), begin(installs, job="j2"), return_exceptions=True
+    )
+    assert sorted(type(r).__name__ for r in results) == ["InstallBusy", "InstallRecord"]
+    await installs.finish("c1", "installed", None)
+    results = await asyncio.gather(
+        installs.begin_uninstall("c1", job_id="u1"),
+        installs.begin_uninstall("c1", job_id="u2"),
+        return_exceptions=True,
+    )
+    assert sorted(type(r).__name__ for r in results) == ["InstallBusy", "InstallRecord"]
 
 
 async def test_migration_0010_up_and_down(tmp_path):

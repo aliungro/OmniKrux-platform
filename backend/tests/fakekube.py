@@ -1407,7 +1407,7 @@ def helm_release_secret(
     owner: str = "helm",
     managed_by_omnikrux: bool = True,
 ) -> dict:
-    """The Secret Helm 3 keeps for a release revision: labelled `owner`, `name`, `status` and
+    """The Secret Helm 3 and 4 keep for a release revision: labelled `owner`, `name`, `status` and
     `version`; `data.release` is base64 of base64 of the gzipped release JSON (the API's own
     base64 over the one Helm applies). `managed_by_omnikrux` adds the marker OmniKrux's values
     carry (`config.omnikrux.managedBy`)."""

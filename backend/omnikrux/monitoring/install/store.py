@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from types import MappingProxyType
 from typing import Literal
@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnikrux.monitoring.install.settings import Component, InstallSettings, Resources
-from omnikrux.monitoring.models import InstallRow, now, utc
+from omnikrux.monitoring.models import InstallRow, lock_first, now, utc
 
 InstallState = Literal["installing", "installed", "failed", "cancelled", "uninstalling"]
 
@@ -71,8 +71,9 @@ def settings_json(settings: InstallSettings) -> str:
 
 def settings_from_json(text: str) -> InstallSettings:
     values = json.loads(text)
-    for name in ("prometheus", "alertmanager", "loki", "alloy"):
-        values[name] = Resources(**values[name])
+    for field in fields(InstallSettings):
+        if field.type in (Resources, "Resources"):
+            values[field.name] = Resources(**values[field.name])
     return InstallSettings(**values)
 
 
@@ -145,6 +146,7 @@ class InstallStore:
         another job's install or uninstall is running there."""
         moment = now()
         async with self._sessionmaker.begin() as session:
+            await lock_first(session)
             row = await _by_cluster(session, cluster_id)
             if row is None:
                 row = InstallRow(id=uuid.uuid4().hex, cluster_id=cluster_id, created_at=moment)
@@ -189,6 +191,7 @@ class InstallStore:
     async def begin_uninstall(self, cluster_id: str, *, job_id: str) -> InstallRecord:
         """State `uninstalling`. KeyError without a record; InstallBusy when another job runs."""
         async with self._sessionmaker.begin() as session:
+            await lock_first(session)
             row = await _existing(session, cluster_id)
             _check_free(row, job_id)
             row.state = "uninstalling"

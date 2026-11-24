@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,10 @@ from omnikrux.kube.connections import ClusterConnections
 log = logging.getLogger(__name__)
 
 FOLDER_PREFIX = "omnikrux-helm-"
+# The longest one Helm call can run (an install waits up to 15 minutes), so a folder younger than
+# this plus a margin may belong to a call of another OmniKrux process on this machine.
+LONGEST_HELM_CALL_SECONDS = 15 * 60
+STALE_FOLDER_SECONDS = LONGEST_HELM_CALL_SECONDS + 15 * 60
 _REMOVE_ATTEMPTS = 5
 _REMOVE_PAUSE_SECONDS = 0.2
 
@@ -152,11 +157,16 @@ async def helm_kubeconfig(connections: ClusterConnections, cluster_id: str) -> A
         await _remove(folder)
 
 
-def remove_leftover_folders(root: Path | None = None) -> int:
+def remove_leftover_folders(
+    root: Path | None = None, *, older_than: float = STALE_FOLDER_SECONDS, now: float | None = None
+) -> int:
     """At startup: remove what a hard stop left in the temporary directory (`root`, the
     system's by default) -- only folders named with this module's `FOLDER_PREFIX` (Helm's own
-    run folders share it), which can hold a credential. Returns how many were removed."""
+    run folders share it), which can hold a credential, and only those untouched for
+    `older_than` seconds (younger ones may be a running call of another OmniKrux process).
+    Returns how many were removed."""
     base = root if root is not None else Path(tempfile.gettempdir())
+    moment = time.time() if now is None else now
     removed = 0
     try:
         entries = list(base.iterdir())
@@ -166,7 +176,9 @@ def remove_leftover_folders(root: Path | None = None) -> int:
         if not entry.name.startswith(FOLDER_PREFIX):
             continue
         try:
-            if entry.is_symlink() or not entry.is_dir():
+            if entry.is_symlink() or entry.is_junction() or not entry.is_dir():
+                continue
+            if moment - entry.stat().st_mtime < older_than:
                 continue
             shutil.rmtree(entry)
             removed += 1
