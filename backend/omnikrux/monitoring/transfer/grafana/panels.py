@@ -256,8 +256,9 @@ def _modern_thresholds(modern: dict, items: list[tuple[str, str]]) -> list[dict]
     for i, step in enumerate(s for s in modern["steps"] if isinstance(s, dict)):
         value = _num(step.get("value"))
         color = step.get("color")
+        raw_value = step.get("value")
         if value is None:
-            if i == 0:
+            if i == 0 and (raw_value is None or raw_value == "-Infinity"):
                 base_color = color
             else:
                 items.append(
@@ -326,7 +327,7 @@ def _thresholds(p: dict, kind: str, items: list[tuple[str, str]]) -> list[dict]:
     modern = _get(p, "fieldConfig", "defaults", "thresholds")
     if isinstance(modern, dict) and isinstance(modern.get("steps"), list):
         found = _modern_thresholds(modern, items)
-    elif kind == "stat" and isinstance(p.get("thresholds"), str):
+    elif isinstance(p.get("thresholds"), str):
         found = _singlestat_thresholds(p, items)
     elif isinstance(p.get("thresholds"), list):
         found = _graph_thresholds(p, items)

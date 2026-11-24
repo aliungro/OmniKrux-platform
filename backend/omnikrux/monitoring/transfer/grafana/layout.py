@@ -11,7 +11,11 @@ _PX = re.compile(r"\s*([0-9]+(?:\.[0-9]+)?)\s*(?:px)?\s*")
 def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value) if math.isfinite(value) else None
+    try:
+        n = float(value)
+    except OverflowError:
+        return None
+    return n if math.isfinite(n) and abs(n) <= 1e9 else None  # beyond this is not a size
 
 
 def _clamp(n: int, lo: int, hi: int) -> int:
@@ -50,7 +54,7 @@ def rows_layout(rows: list) -> list[tuple[dict, dict]]:
             height_px = _px(p.get("height"))
             ph = _clamp(_round((height_px if height_px is not None else row_px) / 30), 2, 40)
             span = _number(p.get("span"))
-            w = _clamp(_round((span if span else 12) * 2), 2, GRID)
+            w = _clamp(_round((min(span, 100) if span else 12) * 2), 2, GRID)
             if x + w > GRID:
                 x = 0
                 top = bottom

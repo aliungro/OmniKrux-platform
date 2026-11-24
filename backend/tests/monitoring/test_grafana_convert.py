@@ -226,6 +226,19 @@ HOSTILE = [
             }
         ]
     },
+    {
+        "panels": [
+            {"type": "stat", "targets": [{"expr": "up"}], "gridPos": {"x": 10**400, "w": 10**400}}
+        ]
+    },
+    {
+        "rows": [
+            {
+                "height": 9e307,
+                "panels": [{"type": "stat", "targets": [{"expr": "up"}], "span": 9e307}],
+            }
+        ]
+    },
     {"time": {"from": "1700000000000", "to": "2024-01-01T10:00:00.123Z"}, "panels": []},
 ]
 
@@ -454,3 +467,21 @@ def test_tones():
         ]
     ] == ["ok", "bad", "warn", "warn", "ok", None, None]
     assert tone_for("#ffffff") is None and tone_for("#d44a3a") == "bad"
+
+
+def test_singlestat_shown_as_gauge_keeps_its_string_thresholds():
+    panel = {
+        "type": "singlestat",
+        "title": "G",
+        "datasource": "P",
+        "gauge": {"show": True, "minValue": 0, "maxValue": 10},
+        "thresholds": "4,8",
+        "colors": ["#299c46", "#d44a3a", "blue"],
+        "targets": [{"expr": "up"}],
+    }
+    c = convert_grafana({"panels": [panel]}, GrafanaContext(), key="k")
+    p = c.doc["panels"][0]
+    assert p["type"] == "gauge" and p["options"]["thresholds"] == [{"value": 4, "color": "bad"}]
+    assert ("Threshold 8", "Its colour blue isn't good, warning or bad.") in {
+        (s.what, s.reason) for s in c.skipped
+    }
