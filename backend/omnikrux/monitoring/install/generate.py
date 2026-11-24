@@ -25,6 +25,8 @@ RECEIVERS_NOTE = "Add receivers here. OmniKrux never writes secrets into tools i
 
 
 def _is_address(text: str) -> bool:
+    if "%" in text:  # an IPv6 scope ID (fe80::1%eth0) is only meaningful on one machine
+        return False
     if _HOSTNAME.fullmatch(text):
         return True
     try:
@@ -362,7 +364,6 @@ _SCRIPT = r"""#!/usr/bin/env bash
 set -euo pipefail
 
 CENTRAL=@@ADDRESS@@
-RETENTION_DAYS=@@DAYS@@
 ROLE=""
 UNINSTALL=0
 PURGE=0
@@ -392,6 +393,9 @@ done
 if [ "$UNINSTALL" -eq 0 ]; then
   case "$ROLE" in central | agent) ;; *) usage ;; esac
 fi
+if [ "$PURGE" -eq 1 ] && [ "$UNINSTALL" -eq 0 ]; then
+  die "@@PURGE@@"
+fi
 [[ "$CENTRAL" =~ ^[A-Za-z0-9.:-]{1,253}$ ]] || die "@@ADDRESS_RULE@@"
 
 [ "$(id -u)" -eq 0 ] || die "@@NOT_ROOT@@"
@@ -399,7 +403,7 @@ fi
 if [ "$UNINSTALL" -eq 1 ]; then
   required="systemctl"
 else
-  required="curl tar unzip sha256sum systemctl"
+  required="curl tar unzip sha256sum systemctl hostname"
 fi
 for tool in $required; do
   command -v "$tool" > /dev/null 2>&1 || die "@@MISSING@@"
@@ -507,6 +511,8 @@ fi
 systemctl daemon-reload
 for unit in $units; do
   systemctl enable --now "$unit"
+  # enable --now leaves a running service alone, so a re-run restarts it onto the new files
+  systemctl restart "$unit"
 done
 
 echo "OmniKrux monitoring is running ($ROLE)."
@@ -551,9 +557,9 @@ def server_script(g: GenerateIn) -> str:
         "VAR": _VAR,
         "NO_SIGN_IN": messages.SCRIPT_NO_SIGN_IN,
         "ADDRESS": shlex.quote(g.address),
-        "DAYS": str(g.retention_days),
         "USAGE": messages.SCRIPT_USAGE,
         "ADDRESS_RULE": messages.GENERATE_ADDRESS,
+        "PURGE": messages.SCRIPT_PURGE,
         "NOT_ROOT": messages.SCRIPT_NOT_ROOT,
         "MISSING": messages.SCRIPT_MISSING_TOOL,
         "ARCH": messages.SCRIPT_ARCH,

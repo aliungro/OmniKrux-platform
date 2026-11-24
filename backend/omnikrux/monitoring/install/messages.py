@@ -249,3 +249,4 @@ SCRIPT_DOWNLOAD = "Couldn't download $file. Check the network, then run this aga
 SCRIPT_USAGE = "Usage: $0 --role central|agent [--central ADDRESS] | --uninstall [--purge]"
 SCRIPT_NO_SIGN_IN = "These ports have no sign-in: 9090 (Prometheus), 9093 (Alertmanager), 3100 (Loki) and 9100 (node exporter). Keep them on a private network or behind a firewall."
 COMPOSE_NO_SIGN_IN = "The published ports (9090, 9093, 3100) have no sign-in. Keep them on a private network or behind a firewall."
+SCRIPT_PURGE = "--purge only works together with --uninstall."

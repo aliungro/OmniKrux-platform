@@ -148,6 +148,8 @@ def test_script_keeps_the_retention():
     [
         ({"kind": "docker", "address": "http://x:1"}, messages.GENERATE_ADDRESS),
         ({"kind": "docker", "address": "host.example:9090"}, messages.GENERATE_ADDRESS),
+        ({"kind": "docker", "address": "fe80::1%eth0"}, messages.GENERATE_ADDRESS),
+        ({"kind": "docker", "address": "10.0.0.5%eth0"}, messages.GENERATE_ADDRESS),
         ({"kind": "servers", "address": "central.example"}, messages.GENERATE_SERVERS),
         (
             {"kind": "servers", "address": "central.example", "servers": ["a b"]},
@@ -308,3 +310,20 @@ def test_image_versions_follow_the_charts():
     for pin in SERVER_BINARIES.values():
         for arch in ARCHES:
             assert re.fullmatch(r"[0-9a-f]{64}", pin.sha256[arch])
+
+
+def test_a_rerun_restarts_every_unit_after_enabling_it():
+    script = server_script(SERVERS)
+    assert script.index("systemctl daemon-reload", script.index("OMNIKRUX_UNIT")) < script.index(
+        'systemctl enable --now "$unit"'
+    )
+    assert script.index('systemctl enable --now "$unit"') < script.index(
+        'systemctl restart "$unit"'
+    )
+
+
+def test_script_needs_hostname_and_refuses_purge_alone():
+    script = server_script(SERVERS)
+    assert "sha256sum systemctl hostname" in script
+    assert 'die "--purge only works together with --uninstall."' in script
+    assert "RETENTION_DAYS" not in script
