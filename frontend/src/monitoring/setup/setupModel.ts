@@ -110,7 +110,8 @@ export const NOTHING_PICKED_OR_INSTALLED = "Pick at least one source, install on
 
 /**
  * Why the page can't move on yet, in words, or `null` when it can. A source in use or a component
- * to install is enough; `installOffered` (a cluster where OmniKrux can install) says so in the words.
+ * to install is enough, but a component counts only once OmniKrux has said it can install there
+ * (`installOffered`: the tools read answered available), which the words then say too.
  */
 export function blockedBy(draft: SetupDraft, opts: { installOffered?: boolean } = {}): string | null {
   if (draft.step === 1) {
@@ -119,10 +120,11 @@ export function blockedBy(draft: SetupDraft, opts: { installOffered?: boolean } 
     return null;
   }
   const used = inUse(draft);
-  if (used.length === 0 && installComponents(draft).length === 0) return opts.installOffered ? NOTHING_PICKED_OR_INSTALLED : NOTHING_PICKED;
+  const installs = opts.installOffered ? installComponents(draft).length : 0;
+  if (used.length === 0 && installs === 0) return opts.installOffered ? NOTHING_PICKED_OR_INSTALLED : NOTHING_PICKED;
   if (used.some((p) => validFilter(p.filter) !== null)) return "Fix the filter that can't be read, or clear it.";
   if (draft.step === 4 && draft.name.trim() === "") return "Give the project a name.";
   return null;
 }
 
-export const canContinue = (draft: SetupDraft): boolean => blockedBy(draft) === null;
+export const canContinue = (draft: SetupDraft, opts: { installOffered?: boolean } = {}): boolean => blockedBy(draft, opts) === null;

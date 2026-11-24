@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DiscoveryOut, FoundTool, SourceOut, SuggestOut } from "../api/types";
 import { readRecent } from "../home/recent";
@@ -509,6 +509,68 @@ describe("Setup installs what's missing", () => {
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(document.activeElement).not.toBe(document.body);
     expect(selectedTab().textContent).toContain(CLUSTER);
+  });
+
+  it("a failed install plan after create says so and leaves the keyboard on the page", async () => {
+    const user = userEvent.setup();
+    const api = install({ discovery: { c1: PROM_AND_LOKI_MISSING }, install: { tools: TOOLS, status: { c1: status({ cluster_name: CLUSTER }) } } });
+    startFromCluster();
+    await user.click(await screen.findByRole("button", { name: "Install Loki…" }));
+    await user.click(continueButton());
+    await user.click(await screen.findByRole("button", { name: "Create project and review the install" }));
+
+    expect(await screen.findByText(/^Couldn't review the install in kind-omnikrux-dev: /)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(installPosts(api)).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: CLUSTER })).toBeTruthy();
+    expect(selectedTab().textContent).toContain(CLUSTER);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a restored install counts only once the tools read says installing is available", async () => {
+    // A draft kept with Loki to install and no source in use, restored while the tools read is
+    // held, then failed: nothing may be created (it would make an empty project, nothing installed).
+    localStorage.setItem(`${SETUP_DRAFT_PREFIX}start0`, JSON.stringify({
+      v: 1, start: "c1", named: true,
+      draft: { step: 4, kind: "kubernetes", clusterId: "c1", picks: [], name: "Shop", install: { metrics: false, logs: true } },
+    }));
+    const api = install({ discovery: { c1: LOKI_MISSING } });
+    const inner = globalThis.fetch;
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/monitoring/install/tools") {
+        await held;
+        return new Response(JSON.stringify({ detail: "The tools couldn't be read." }), { status: 500, headers: { "content-type": "application/json" } });
+      }
+      return inner(input, init);
+    }));
+    startFromCluster();
+    await screen.findByRole("heading", { name: "Name and review" });
+    const create = () => screen.getByRole("button", { name: /^Create project/ }) as HTMLButtonElement;
+    expect(create().disabled).toBe(true);
+    expect(screen.getByText("Pick at least one source, or add one by hand.")).toBeTruthy();
+    expect(screen.queryByText("Install: Loki and Grafana Alloy into the cluster")).toBeNull();
+
+    release();
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(create().disabled).toBe(true);
+    fireEvent.click(create());
+    expect(setupPosts(api)).toHaveLength(0);
+  });
+
+  it("closing a setup tab removes its draft", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
+    await screen.findByRole("group", { name: "Prometheus" });
+    await user.click(continueButton());
+    await screen.findByRole("heading", { name: "Name and review" });
+    await waitFor(() => expect(localStorage.getItem(`${SETUP_DRAFT_PREFIX}start0`)).not.toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Name and review" })).toBeNull());
+    await waitFor(() => expect(Object.keys(localStorage).filter((k) => k.startsWith(SETUP_DRAFT_PREFIX))).toEqual([]));
   });
 
   it("unavailable tools replace the install buttons with the reason", async () => {

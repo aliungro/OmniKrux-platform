@@ -2,7 +2,8 @@
 // comes back when setup opens again in that tab. Storage can be blocked, full or tampered with:
 // every access is caught, and an entry that can't be read is ignored.
 //
-// Secrets never reach storage. A new source is copied field by field (never spread), without its
+// Secrets never reach storage. The draft, each pick and each new source are copied field by field
+// (never spread: a field added later is left out until it is named here); a new source goes without its
 // password, token, API key, client key or header values; an address with a sign-in, a query or a
 // fragment is cut back to its host and path. A pick that lost something is marked `secretsDropped`
 // and comes back unticked. The "add by hand" form being typed is not in the draft at all.
@@ -86,12 +87,38 @@ export function keepableSource(src: SourceIn): { source: SourceIn; dropped: bool
   return { source: out, dropped };
 }
 
-/** A pick as it may be kept. */
+/**
+ * A pick as it may be kept: named fields only (never spread), so a field added to `SetupPick`
+ * later is left out until it is named here, after checking it holds no secret.
+ */
 function keepablePick(p: SetupPick): SetupPick {
-  if (!("new" in p.source)) return { ...p, source: { existingId: p.source.existingId } };
-  const { source, dropped } = keepableSource(p.source.new);
-  const detail = p.detail === p.source.new.url ? (source.url ?? "") : p.detail;
-  return { ...p, detail, source: { new: source }, ...(dropped || p.secretsDropped ? { secretsDropped: true } : {}) };
+  let source: SetupPick["source"];
+  let detail = p.detail;
+  let dropped = p.secretsDropped === true;
+  if ("new" in p.source) {
+    const kept = keepableSource(p.source.new);
+    source = { new: kept.source };
+    if (p.detail === p.source.new.url) detail = kept.source.url ?? "";
+    dropped = dropped || kept.dropped;
+  } else {
+    source = { existingId: p.source.existingId };
+  }
+  return {
+    key: p.key, label: p.label, detail, use: p.use, source, filter: p.filter, origin: p.origin, reason: p.reason,
+    ...(p.suggestedFor !== undefined ? { suggestedFor: p.suggestedFor } : {}),
+    ...(dropped ? { secretsDropped: true } : {}),
+  };
+}
+
+/**
+ * The draft as it may be kept: named fields only (never spread). A field added to `SetupDraft`
+ * later (M6's Grafana connection, which may hold a token) is left out until it is named here.
+ */
+function keepableDraft(d: SetupDraft): SetupDraft {
+  return {
+    step: d.step, kind: d.kind, clusterId: d.clusterId, name: d.name, picks: d.picks.map(keepablePick),
+    ...(d.install ? { install: { metrics: d.install.metrics === true, logs: d.install.logs === true } } : {}),
+  };
 }
 
 /** Keeps the tab's draft. Never throws. */
@@ -99,7 +126,7 @@ export function writeSetupDraft(tabId: string, start: string, draft: SetupDraft,
   try {
     const s = store();
     if (!s) return;
-    const kept: Stored = { v: 1, start, named, draft: { ...draft, picks: draft.picks.map(keepablePick) } };
+    const kept: Stored = { v: 1, start, named: named === true, draft: keepableDraft(draft) };
     s.setItem(key(tabId), JSON.stringify(kept));
   } catch {
     // Blocked or full: the setup still works, it just won't come back.

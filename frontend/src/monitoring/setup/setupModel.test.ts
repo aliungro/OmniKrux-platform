@@ -120,10 +120,14 @@ describe("setup model", () => {
 
   it("canContinue with something to install and no source in use", () => {
     const logs = { metrics: false, logs: true };
-    expect(canContinue(draft({ step: 2, install: logs }))).toBe(true);
-    expect(canContinue(draft({ step: 2, kind: "docker", install: logs }))).toBe(false);
-    expect(canContinue(draft({ step: 4, name: "", install: logs }))).toBe(false);
-    expect(canContinue(draft({ step: 4, name: "Shop", install: logs }))).toBe(true);
+    const offered = { installOffered: true };
+    expect(canContinue(draft({ step: 2, install: logs }), offered)).toBe(true);
+    expect(canContinue(draft({ step: 2, kind: "docker", install: logs }), offered)).toBe(false);
+    expect(canContinue(draft({ step: 4, name: "", install: logs }), offered)).toBe(false);
+    expect(canContinue(draft({ step: 4, name: "Shop", install: logs }), offered)).toBe(true);
+    // Until the tools read says installing is available (loading, failed, unavailable), an install doesn't count.
+    expect(canContinue(draft({ step: 2, install: logs }))).toBe(false);
+    expect(canContinue(draft({ step: 4, name: "Shop", install: logs }))).toBe(false);
     expect(blockedBy(draft({ step: 2 }))).toBe("Pick at least one source, or add one by hand.");
     expect(blockedBy(draft({ step: 2 }), { installOffered: true })).toBe("Pick at least one source, install one, or add one by hand.");
     // Installs aren't part of /setup.
@@ -175,6 +179,27 @@ describe("setup draft store", () => {
     expect(hand.secretsDropped).toBe(true);
     expect(hand.detail).toBe("http://prom.example:9090/x");
     expect(existing).toEqual(d.picks[1]);
+  });
+
+  it("only named fields are kept: a field added later never reaches storage", () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    try {
+      const extra = draft({
+        step: 2,
+        picks: [{ ...pick({ key: "hand:1", source: { new: { type: "loki", reach: "url", url: "http://loki:3100" } } }), connection: { token: "pick-extra-token" } } as SetupPick],
+      });
+      const withImport = { ...extra, importFrom: { connection: { url: "http://grafana:3000", token: "draft-extra-token" } } } as SetupDraft;
+      writeSetupDraft("t1", "c1", withImport, false);
+      expect(setItem).toHaveBeenCalled();
+      for (const [k, v] of setItem.mock.calls) {
+        expect(`${k}${v}`).not.toMatch(/extra-token|importFrom|connection/);
+      }
+      const back = readSetupDraft("t1", "c1");
+      expect(Object.keys(back?.draft ?? {}).sort()).toEqual(["clusterId", "kind", "name", "picks", "step"]);
+      expect(Object.keys(back?.draft.picks[0] ?? {}).sort()).toEqual(["detail", "filter", "key", "label", "origin", "reason", "source", "use"]);
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it("a bad or old entry is ignored, and closed tabs' drafts go", () => {
