@@ -462,6 +462,61 @@ async def test_install_in_another_namespace_blocks(env):
     ]
 
 
+def loki_statefulset(fake_api, size: str | None) -> None:
+    """The installed Loki's StatefulSet, claiming a `size` data volume (none when None)."""
+    claims = [] if size is None else [
+        {
+            "metadata": {"name": "storage"},
+            "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": size}}},
+        }
+    ]  # fmt: skip
+    fake_api.objects["statefulsets.apps"][("monitoring", "omnikrux-loki")] = {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {"name": "omnikrux-loki", "namespace": "monitoring", "uid": "u-sts-loki"},
+        "spec": {"replicas": 1, "volumeClaimTemplates": claims},
+    }
+
+
+async def test_installed_loki_volume_cant_change(env):
+    """Kubernetes never lets a StatefulSet's volume claim change: Helm would refuse the update
+    half way, so the review says so before anything is written."""
+    http, _, cluster, fake_api, _ = env
+    default_class(fake_api)
+    namespace(fake_api)
+    loki_statefulset(fake_api, "10Gi")
+    same = (await plan_for(http, cluster, components=["logs"]))["plan"]
+    assert same["blocked"] == []
+    smaller = await plan_for(http, cluster, components=["logs"], settings={"loki_storage": "2Gi"})
+    assert smaller["plan"]["blocked"] == [
+        (
+            "Loki already keeps its data on a 10Gi volume, and its size can't change once Loki has "
+            "it. Set Loki's storage back to 10Gi, or uninstall the tools and install them again."
+        )
+    ]
+    in_memory = await plan_for(http, cluster, components=["logs"], settings={"persist": False})
+    assert in_memory["plan"]["blocked"] == [
+        (
+            "Loki already keeps its data on a 10Gi volume, which can't be taken away once Loki has "
+            "it. Turn on Keep data on volumes with Loki at 10Gi, or uninstall the tools and install "
+            "them again."
+        )
+    ]
+    # Metrics alone never touch Loki.
+    metrics = await plan_for(
+        http, cluster, components=["metrics"], settings={"loki_storage": "2Gi"}
+    )
+    assert metrics["plan"]["blocked"] == []
+    loki_statefulset(fake_api, None)
+    added = await plan_for(http, cluster, components=["logs"])
+    assert added["plan"]["blocked"] == [
+        (
+            "Loki already runs without a data volume, and one can't be added once Loki runs. Turn "
+            "off Keep data on volumes, or uninstall the tools and install them again."
+        )
+    ]
+
+
 async def test_a_running_job_blocks(env):
     http, app, cluster, fake_api, _ = env
     default_class(fake_api)

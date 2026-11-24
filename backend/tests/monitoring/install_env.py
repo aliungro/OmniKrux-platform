@@ -12,6 +12,7 @@ import yaml
 
 from omnikrux.monitoring.install.helm import HelmResult
 from omnikrux.monitoring.install.pins import CHARTS
+from omnikrux.monitoring.install.settings import InstallSettings
 from omnikrux.monitoring.install.values import RELEASES
 from tests.fakekube import FakeKubeApi, FakeResource, helm_release_secret, storage_class
 from tests.monitoring.fake_helm import FakeHelm
@@ -202,6 +203,12 @@ def workload(
 ) -> dict:
     labels = _labels(release, name)
     status = rolled_out(kind, ready=ready, generation=generation)
+    # Loki's StatefulSet claims its data volume, at the default size (as the chart makes it).
+    claims = (
+        {"volumeClaimTemplates": [_claim("storage", InstallSettings().loki_storage)]}
+        if (kind, name) == ("StatefulSet", "omnikrux-loki")
+        else {}
+    )
     return {
         "apiVersion": "apps/v1",
         "kind": kind,
@@ -215,8 +222,16 @@ def workload(
             **({} if kind == "DaemonSet" else {"replicas": 1}),
             "selector": {"matchLabels": labels},
             "template": {"metadata": {"labels": labels}},
+            **claims,
         },
         "status": status,
+    }
+
+
+def _claim(name: str, size: str) -> dict:
+    return {
+        "metadata": {"name": name},
+        "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": size}}},
     }
 
 

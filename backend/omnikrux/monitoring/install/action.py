@@ -35,7 +35,12 @@ from omnikrux.actions.pipeline import (
 )
 from omnikrux.clusters.models import Environment
 from omnikrux.monitoring.install import messages
-from omnikrux.monitoring.install.facts import OPERATOR_VERSION, read_facts
+from omnikrux.monitoring.install.facts import (
+    NO_VOLUME,
+    OPERATOR_VERSION,
+    loki_volume,
+    read_facts,
+)
 from omnikrux.monitoring.install.job import release_specs, run_install, settings_from_dict
 from omnikrux.monitoring.install.pins import CHARTS
 from omnikrux.monitoring.install.readiness import step_words
@@ -124,6 +129,20 @@ def _connect_line(components: Sequence[str], project: str | None) -> str:
         ).format(project=project)
     line = messages.SUMMARY_CONNECT_ONE if one else messages.SUMMARY_CONNECT
     return line.format(tools=_and(tools), project=joined)
+
+
+def _loki_volume_problem(installed: str | None, s: InstallSettings) -> str | None:
+    """Why the installed Loki can't take these settings: Kubernetes never lets a StatefulSet's
+    volume claim change, so Helm would refuse the update half way. None when nothing is installed
+    or the volume stays as it is."""
+    wanted = s.loki_storage if s.persist else NO_VOLUME
+    if installed is None or installed == wanted:
+        return None
+    if installed == NO_VOLUME:
+        return messages.BLOCK_LOKI_VOLUME_ADDED
+    if wanted == NO_VOLUME:
+        return messages.BLOCK_LOKI_VOLUME_REMOVED.format(size=installed)
+    return messages.BLOCK_LOKI_VOLUME_SIZE.format(size=installed)
 
 
 def _chart_crds_by_name(docs: Sequence[dict]) -> dict[str, str | None]:
@@ -231,6 +250,10 @@ class InstallAction:
             blocked.append(
                 messages.BLOCK_BUSY.format(doing=_RUNNING[record.state], cluster=cluster.name)
             )
+        if "logs" in components and (problem := _loki_volume_problem(
+            await loki_volume(api, namespace), effective
+        )):  # fmt: skip
+            blocked.append(problem)
 
         values = {
             r.release: values_for(

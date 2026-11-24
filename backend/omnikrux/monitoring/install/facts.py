@@ -73,6 +73,30 @@ def _items(answer: dict) -> list[dict]:
     return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
 
+LOKI_STATEFULSET = "omnikrux-loki"
+NO_VOLUME = ""  # the installed Loki runs without a data volume
+
+
+def _dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+async def loki_volume(api: ApiClient, namespace: str) -> str | None:
+    """The size of the data volume the installed Loki StatefulSet claims (`NO_VOLUME` when it
+    claims none), or None when there is no such StatefulSet. Kubernetes never lets a
+    StatefulSet's volume claims change, so an update must keep this."""
+    path = f"/apis/apps/v1/namespaces/{quote(namespace, safe='')}/statefulsets/{LOKI_STATEFULSET}"
+    statefulset = await _get_or_none(api, path)
+    if statefulset is None:
+        return None
+    templates = _dict(statefulset.get("spec")).get("volumeClaimTemplates")
+    for template in templates if isinstance(templates, list) else []:
+        size = _dict(_dict(_dict(_dict(template).get("spec")).get("resources")).get("requests"))
+        if isinstance(size.get("storage"), str):
+            return size["storage"]
+    return NO_VOLUME
+
+
 async def _kube_version(api: ApiClient) -> str:
     answer = await _get(api, "/version")
     version = answer.get("gitVersion")
