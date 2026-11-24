@@ -9,6 +9,7 @@ import type {
 } from "../api/types";
 import type { CatalogOut } from "../catalog/api";
 import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut } from "../dashboards/api";
+import { emptyTransferState, transferRoute, type FakeTransferState } from "./fakeTransferApi";
 import { alertsRoute, emptyAlertsState, type FakeAlertsState, type FakeRefusal } from "./fakeAlertsApi";
 import type { Plan } from "../../api/types";
 import type { ContactsSyncOut, GeneratedOut, InstallPlanOut, InstallStatusOut, ProbeResultOut, ToolsOut } from "../install/api";
@@ -56,6 +57,8 @@ export function emptyInstallState(): FakeInstallState {
 
 export interface FakeMonitoringState extends FakeAlertsState {
   install: FakeInstallState;
+  /** Export, Grafana connections, import and update from source (`fakeTransferApi.ts`). */
+  transfer: FakeTransferState;
   sources: SourceOut[];
   projects: ProjectOut[];
   groups: GroupOut[];
@@ -81,7 +84,10 @@ export interface FakeMonitoringState extends FakeAlertsState {
 }
 
 /** A seed: any part of the state; `install` may be seeded in part (the rest keeps its defaults). */
-export type FakeMonitoringSeed = Partial<Omit<FakeMonitoringState, "install">> & { install?: Partial<FakeInstallState> };
+export type FakeMonitoringSeed = Partial<Omit<FakeMonitoringState, "install" | "transfer">> & {
+  install?: Partial<FakeInstallState>;
+  transfer?: Partial<FakeTransferState>;
+};
 
 export interface FakeMonitoringApi {
   state: FakeMonitoringState;
@@ -162,6 +168,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
     ...emptyAlertsState(),
     ...seed,
     install: { ...emptyInstallState(), ...seed.install },
+    transfer: { ...emptyTransferState(), ...seed.transfer },
   };
   const requests: FakeMonitoringApi["requests"] = [];
   let counter = 0;
@@ -436,6 +443,10 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
     const [a, b, , d] = seg;
     const is = (m: string, ...pattern: (string | null)[]) =>
       method === m && seg.length === pattern.length && pattern.every((p, i) => p === null || p === seg[i]);
+
+    // --- export, Grafana connections, import, origins and update from source
+    const transferred = transferRoute({ state, nextId }, method, seg, body);
+    if (transferred) return transferred;
 
     // --- dashboards, ready-made views, batches and label values
     if (a === "dashboards") return dashboardRoute(method, seg, query, body);

@@ -283,6 +283,30 @@ describe("monitoring tab state", () => {
     expect(monitoringTabsReducer(tabs, { type: "navigate", id, view: { ...dash, refresh: "5m" }, mode: "push" })).toBe(tabs);
   });
 
+  it("an import view survives storage with its target", () => {
+    const view: MonitoringView = { page: "import", target: { kind: "group", id: "g1" } };
+    const parsed = parseMonitoringTabs(JSON.parse(JSON.stringify({ tabs: [{ id: "t1", view, back: [{ page: "import" }], forward: [], scrollTop: 0 }], active: "t1", closed: [] })));
+    expect(parsed.tabs.tabs[0].view).toEqual(view);
+    expect(parsed.tabs.tabs[0].back).toEqual([{ page: "import" }]);
+    expect(sameMonitoringView(view, { page: "import" })).toBe(true);
+    expect(sameMonitoringView(view, MONITORING_HOME)).toBe(false);
+  });
+
+  it("a bad import target is dropped and the view kept", () => {
+    const parse = (target: unknown) => parseMonitoringTabs({ tabs: [{ id: "t1", view: { page: "import", target } }], active: "t1" }).tabs.tabs[0].view;
+    expect(parse({ kind: "cluster", id: "x" })).toEqual({ page: "import" });
+    expect(parse({ kind: "project", id: "" })).toEqual({ page: "import" });
+    expect(parse({ kind: "project", id: "x".repeat(201) })).toEqual({ page: "import" });
+    expect(parse({ kind: "project", id: 7 })).toEqual({ page: "import" });
+    expect(parse("project")).toEqual({ page: "import" });
+    expect(parse({ kind: "project", id: "x".repeat(200), extra: 1 })).toEqual({ page: "import", target: { kind: "project", id: "x".repeat(200) } });
+  });
+
+  it("the import tab is labelled Import", () => {
+    expect(monitoringTabLabel({ page: "import" }, {})).toBe("Import");
+    expect(monitoringTabLabel({ page: "import", target: { kind: "project", id: "p1" } }, {})).toBe("Import");
+  });
+
   describe("the leave check", () => {
     afterEach(() => setMonitoringLeaveCheck(null));
 

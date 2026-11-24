@@ -72,6 +72,7 @@ type Page = MonitoringView["page"];
 const ExplorePage = lazy(() => import("./explore/ExplorePage"));
 const AlertsPage = lazy(() => import("./alerts/page/AlertsPage"));
 const ToolsPage = lazy(() => import("./install/ToolsPage"));
+const ImportPage = lazy(() => import("./transfer/ImportPage"));
 
 /**
  * Every page by `view.page`.
@@ -88,6 +89,7 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   alerts: AlertsPage,
   dashboard: DashboardPage,
   tools: ToolsPage,
+  import: ImportPage,
 };
 
 /** Opening a project, group or dashboard (in this tab or a new one) puts it first in Recently opened. */
@@ -374,6 +376,18 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [owner, canCreate, creating, newDashboard]);
+  // I anywhere in Monitoring, outside a field, a dialog, a menu or edit mode: Import, for the current project or group.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!pressed("monitoringImport", e) || !pageLetter(e)) return;
+      if (editSessions.get(latest.current.tabs.active)?.mode === "edit") return;
+      e.preventDefault();
+      if (e.repeat) return;
+      pageNav.navigate({ page: "import", ...(owner ? { target: { kind: owner.kind, id: owner.id } } : {}) }, "push");
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [owner, pageNav]);
   const goHome = useCallback(() => pageNav.navigate(MONITORING_HOME, "push"), [pageNav]);
 
   // Each tab keeps where its page was scrolled.

@@ -13,6 +13,7 @@ export type MonitoringView =
   | { page: "project"; id: string }
   | { page: "group"; id: string }
   | { page: "newGroup" }
+  | { page: "import"; target?: { kind: "project" | "group"; id: string } }
   | DashboardView;
 
 /**
@@ -259,6 +260,12 @@ function parseView(x: unknown): MonitoringView | null {
       return { page: x.page };
     case "source": case "project": case "group":
       return validId(x.id) ? { page: x.page, id: x.id } : null;
+    case "import": {
+      const t = x.target;
+      return record(t) && (t.kind === "project" || t.kind === "group") && validId(t.id)
+        ? { page: "import", target: { kind: t.kind, id: t.id } }
+        : { page: "import" };
+    }
     case "setup":
       if (x.clusterId === undefined) return { page: "setup" };
       return validId(x.clusterId) ? { page: "setup", clusterId: x.clusterId } : null;
@@ -328,6 +335,7 @@ export function monitoringTabLabel(view: MonitoringView, names: MonitoringNames)
     case "setup": return "New project";
     case "tools": { const name = names.cluster?.(view.clusterId); return name ? `Tools · ${name}` : "Monitoring tools"; }
     case "newGroup": return "New group";
+    case "import": return "Import";
     case "dashboard": return names.dashboard?.(view.id) ?? "Dashboard";
   }
 }

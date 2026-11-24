@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getJson, patchJson, postJson, putJson } from "../../api/http";
+import { deleteEmpty, getJson, patchJson, postJson, putJson } from "../../api/http";
 import type { SourceOut } from "../api/types";
 import { installFakeMonitoringApi } from "./fakeMonitoringApi";
 
@@ -241,5 +241,50 @@ describe("fake Monitoring API", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ alert_changes: [] });
     expect(api.state.contactPoints).toEqual([]);
+  });
+
+  it("fake API answers previews by text and by Grafana uids", async () => {
+    const preview = (format_label: string) => ({
+      format: "grafana", format_label, target_kinds: ["project"], suggested_target: null, bundle: null, sources: [], dashboards: [], skipped_total: 0,
+    });
+    const api = installFakeMonitoringApi({
+      transfer: {
+        previews: {
+          '{"a":1}': preview("by text") as never,
+          "grafana:gf1:u1,u2": preview("saved") as never,
+          "grafana:new:u1": preview("unsaved") as never,
+          bad: { status: 422, detail: { code: "unknown_format", message: "Not a dashboard.", key: null, problems: [] } },
+        },
+        commits: [
+          { dashboards: [], group_id: null, grafana_id: null, warnings: ["one"], alert_changes: [] },
+          { dashboards: [], group_id: "g", grafana_id: null, warnings: [], alert_changes: [] },
+        ],
+        origins: { d1: null },
+        exports: { "project:p1": { file_name: "shop.json", export: { formatVersion: 1 }, dashboards: 1, sources: 0, alerts: 0 } },
+      },
+    });
+    const post = (path: string, body: unknown) => postJson<Record<string, unknown>>(`/api/monitoring/${path}`, body);
+    expect((await post("import/preview", { input: { kind: "text", text: '{"a":1}', via: "paste" } })).format_label).toBe("by text");
+    expect((await post("import/preview", { input: { kind: "grafana", grafana_id: "gf1", uids: ["u1", "u2"] } })).format_label).toBe("saved");
+    expect((await post("import/preview", { input: { kind: "grafana", connection: { reach: "url" }, uids: ["u1"] } })).format_label).toBe("unsaved");
+    await expect(post("import/preview", { input: { kind: "text", text: "bad", via: "file" } })).rejects.toThrow();
+    await expect(post("import/preview", { input: { kind: "text", text: "unseeded", via: "file" } })).rejects.toThrow();
+    expect((await post("import/commit", {})).warnings).toEqual(["one"]);
+    expect((await post("import/commit", {})).group_id).toBe("g");
+    expect((await post("import/commit", {})).group_id).toBe("g");
+    expect(await getJson("/api/monitoring/dashboards/d1/origin")).toBeNull();
+    expect((await post("export", { kind: "project", id: "p1" })).file_name).toBe("shop.json");
+    expect(api.requests.filter((r) => r.url.includes("import/preview"))).toHaveLength(5);
+  });
+
+  it("fake API keeps Grafana connections without their secrets", async () => {
+    const api = installFakeMonitoringApi();
+    const made = await postJson<{ id: string; auth: object }>("/api/monitoring/grafana", { reach: "url", url: "http://g.example.invalid", auth: { type: "bearer", token: "glsa_x" } });
+    expect(made.auth).toEqual({ type: "bearer", username: null, has_password: false, has_token: true });
+    expect(JSON.stringify(await getJson("/api/monitoring/grafana"))).not.toContain("glsa_x");
+    const patched = await patchJson<{ name: string; auth: { has_token: boolean } }>(`/api/monitoring/grafana/${made.id}`, { name: "Main" });
+    expect(patched).toMatchObject({ name: "Main", auth: { has_token: true } });
+    await deleteEmpty(`/api/monitoring/grafana/${made.id}`);
+    expect(api.state.transfer.grafana).toEqual([]);
   });
 });

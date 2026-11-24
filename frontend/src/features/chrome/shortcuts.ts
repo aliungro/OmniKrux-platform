@@ -44,7 +44,7 @@ export type ShortcutId =
   | "leaveLogs"
   | "sessionTabs"
   | "confirmReview"
-  | "monitoringFind" | "monitoringTree" | "monitoringNewDashboard"
+  | "monitoringFind" | "monitoringTree" | "monitoringNewDashboard" | "monitoringImport"
   | "dashboardEdit" | "dashboardViews" | "dashboardTime" | "dashboardRefresh" | "dashboardSave"
   | "panelFocus" | "panelMove" | "panelResize" | "panelSettings" | "panelAdd" | "panelRemove" | "panelLeave"
   | "queryRun" | "chartCrosshair" | "tableSort" | "logLabels" | "addPanelPick" | "suggestionsFocus"
@@ -145,6 +145,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "monitoringFind", scope: "monitoring", keys: ["/"], match: ["/"], label: "Find a project, group or source" },
   { id: "monitoringTree", scope: "monitoring", keys: ["↑ ↓", "← →", "Enter"], label: "In the sidebar: move, close or open a group, open the item" },
   { id: "monitoringNewDashboard", scope: "monitoring", keys: ["N"], match: ["n", "N"], label: "New dashboard" },
+  { id: "monitoringImport", scope: "monitoring", keys: ["I"], match: ["i", "I"], label: "Import dashboards" },
   // On a dashboard. Ctrl S and Ctrl Enter also work from its fields while editing; letters never do.
   { id: "dashboardEdit", scope: "dashboard", keys: ["e"], match: ["e"], label: "Edit the dashboard" },
   { id: "dashboardViews", scope: "dashboard", keys: ["1–3"], match: ["1", "2", "3"], label: "Dashboard, JSON or Versions" },

@@ -122,7 +122,18 @@ describe("shortcut registry", () => {
       ["monitoringFind", ["/"], "Find a project, group or source"],
       ["monitoringTree", ["↑ ↓", "← →", "Enter"], "In the sidebar: move, close or open a group, open the item"],
       ["monitoringNewDashboard", ["N"], "New dashboard"],
+      ["monitoringImport", ["I"], "Import dashboards"],
     ]);
+  });
+
+  it("I imports in Monitoring only", () => {
+    expect(pressed("monitoringImport", { ...base, key: "i" })).toBe(true);
+    expect(pressed("monitoringImport", { ...base, key: "I", shiftKey: true })).toBe(true);
+    expect(pressed("monitoringImport", { ...base, key: "i", ctrlKey: true })).toBe(false);
+    expect(pressed("monitoringImport", { ...base, key: "n" })).toBe(false);
+    expect(SHORTCUTS.find((s) => s.id === "monitoringImport")).toMatchObject({ scope: "monitoring", keys: ["I"], label: "Import dashboards" });
+    expect(allGroups(undefined, "kubernetes").flatMap(([, list]) => list.map((s) => s.id))).not.toContain("monitoringImport");
+    expect(allGroups(undefined, "monitoring").find(([t]) => t === "Monitoring")![1].map((s) => s.label)).toContain("Import dashboards");
   });
 
   it("the Dashboards group appears only in Monitoring", () => {
