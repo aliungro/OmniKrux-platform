@@ -22,6 +22,7 @@ TransferErrorCode = Literal[
     "no_origin",
     "read_only",
     "version_conflict",
+    "not_imported",
 ]
 
 

@@ -15,6 +15,9 @@ Audit records never hold a document, a query, a secret or a file's content."""
 
 import asyncio
 import copy
+import hashlib
+import json
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -95,10 +98,6 @@ TARGET_GONE = "That project or group no longer exists. Pick another."
 NOT_IMPORTABLE = '"{title}" can\'t be imported: {problem}.'
 CHANGED = '"{title}" changed since you checked it. Check again.'
 UNLINKED_SOURCE = '"{source}" isn\'t linked to {project}. Pick one of its sources.'
-WARN_NOT_IMPORTED = '"{title}" wasn\'t imported: {message}'
-WARN_NO_ORIGIN = (
-    "Couldn't record where \"{title}\" came from, so Update from source isn't offered for it."
-)
 # Not in the plan's list: refusals of a body that names its parts wrongly, and of a source of
 # the other type.
 ONE_GRAFANA = "Choose one Grafana: a saved connection or a new one."
@@ -106,6 +105,8 @@ ONE_PLACE = "Choose where the dashboards go: a project or group, or a new group.
 ONCE_EACH = "Each dashboard can be imported only once at a time."
 WRONG_TYPE = '"{source}" is a {has} source, and these queries need a {needs} one. Pick another.'
 NOT_IMPORTED = "The import couldn't be saved, so nothing was imported. Try again."
+
+log = logging.getLogger(__name__)
 
 FILE_LABEL = "a file"
 PASTE_LABEL = "pasted JSON"
@@ -136,9 +137,9 @@ class GrafanaInput(_Body):
     """Dashboards of a Grafana: a saved connection (`grafana_id`) or one as entered."""
 
     kind: Literal["grafana"]
-    grafana_id: str | None = None
+    grafana_id: str | None = Field(None, max_length=200)
     connection: GrafanaIn | None = None
-    uids: list[str] = Field(min_length=1, max_length=100)
+    uids: list[Annotated[str, Field(max_length=200)]] = Field(min_length=1, max_length=100)
 
 
 ImportInput = Annotated[TextInput | GrafanaInput, Field(discriminator="kind")]
@@ -146,12 +147,12 @@ ImportInput = Annotated[TextInput | GrafanaInput, Field(discriminator="kind")]
 
 class TargetIn(_Body):
     kind: OwnerKind
-    id: str
+    id: str = Field(max_length=200)
 
 
 class NewGroupIn(_Body):
-    name: str
-    project_ids: list[str]
+    name: str = Field(max_length=200)
+    project_ids: list[Annotated[str, Field(max_length=200)]] = Field(max_length=500)
 
 
 class ImportPreviewIn(_Body):
@@ -160,22 +161,22 @@ class ImportPreviewIn(_Body):
 
 
 class MappingIn(_Body):
-    key: str
-    source_id: str | None = None
+    key: str = Field(max_length=300)
+    source_id: str | None = Field(None, max_length=200)
     leave_out: bool = False
 
 
 class CommitDashboardIn(_Body):
-    key: str
-    title: str
-    digest: str
+    key: str = Field(max_length=300)
+    title: str = Field(max_length=500)
+    digest: str = Field(max_length=64)
 
 
 class ImportCommitIn(_Body):
     input: ImportInput
     target: TargetIn | None = None
     new_group: NewGroupIn | None = None
-    mapping: list[MappingIn] = Field(default_factory=list)
+    mapping: list[MappingIn] = Field(default_factory=list, max_length=500)
     dashboards: list[CommitDashboardIn] = Field(min_length=1, max_length=200)
 
 
@@ -553,6 +554,20 @@ def attach_alerts(
     return out, items
 
 
+def review_digest(c: ConvertedDashboard, doc: dict, items: Sequence[SkippedItem]) -> str:
+    """What a reviewer saw of one dashboard, as a hash: the converted dashboard (`digest`, which
+    the origin row keeps) and its alerts as this OmniKrux attaches them now, with what changed on
+    the way. A contact point removed, renamed or added since the preview changes it, so the
+    commit is refused instead of an alert silently telling someone else, or no one."""
+    payload = {
+        "converted": digest(c),
+        "alerts": [[p["id"], p.get("alert")] for p in doc.get("panels", [])],
+        "items": [[i.where, i.what, i.reason] for i in items],
+    }
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _alert_count(doc: dict) -> int:
     return sum(1 for p in doc.get("panels", []) if p.get("alert") is not None)
 
@@ -677,10 +692,12 @@ async def preview(
     for c in read.converted:
         skipped = list(c.skipped)
         panels = alerts = 0
+        shown = digest(c)
         if c.doc is not None:
             doc, items = attach_alerts(c, c.doc, contact_points)
             skipped.extend(items)
             panels, alerts = panel_count(doc), _alert_count(doc)
+            shown = review_digest(c, doc, items)
         suggested = unique_title(c.title, taken) if c.title.strip() else c.title
         if c.doc is not None:
             taken.add(suggested)
@@ -695,7 +712,7 @@ async def preview(
                 skipped=[SkippedOut(where=s.where, what=s.what, reason=s.reason) for s in skipped],
                 problems=[ProblemOut(path=p.path, message=p.message) for p in c.problems],
                 importable=c.doc is not None,
-                digest=digest(c),
+                digest=shown,
             )
         )
     sources = await services.sources.list()
@@ -766,16 +783,12 @@ def _choices(
 
 
 def _panels_gone(before: dict, after: dict, skipped: Sequence[SkippedItem]) -> dict[str, str]:
-    """Panel id → why the mapping took it away."""
+    """Panel id → why the mapping took it away. `apply_mapping` lists one "The whole panel"
+    item per panel it removes, in panel order, so the removed panels pair with them in order."""
     kept = {p["id"] for p in after["panels"]}
-    reasons = {s.where: s.reason for s in skipped if s.what == "The whole panel"}
-    gone: dict[str, str] = {}
-    for p in before["panels"]:
-        if p["id"] not in kept:
-            why = reasons.get(f'Panel "{p.get("title")}"')
-            if why is not None:
-                gone[p["id"]] = why
-    return gone
+    removed = [p["id"] for p in before["panels"] if p["id"] not in kept]
+    reasons = [s.reason for s in skipped if s.what == "The whole panel"]
+    return dict(zip(removed, reasons, strict=False))
 
 
 def _plan(
@@ -863,19 +876,21 @@ async def commit(request: Request, body: ImportCommitIn) -> ImportResultOut:
     keys = [d.key for d in body.dashboards]
     if len(set(keys)) != len(keys):
         raise TransferError(422, "invalid_input", ONCE_EACH)
+    contact_points = await contact_points_by_name(services)
     for d in body.dashboards:
         c = by_key.get(d.key)
         if c is None:
             raise TransferError(409, "changed", CHANGED.format(title=d.title), key=d.key)
         if c.doc is None:
             raise _not_importable(c.title, c.problems[0], c.key)
-        if digest(c) != d.digest:
+        # The dashboard and its alerts as the preview showed them, contact points included.
+        attached, items = attach_alerts(c, c.doc, contact_points)
+        if review_digest(c, attached, items) != d.digest:
             raise TransferError(409, "changed", CHANGED.format(title=c.title), key=c.key)
     target, new_group = await _place(services, body, read)
     refs = {r.key: r for r in _all_refs([by_key[k] for k in keys])}
     sources = {s.id: s for s in await services.sources.list()}
     choices = _choices(body, target, refs, sources)
-    contact_points = await contact_points_by_name(services)
     taken = await _owner_titles(services, target)
     planned: list[_Planned] = []
     for d in body.dashboards:
@@ -940,7 +955,7 @@ async def _begin_all(
                     request, "dashboard_import", "dashboard", p.doc["title"], details
                 )
             )
-    except HTTPException:
+    except Exception:  # 503 from the audit, or anything else: nothing is written
         for record in started:
             await finish_change(request, record, False, NOT_IMPORTED)
         raise
@@ -1041,9 +1056,10 @@ async def _write(
     except UnknownGroup:
         await fail(TARGET_GONE)
         raise TransferError(404, "not_found", TARGET_GONE) from None
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - answered in words; nothing was written
+        log.warning("An import couldn't be saved (%s)", type(exc).__name__)
         await fail(NOT_IMPORTED)
-        raise
+        raise TransferError(500, "not_imported", NOT_IMPORTED) from None
     for record in records:
         await finish_change(request, record, True)
     changes: list[AlertChangeOut] = []

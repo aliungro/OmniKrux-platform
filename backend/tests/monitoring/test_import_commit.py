@@ -8,9 +8,11 @@ import logging
 
 from omnikrux.audit.store import AuditUnavailable
 from omnikrux.monitoring.transfer import importing
+from omnikrux.monitoring.transfer.grafana.convert import convert_grafana
+from omnikrux.monitoring.transfer.grafana.datasources import GrafanaContext
 from omnikrux.monitoring.transfer.mapping import LEFT_OUT, apply_mapping
 from omnikrux.monitoring.transfer.origins import MappingChoice
-from omnikrux.monitoring.transfer.types import SkippedItem
+from omnikrux.monitoring.transfer.types import SkippedItem, digest
 from tests.monitoring.conftest import GRAFANA_TOKEN
 from tests.monitoring.test_import_preview import (
     API,
@@ -108,7 +110,10 @@ async def test_commit_creates_and_records_origin(monitoring_app, linked_project)
         "api-lat",
     )
     assert (origin.grafana_version, origin.grafana_id, origin.imported_version) == (3, None, 1)
-    assert origin.digest == p["dashboards"][0]["digest"]
+    # The origin keeps the converted dashboard's digest (Update from source compares the source
+    # with it); the preview's also covers the alerts as attached here.
+    converted = convert_grafana(load("gridpos_v22_inputs"), GrafanaContext(), key="d-1")
+    assert origin.digest == digest(converted) != p["dashboards"][0]["digest"]
     assert origin.mapping == {"grafana:input:DS_PROM": MappingChoice(None)}
     assert origin.panels == {"2": "p-1", "3": "p-2", "4": "p-3", "5": "p-4"}
     [record] = await imports(http)
@@ -272,10 +277,15 @@ async def test_a_failed_write_leaves_nothing_behind(monitoring_app, linked_proje
         return await real(o, session=session)
 
     monkeypatch.setattr(origins, "record", flaky)
-    try:
-        await commit(http, text, chosen(p), target=to)
-    except RuntimeError:
-        pass  # the test client lets the server's error through
+    r = await commit(http, text, chosen(p), target=to)
+    assert r.status_code == 500
+    assert r.json()["detail"] == {
+        "code": "not_imported",
+        "message": "The import couldn't be saved, so nothing was imported. Try again.",
+        "key": None,
+        "problems": [],
+    }
+    assert "disk full" not in r.text
     owned = (await http.get(DASHBOARDS, params={"owner_kind": "project", "owner_id": other})).json()
     assert owned == []
     assert [await origins.get(id) for id in calls] == [None, None, None]
@@ -771,3 +781,131 @@ async def test_commit_answers_the_alert_changes(monitoring_app, linked_project):
     assert result["alert_changes"] == []  # both run on OmniKrux's engine: nothing in a tool
     rules = (await http.get(RULES)).json()
     assert sorted(r["name"] for r in rules) == ["Requests high", "Requests high"]
+
+
+async def test_a_failing_audit_record_ends_the_ones_begun(
+    monitoring_app, linked_project, monkeypatch
+):
+    """The second audit record can't be written: the first ends as failed, nothing is written."""
+    http, app = monitoring_app
+    shop = linked_project.project_id
+    for title in ("A", "B"):
+        await create(http, "project", shop, board(title, linked_project.source_id))
+    out = (await http.post(f"{API}/export", json={"kind": "project", "id": shop})).json()
+    other, _ = await project_with_source(http, "Other", "http://prometheus.example.invalid:9090")
+    text = text_input(json.dumps(out["export"]))
+    to = target("project", other)
+    p = await preview(http, text, to)
+    audit = app.state.audit
+    real = audit.begin_app
+    begun = []
+
+    async def second_fails(entry):
+        if entry.action == "dashboard_import":
+            begun.append(entry.name)
+            if len(begun) == 2:
+                raise AuditUnavailable("disk full")
+        return await real(entry)
+
+    monkeypatch.setattr(audit, "begin_app", second_fails)
+    r = await commit(http, text, chosen(p), target=to)
+    assert r.status_code == 503
+    monkeypatch.undo()
+    [record] = await imports(http)
+    assert (record["name"], record["outcome"]) == ("A", "failed")
+    owned = (await http.get(DASHBOARDS, params={"owner_kind": "project", "owner_id": other})).json()
+    assert owned == []
+
+
+async def test_body_lists_are_bounded(monitoring_app, linked_project):
+    http, _ = monitoring_app
+    to = target("project", linked_project.project_id)
+    text = text_input(fixture_text("gridpos_v22_inputs"))
+    [pick] = chosen(await preview(http, text, to))
+    many = [{"key": f"k-{i}", "leave_out": True} for i in range(501)]
+    r = await commit(http, text, [pick], target=to, mapping=many)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_input"
+    r = await commit(http, text, [pick | {"digest": "0" * 65}], target=to)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_input"
+    r = await commit(http, text, [pick], new_group={"name": "G", "project_ids": ["p"] * 501})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_input"
+    assert (await http.get(DASHBOARDS)).json() == []
+
+
+# --- contact points that change while the user reviews --------------------------------------
+
+
+def notifying_export(names: list[str]) -> dict:
+    alert = {
+        "name": "Requests high",
+        "query": "A",
+        "op": "above",
+        "threshold": 5,
+        "for": "1m",
+        "notify": [{"name": n} for n in names],
+    }
+    return tool_export(alert)
+
+
+async def contact_point(http, name: str, url: str) -> dict:
+    r = await http.post(
+        CONTACT_POINTS, json={"name": name, "type": "webhook", "secrets": {"url": f"{url}/h"}}
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+async def test_a_contact_point_removed_since_the_preview_is_refused(
+    monitoring_app, linked_project, fake_webhook
+):
+    http, _ = monitoring_app
+    cp = await contact_point(http, "Ops hook", fake_webhook.url)
+    text = text_input(json.dumps(notifying_export(["Ops hook"])))
+    to = target("project", linked_project.project_id)
+    p = await preview(http, text, to)
+    assert p["dashboards"][0]["skipped"] == []  # the preview says the alert tells Ops hook
+    review = (await http.get(f"{CONTACT_POINTS}/{cp['id']}/delete-review")).json()
+    removed = await http.delete(f"{CONTACT_POINTS}/{cp['id']}", params={"token": review["token"]})
+    assert removed.status_code == 200, removed.text
+    r = await commit(http, text, chosen(p), target=to)
+    assert refusal(r) == (
+        409,
+        "changed",
+        '"Tool alerts" changed since you checked it. Check again.',
+    )
+    assert r.json()["detail"]["key"] == "d-1"
+    assert (await http.get(DASHBOARDS)).json() == [] and await imports(http) == []
+    # Checked again, the preview says the contact point is gone, and that imports.
+    again = await preview(http, text, to)
+    assert [s["what"] for s in again["dashboards"][0]["skipped"]] == ['Contact point "Ops hook"']
+    await committed(http, text, chosen(again), target=to)
+
+
+async def test_a_contact_point_renamed_since_the_preview_is_refused(
+    monitoring_app, linked_project, fake_webhook
+):
+    http, _ = monitoring_app
+    cp = await contact_point(http, "Ops hook", fake_webhook.url)
+    text = text_input(json.dumps(notifying_export(["Ops hook"])))
+    to = target("project", linked_project.project_id)
+    p = await preview(http, text, to)
+    renamed = await http.patch(f"{CONTACT_POINTS}/{cp['id']}", json={"name": "Ops pager"})
+    assert renamed.status_code == 200, renamed.text
+    r = await commit(http, text, chosen(p), target=to)
+    assert refusal(r)[:2] == (409, "changed")
+    assert (await http.get(DASHBOARDS)).json() == []
+
+
+async def test_a_contact_point_added_since_the_preview_is_refused(
+    monitoring_app, linked_project, fake_webhook
+):
+    """The preview said "Ops hook" would be left out; one added meanwhile would be used."""
+    http, _ = monitoring_app
+    text = text_input(json.dumps(notifying_export(["Ops hook"])))
+    to = target("project", linked_project.project_id)
+    p = await preview(http, text, to)
+    assert [s["what"] for s in p["dashboards"][0]["skipped"]] == ['Contact point "Ops hook"']
+    await contact_point(http, "Ops hook", fake_webhook.url)
+    r = await commit(http, text, chosen(p), target=to)
+    assert refusal(r)[:2] == (409, "changed")
+    assert (await http.get(DASHBOARDS)).json() == []
