@@ -31,6 +31,7 @@ from omnikrux.monitoring.models import (
     lock_first,
     now,
     utc,
+    writing,
 )
 from omnikrux.monitoring.projects.types import UnknownGroup, UnknownProject
 from omnikrux.monitoring.sources.types import NameTaken
@@ -326,9 +327,11 @@ class DashboardStore:
         *,
         origin: Origin = "created",
         copied_from: str | None = None,
+        session: AsyncSession | None = None,
     ) -> DashboardRecord:
         """A new dashboard at version 1, titled after the document. UnknownProject or
-        UnknownGroup (the owner), NameTaken."""
+        UnknownGroup (the owner), NameTaken. With `session`, the dashboard is part of the
+        caller's transaction and commits with it."""
         title = spec["title"]
         text = _spec_text(spec)
         moment = now()
@@ -342,16 +345,14 @@ class DashboardStore:
             created_at=moment,
             updated_at=moment,
         )
-        async with self._sessionmaker.begin() as session:
+        async with writing(self._sessionmaker, session) as s:
             # The owner can't be deleted between this check and the commit.
-            await lock_first(session)
-            await _owner_exists(session, owner_kind, owner_id)
-            await _title_free(session, owner_kind, owner_id, title)
-            session.add(row)
-            session.add(
-                _version_row(row.id, 1, spec, text, moment, origin, copied_from=copied_from)
-            )
-            await _flush(session, title)
+            await lock_first(s)
+            await _owner_exists(s, owner_kind, owner_id)
+            await _title_free(s, owner_kind, owner_id, title)
+            s.add(row)
+            s.add(_version_row(row.id, 1, spec, text, moment, origin, copied_from=copied_from))
+            await _flush(s, title)
         return _record(row)
 
     async def _advance(

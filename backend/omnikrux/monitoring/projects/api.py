@@ -786,13 +786,22 @@ async def list_groups(request: Request) -> list[GroupOut]:
     return [_group_out(g, names) for g in await services.groups.list()]
 
 
+async def new_group_checked(
+    services: MonitoringServices, name: str, project_ids: Sequence[str]
+) -> tuple[str, dict]:
+    """A new group's checked name and its `group_add` audit details (the chosen projects'
+    names); 422 in M1's words when the name breaks the rules or a chosen project is gone. The
+    group route and an import into a new group check and audit a new group the same way."""
+    checked = checked_name(name)
+    chosen = _chosen(await _project_names(services), project_ids)
+    return checked, {"projects": chosen}
+
+
 @router.post("/groups", status_code=201)
 async def add_group(body: GroupIn, request: Request) -> GroupOut:
     services = _services(request)
-    name = checked_name(body.name)
-    names = await _project_names(services)
-    chosen = _chosen(names, body.project_ids)
-    record = await begin_change(request, "group_add", "group", name, {"projects": chosen})
+    name, details = await new_group_checked(services, body.name, body.project_ids)
+    record = await begin_change(request, "group_add", "group", name, details)
     try:
         group = await services.groups.create(name, body.project_ids)
     except NameTaken as exc:

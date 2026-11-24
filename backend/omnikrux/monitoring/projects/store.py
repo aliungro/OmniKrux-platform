@@ -548,17 +548,23 @@ class GroupStore:
             raise UnknownGroup(id)
         return found[0]
 
-    async def create(self, name: str, project_ids: Sequence[str]) -> Group:
+    async def create(
+        self, name: str, project_ids: Sequence[str], *, session: AsyncSession | None = None
+    ) -> Group:
+        """UnknownProject, NameTaken. With `session`, the group is part of the caller's
+        transaction and commits with it."""
         name = clean_name(name)
         moment = now()
         row = GroupRecord(id=uuid.uuid4().hex, name=name, created_at=moment, updated_at=moment)
-        async with self._sessionmaker.begin() as session:
-            await lock_first(session)
-            members = await _known_projects(session, project_ids)
-            await _name_free(session, GroupRecord, "group", name)
-            session.add(row)
-            session.add_all(GroupMemberRecord(group_id=row.id, project_id=p) for p in members)
-            await _flush(session, "group", name)
+        async with writing(self._sessionmaker, session) as s:
+            await lock_first(s)
+            members = await _known_projects(s, project_ids)
+            await _name_free(s, GroupRecord, "group", name)
+            s.add(row)
+            s.add_all(GroupMemberRecord(group_id=row.id, project_id=p) for p in members)
+            await _flush(s, "group", name)
+            if session is not None:
+                return (await self._groups(s, [row.id]))[0]
         return await self.get(row.id)
 
     async def update(
