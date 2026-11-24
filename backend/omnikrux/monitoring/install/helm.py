@@ -58,11 +58,17 @@ class HelmResult:
     stderr: str
     # Set on a timed-out call (`timed_out`): the time limit in seconds.
     timeout: float | None = None
+    # True when Helm printed more than `max_output` bytes on stdout or stderr and the rest was
+    # dropped. A cut multi-document YAML can still parse, so any caller that reads the output
+    # (`template`, `show crds`) must refuse a truncated answer rather than use part of it.
+    truncated: bool = False
 
 
-def timed_out(stdout: str, stderr: str, timeout: float) -> HelmResult:
+def timed_out(stdout: str, stderr: str, timeout: float, *, truncated: bool = False) -> HelmResult:
     """The answer of a call stopped at its time limit: code 124, stderr ending in TIMEOUT_MARK."""
-    return HelmResult(TIMEOUT_CODE, stdout, stderr + TIMEOUT_MARK, timeout=timeout)
+    return HelmResult(
+        TIMEOUT_CODE, stdout, stderr + TIMEOUT_MARK, timeout=timeout, truncated=truncated
+    )
 
 
 class HelmRunner(Protocol):
@@ -136,10 +142,13 @@ class _Capped:
     def __init__(self, limit: int):
         self.limit = limit
         self.kept = bytearray()
+        self.cut = False
 
     async def pump(self, stream: asyncio.StreamReader) -> None:
         while chunk := await stream.read(_READ_CHUNK):
             room = self.limit - len(self.kept)
+            if len(chunk) > room:
+                self.cut = True
             if room > 0:
                 self.kept += chunk[:room]
 
@@ -195,14 +204,17 @@ async def _stop(proc: asyncio.subprocess.Process) -> None:
                 await proc.wait()
 
 
-async def _drain(readers: Sequence[asyncio.Task]) -> None:
-    """Let the readers reach the end of the closed pipes; cancel any still waiting."""
+async def _drain(readers: Sequence[asyncio.Task]) -> bool:
+    """Let the readers reach the end of the closed pipes; cancel any still waiting (a child of
+    Helm's holding a pipe open). False when one had to be cancelled: the output is incomplete."""
     pending = [r for r in readers if not r.done()]
     if pending:
         await asyncio.wait(pending, timeout=_DRAIN_SECONDS)
+    complete = all(r.done() and not r.cancelled() for r in readers)
     for reader in readers:
         reader.cancel()
     await asyncio.gather(*readers, return_exceptions=True)
+    return complete
 
 
 class SubprocessHelm(HelmRunner):
@@ -256,28 +268,34 @@ class SubprocessHelm(HelmRunner):
         )
         limit = asyncio.timeout(timeout)
         try:
-            async with limit:
-                await asyncio.wait(readers)
-                await proc.wait()
-        except TimeoutError:
-            await _stop(proc)
-            await _drain(readers)
-            if not limit.expired():
-                raise
-            log.warning("Helm %s ran past its %g s limit and was stopped", step, timeout)
-            return timed_out(out.text(), err.text(), timeout)
-        except BaseException:
             try:
+                async with limit:
+                    await asyncio.wait(readers)
+                    await proc.wait()
+            except TimeoutError:
                 await _stop(proc)
-            finally:
-                for reader in readers:
-                    reader.cancel()
+                if not limit.expired():
+                    raise
+                complete = await _drain(readers)
+                log.warning("Helm %s ran past its %g s limit and was stopped", step, timeout)
+                return timed_out(
+                    out.text(), err.text(), timeout, truncated=out.cut or err.cut or not complete
+                )
+            except BaseException:
                 log.info("Helm %s was stopped before it finished", step)
-            raise
-        await _drain(readers)
-        code = proc.returncode if proc.returncode is not None else -1
-        log.info("Helm %s ended with exit code %d", step, code)
-        return HelmResult(code, out.text(), err.text())
+                await _stop(proc)
+                raise
+            complete = await _drain(readers)
+            code = proc.returncode if proc.returncode is not None else -1
+            log.info("Helm %s ended with exit code %d", step, code)
+            return HelmResult(
+                code, out.text(), err.text(), truncated=out.cut or err.cut or not complete
+            )
+        finally:
+            # Every ending (also a cancel during the terminate grace) leaves no reader behind.
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
 
 
 # ---- words ----

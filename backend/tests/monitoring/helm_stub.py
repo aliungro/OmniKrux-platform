@@ -2,7 +2,7 @@
 
 Its first argument picks what it does (anything else prints its arguments and environment):
 - `big N`: write N bytes to stdout and N bytes to stderr, then exit 0;
-- `sleep SECONDS PIDFILE`: write its process id to PIDFILE, then sleep;
+- `sleep SECONDS PIDFILE`: write its process id and HOME to PIDFILE, then sleep;
 - `ignore-term SECONDS PIDFILE`: the same, ignoring SIGTERM (POSIX; Windows has no SIGTERM to
   ignore, `terminate()` there ends the process at once);
 - `fail CODE TEXT`: write TEXT to stderr and exit with CODE.
@@ -17,7 +17,8 @@ from pathlib import Path
 
 
 def _sleep(seconds: str, pidfile: str) -> None:
-    Path(pidfile).write_text(str(os.getpid()), encoding="utf-8")
+    # Its process id, then its HOME (which is inside the runner's private folder for the call).
+    Path(pidfile).write_text(f"{os.getpid()}\n{os.environ.get('HOME', '')}", encoding="utf-8")
     time.sleep(float(seconds))
 
 

@@ -86,11 +86,13 @@ async def gone_within(pid: int, seconds: float) -> bool:
     return not alive(pid)
 
 
-async def pid_from(path: Path, seconds: float = 20) -> int:
+async def started(path: Path, seconds: float = 20) -> tuple[int, Path]:
+    """The sleeping stub's process id and the runner's private folder for the call."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        if path.exists() and (text := path.read_text(encoding="utf-8")):
-            return int(text)
+        if path.exists() and "\n" in (text := path.read_text(encoding="utf-8")):
+            pid, home = text.split("\n", 1)
+            return int(pid), Path(home).parent
         await asyncio.sleep(0.05)
     raise AssertionError("the stub never started")
 
@@ -344,17 +346,21 @@ async def test_client_key_is_never_an_argument_or_in_the_environment(tls, tmp_pa
 
 async def test_subprocess_runner_runs_and_caps_output():
     answer = await stub_helm().run(version_args(), kubeconfig=None, timeout=60)
-    assert answer.code == 0 and answer.stderr == ""
+    assert answer.code == 0 and answer.stderr == "" and not answer.truncated
     assert json.loads(answer.stdout)["args"] == version_args()
 
     big = await stub_helm().run(["big", str(5 * MIB)], kubeconfig=None, timeout=60)
     assert big.code == 0
     assert len(big.stdout) == 4 * MIB and len(big.stderr) == 4 * MIB
+    assert big.truncated
+
+    exact = await stub_helm().run(["big", str(4 * MIB)], kubeconfig=None, timeout=60)
+    assert len(exact.stdout) == 4 * MIB and not exact.truncated
 
     larger = await stub_helm().run(
         ["big", str(5 * MIB)], kubeconfig=None, timeout=60, max_output=8 * MIB
     )
-    assert len(larger.stdout) == 5 * MIB
+    assert len(larger.stdout) == 5 * MIB and not larger.truncated
 
 
 async def test_subprocess_runner_env_is_minimal(tmp_path, monkeypatch):
@@ -388,11 +394,13 @@ async def test_cancel_terminates_the_process(tmp_path):
     task = asyncio.create_task(
         stub_helm().run(["sleep", "600", str(pidfile)], kubeconfig=None, timeout=600)
     )
-    pid = await pid_from(pidfile)
+    pid, private = await started(pidfile)
+    assert private.name.startswith("omnikrux-helm-run-") and private.exists()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert await gone_within(pid, 25)
+    assert not private.exists()
 
 
 async def test_a_process_that_ignores_terminate_is_killed(tmp_path, monkeypatch):
@@ -401,8 +409,7 @@ async def test_a_process_that_ignores_terminate_is_killed(tmp_path, monkeypatch)
     task = asyncio.create_task(
         stub_helm().run(["ignore-term", "600", str(pidfile)], kubeconfig=None, timeout=600)
     )
-    pid = await pid_from(pidfile)
-    await asyncio.sleep(0.3)  # the stub has set its SIGTERM handler before it wrote the pid
+    pid, _ = await started(pidfile)  # its SIGTERM handler is set before it writes the pid
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -413,14 +420,71 @@ async def test_timeout_returns_124(tmp_path):
     pidfile = tmp_path / "pid"
     answer = await stub_helm().run(["sleep", "600", str(pidfile)], kubeconfig=None, timeout=1)
     assert answer.code == 124 and answer.stderr.endswith(TIMEOUT_MARK)
-    assert answer.timeout == 1
-    assert await gone_within(int(pidfile.read_text(encoding="utf-8")), 25)
+    assert answer.timeout == 1 and not answer.truncated
+    pid, private = await started(pidfile)
+    assert await gone_within(pid, 25)
+    assert private.name.startswith("omnikrux-helm-run-") and not private.exists()
     assert (
         helm_error_message(
             timed_out("", "", 600), step="install omnikrux-loki", secrets=[], hosts=[], cloud=True
         )
         == "Helm didn't finish install omnikrux-loki within 10 minutes."
     )
+
+
+class StubbornProcess:
+    """A process whose terminate() doesn't end it; only kill() does."""
+
+    def __init__(self):
+        self.returncode: int | None = None
+        self.signals: list[str] = []
+        self._ended = asyncio.Event()
+
+    def terminate(self) -> None:
+        self.signals.append("terminate")
+
+    def kill(self) -> None:
+        self.signals.append("kill")
+        self.returncode = -9
+        self._ended.set()
+
+    async def wait(self) -> int:
+        await self._ended.wait()
+        return self.returncode
+
+
+async def test_stop_kills_after_the_grace_when_terminate_does_not_end_it(monkeypatch):
+    monkeypatch.setattr(helm_module, "STOP_GRACE_SECONDS", 0.2)
+    proc = StubbornProcess()
+    began = time.monotonic()
+    await helm_module._stop(proc)
+    assert proc.signals == ["terminate", "kill"] and proc.returncode == -9
+    assert time.monotonic() - began >= 0.2
+
+
+async def test_stop_still_kills_when_cancelled_during_the_grace(monkeypatch):
+    monkeypatch.setattr(helm_module, "STOP_GRACE_SECONDS", 600)
+    proc = StubbornProcess()
+    task = asyncio.create_task(helm_module._stop(proc))
+    await asyncio.sleep(0.05)
+    assert proc.signals == ["terminate"]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert proc.signals == ["terminate", "kill"]
+
+
+async def test_no_reader_is_left_pending_after_a_cancel(tmp_path):
+    pidfile = tmp_path / "pid"
+    before = asyncio.all_tasks()
+    task = asyncio.create_task(
+        stub_helm().run(["sleep", "600", str(pidfile)], kubeconfig=None, timeout=600)
+    )
+    await started(pidfile)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert asyncio.all_tasks() - before == set()
 
 
 async def test_a_failure_keeps_helms_words_and_logs_only_the_step(caplog):
