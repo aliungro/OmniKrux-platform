@@ -6,7 +6,6 @@ import re
 from datetime import UTC, datetime
 
 from omnikrux.monitoring.dashboards.schema import (
-    BUILTIN_VARIABLES,
     DEFAULT_TIME,
     MAX_PANELS,
     MAX_VARIABLES,
@@ -14,9 +13,9 @@ from omnikrux.monitoring.dashboards.schema import (
     DashboardInvalid,
     Problem,
     validate_dashboard,
-    variables_used,
 )
-from omnikrux.monitoring.transfer.grafana.datasources import GrafanaContext, Ref
+from omnikrux.monitoring.transfer.grafana.alerts import PanelInfo, legacy_draft, unified_drafts
+from omnikrux.monitoring.transfer.grafana.datasources import GrafanaContext
 from omnikrux.monitoring.transfer.grafana.layout import grid_pos, place, rows_layout
 from omnikrux.monitoring.transfer.grafana.panels import (
     PanelResult,
@@ -25,7 +24,9 @@ from omnikrux.monitoring.transfer.grafana.panels import (
     convert_panel,
     prescan,
 )
+from omnikrux.monitoring.transfer.grafana.variables import convert_variables, datasource_variables
 from omnikrux.monitoring.transfer.types import (
+    AlertDraft,
     ConvertedDashboard,
     Identity,
     SkippedItem,
@@ -150,54 +151,6 @@ def _dashboard_items(d: dict, items: list[tuple[str, str]]) -> None:
         items.append((f"Time zone {clean_text(tz)}", "Times show in your browser's time zone."))
 
 
-def _templating(d: dict) -> list[dict]:
-    t = d.get("templating")
-    entries = t.get("list") if isinstance(t, dict) else None
-    return [v for v in entries if isinstance(v, dict)] if isinstance(entries, list) else []
-
-
-def _convertible_names(variables: list[dict]) -> list[dict]:
-    """Interim until variables are converted properly: the query variables with a usable name."""
-    out: list[dict] = []
-    for v in variables:
-        name = v.get("name")
-        if (
-            v.get("type") == "query"
-            and isinstance(name, str)
-            and _NAME.fullmatch(name)
-            and not name.startswith("__")
-            and all(o["name"] != name for o in out)
-        ):
-            out.append(v)
-    return out[:MAX_VARIABLES]
-
-
-def _variable_doc(v: dict, state: PanelState) -> dict:
-    query = v.get("query")
-    text = query.get("query") if isinstance(query, dict) else query
-    label = None
-    if isinstance(text, str):
-        m = _LABEL_VALUES.search(text)
-        label = m.group(1) if m else None
-    if label is None and isinstance(query, dict) and isinstance(query.get("label"), str):
-        label = query["label"]
-    if label is None or not _LABEL.fullmatch(label):
-        label = v["name"]
-    res = state.resolve(v.get("datasource"))
-    kind = res.type if isinstance(res, Ref) and res.type == "loki" else "prometheus"
-    return {
-        "name": v["name"],
-        "label": v["name"],
-        "type": "labelValues",
-        "source": {"type": kind, "id": None},
-        "labelName": label,
-        "match": "",
-        "multi": v.get("multi") is True,
-        "includeAll": v.get("includeAll") is True,
-        "default": [],
-    }
-
-
 def _id_of(grafana_id: object) -> str | None:
     if _is_int(grafana_id) or (isinstance(grafana_id, str) and grafana_id):
         return str(grafana_id)
@@ -237,16 +190,8 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
         for i in (raw_inputs if isinstance(raw_inputs, list) else [])
         if isinstance(i, dict) and isinstance(i.get("name"), str) and i.get("type") == "datasource"
     }
-    templating = _templating(d)
-    ds_vars = {
-        v["name"]: v["query"]
-        for v in templating
-        if v.get("type") == "datasource" and isinstance(v.get("name"), str)
-    }
-    convertible = _convertible_names(templating)
-    state = PanelState(
-        ctx, inputs, ds_vars, frozenset(v["name"] for v in convertible), exprs_by_key={}
-    )
+    ds_vars = {name: ref.type for name, ref in datasource_variables(d.get("templating")).items()}
+    state = PanelState(ctx, inputs, ds_vars, frozenset(), exprs_by_key={})
 
     panels = d.get("panels")
     saw_row = False
@@ -271,6 +216,11 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
         for ref, expr in prescan(p, state):
             state.exprs_by_key.setdefault(ref.key, []).append(expr)
 
+    var_result = convert_variables(d.get("templating"), state.resolve)
+    for v in var_result.variables:
+        v["source"]["type"] = state.note_ref(var_result.refs[v["name"]])
+    state.known = frozenset(v["name"] for v in var_result.variables)
+
     results: list[tuple[PanelResult, dict]] = []
     for p, layout in flat:
         r = convert_panel(p, state)
@@ -283,6 +233,7 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
         placed_indexes.add(i)
 
     skipped: list[SkippedItem] = [SkippedItem("Dashboard", w, r) for w, r in dash_items]
+    skipped.extend(var_result.skipped)
     for i, (r, _) in enumerate(results):
         skipped.extend(r.skipped)
         if r.panel is not None and i not in placed_indexes:
@@ -309,13 +260,7 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
         panel["description"] = panel["description"][:2000]
         entries.append({"panel": panel, "result": r})
 
-    used_names: list[str] = []
-    for e in entries:
-        for q in e["panel"]["queries"]:
-            for name in variables_used(q["expr"]):
-                if name not in BUILTIN_VARIABLES and name not in used_names:
-                    used_names.append(name)
-    variables = [_variable_doc(v, state) for v in convertible if v["name"] in used_names]
+    variables = var_result.variables
 
     ctx_doc = {"title": title, "description": description, "time": doc_time, "refresh": refresh}
     doc, problems = _validated(ctx_doc, variables, entries, skipped)
@@ -326,23 +271,78 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
         for q in p["queries"]:
             if q["source"]["id"] not in used_keys:
                 used_keys.append(q["source"]["id"])
+    for v in doc["variables"] if doc else []:
+        if v["source"]["id"] not in used_keys:
+            used_keys.append(v["source"]["id"])
     refs: tuple[SourceRefFound, ...] = tuple(state.refs[k] for k in used_keys if k in state.refs)
     sources = [(e["panel"]["id"], _id_of(e["result"].grafana_id)) for e in entries]
     ids = [g for _, g in sources if g is not None]
     panel_sources = (
         tuple((pid, g) for pid, g in sources if g is not None and ids.count(g) == 1) if doc else ()
     )
+    alerts: list[tuple[str, AlertDraft]] = []
+    if doc:
+        kept = {e["panel"]["id"] for e in entries}
+        alerts, alert_items = _alerts(entries, kept, ctx, identity)
+        skipped.extend(alert_items)
     return ConvertedDashboard(
         key=key,
         title=doc["title"] if doc else title,
         doc=doc,
         refs=refs,
         skipped=tuple(skipped),
-        alerts=(),
+        alerts=tuple(alerts),
         problems=problems,
         identity=identity,
         panel_sources=panel_sources,
     )
+
+
+def _alerts(entries: list[dict], kept: set[str], ctx: GrafanaContext, identity: Identity):
+    """One alert per panel, in panel order: the old panel alert first, then unified rules."""
+    alerts: dict[str, AlertDraft] = {}
+    items: list[SkippedItem] = []
+    infos: dict[str, PanelInfo] = {}
+    for e in entries:
+        r: PanelResult = e["result"]
+        gid = _id_of(r.grafana_id)
+        if gid is not None and gid not in infos:
+            infos[gid] = PanelInfo(e["panel"]["id"], e["panel"]["title"], r.ref_map, r.raw_exprs)
+        if r.legacy_alert is not None:
+            draft, found = legacy_draft(r.legacy_alert, r.ref_map)
+            items.extend(found)
+            _keep(alerts, items, e["panel"]["id"], draft)
+    if ctx.alert_rules is not None and identity.ref is not None:
+        mine = [
+            rule
+            for rule in ctx.alert_rules
+            if isinstance(rule, dict)
+            and isinstance(rule.get("annotations"), dict)
+            and rule["annotations"].get("__dashboardUid__") == identity.ref
+        ]
+        drafts, found = unified_drafts(mine, infos)
+        items.extend(found)
+        for panel_id, draft in drafts:
+            _keep(alerts, items, panel_id, draft)
+    if ctx.alert_rules_note:
+        items.append(SkippedItem("Dashboard", "Grafana alert rules", ctx.alert_rules_note))
+    order = [e["panel"]["id"] for e in entries]
+    return [(pid, alerts[pid]) for pid in order if pid in alerts], items
+
+
+def _keep(alerts: dict[str, AlertDraft], items: list[SkippedItem], panel_id: str, draft) -> None:
+    if draft is None:
+        return
+    if panel_id in alerts:
+        items.append(
+            SkippedItem(
+                f'Alert "{draft.title}"',
+                "The rule",
+                "The panel already has an alert; OmniKrux panels have one.",
+            )
+        )
+        return
+    alerts[panel_id] = draft
 
 
 def _where(entry: dict) -> str:

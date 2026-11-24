@@ -112,7 +112,7 @@ def test_gridpos_with_inputs():
         SourceRefFound("grafana:input:DS_PROM", "prometheus", False, "Prometheus", None, None),
     )
     assert c.identity == Identity("grafana", "api-lat", 3)
-    assert c.alerts == () and all(p["alert"] is None for p in c.doc["panels"])
+    assert all(p["alert"] is None for p in c.doc["panels"])
 
 
 def test_modern_objects_rows_mixed_and_logs():

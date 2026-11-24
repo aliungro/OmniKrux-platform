@@ -7,7 +7,6 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Literal
 
-from omnikrux.monitoring.dashboards.schema import BUILTIN_VARIABLES, variables_used
 from omnikrux.monitoring.transfer.grafana.datasources import (
     GrafanaContext,
     Ref,
@@ -15,6 +14,7 @@ from omnikrux.monitoring.transfer.grafana.datasources import (
     guess_type,
     resolve,
 )
+from omnikrux.monitoring.transfer.grafana.expressions import convert_expr
 from omnikrux.monitoring.transfer.types import SkippedItem, SourceRefFound
 
 PANEL_TYPES = {
@@ -119,6 +119,8 @@ class PanelResult:
     refs_used: list[str]
     legacy_alert: dict | None
     grafana_id: object
+    ref_map: dict[str, str] = field(default_factory=dict)  # Grafana refId -> new ref
+    raw_exprs: dict[str, str] = field(default_factory=dict)  # Grafana refId -> raw expression
 
 
 def prescan(p: dict, state: PanelState) -> list[tuple[Ref, str]]:
@@ -421,24 +423,14 @@ def _letter_for(wanted: object, used: set[str]) -> str:
     return next((c for c in _LETTERS if c not in used), "")
 
 
-def _variable_problem(expr: str, known: frozenset[str]) -> str | None:
-    """Interim: Task 6 replaces this with the full expression conversion."""
-    for name in variables_used(expr):
-        if name in BUILTIN_VARIABLES:
-            continue
-        if name.startswith("__"):
-            return f"Uses ${{{name}}}, which OmniKrux doesn't have."
-        if name not in known:
-            return f"Uses ${{{name}}}, a Grafana variable OmniKrux couldn't copy."
-    return None
-
-
 def _convert_targets(p: dict, kind: str, state: PanelState, items: list[tuple[str, str]]):
     targets = p.get("targets")
     panel_ds = state.resolve(p.get("datasource"))
     mixed = isinstance(panel_ds, Special) and panel_ds.kind == "mixed"
     queries: list[dict] = []
     refs_used: list[str] = []
+    ref_map: dict[str, str] = {}
+    raw_exprs: dict[str, str] = {}
     used: set[str] = set()
     over_limit: list[str] = []
     loki_kept = False
@@ -463,9 +455,9 @@ def _convert_targets(p: dict, kind: str, state: PanelState, items: list[tuple[st
         if not isinstance(expr, str) or not expr.strip():
             items.append((f"Query {label}", "It has no query text."))
             continue
-        problem = _variable_problem(expr, state.known)
-        if problem:
-            items.append((f"Query {label}", problem))
+        converted = convert_expr(expr, state.known)
+        if converted.text is None:
+            items.append((f"Query {label}", converted.reason or ""))
             continue
         source_type = state.source_type(res)[0]
         if kind == "logs":
@@ -487,18 +479,23 @@ def _convert_targets(p: dict, kind: str, state: PanelState, items: list[tuple[st
         legend = legend if isinstance(legend, str) and legend != "__auto" else ""
         state.note_ref(res)
         refs_used.append(res.key)
+        ref_map[label] = ref
+        raw_exprs[label] = expr
+        for note in converted.notes:
+            if note not in items:
+                items.append(note)
         queries.append(
             {
                 "ref": ref,
                 "source": {"type": state.refs[res.key].type, "id": res.key},
-                "expr": expr,
+                "expr": converted.text,
                 "legend": legend,
                 "hidden": t.get("hide") is True,
             }
         )
     if over_limit:
         items.append((f"Queries {', '.join(over_limit)}", "A panel keeps at most 10 queries."))
-    return queries, refs_used
+    return queries, refs_used, ref_map, raw_exprs
 
 
 # --- the panel ------------------------------------------------------------------------------
@@ -530,9 +527,16 @@ def convert_panel(p: dict, state: PanelState) -> PanelResult:
     items: list[tuple[str, str]] = []
     legacy = p.get("alert") if isinstance(p.get("alert"), dict) else None
 
-    def result(panel: dict | None, refs: list[str] | None = None) -> PanelResult:
+    def result(
+        panel: dict | None,
+        refs: list[str] | None = None,
+        ref_map: dict[str, str] | None = None,
+        raw_exprs: dict[str, str] | None = None,
+    ) -> PanelResult:
         skipped = [SkippedItem(where, w, r) for w, r in items]
-        return PanelResult(panel, skipped, refs or [], legacy, grafana_id)
+        return PanelResult(
+            panel, skipped, refs or [], legacy, grafana_id, ref_map or {}, raw_exprs or {}
+        )
 
     lib = p.get("libraryPanel")
     if isinstance(lib, dict):
@@ -556,7 +560,7 @@ def convert_panel(p: dict, state: PanelState) -> PanelResult:
         return result(None)
     if raw_type == "singlestat" and _get(p, "gauge", "show") is True:
         kind = "gauge"
-    queries, refs_used = _convert_targets(p, kind, state, items)
+    queries, refs_used, ref_map, raw_exprs = _convert_targets(p, kind, state, items)
     if not queries:
         items.append(
             (
@@ -605,4 +609,4 @@ def convert_panel(p: dict, state: PanelState) -> PanelResult:
         "options": options,
         "alert": None,
     }
-    return result(panel, refs_used)
+    return result(panel, refs_used, ref_map, raw_exprs)
