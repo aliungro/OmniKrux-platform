@@ -4,15 +4,18 @@
 // one. The calls that carry a secret are plain (never a TanStack mutation, which would keep the
 // body in its cache); every secret input is emptied once the save went through, and nothing typed
 // goes into the view state or the page. Ctrl+Enter saves; Esc and Cancel ask first when there are changes.
+// A change that an Alertmanager OmniKrux installed needs (the answer's `contacts` changes) is
+// reviewed through the tool review queue once the form is gone.
 
 import { useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { failure } from "../../../api/http";
 import { pressed } from "../../../features/chrome/shortcuts";
 import {
   createContactPoint, testContactPoint, testUnsavedContactPoint, updateContactPoint, useRefreshAfterContactPoint,
-  type AlertRequestError, type ContactPointIn, type ContactPointOut, type ContactPointPatch, type ContactPointType,
+  type AlertChangeOut, type AlertRequestError, type ContactPointIn, type ContactPointOut, type ContactPointPatch, type ContactPointType,
 } from "../api";
 import { DiscardDialog, useLeaveGuard, type LeaveRef } from "../leave";
+import { useToolReviews } from "../reviews/useToolReviews";
 import s from "./Contacts.module.css";
 
 export const TYPE_LABEL: Record<ContactPointType, string> = {
@@ -67,6 +70,7 @@ export interface ContactPointFormProps {
 export function ContactPointForm({ initial, onDone, leaveRef, tabId }: ContactPointFormProps) {
   const ids = useId();
   const refresh = useRefreshAfterContactPoint();
+  const reviews = useToolReviews();
   const start = useRef(plainOf(initial)).current;
   const [plain, setPlain] = useState<Plain>(start);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
@@ -148,13 +152,21 @@ export function ContactPointForm({ initial, onDone, leaveRef, tabId }: ContactPo
     busyRef.current = true;
     setBusy(true);
     try {
-      // Plain calls: the body (a secret in it) never enters the TanStack cache.
-      const saved = initial ? await updateContactPoint(initial.id, built.patch) : await createContactPoint(built.body);
+      // Plain calls: the body (a secret in it) never enters the TanStack cache. Only an edit answers
+      // changes (a new contact point isn't used by a rule yet).
+      let saved: ContactPointOut;
+      let changes: AlertChangeOut[] = [];
+      if (initial) {
+        const out = await updateContactPoint(initial.id, built.patch);
+        changes = out.alert_changes ?? [];
+        saved = out;
+      } else saved = await createContactPoint(built.body);
       // Nothing typed stays in the form, whatever happens next.
       setSecrets({});
       setRemoved({});
       await refresh();
       onDone(saved);
+      if (changes.length > 0) reviews.enqueue(changes);
     } catch (err) {
       refused(err);
     } finally {

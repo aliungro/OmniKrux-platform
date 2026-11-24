@@ -5,7 +5,9 @@
 // **Update review**; the last edited ones are kept, so **Review again** after an expired or stale
 // plan keeps them) and, once applied, the job's progress. What each review did is said in a polite
 // status line; then Monitoring's data and the audit log are read again, and the keyboard goes back
-// where the review was asked for (or to the workspace), never to <body>.
+// where the review was asked for (or to the workspace), never to <body>. The screen holds one
+// review across both hosts: each review here, and each one the tool review queue opens, waits for
+// its `turn()` first.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -106,6 +108,24 @@ export function InstallReviewHost({ children, place }: {
   const backTo = useRef<{ el: FocusAfter | undefined } | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const lineId = useRef(0);
+  /** Whether a review (this host's or the tool queue's) holds the screen, and who waits for it. */
+  const held = useRef(false);
+  const waitingTurn = useRef<(() => void)[]>([]);
+
+  const turn = useCallback(() => new Promise<() => void>((resolve) => {
+    const grant = () => {
+      held.current = true;
+      let released = false;
+      resolve(() => {
+        if (released) return;
+        released = true;
+        held.current = false;
+        waitingTurn.current.shift()?.();
+      });
+    };
+    if (held.current) waitingTurn.current.push(grant);
+    else grant();
+  }), []);
 
   const say = useCallback((tone: Line["tone"], text: string) => {
     if (!alive.current) return;
@@ -145,7 +165,14 @@ export function InstallReviewHost({ children, place }: {
     try {
       while (alive.current && queue.current.length > 0) {
         const item = queue.current[0];
-        const outcome = await runOne(item);
+        // Planned only once the screen is free: the plan is fresh when it shows.
+        const release = await turn();
+        let outcome: InstallOutcome;
+        try {
+          outcome = alive.current ? await runOne(item) : "cancelled";
+        } finally {
+          release();
+        }
         if (!alive.current) return;
         queue.current.shift();
         item.resolve(outcome);
@@ -155,7 +182,7 @@ export function InstallReviewHost({ children, place }: {
     } finally {
       running.current = false;
     }
-  }, [client, runOne]);
+  }, [client, runOne, turn]);
 
   const request = useCallback((fields: Omit<Item, "id" | "resolve">) => new Promise<InstallOutcome>((resolve) => {
     if (!alive.current) {
@@ -170,7 +197,8 @@ export function InstallReviewHost({ children, place }: {
     install: (req) => request({ kind: "install", clusterId: req.clusterId, components: req.components, projectId: req.projectId, focusAfter: req.focusAfter }),
     uninstall: (clusterId, focusAfter) => request({ kind: "uninstall", clusterId, components: [], focusAfter }),
     contacts: (clusterId, focusAfter) => request({ kind: "contacts", clusterId, components: [], focusAfter }),
-  }), [request]);
+    turn,
+  }), [request, turn]);
 
   const finish = useCallback((outcome: InstallOutcome) => {
     const now = shown.current;
@@ -263,6 +291,11 @@ export function InstallReviewHost({ children, place }: {
       closing.current?.("cancelled");
       closing.current = null;
       for (const item of waiting) item.resolve("cancelled");
+      // Whoever waits for the screen goes on (and finds Monitoring gone).
+      const turns = waitingTurn.current;
+      waitingTurn.current = [];
+      held.current = false;
+      for (const grant of turns) grant();
     };
   }, []);
 

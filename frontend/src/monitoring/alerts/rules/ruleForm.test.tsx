@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { Plan } from "../../../api/types";
 import type { GroupOut, LinkOut, ProjectOut } from "../../api/types";
 import { intercept } from "../../test/dashboardSeeds";
-import { installFakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
+import { emptyInstallState, installFakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../../test/renderMonitoringApp";
 import type { CapabilityOut, ContactPointOut, RuleIn, RuleOut, TargetOut } from "../api";
 import { endRuleForm, ruleFormSessions } from "./formSessions";
@@ -197,6 +198,79 @@ describe("the rule form", () => {
     expect(sent.engine).toBe("tool");
     expect(sent.channel).toEqual({ receiver: "oncall", labels: { severity: "critical" } });
     expect(sent.contact_point_ids).toEqual([]);
+  });
+
+  it("a tool rule on installed tools picks contact points", async () => {
+    const user = userEvent.setup();
+    const ops: ContactPointOut = {
+      id: "c1", name: "Slack #ops", type: "slack", settings: {}, secrets_set: ["url"], summary: "Slack, #ops", used_by: [], last_delivery: null,
+      created_at: T, updated_at: T,
+    };
+    const cap: CapabilityOut = {
+      project_id: "p1", project_name: "dev", source_id: "s1", source_name: "Prometheus", tool: "prometheus_rule", reason: null, installed_by_omnikrux: true,
+    };
+    const contactsPlan: Plan = {
+      plan_id: "plan-c", action: "edit",
+      target: { cluster_id: "k1", kind_key: "alertmanagerconfigs.monitoring.coreos.com", namespace: "monitoring", name: "omnikrux-contact-points" },
+      kind: "AlertmanagerConfig", cluster: { id: "k1", name: "kind-install", provider: "kind", environment: "development" },
+      title: "Update contact points in monitoring", summary: ["Routes 1 rule to 1 contact point."], warnings: [], blocked: [], diff: null,
+      confirm_text: null, apply_label: "Update", expires_at: "2026-11-24T10:05:00Z",
+    };
+    const { api } = open({
+      contactPoints: [ops], capabilities: [cap],
+      ruleChanges: [{ target_id: "", rule_id: "", rule_name: "", project_id: "", project_name: "kind-install", kind: "contacts", message: null, cluster_id: "k1" }],
+      install: { ...emptyInstallState(), contacts: { k1: { kind: "review", plan: contactsPlan } } },
+    });
+    await newRule(user);
+    await waitFor(() => expect(screen.getByText("In Prometheus (dev), fires even when OmniKrux is off")).toBeTruthy());
+    await user.click(screen.getByRole("radio", { name: "In the tool" }));
+    const notify = screen.getByRole("group", { name: "Notify" });
+    expect(within(notify).getByText(
+      "These contact points are sent from the Alertmanager OmniKrux installed; saving asks you to review that change.",
+    )).toBeTruthy();
+    expect(screen.queryByLabelText("Channel")).toBeNull();
+    // Its Alertmanager is OmniKrux's own: no channel to read.
+    expect(api.requests.some((r) => r.url.includes("/alerts/channels"))).toBe(false);
+    await user.click(within(notify).getByRole("checkbox", { name: /Slack #ops/ }));
+    await user.type(screen.getByLabelText("Name"), "Paging");
+    await user.type(screen.getByLabelText("Query"), "up == 0");
+    await user.click(screen.getByRole("button", { name: "Save rule" }));
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    const sent = posts(api)[0].body as RuleIn;
+    expect(sent.engine).toBe("tool");
+    expect(sent.contact_point_ids).toEqual(["c1"]);
+    expect(sent.channel).toBeNull();
+    // The save's contacts change opens the review of that Alertmanager's contact points.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading").textContent).toBe("Update contact points in monitoring");
+  });
+
+  it("mixed projects show both with the note", async () => {
+    const user = userEvent.setup();
+    const ops: ContactPointOut = {
+      id: "c1", name: "Slack #ops", type: "slack", settings: {}, secrets_set: ["url"], summary: "Slack, #ops", used_by: [], last_delivery: null,
+      created_at: T, updated_at: T,
+    };
+    const caps: CapabilityOut[] = [
+      { project_id: "p3", project_name: "prod-east", source_id: "s2", source_name: "Central Prometheus", tool: "prometheus_rule", reason: null, installed_by_omnikrux: true },
+      { project_id: "p4", project_name: "prod-west", source_id: "s2", source_name: "Central Prometheus", tool: "prometheus_rule", reason: null, installed_by_omnikrux: false },
+    ];
+    const { api } = open({ contactPoints: [ops], capabilities: caps });
+    await newRule(user);
+    await user.selectOptions(screen.getByLabelText("For"), "Group · Production");
+    await waitFor(() => expect(screen.getByText("In Prometheus (prod-west), fires even when OmniKrux is off")).toBeTruthy());
+    await user.click(screen.getByRole("radio", { name: "In the tool" }));
+    const notify = screen.getByRole("group", { name: "Notify" });
+    expect(within(notify).getByText("Contact points apply where OmniKrux installed the tools; the channel applies to the Prometheus you run.")).toBeTruthy();
+    expect(screen.getByLabelText("Channel")).toBeTruthy();
+    await user.click(within(notify).getByRole("checkbox", { name: /Slack #ops/ }));
+    await user.type(screen.getByLabelText("Name"), "Paging");
+    await user.type(screen.getByLabelText("Query"), "up == 0");
+    await user.click(screen.getByRole("button", { name: "Save rule" }));
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    const sent = posts(api)[0].body as RuleIn;
+    expect(sent.contact_point_ids).toEqual(["c1"]);
+    expect(sent.channel).toBeNull();
   });
 
   it("Esc leaves an untouched form at once and asks about one with changes", async () => {

@@ -1,10 +1,13 @@
 // The question before a contact point goes: which rules stop notifying it. The review is read
 // first; the delete carries its token, so a rule that started using it since is asked about again.
+// What the delete changes in an Alertmanager OmniKrux installed (the answer's `contacts` changes) is
+// reviewed through the tool review queue once this dialog is gone.
 
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { failure } from "../../../api/http";
 import { DeleteReviewDialog } from "../../DeleteReviewDialog";
 import { contactPointDeleteReview, deleteContactPoint, type AlertRequestError, type ContactPointDeleteReviewOut, type ContactPointOut } from "../api";
+import { useToolReviews } from "../reviews/useToolReviews";
 
 export const REVIEW_CHANGED = "Something changed since the review. Review it again.";
 
@@ -14,6 +17,7 @@ export function ContactPointDeleteDialog({ point, restoreFocusTo, onCancel, onDe
   onCancel(): void;
   onDeleted(): void;
 }) {
+  const reviews = useToolReviews();
   const [review, setReview] = useState<ContactPointDeleteReviewOut | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,8 +51,9 @@ export function ContactPointDeleteDialog({ point, restoreFocusTo, onCancel, onDe
     setBusy(true);
     setError(null);
     try {
-      await deleteContactPoint(point.id, review.token);
+      const out = await deleteContactPoint(point.id, review.token);
       onDeleted();
+      if (out.alert_changes.length > 0) reviews.enqueue(out.alert_changes);
     } catch (err) {
       const e = err as AlertRequestError;
       if (e.status === 404) {

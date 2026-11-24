@@ -19,7 +19,7 @@ import { EVERY_SECONDS, defaultsExpr } from "../limits";
 import { ThresholdChart, type ChartInput } from "../page/RuleChart";
 import { mixedClusterWarnings } from "./clusterWarning";
 import { DryRunLine } from "./DryRunLine";
-import { RuleDetailsFields, type DetailsValue } from "./RuleDetailsFields";
+import { installedOf, RuleDetailsFields, type DetailsValue, type Installed } from "./RuleDetailsFields";
 import { NEW_TITLE, keepRuleForm, ruleFormSessions, type RuleFormKept } from "./formSessions";
 import { RuleSentence, parseThreshold, seriesWordOf, type SentenceValue } from "./RuleSentence";
 import { useSettled } from "./useRuleDryRun";
@@ -103,13 +103,19 @@ function draftOf(rule: RuleOut | undefined, owner: Owner | null, projects: reado
   };
 }
 
-/** What the server is sent: contact points for a rule OmniKrux checks, a channel for a tool's. */
-function ruleIn(d: Draft, owner: Owner, source: SourcePick): RuleIn {
+/**
+ * What the server is sent: contact points for a rule OmniKrux checks, a channel for a tool's. A
+ * tool's rule where OmniKrux installed the tools sends contact points too (`some`), or only them
+ * (`all`); while that isn't known yet (null), both are sent as they are, so nothing is dropped.
+ */
+function ruleIn(d: Draft, owner: Owner, source: SourcePick, installed: Installed | null): RuleIn {
   const tool = d.details.engine === "tool";
+  const notify = !tool || installed !== "none";
+  const channel = tool && installed !== "all";
   return {
     name: d.details.name, scope: owner, source, expr: d.expr,
     condition: { ...d.cond }, severity: d.details.severity, message: d.details.message,
-    contact_point_ids: tool ? [] : d.details.notify, engine: d.details.engine, channel: tool ? d.details.channel : null,
+    contact_point_ids: notify ? d.details.notify : [], engine: d.details.engine, channel: channel ? d.details.channel : null,
   };
 }
 
@@ -265,7 +271,10 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
   const choices = sourceChoices(owner, projectList, firstType);
   const ownerProjects = projectsOf(owner, projectList, groupList);
   const capabilities = useCapabilities(owner && source ? { scope: owner, sourceType: source.type, sourceId: source.id } : null);
-  const channels = useChannels(owner?.kind === "project" && draft.details.engine === "tool" ? owner.id : null);
+  // Whether the tools the rule runs in are ones OmniKrux installed (null while that isn't known).
+  const installedKnown = capabilities.data === undefined ? null : installedOf(capabilities.data);
+  const installed = installedKnown ?? "none";
+  const channels = useChannels(owner?.kind === "project" && draft.details.engine === "tool" && installed !== "all" ? owner.id : null);
   const warnings = owner && source ? mixedClusterWarnings(owner, source.type, source.id, projectList, groupList) : [];
 
   const body = useMemo<DryRunIn | null>(() => (
@@ -309,8 +318,8 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
     setSaving(true);
     try {
       const out = initial
-        ? await saveRule(initial.id, { ...ruleIn(draft, owner, source), base_version: initial.version })
-        : await createRule(ruleIn(draft, owner, source));
+        ? await saveRule(initial.id, { ...ruleIn(draft, owner, source, installedKnown), base_version: initial.version })
+        : await createRule(ruleIn(draft, owner, source, installedKnown));
       onSaved(out);
       return;
     } catch (err) {
@@ -436,7 +445,7 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
         onChange={(details) => { clearError("name", "message", "contact_point_ids", "channel"); edit({ details }); }}
         onAddContactPoint={onOpenContactPoints ? () => requestClose(onOpenContactPoints) : undefined}
         errors={{ name: err("name"), message: err("message"), contact_point_ids: err("contact_point_ids"), channel: err("channel") }}
-        refs={{ name: nameRef, message: messageRef, notify: notifyRef, channel: channelRef }} />
+        refs={{ name: nameRef, message: messageRef, notify: notifyRef, channel: channelRef }} installed={installed} />
 
       <WhereItRuns engine={draft.details.engine} capabilities={capabilities.data ?? []} waiting={capsWaiting}
         onChange={(engine) => edit({ details: { ...draft.details, engine } })} />

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { installFakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
+import type { Plan } from "../../../api/types";
+import { emptyInstallState, installFakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
-import type { ContactPointOut } from "../api";
+import type { AlertChangeOut, ContactPointOut } from "../api";
 
 afterEach(() => {
   cleanup();
@@ -251,5 +252,70 @@ describe("contact points", () => {
     expect(api.requests.filter((r) => r.url.endsWith("/delete-review"))).toHaveLength(2);
     await user.click(await within(dialog).findByRole("button", { name: "Delete contact point" }));
     await waitFor(() => expect(screen.queryByText("Ops hook")).toBeNull());
+  });
+});
+
+describe("contact points sent from an Alertmanager OmniKrux installed", () => {
+  const contactsPlan: Plan = {
+    plan_id: "plan-c", action: "edit",
+    target: { cluster_id: "k1", kind_key: "alertmanagerconfigs.monitoring.coreos.com", namespace: "monitoring", name: "omnikrux-contact-points" },
+    kind: "AlertmanagerConfig", cluster: { id: "k1", name: "kind-install", provider: "kind", environment: "development" },
+    title: "Update contact points in monitoring", summary: ["Routes 1 rule to 1 contact point."], warnings: [], blocked: [], diff: null,
+    confirm_text: null, apply_label: "Update", expires_at: "2026-11-24T10:05:00Z",
+  };
+  const contacts: AlertChangeOut = {
+    target_id: "", rule_id: "", rule_name: "", project_id: "", project_name: "kind-install", kind: "contacts", message: null, cluster_id: "k1",
+  };
+  const seed = (): Partial<FakeMonitoringState> => ({
+    contactPoints: [point({ used_by: [{ id: "r1", name: "PodCrashLooping" }] })],
+    contactPointChanges: [contacts],
+    install: { ...emptyInstallState(), contacts: { k1: { kind: "review", plan: contactsPlan } } },
+  });
+  const installStatus = () => screen.getByTestId("install-review-status").querySelector('[role="status"]') as HTMLElement;
+
+  it("saving a contact point queues the contacts review", async () => {
+    const user = userEvent.setup();
+    const { api, app } = open(seed());
+    await user.click(await screen.findByRole("button", { name: "Edit Ops hook" }));
+    await user.type(screen.getByLabelText("Address"), ADDRESS);
+    await user.click(screen.getByRole("button", { name: "Save contact point" }));
+    await waitFor(() => expect(requests(api, "PATCH", "/contact-points/c1")).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("form")).toBeNull());
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading").textContent).toBe("Update contact points in monitoring");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(requests(api, "POST", "/install/clusters/k1/contacts/sync")).toHaveLength(1);
+    // The review never carries the secret, and nothing kept it.
+    expect(document.body.innerHTML).not.toContain("XXSECRETXX");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(installStatus().textContent).toBe("Contact points in kind-install's Alertmanager aren't updated yet. Review them from Monitoring tools.");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit Ops hook" }));
+    const cache = JSON.stringify(app.client.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]));
+    const mutations = JSON.stringify(app.client.getMutationCache().getAll().map((m) => [m.options.mutationKey, m.state.variables, m.state.data]));
+    expect(cache).not.toContain("XXSECRETXX");
+    expect(mutations).not.toContain("XXSECRETXX");
+    expect(JSON.stringify(app.current().tabs)).not.toContain("XXSECRETXX");
+  });
+
+  it("deleting a contact point reads the 200 answer and queues the review", async () => {
+    const user = userEvent.setup();
+    const { api } = open(seed());
+    await user.click(await screen.findByRole("button", { name: "Delete Ops hook…" }));
+    const ask = await screen.findByRole("alertdialog", { name: 'Delete the contact point "Ops hook"?' });
+    expect(await within(ask).findByText("These rules stop notifying it: PodCrashLooping.")).toBeTruthy();
+    await user.click(within(ask).getByRole("button", { name: "Delete contact point" }));
+    await waitFor(() => expect(api.requests.some((r) => r.method === "DELETE" && r.url.includes("/contact-points/c1"))).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Ops hook")).toBeNull());
+
+    // The delete's answer (200, with its changes) opens the review of the contact points left.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading").textContent).toBe("Update contact points in monitoring");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(installStatus().textContent).toBe("Contact points in kind-install's Alertmanager aren't updated yet. Review them from Monitoring tools.");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add a contact point" }));
   });
 });

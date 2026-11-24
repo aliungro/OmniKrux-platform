@@ -30,12 +30,18 @@ export interface InstallReviews {
   install(req: InstallRequest): Promise<InstallOutcome>;
   uninstall(clusterId: string, focusAfter?: HTMLElement | null): Promise<InstallOutcome>;
   contacts(clusterId: string, focusAfter?: HTMLElement | null): Promise<InstallOutcome>;
+  /**
+   * One review dialog at a time across Monitoring: resolves when no other review holds the screen
+   * (this host's own reviews take the same turn), with the release to call once the caller's
+   * dialog closed. The tool review queue takes it before each review it opens.
+   */
+  turn(): Promise<() => void>;
 }
 
 export const InstallReviewsContext = createContext<InstallReviews | null>(null);
 
 const cancelled = () => Promise.resolve<InstallOutcome>("cancelled");
-const NONE: InstallReviews = { install: cancelled, uninstall: cancelled, contacts: cancelled };
+const NONE: InstallReviews = { install: cancelled, uninstall: cancelled, contacts: cancelled, turn: () => Promise.resolve(() => {}) };
 
 /** The reviews of the Monitoring app; outside it, ones that do nothing (each reads cancelled). */
 export function useInstallReviews(): InstallReviews {

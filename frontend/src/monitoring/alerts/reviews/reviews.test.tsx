@@ -6,6 +6,8 @@ import { useRef, useState } from "react";
 import type { Plan } from "../../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp } from "../../test/renderMonitoringApp";
+import { InstallReviewHost } from "../../install/InstallReviewHost";
+import { useInstallReviews, type InstallOutcome, type InstallReviews } from "../../install/useInstallReviews";
 import { alertsKeys, type AlertChangeOut, type SyncOut, type TargetOut } from "../api";
 import { OK_STATUS_MS, ToolReviewHost } from "./ToolReviewHost";
 import { useToolReviews, type ToolReviewResult, type ToolReviews } from "./useToolReviews";
@@ -322,5 +324,138 @@ describe("tool review queue", () => {
     installFakeMonitoringApi();
     renderMonitoringApp();
     expect(screen.getByTestId("tool-review-status").querySelector('[role="status"]')).not.toBeNull();
+  });
+});
+
+describe("contact points in the tool review queue", () => {
+  /** The review of the contact points in the Alertmanager OmniKrux installed in kind-dev. */
+  const contactsPlan = plan({
+    plan_id: "plan-c", action: "edit", kind: "AlertmanagerConfig",
+    target: { cluster_id: "c1", kind_key: "alertmanagerconfigs.monitoring.coreos.com", namespace: "monitoring", name: "omnikrux-contact-points" },
+    title: "Update contact points in monitoring", summary: ["Routes 1 rule to 2 contact points."], apply_label: "Update",
+  });
+  const contacts = (over: Partial<AlertChangeOut> = {}): AlertChangeOut => change({
+    target_id: "", rule_id: "", rule_name: "", project_id: "", project_name: "kind-dev", kind: "contacts", cluster_id: "c1", ...over,
+  });
+  const installStatus = () => screen.getByTestId("install-review-status").querySelector('[role="status"]') as HTMLElement;
+  const heading = () => within(screen.getByRole("dialog")).getByRole("heading").textContent;
+
+  /** Both hosts, nested as `MonitoringApp` nests them, around a page that asks the queue and the install reviews. */
+  function renderBoth(changes: AlertChangeOut[]) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let install!: InstallReviews;
+    let queue!: ToolReviews;
+    function Page() {
+      install = useInstallReviews();
+      return <Probe changes={changes} onQueue={(q) => { queue = q; }} />;
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <main tabIndex={-1}>
+          <InstallReviewHost>
+            <ToolReviewHost>
+              <Page />
+            </ToolReviewHost>
+          </InstallReviewHost>
+        </main>
+      </QueryClientProvider>,
+    );
+    return { install: () => install, queue: () => queue };
+  }
+
+  it("a contacts change opens its review after the rule's review", async () => {
+    const user = userEvent.setup();
+    const { fallback, seen } = pipeline([APPLIED, { status: 200, body: { outcome: "succeeded", message: "Updated.", job_id: null, audit_id: 2 } }]);
+    const api = installFakeMonitoringApi({
+      syncAnswers: { t1: review(plan()) },
+      install: { contacts: { c1: { kind: "review", plan: contactsPlan } } },
+    }, fallback);
+    renderBoth([change(), contacts()]);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    // The rule's review first, alone; the contact points aren't asked for while it is open.
+    await screen.findByRole("dialog");
+    expect(heading()).toBe("Create PrometheusRule omnikrux-slow-1a2b");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByTestId("pending").textContent).toBe("2");
+    expect(api.requests.some((r) => r.url.endsWith("/install/clusters/c1/contacts/sync"))).toBe(false);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create" }));
+
+    // Then the contact points of the Alertmanager OmniKrux installed, alone too.
+    await waitFor(() => expect(heading()).toBe("Update contact points in monitoring"));
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByTestId("pending").textContent).toBe("1");
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Update" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.getByTestId("pending").textContent).toBe("0"));
+
+    // Each host says its own: the rule's line, and the install reviews' contact points line.
+    expect(status().textContent).toContain(`Applied "Slow checkout" in Shop's cluster.`);
+    expect(installStatus().textContent).toContain("Contact points are up to date in kind-dev's Alertmanager.");
+    expect(seen.filter((u) => u.endsWith("/apply"))).toHaveLength(2);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Save" })));
+  });
+
+  it("the contact points wait behind every rule of their batch, once per cluster", async () => {
+    const user = userEvent.setup();
+    const { fallback } = pipeline([APPLIED]);
+    const api = installFakeMonitoringApi({
+      syncAnswers: { t1: review(plan()), t2: review(plan({ plan_id: "plan-2", title: "Create PrometheusRule omnikrux-errors-3c4d" })) },
+      install: { contacts: { c1: { kind: "review", plan: contactsPlan } } },
+    }, fallback);
+    renderBoth([contacts(), change(), contacts(), change({ target_id: "t2", rule_name: "Errors" })]);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const titles: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      await screen.findByRole("dialog");
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      const title = heading() ?? "";
+      titles.push(title);
+      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("heading", { name: title })).toBeNull());
+    }
+    expect(titles).toEqual([
+      "Create PrometheusRule omnikrux-slow-1a2b", "Create PrometheusRule omnikrux-errors-3c4d", "Update contact points in monitoring",
+    ]);
+    await waitFor(() => expect(screen.getByTestId("pending").textContent).toBe("0"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.requests.filter((r) => r.url.endsWith("/install/clusters/c1/contacts/sync"))).toHaveLength(1);
+    expect(installStatus().textContent).toBe("Contact points in kind-dev's Alertmanager aren't updated yet. Review them from Monitoring tools.");
+  });
+
+  it("a review either host is asked for waits while the other's review is open", async () => {
+    const user = userEvent.setup();
+    const { fallback } = pipeline([APPLIED]);
+    installFakeMonitoringApi({
+      syncAnswers: { t1: review(plan()) },
+      install: { contacts: { c1: { kind: "review", plan: contactsPlan } } },
+    }, fallback);
+    const both = renderBoth([change()]);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("dialog");
+    expect(heading()).toBe("Create PrometheusRule omnikrux-slow-1a2b");
+
+    // Asked for straight from the install host while the rule's review is open: it waits its turn.
+    let asked: Promise<InstallOutcome> | null = null;
+    act(() => { asked = both.install().contacts("c1"); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(heading()).toBe("Update contact points in monitoring"));
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+
+    // A rule's review asked for while the contact points' review is open waits for it to close.
+    let again: Promise<ToolReviewResult> | null = null;
+    act(() => { again = both.queue().reviewTarget("t1", "Slow checkout", "Shop"); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(heading()).toBe("Update contact points in monitoring");
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await expect(asked!).resolves.toBe("cancelled");
+    await waitFor(() => expect(heading()).toBe("Create PrometheusRule omnikrux-slow-1a2b"));
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await expect(again!).resolves.toBe("cancelled");
   });
 });

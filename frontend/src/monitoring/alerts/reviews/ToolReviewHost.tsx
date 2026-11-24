@@ -7,6 +7,12 @@
 // and when the queue ends it goes to `after.focus` (or the Monitoring workspace). A status of
 // successes only goes away by itself after a while, and when the workspace moves to another page
 // (`place`); one that says something is left to do stays until it is dismissed.
+//
+// A `contacts` change (the contact points in an Alertmanager OmniKrux installed) is reviewed by the
+// install reviews (`useInstallReviews().contacts`), which say how it went; it waits behind the
+// PrometheusRule reviews of its batch, so a rule exists before what routes it, and the queue waits
+// for it before going on. Every review this queue opens first takes the screen's `turn()`: a review
+// of the install host never shows beside it.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -15,6 +21,7 @@ import type { Plan } from "../../../api/types";
 import { ActionDialog } from "../../../features/actions/ActionDialog";
 import { discardPlans } from "../../../features/actions/useActions";
 import { focusMainFrom } from "../../focus";
+import { useInstallReviews } from "../../install/useInstallReviews";
 import { syncTarget, type AlertChangeOut, type SyncOut } from "../api";
 import {
   appliedWords, cancelledWords, failedWords, lokiFailedWords, removedWords, TOOL_FAILED, ToolReviewsContext,
@@ -27,7 +34,12 @@ interface Item extends ToolReviewRequest {
   waiting: ((result: ToolReviewResult) => void)[];
   /** A sync the caller already made: its answer is used instead of syncing again. */
   answer?: SyncOut;
+  /** A `contacts` change: the cluster whose Alertmanager's contact points the install reviews review. */
+  contactsOf?: string;
 }
+
+/** The queue key of a cluster's contact points review (rule targets are keyed by their id). */
+const contactsKey = (clusterId: string) => `contacts:${clusterId}`;
 
 /** One line of the status: applied (ok), not applied yet (wait), couldn't (failed). */
 interface Line {
@@ -53,6 +65,9 @@ export function ToolReviewHost({ children, place }: {
   place?: string;
 }) {
   const client = useQueryClient();
+  const installReviews = useInstallReviews();
+  const install = useRef(installReviews);
+  install.current = installReviews;
   const queue = useRef<Item[]>([]);
   const running = useRef(false);
   const alive = useRef(true);
@@ -97,7 +112,7 @@ export function ToolReviewHost({ children, place }: {
   }, [say]);
 
   /** Syncs one target and, when it needs a review, waits for its dialog to close. */
-  const reviewOne = useCallback(async (item: Item): Promise<ToolReviewResult> => {
+  const syncAndShow = useCallback(async (item: Item): Promise<ToolReviewResult> => {
     let answer: SyncOut;
     try {
       answer = item.answer ?? await syncTarget(item.targetId);
@@ -117,6 +132,22 @@ export function ToolReviewHost({ children, place }: {
     });
   }, [doneResult, say, show]);
 
+  /** One queued review: a target's (in the screen's turn), or a cluster's contact points. */
+  const reviewOne = useCallback(async (item: Item): Promise<ToolReviewResult> => {
+    if (item.contactsOf !== undefined) {
+      // The install reviews open it (in their turn) and say how it went.
+      const outcome = await install.current.contacts(item.contactsOf, after.current ?? undefined);
+      return outcome === "started" ? "applied" : outcome;
+    }
+    // Planned only once no other review holds the screen; held until this one closed.
+    const release = await install.current.turn();
+    try {
+      return await syncAndShow(item);
+    } finally {
+      release();
+    }
+  }, [syncAndShow]);
+
   const pump = useCallback(async () => {
     if (running.current) return;
     running.current = true;
@@ -135,6 +166,20 @@ export function ToolReviewHost({ children, place }: {
     }
     setEnded((n) => n + 1);
   }, [refresh, reviewOne]);
+
+  /**
+   * Queues a cluster's contact points review. One still waiting goes to the end (behind the rules
+   * queued since, which it routes); one already under way is followed by a new one, as the contact
+   * points changed again.
+   */
+  const addContacts = useCallback((clusterId: string, clusterName: string) => {
+    const key = contactsKey(clusterId);
+    const at = queue.current.findIndex((i) => i.targetId === key);
+    const waiting = at > 0 || (at === 0 && !running.current);
+    const kept = waiting ? queue.current.splice(at, 1)[0] : null;
+    queue.current.push(kept ?? { targetId: key, ruleName: "", projectName: clusterName, waiting: [], contactsOf: clusterId });
+    setPending(queue.current.length);
+  }, []);
 
   /** Queues a review; one already queued (or open) for the same target is the same review. */
   const add = useCallback((request: ToolReviewRequest, settle?: (result: ToolReviewResult) => void, answer?: SyncOut) => {
@@ -160,18 +205,21 @@ export function ToolReviewHost({ children, place }: {
   const enqueue = useCallback<ToolReviews["enqueue"]>((changes: AlertChangeOut[], opts) => {
     const reviews = changes.filter((c) => c.kind === "review");
     const failed = changes.filter((c) => c.kind === "failed");
-    if (reviews.length === 0 && failed.length === 0) return;
+    const contacts = changes.filter((c): c is AlertChangeOut & { cluster_id: string } => c.kind === "contacts" && !!c.cluster_id);
+    if (reviews.length === 0 && failed.length === 0 && contacts.length === 0) return;
     const fresh = startRun();
     for (const c of failed) {
       const message = c.message ?? TOOL_FAILED;
       // A PrometheusRule's change names the project's cluster; anything else was a Loki ruler's.
       say("failed", c.tool === "prometheus_rule" ? failedWords(c.rule_name, c.project_name, message) : lokiFailedWords(c.rule_name, message));
     }
-    if (reviews.length === 0) return;
+    if (reviews.length === 0 && contacts.length === 0) return;
     if (opts?.focus !== undefined || fresh) after.current = opts?.focus ?? null;
     for (const c of reviews) add({ targetId: c.target_id, ruleName: c.rule_name, projectName: c.project_name });
+    // After the batch's rules: the PrometheusRules exist before what routes their alerts.
+    for (const c of contacts) addContacts(c.cluster_id, c.project_name);
     void pump();
-  }, [add, pump, say, startRun]);
+  }, [add, addContacts, pump, say, startRun]);
 
   const reviewTarget = useCallback<ToolReviews["reviewTarget"]>((targetId, ruleName, projectName, answer) => {
     startRun();
