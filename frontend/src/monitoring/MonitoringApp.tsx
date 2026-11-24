@@ -380,14 +380,14 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!pressed("monitoringImport", e) || !pageLetter(e)) return;
-      if (editSessions.get(latest.current.tabs.active)?.mode === "edit") return;
+      if (editSessions.get(latest.current.tabs.active)?.mode === "edit" || creating) return;
       e.preventDefault();
       if (e.repeat) return;
       pageNav.navigate({ page: "import", ...(owner ? { target: { kind: owner.kind, id: owner.id } } : {}) }, "push");
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [owner, pageNav]);
+  }, [owner, pageNav, creating]);
   const goHome = useCallback(() => pageNav.navigate(MONITORING_HOME, "push"), [pageNav]);
 
   // Each tab keeps where its page was scrolled.
