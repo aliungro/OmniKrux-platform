@@ -535,6 +535,12 @@ async def other_readers(api: ApiClient, namespace: str) -> list[str]:
             continue
         spec = item.get("spec") if isinstance(item, dict) else None
         spec = spec if isinstance(spec, dict) else {}
+        # An Alertmanager in the namespace that takes the AlertmanagerConfig as its whole
+        # configuration reads it whatever its selectors say.
+        whole = spec.get("alertmanagerConfiguration")
+        if where[0] == namespace and isinstance(whole, dict) and whole.get("name") == AMC_NAME:
+            found.append(f"{where[0]}/{where[1]}")
+            continue
         selector = spec.get("alertmanagerConfigSelector")
         if selector is None or not selector_matches(selector, ours):
             continue

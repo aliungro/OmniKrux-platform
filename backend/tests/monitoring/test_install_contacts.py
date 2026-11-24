@@ -878,3 +878,26 @@ def test_alert_change_schema_keeps_its_fields():
 
     schema = AlertChangeOut.model_json_schema(mode="serialization")
     assert "cluster_id" in schema["properties"] and "target_id" in schema["properties"]
+
+
+async def test_an_alertmanager_that_takes_the_settings_as_its_whole_configuration_blocks(
+    monitoring_app, installed_cluster, fake_api, tool_rule_with_contacts
+):
+    http, _ = monitoring_app
+    # No selectors at all, but it names OmniKrux's AlertmanagerConfig as its configuration.
+    fake_api.objects[ALERTMANAGERS][(NS, "global")] = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "Alertmanager",
+        "metadata": {"name": "global", "namespace": NS, "uid": "u-am-global"},
+        "spec": {"alertmanagerConfiguration": {"name": "omnikrux-contact-points"}},
+    }
+    # The same name from another namespace refers to that namespace's object, not OmniKrux's.
+    fake_api.objects[ALERTMANAGERS][("other", "elsewhere")] = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "Alertmanager",
+        "metadata": {"name": "elsewhere", "namespace": "other", "uid": "u-am-elsewhere"},
+        "spec": {"alertmanagerConfiguration": {"name": "omnikrux-contact-points"}},
+    }
+    plan = (await sync(http, installed_cluster.cluster_id))["plan"]
+    assert plan["blocked"] == [other_alertmanager("monitoring/global")]
+    assert contact_writes(fake_api) == []

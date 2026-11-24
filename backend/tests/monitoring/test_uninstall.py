@@ -661,3 +661,29 @@ async def test_a_stop_says_what_stays(env):
             "Open Monitoring tools to see what's there, then run it again."
         ),
     )
+
+
+IF_THERE = (
+    "Removes OmniKrux's contact-point settings (AlertmanagerConfig omnikrux-contact-points and "
+    "its Secret) if they're there."
+)
+
+
+async def test_contact_settings_written_after_the_review_are_removed(env, monkeypatch):
+    """A contact-point sync that writes after the uninstall's review (and its check at apply)
+    leaves nothing behind: the job removes OmniKrux's settings whatever the review saw."""
+    http, app, installed, fake_api, _, _ = env
+    plan = await uninstall_plan(http, installed.cluster_id)
+    assert IF_THERE in plan["summary"] and CONTACTS not in plan["summary"]
+    installs = app.state.monitoring.installs
+    real = installs.begin_uninstall
+
+    async def late_sync(cluster_id, *, job_id):
+        contact_settings(fake_api, NS)  # written between the apply's check and the job
+        return await real(cluster_id, job_id=job_id)
+
+    monkeypatch.setattr(installs, "begin_uninstall", late_sync)
+    out = await apply(http, plan)
+    assert (await wait_job(http, out["job_id"]))["state"] == "succeeded"
+    assert (NS, AMC_NAME) not in fake_api.objects["secrets"]
+    assert (NS, AMC_NAME) not in fake_api.objects["alertmanagerconfigs.monitoring.coreos.com"]

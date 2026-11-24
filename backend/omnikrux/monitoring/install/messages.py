@@ -139,6 +139,8 @@ SUMMARY_REMOVES_RELEASE = "Removes the Helm release {names} from {cluster}."
 # whose Helm record can't be read) is left in place.
 SUMMARY_KEEPS_RELEASE = "Keeps the Helm release {release} in {namespace}: it doesn't carry OmniKrux's mark, so OmniKrux leaves it as it is."
 SUMMARY_REMOVES_CONTACTS = "Removes OmniKrux's contact-point settings from its Alertmanager (AlertmanagerConfig and Secret omnikrux-contact-points)."
+# Not in the plan's copy list: the review didn't see them, but the job removes them anyway.
+SUMMARY_REMOVES_CONTACTS_IF_THERE = "Removes OmniKrux's contact-point settings (AlertmanagerConfig omnikrux-contact-points and its Secret) if they're there."
 SUMMARY_REMOVES_SOURCES = "Removes the sources {names}. These projects lose them: {projects}."
 SUMMARY_REMOVES_SOURCES_UNUSED = "Removes the sources {names}. No project uses them."
 # Not in the plan's copy list: one source (logs alone).

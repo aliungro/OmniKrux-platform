@@ -297,6 +297,9 @@ class UninstallAction:
         ]
         if seen["contacts"]:
             summary.append(messages.SUMMARY_REMOVES_CONTACTS)
+        elif "metrics" in seen["components"]:
+            # The job removes them whatever the review saw (a sync may land after it).
+            summary.append(messages.SUMMARY_REMOVES_CONTACTS_IF_THERE)
         if seen["source_names"]:
             summary.append(_sources_line(seen["source_names"], seen["projects"]))
         if (line := _data_line(seen["volumes"], seen["delete_data"])) is not None:
@@ -938,11 +941,15 @@ async def _steps(
                 clock=CLOCK,
             )
 
-    # 2. OmniKrux's contact-point settings in its Alertmanager, when the review listed them.
+    # 2. OmniKrux's contact-point settings in its Alertmanager: always (only objects with its
+    # label; missing ones are fine), as a contact-point sync may have written them after the
+    # review read the cluster. A step of its own when the review listed them.
     if plan_state["contacts"]:
         step(job, messages.STEP_REMOVE_CONTACTS)
         await remove_contact_settings(connections, cluster, cloud, namespace)
         job.done += 1
+    else:
+        await remove_contact_settings(connections, cluster, cloud, namespace)
 
     # 3. The stored data, only when asked.
     if delete_data:
