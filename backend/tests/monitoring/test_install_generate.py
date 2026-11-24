@@ -63,6 +63,17 @@ def test_compose_pins_images_and_never_mounts_the_docker_socket():
     assert "ports (9090, 9093, 3100) have no sign-in" in compose_file(docker_input())
 
 
+def test_alloy_configs_have_one_attribute_per_line():
+    """Alloy ends an attribute at a newline; two on one line make it refuse the whole file."""
+    second = re.compile(r'["\]]\s+[A-Za-z_][A-Za-z0-9_]*\s*=')
+    doc = yaml.safe_load(compose_file(docker_input()))
+    script = server_script(SERVERS)
+    journal = script[script.index("<<ALLOY_CONFIG") : script.index("\nALLOY_CONFIG\n")]
+    for config in (doc["configs"]["alloy"]["content"], journal):
+        assert "loki.write" in config
+        assert not [line for line in config.splitlines() if second.search(line)]
+
+
 @pytest.mark.compose
 def test_compose_passes_docker_compose_config(tmp_path):
     if shutil.which("docker") is None:

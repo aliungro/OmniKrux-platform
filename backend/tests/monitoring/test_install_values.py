@@ -1,5 +1,6 @@
 """Install settings, the values for each release, and the sentence about what a chart creates."""
 
+import re
 from dataclasses import replace
 
 from omnikrux.monitoring.install import messages
@@ -170,11 +171,26 @@ EXPECTED_ALLOY = """discovery.kubernetes "pods" {
 
 discovery.relabel "pods" {
   targets = discovery.kubernetes.pods.targets
-  rule { source_labels = ["__meta_kubernetes_namespace"] target_label = "namespace" }
-  rule { source_labels = ["__meta_kubernetes_pod_name"] target_label = "pod" }
-  rule { source_labels = ["__meta_kubernetes_pod_container_name"] target_label = "container" }
-  rule { source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"] target_label = "app" }
-  rule { source_labels = ["__meta_kubernetes_pod_node_name"] target_label = "node" }
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+    target_label  = "app"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_node_name"]
+    target_label  = "node"
+  }
 }
 
 loki.source.kubernetes "pods" {
@@ -204,6 +220,17 @@ def test_alloy_config_pushes_to_the_installed_loki():
     assert v["controller"] == {"type": "deployment", "replicas": 1}
     assert v["crds"] == {"create": False}
     assert v["fullnameOverride"] == "omnikrux-alloy"
+
+
+# Alloy ends an attribute at a newline: a second one on the same line (`a = "x" b = "y"`) is a
+# syntax error, and Alloy then refuses the whole file and never starts.
+SECOND_ATTRIBUTE = re.compile(r'["\]]\s+[A-Za-z_][A-Za-z0-9_]*\s*=')
+
+
+def test_alloy_config_has_one_attribute_per_line():
+    config = alloy_config("monitoring", "kind-omnikrux-install")
+    assert SECOND_ATTRIBUTE.findall('rule { source_labels = ["a"] target_label = "b" }')
+    assert not [line for line in config.splitlines() if SECOND_ATTRIBUTE.search(line)]
 
 
 def test_releases_name_what_each_chart_creates():
