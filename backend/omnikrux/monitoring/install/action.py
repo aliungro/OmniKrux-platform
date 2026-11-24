@@ -131,6 +131,11 @@ def _connect_line(components: Sequence[str], project: str | None) -> str:
     return line.format(tools=_and(tools), project=joined)
 
 
+def _pending(status: str) -> bool:
+    """Helm's `pending-install`, `pending-upgrade` and `pending-rollback`."""
+    return status.startswith("pending-")
+
+
 def _loki_volume_problem(installed: str | None, s: InstallSettings) -> str | None:
     """Why the installed Loki can't take these settings: Kubernetes never lets a StatefulSet's
     volume claim change, so Helm would refuse the update half way. None when nothing is installed
@@ -250,6 +255,17 @@ class InstallAction:
             blocked.append(
                 messages.BLOCK_BUSY.format(doing=_RUNNING[record.state], cluster=cluster.name)
             )
+        else:
+            # No job of OmniKrux's runs here, so a release still "pending" was left by a Helm
+            # that was stopped half way: Helm refuses to change it until it is uninstalled.
+            for release in specs:
+                ref = facts.releases.get(release.release)
+                if ref is not None and ref.owner_label == MANAGED_BY and _pending(ref.status):
+                    blocked.append(
+                        messages.BLOCK_RELEASE_PENDING.format(
+                            release=release.release, status=ref.status
+                        )
+                    )
         if "logs" in components and (problem := _loki_volume_problem(
             await loki_volume(api, namespace), effective
         )):  # fmt: skip

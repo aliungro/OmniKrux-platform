@@ -517,6 +517,35 @@ async def test_installed_loki_volume_cant_change(env):
     ]
 
 
+async def test_a_release_helm_never_finished_blocks(env):
+    """A Helm stopped half way (killed, or OmniKrux stopped) leaves its record `pending-install`;
+    Helm refuses to change that release again, so the review says how to get out."""
+    http, app, cluster, fake_api, _ = env
+    default_class(fake_api)
+    namespace(fake_api)
+    await _record(app, cluster, state="cancelled")
+    secret = helm_release_secret(
+        "monitoring", "omnikrux-metrics", 1, "pending-install", chart="kube-prometheus-stack",
+        version=KPS.version,
+    )  # fmt: skip
+    fake_api.objects["secrets"][("monitoring", secret["metadata"]["name"])] = secret
+    plan = (await plan_for(http, cluster, components=["metrics"]))["plan"]
+    assert plan["blocked"] == [
+        (
+            "Helm's record of omnikrux-metrics says an earlier change never finished "
+            "(pending-install), so Helm won't change it again. Uninstall the tools, then install "
+            "them again."
+        )
+    ]
+    # One someone else made isn't OmniKrux's to judge: it blocks as a foreign release.
+    fake_api.objects["secrets"][("monitoring", secret["metadata"]["name"])] = helm_release_secret(
+        "monitoring", "omnikrux-metrics", 1, "pending-install", chart="kube-prometheus-stack",
+        version=KPS.version, managed_by_omnikrux=False,
+    )  # fmt: skip
+    plan = (await plan_for(http, cluster, components=["metrics"]))["plan"]
+    assert not any("never finished" in line for line in plan["blocked"])
+
+
 async def test_a_running_job_blocks(env):
     http, app, cluster, fake_api, _ = env
     default_class(fake_api)

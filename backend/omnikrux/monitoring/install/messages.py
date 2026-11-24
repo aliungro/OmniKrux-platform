@@ -62,6 +62,9 @@ BLOCK_FOREIGN_OPERATOR = "This cluster already runs a Prometheus Operator ({wher
 BLOCK_FOREIGN_RELEASE = "A Helm release named {release} already exists in {namespace}, and OmniKrux didn't install it. Pick another namespace."
 BLOCK_OTHER_NAMESPACE = "OmniKrux already installed its tools in {namespace} in this cluster. Update them there, or uninstall them first."
 BLOCK_BUSY = "OmniKrux is {doing} in {cluster} right now. Wait for it to finish, or cancel it."
+# Not in the plan's copy list: Helm stopped before it finished (killed, or OmniKrux stopped), and
+# its record still says the change is under way, so Helm refuses any other.
+BLOCK_RELEASE_PENDING = "Helm's record of {release} says an earlier change never finished ({status}), so Helm won't change it again. Uninstall the tools, then install them again."
 # Not in the plan's copy list: Kubernetes never lets the installed Loki's volume claim change.
 BLOCK_LOKI_VOLUME_SIZE = "Loki already keeps its data on a {size} volume, and its size can't change once Loki has it. Set Loki's storage back to {size}, or uninstall the tools and install them again."
 BLOCK_LOKI_VOLUME_ADDED = "Loki already runs without a data volume, and one can't be added once Loki runs. Turn off Keep data on volumes, or uninstall the tools and install them again."
