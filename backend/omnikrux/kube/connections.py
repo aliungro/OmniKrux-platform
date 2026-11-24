@@ -9,12 +9,13 @@ from typing import Protocol
 
 import aiohttp
 from aiohttp.http_exceptions import HttpProcessingError
-from kubernetes_asyncio.client import ApiClient
+from kubernetes_asyncio.client import ApiClient, Configuration
 from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
 from omnikrux.kube.client import (
     ClusterUnavailable,
+    build_configuration,
     kubeconfig_user,
     make_api_client,
     make_ws_api_client,
@@ -76,6 +77,12 @@ class ClusterConnections:
             )
             sources[digest] = CloudTokenSource(cached) if plan.cloud else cached
         return kubeconfig, sources[digest]
+
+    async def configuration(self, cluster_id: str) -> Configuration:
+        """The cluster's client configuration, with a fresh bearer token when it uses one, for
+        callers that hand the credentials to another program (Helm). Read-only."""
+        kubeconfig, token = await self._client_inputs(cluster_id)
+        return await build_configuration(kubeconfig, token=token)
 
     def forget(self, cluster_id: str) -> None:
         self._exec_tokens.pop(cluster_id, None)

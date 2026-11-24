@@ -31,6 +31,7 @@ from omnikrux.monitoring.sources.types import SourceConfig, SourceSecrets
 from omnikrux.security.secrets import SecretBox
 from tests.fakekube import kubeconfig_for
 from tests.monitoring.alert_env import CONTACT_POINTS, EngineEnv, no_sleep
+from tests.monitoring.fake_helm import AvailableTools, FakeHelm
 from tests.monitoring.fake_receivers import serve_fake_smtp, serve_fake_webhook
 from tests.monitoring.fakes import (
     TlsMaterial,
@@ -162,6 +163,25 @@ async def kube_cluster(fake_api, monitoring_app) -> str:
         yaml.safe_dump(kubeconfig_for(fake_api)), rewrite_loopback=False, source=SOURCE_UPLOAD
     )
     return info.id
+
+
+@pytest.fixture
+async def connections(monitoring_app) -> ClusterConnections:
+    """The running app's `ClusterConnections`."""
+    _, app = monitoring_app
+    return app.state.connections
+
+
+@pytest.fixture
+async def fake_helm(monitoring_app) -> FakeHelm:
+    """A `FakeHelm` as the app's Helm runner, with a tools check that reports the pinned Helm and
+    charts available (at placeholder paths)."""
+    _, app = monitoring_app
+    helm = FakeHelm()
+    services = app.state.monitoring
+    services.helm = helm
+    services.install_tools = AvailableTools()
+    return helm
 
 
 @pytest.fixture

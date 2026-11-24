@@ -9,3 +9,10 @@ TOOLS_BAD_CHART = "The {chart} chart archive in {dir} is missing or isn't the pi
 # Not in the plan's copy list: TOOLS_WRONG_HELM's `found` when the file doesn't answer
 # `helm version` (it can't run, fails, or takes longer than 5 seconds).
 TOOLS_HELM_NO_ANSWER = "a program that didn't report a Helm version"
+
+# Helm's own words when it fails, with every secret and (for cloud clusters) address taken out.
+HELM_FAILED = "Helm couldn't {step}: {reason}"
+HELM_FAILED_CLOUD = "Helm couldn't {step}: the cluster refused or didn't answer. Check the cloud login and the network, then try again."
+HELM_TIMEOUT = "Helm didn't finish {step} within {minutes} minutes."
+# Not in the plan's copy list: HELM_FAILED's `reason` when Helm wrote nothing to stderr.
+HELM_NO_REASON = "it stopped with exit code {code} and gave no reason"
