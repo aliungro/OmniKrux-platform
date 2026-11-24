@@ -316,6 +316,19 @@ class SourceStore:
                 raise KeyError(id)
             await s.execute(delete(ProjectSourceRecord).where(ProjectSourceRecord.source_id == id))
 
+    async def set_installed_by_omnikrux(
+        self, id: str, value: bool, *, session: AsyncSession | None = None
+    ) -> None:
+        """Mark the source as one of a tool OmniKrux installed (or not). KeyError if unknown."""
+        async with writing(self._sessionmaker, session) as s:
+            result = await s.execute(
+                update(SourceRecord)
+                .where(SourceRecord.id == id)
+                .values(installed_by_omnikrux=value, updated_at=now())
+            )
+            if result.rowcount == 0:
+                raise KeyError(id)
+
     async def record_check(self, id: str, check: SourceCheck) -> None:
         """Keep the last check's result (it leaves `updated_at` alone). KeyError if unknown."""
         async with self._sessionmaker.begin() as session:

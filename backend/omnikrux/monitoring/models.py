@@ -1,4 +1,4 @@
-"""Monitoring tables. Kept identical to migrations 0007, 0008 and 0009 (`tests/test_db.py`
+"""Monitoring tables. Kept identical to migrations 0007, 0008, 0009 and 0010 (`tests/test_db.py`
 compares them)."""
 
 from collections.abc import AsyncIterator
@@ -316,6 +316,34 @@ class DeliveryRow(Base):
     kind: Mapped[str] = mapped_column(String)
     ok: Mapped[bool] = mapped_column(Boolean)
     message: Mapped[str | None] = mapped_column(Text)
+
+
+class InstallRow(Base):
+    """What OmniKrux installed into a cluster (one record per cluster); JSON columns hold the
+    components, the settings and the chart versions. Nothing secret."""
+
+    __tablename__ = "monitoring_installs"
+    __table_args__ = (UniqueConstraint("cluster_id", name="uq_monitoring_installs_cluster"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    cluster_id: Mapped[str] = mapped_column(String)
+    namespace: Mapped[str] = mapped_column(String)
+    components: Mapped[str] = mapped_column(Text)  # JSON list
+    settings: Mapped[str] = mapped_column(Text)  # JSON
+    charts: Mapped[str] = mapped_column(Text)  # JSON {release: version}
+    state: Mapped[str] = mapped_column(String)
+    message: Mapped[str | None] = mapped_column(Text)
+    job_id: Mapped[str | None] = mapped_column(String)
+    project_id: Mapped[str | None] = mapped_column(String)
+    prometheus_source_id: Mapped[str | None] = mapped_column(String)
+    alertmanager_source_id: Mapped[str | None] = mapped_column(String)
+    loki_source_id: Mapped[str | None] = mapped_column(String)
+    contacts_digest: Mapped[str | None] = mapped_column(String)
+    contacts_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    contacts_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 async def lock_first(session: AsyncSession) -> None:

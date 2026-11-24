@@ -150,3 +150,26 @@ async def helm_kubeconfig(connections: ClusterConnections, cluster_id: str) -> A
         yield path
     finally:
         await _remove(folder)
+
+
+def remove_leftover_folders(root: Path | None = None) -> int:
+    """At startup: remove what a hard stop left in the temporary directory (`root`, the
+    system's by default) -- only folders named with this module's `FOLDER_PREFIX` (Helm's own
+    run folders share it), which can hold a credential. Returns how many were removed."""
+    base = root if root is not None else Path(tempfile.gettempdir())
+    removed = 0
+    try:
+        entries = list(base.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.name.startswith(FOLDER_PREFIX):
+            continue
+        try:
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            shutil.rmtree(entry)
+            removed += 1
+        except OSError:
+            log.warning("Couldn't remove a leftover temporary Helm folder (%s)", entry.name)
+    return removed

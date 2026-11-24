@@ -52,7 +52,9 @@ starts its containers: each read of the pod moves a new container one step throu
 """
 
 import asyncio
+import base64
 import copy
+import gzip
 import json
 import re
 from collections.abc import Callable
@@ -161,6 +163,7 @@ def default_resources() -> list[FakeResource]:
             False,
             short_names=("crd", "crds"),
         ),
+        R("storage.k8s.io", "v1", "storageclasses", "StorageClass", False, short_names=("sc",)),
         R("example.omnikrux.dev", "v1", "widgets", "Widget", True, short_names=("wd",)),
         R(METRICS_GROUP, "v1beta1", "pods", "PodMetrics", True, ("get", "list")),
         R(METRICS_GROUP, "v1beta1", "nodes", "NodeMetrics", False, ("get", "list")),
@@ -1373,6 +1376,99 @@ def prometheus_operator(
             "name": namespace,
             "uid": f"u-ns-{namespace}",
             "labels": {"kubernetes.io/metadata.name": namespace},
+        },
+    }
+
+
+def storage_class(name: str, default: bool) -> dict:
+    """A StorageClass for `objects["storageclasses.storage.k8s.io"][("", name)]`; the default
+    one carries the annotation Kubernetes reads."""
+    annotations = {"storageclass.kubernetes.io/is-default-class": "true"} if default else {}
+    return {
+        "apiVersion": "storage.k8s.io/v1",
+        "kind": "StorageClass",
+        "metadata": {
+            "name": name,
+            "uid": f"u-sc-{name}",
+            "annotations": annotations,
+        },
+        "provisioner": "example.omnikrux.dev/provisioner",
+    }
+
+
+def helm_release_secret(
+    namespace: str,
+    release: str,
+    revision: int,
+    status: str,
+    *,
+    chart: str,
+    version: str,
+    owner: str = "helm",
+    managed_by_omnikrux: bool = True,
+) -> dict:
+    """The Secret Helm 3 keeps for a release revision: labelled `owner`, `name`, `status` and
+    `version`; `data.release` is base64 of base64 of the gzipped release JSON (the API's own
+    base64 over the one Helm applies). `managed_by_omnikrux` adds the marker OmniKrux's values
+    carry (`config.omnikrux.managedBy`)."""
+    config: dict = {"omnikrux": {"managedBy": "omnikrux"}} if managed_by_omnikrux else {}
+    release_json = {
+        "name": release,
+        "namespace": namespace,
+        "version": revision,
+        "info": {"status": status, "last_deployed": "2026-11-24T10:00:00Z"},
+        "chart": {"metadata": {"name": chart, "version": version, "appVersion": version}},
+        "config": config,
+    }
+    packed = base64.b64encode(gzip.compress(json.dumps(release_json).encode())).decode()
+    name = f"sh.helm.release.v1.{release}.v{revision}"
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "type": "helm.sh/release.v1",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-helm-{namespace}-{release}-{revision}",
+            "labels": {
+                "owner": owner,
+                "name": release,
+                "status": status,
+                "version": str(revision),
+            },
+        },
+        "data": {"release": base64.b64encode(packed.encode()).decode()},
+    }
+
+
+def prometheus_operator_deployment(namespace: str, name: str, *, instance: str) -> dict:
+    """A Deployment running a Prometheus Operator (another install's, `instance` its
+    `app.kubernetes.io/instance` label), for `objects["deployments.apps"][(namespace, name)]`."""
+    labels = {
+        "app.kubernetes.io/name": "prometheus-operator",
+        "app.kubernetes.io/instance": instance,
+        "app.kubernetes.io/component": "controller",
+    }
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-deploy-{namespace}-{name}",
+            "labels": labels,
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": labels},
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "containers": [
+                        {"name": "prometheus-operator", "image": "example.test/operator:v0"}
+                    ]
+                },
+            },
         },
     }
 

@@ -62,6 +62,8 @@ Action = Literal[
     "contact_point_change",
     "contact_point_remove",
     "contact_point_test",
+    "install",
+    "uninstall",
     "silence_add",
     "silence_remove",
     "loki_rule_write",

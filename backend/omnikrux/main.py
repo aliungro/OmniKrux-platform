@@ -256,6 +256,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             registry,
             audit=audit,
             alert_engine=settings.alert_engine,
+            settings=settings,
         )
         try:
             for cluster_id in await _import_kubeconfig_files(settings, registry):
