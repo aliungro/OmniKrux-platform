@@ -58,3 +58,15 @@ def test_parse_import_text_words():
         parse_import_text(" " * (MAX_IMPORT_BYTES + 1))
     assert (e.value.status, e.value.code, e.value.message) == (413, "too_large", TOO_LARGE)
     assert parse_import_text(" " * (MAX_IMPORT_BYTES - 2) + "[]") == []
+
+
+def test_schema_version_two_and_empty_panels():
+    # A newer OmniKrux document is not mistaken for Grafana; the validator refuses it in words.
+    newer = {"schemaVersion": 2, "title": "A", "panels": [{"id": "p-1", "queries": []}]}
+    assert detect_format(newer)[0] == "omnikrux_dashboard"
+    # Per the rule, schemaVersion 1 with no panels reads as an OmniKrux dashboard.
+    assert (
+        detect_format({"schemaVersion": 1, "title": "A", "panels": []})[0] == "omnikrux_dashboard"
+    )
+    assert detect_format({"schemaVersion": 39, "title": "A", "panels": []})[0] == "grafana"
+    assert detect_format({"schemaVersion": 2, "title": "A", "panels": [1]})[0] == "grafana"

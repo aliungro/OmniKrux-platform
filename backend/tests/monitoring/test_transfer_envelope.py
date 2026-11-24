@@ -331,3 +331,77 @@ def test_digest_is_stable_and_sensitive():
     # Where a panel came from, and the dashboard's identity, are not what a reviewer saw.
     assert digest(a) == digest(converted(panel_sources=(("p-1", "99"),)))
     assert digest(a) == digest(converted(identity=Identity("omnikrux", "x", None)))
+
+
+def test_odd_types_in_a_file_become_words_not_a_crash():
+    for odd in (["prometheus"], {"a": 1}, 7, None):
+        value = project_file()
+        value["sources"][0]["type"] = odd
+        value["kind"] = odd
+        value["owner"] = {"kind": odd, "name": "x"}
+        value["dashboards"][0]["owner"] = odd
+        with pytest.raises(TransferError) as e:
+            read_envelope(value)
+        paths = [p.path for p in e.value.problems]
+        assert paths == ["kind", "owner.kind", "sources[0].type"]
+    value = project_file()
+    value["sources"] = {"a": 1}
+    with pytest.raises(TransferError) as e:
+        read_envelope(value)
+    assert e.value.problems == (
+        Problem(
+            "sources", "Sources must be a list. Export the file again, or fix the sources section."
+        ),
+    )
+    value = project_file()
+    value["sources"][0]["key"] = ["x"]
+    with pytest.raises(TransferError) as e:
+        read_envelope(value)
+    assert e.value.problems == (Problem("sources[0].key", "Each source needs its own key."),)
+
+
+def test_no_auth_type_leaks_a_secret():
+    base = SourceConfig(
+        id="internal-id",
+        name="P",
+        type="prometheus",
+        reach="url",
+        url="https://p.example.invalid",
+        cluster=None,
+        path_prefix="",
+        auth_type="none",
+        username="who",
+        header_name="X-Api-Key-Header",
+        client_cert_pem="CLIENT-CERT-PEM",
+        ca_pem="CA-PEM",
+        header_names=("X-Org",),
+        secrets=SourceSecrets(
+            password="pw-secret",
+            token="token-secret",
+            api_key="apikey-secret",
+            client_key_pem="client-key-secret",
+            headers={"X-Org": "header-secret"},
+        ),
+        created_by_project_id="proj-internal",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        check=None,
+    )
+    private = (
+        "pw-secret",
+        "token-secret",
+        "apikey-secret",
+        "client-key-secret",
+        "header-secret",
+        "CLIENT-CERT-PEM",
+        "CA-PEM",
+        "who",
+        "internal-id",
+        "proj-internal",
+    )
+    for auth in ("none", "basic", "bearer", "api_key", "mtls"):
+        entry = source_entry(replace(base, auth_type=auth), "src-1", None)
+        assert entry["auth"] == auth and entry["headerNames"] == ["X-Org"]
+        text = repr(entry)
+        for secret in private:
+            assert secret not in text, (auth, secret)

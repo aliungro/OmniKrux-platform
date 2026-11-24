@@ -36,6 +36,7 @@ _OWNER_COPY = 'Use "project" or "group".'
 _SOURCE_TYPE_COPY = 'Use "prometheus" or "loki".'
 _SOURCE_KEY_COPY = "Each source needs its own key."
 _DASHBOARDS_COPY = "An export holds 1 to 200 dashboards."
+_SOURCES_COPY = "Sources must be a list. Export the file again, or fix the sources section."
 _CLUSTER_COPY = "Give the cluster's name, namespace, service, port and scheme."
 _UNLISTED_SOURCE = "It named a source the file doesn't list, so it uses the first {type} source."
 
@@ -170,7 +171,7 @@ def _sources(
     if raw is None:
         return found
     if not isinstance(raw, list):
-        problems.append(Problem("sources", "Expected a list."))
+        problems.append(Problem("sources", _SOURCES_COPY))
         return found
     seen: set[str] = set()
     for i, item in enumerate(raw):
@@ -181,14 +182,17 @@ def _sources(
         key = item.get("key")
         if not isinstance(key, str) or not key or key in seen:
             problems.append(Problem(f"{path}.key", _SOURCE_KEY_COPY))
+            key = None
         else:
             seen.add(key)
         kind = item.get("type")
-        if kind not in _TYPE_LABELS:
+        if not isinstance(kind, str) or kind not in _TYPE_LABELS:
             problems.append(Problem(f"{path}.type", _SOURCE_TYPE_COPY))
             continue
         cluster = _cluster(item.get("cluster"), f"{path}.cluster", problems)
-        key_text = _text(key)
+        if key is None:
+            continue
+        key_text = key
         found.append(
             SourceRefFound(
                 key=key_text,
@@ -240,7 +244,11 @@ def _dashboards(
     for i, item in enumerate(raw, start=1):
         key = f"d-{i}"
         entry = item if isinstance(item, dict) else {}
-        owner = entry.get("owner") if entry.get("owner") in _OWNERS else owner_kind
+        owner = (
+            entry["owner"]
+            if isinstance(entry.get("owner"), str) and entry["owner"] in _OWNERS
+            else owner_kind
+        )
         export_id = _optional_text(entry.get("exportId"))
         body = entry.get("dashboard")
         title = _text(body.get("title")) if isinstance(body, dict) else ""
@@ -270,11 +278,11 @@ def read_envelope(value: dict) -> EnvelopeRead:
     elif not (_is_int(version) and version == FORMAT_VERSION):
         problems.append(Problem("formatVersion", "Expected 1."))
     kind = value.get("kind")
-    if kind not in _KINDS:
+    if not isinstance(kind, str) or kind not in _KINDS:
         problems.append(Problem("kind", _KIND_COPY))
     owner = value.get("owner") if isinstance(value.get("owner"), dict) else {}
     owner_kind = owner.get("kind")
-    if owner_kind not in _OWNERS:
+    if not isinstance(owner_kind, str) or owner_kind not in _OWNERS:
         problems.append(Problem("owner.kind", _OWNER_COPY))
     project = value.get("project") if isinstance(value.get("project"), dict) else None
     group = value.get("group") if isinstance(value.get("group"), dict) else None

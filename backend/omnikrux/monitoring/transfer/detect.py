@@ -50,11 +50,16 @@ def detect_format(value: object) -> tuple[FormatName, object]:
             return "grafana", value["dashboard"]
         panels = value.get("panels")
         version = value.get("schemaVersion")
+        omnikrux_panels = isinstance(panels, list) and all(
+            "queries" in p and "gridPos" not in p for p in panels if isinstance(p, dict)
+        )
+        # An empty panel list at schemaVersion 1 is an OmniKrux dashboard, as the rule reads. A
+        # newer OmniKrux schema is told apart by its panels (queries, no gridPos), so it is refused
+        # in words by the dashboard validator instead of being converted as Grafana.
         if (
             _is_int(version)
-            and version == 1
-            and isinstance(panels, list)
-            and all("queries" in p and "gridPos" not in p for p in panels if isinstance(p, dict))
+            and omnikrux_panels
+            and (version == 1 or (version > 1 and any(isinstance(p, dict) for p in panels)))
         ):
             return "omnikrux_dashboard", value
         if (
