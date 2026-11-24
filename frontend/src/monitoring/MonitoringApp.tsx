@@ -25,7 +25,6 @@ import { InstallReviewHost } from "./install/InstallReviewHost";
 import {
   clearAlertForms, endRuleForm, FORM_LEAVE_BODY, heldFormLeave, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY,
 } from "./alerts/rules/formSessions";
-import { ComingLater } from "./pages/ComingLater";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
@@ -68,9 +67,10 @@ export interface MonitoringPageProps {
 
 type Page = MonitoringView["page"];
 
-/** Explore and Alerts are their own chunks: each loads when a tab first shows it. */
+/** Explore, Alerts and the Monitoring tools are their own chunks: each loads when a tab first shows it. */
 const ExplorePage = lazy(() => import("./explore/ExplorePage"));
 const AlertsPage = lazy(() => import("./alerts/page/AlertsPage"));
+const ToolsPage = lazy(() => import("./install/ToolsPage"));
 
 /**
  * Every page by `view.page`.
@@ -86,7 +86,7 @@ const PAGES: Record<Page, ComponentType<MonitoringPageProps>> = {
   explore: ExplorePage,
   alerts: AlertsPage,
   dashboard: DashboardPage,
-  tools: ComingLater,
+  tools: ToolsPage,
 };
 
 /** Opening a project, group or dashboard (in this tab or a new one) puts it first in Recently opened. */

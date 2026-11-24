@@ -19,6 +19,7 @@ import t from "../alerts/reviews/ToolReviewHost.module.css";
 import { focusMainFrom } from "../focus";
 import { planInstall, planUninstall, syncContacts, type Component, type InstallPlanIn, type InstallPlanOut, type InstallSettingsIn } from "./api";
 import { InstallProgress, type InstallJobState } from "./InstallProgress";
+import { UninstallOptions } from "./UninstallOptions";
 import { InstallSettingsPanel } from "./InstallSettingsPanel";
 import {
   contactsAppliedWords, contactsCancelledWords, installingWords, InstallReviewsContext, notInstalledWords, notUninstalledWords,
@@ -39,6 +40,8 @@ interface Item {
   settings?: InstallSettingsIn;
   /** Edits in the settings panel not sent yet (null: none, or not sendable): Review again uses them. */
   draft?: InstallSettingsIn | null;
+  /** The uninstall's stored-data choice, planned again when it changes (off unless asked for). */
+  deleteData?: boolean;
   resolve(outcome: InstallOutcome): void;
 }
 
@@ -71,7 +74,7 @@ async function planFor(item: Item): Promise<Omit<Open, "item"> | "done"> {
     const out = await planInstall(body);
     return { plan: out.plan, install: out };
   }
-  if (item.kind === "uninstall") return { plan: await planUninstall(item.clusterId), install: null };
+  if (item.kind === "uninstall") return { plan: await planUninstall(item.clusterId, { delete_data: item.deleteData === true }), install: null };
   const out = await syncContacts(item.clusterId);
   return out.kind === "review" ? { plan: out.plan, install: null } : "done";
 }
@@ -218,6 +221,7 @@ export function InstallReviewHost({ children, place }: {
   const onReview = useCallback(async (params?: Record<string, unknown>) => {
     const now = shown.current;
     if (now === null) return;
+    if (now.item.kind === "uninstall" && params && "delete_data" in params) now.item.deleteData = params.delete_data === true;
     if (now.item.kind === "install") {
       if (params && "settings" in params) now.item.settings = params.settings as InstallSettingsIn;
       else if (!params && now.item.draft) now.item.settings = now.item.draft;
@@ -312,6 +316,8 @@ export function InstallReviewHost({ children, place }: {
         options={install ? ({ busy, review }) => (
           <InstallSettingsPanel settings={install.settings} problems={install.problems} facts={install.facts} busy={busy}
             onUpdate={(next) => review({ settings: next })} onDraft={(next) => { item.draft = next; }} />
+        ) : item.kind === "uninstall" ? ({ busy, review }) => (
+          <UninstallOptions checked={item.deleteData === true} busy={busy} onChange={(next) => review({ delete_data: next })} />
         ) : undefined}
         renderProgress={item.kind === "contacts" ? undefined : (p) => <InstallProgress {...p} action={action} onState={onJobState} />}
       />

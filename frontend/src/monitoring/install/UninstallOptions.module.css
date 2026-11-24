@@ -1,0 +1,26 @@
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 2px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.option input {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--focus);
+}
+
+.option:has(input[aria-disabled="true"]) {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.option input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
