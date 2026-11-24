@@ -24,6 +24,9 @@ from omnikrux.monitoring.alerts.engine import AlertEngine
 from omnikrux.monitoring.alerts.notify import Notifier
 from omnikrux.monitoring.alerts.store import AlertStore
 from omnikrux.monitoring.dashboards.store import DashboardStore
+from omnikrux.monitoring.install import connect as install_connect
+from omnikrux.monitoring.install import readiness
+from omnikrux.monitoring.install.values import RELEASES
 from omnikrux.monitoring.projects.store import GroupStore, ProjectStore
 from omnikrux.monitoring.sources.store import NewSource, SourceStore
 from omnikrux.monitoring.sources.transport import TransportFactory
@@ -41,6 +44,14 @@ from tests.monitoring.fakes import (
     serve_fake_loki,
     serve_fake_prometheus,
 )
+from tests.monitoring.install_env import (
+    InstalledCluster,
+    install_plan,
+    mark_all_ready,
+    prepare_install,
+    wait_job,
+)
+from tests.monitoring.install_env import apply as apply_plan
 
 _names = itertools.count(1)
 
@@ -405,3 +416,61 @@ async def engine_env(monitoring_app, fake_prometheus, linked_project, fake_webho
     fake_webhook.release.set()
     await services.engine.stop()
     await services.notifier.drain(10)
+
+
+@dataclass(frozen=True)
+class InstalledBackends:
+    """The fake tools behind the Services an install makes in namespace `monitoring`."""
+
+    prometheus: object
+    alertmanager: object
+    loki: object
+
+
+@pytest.fixture
+def fast_install(monkeypatch):
+    """The install job's waits shortened: readiness and source tests poll every 20 ms, and a
+    source that never answers gives up after a second."""
+    monkeypatch.setattr(readiness, "READY_INTERVAL_SECONDS", 0.02)
+    monkeypatch.setattr(install_connect, "CONNECT_INTERVAL_SECONDS", 0.02)
+    monkeypatch.setattr(install_connect, "CONNECT_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(install_connect, "TEST_SECONDS", 1.0)
+
+
+@pytest.fixture
+async def installed_backends(fake_api, fake_prometheus, fake_alertmanager, fake_loki):
+    """The fake Kubernetes API's service proxy relays the three installed Services (in
+    `monitoring`) to M1's fake Prometheus and Loki and M4's fake Alertmanager."""
+    for specs in RELEASES.values():
+        for spec in specs:
+            for kind, (service, port) in spec.services.items():
+                server = {
+                    "prometheus": fake_prometheus,
+                    "alertmanager": fake_alertmanager,
+                    "loki": fake_loki,
+                }[kind]
+                fake_api.service_backends[("monitoring", f"{service}:{port}")] = server.url
+    return InstalledBackends(fake_prometheus, fake_alertmanager, fake_loki)
+
+
+@pytest.fixture
+async def installed_cluster(
+    monitoring_app, kube_cluster, fake_api, fake_helm, installed_backends, fast_install
+) -> InstalledCluster:
+    """A cluster with a finished install of metrics and logs in `monitoring` (record
+    `installed`, Helm release records on the fake API) and its three connected sources."""
+    http, _ = monitoring_app
+    prepare_install(fake_api, fake_helm)
+    mark_all_ready(fake_api, "monitoring")
+    plan = await install_plan(http, kube_cluster, ["metrics", "logs"])
+    out = await apply_plan(http, plan)
+    job = await wait_job(http, out["job_id"])
+    assert job["state"] == "succeeded", job
+    sources = {
+        s["type"]: s["id"]
+        for s in (await http.get("/api/monitoring/sources")).json()
+        if s["installed_by_omnikrux"]
+    }
+    return InstalledCluster(
+        cluster_id=kube_cluster, namespace="monitoring", project_id=None, sources=sources, job=job
+    )

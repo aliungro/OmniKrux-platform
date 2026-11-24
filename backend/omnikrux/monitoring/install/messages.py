@@ -62,7 +62,55 @@ BLOCK_FOREIGN_OPERATOR = "This cluster already runs a Prometheus Operator ({wher
 BLOCK_FOREIGN_RELEASE = "A Helm release named {release} already exists in {namespace}, and OmniKrux didn't install it. Pick another namespace."
 BLOCK_OTHER_NAMESPACE = "OmniKrux already installed its tools in {namespace} in this cluster. Update them there, or uninstall them first."
 BLOCK_BUSY = "OmniKrux is {doing} in {cluster} right now. Wait for it to finish, or cancel it."
-# Until Task 6 adds the install job, a reviewed install can't be applied.
-APPLY_NOT_YET = (
-    "This version of OmniKrux can review an install but not run it yet. Nothing was installed."
+
+# Applying a reviewed install, and the install job's steps (each shown while it runs).
+INSTALL_STALE = (
+    "The monitoring tools in {namespace} changed since you reviewed this. Review it again."
 )
+INSTALL_NO_JOBS = "OmniKrux is shutting down; nothing was installed."
+# Not in the plan's copy list: the install record couldn't be written before the job started.
+INSTALL_NOT_SAVED = (
+    "OmniKrux couldn't save the install record, so nothing was installed. Try again."
+)
+INSTALL_STARTED = "Installing the monitoring tools in {namespace}…"
+STEP_NAMESPACE = "Creating the namespace {namespace}…"
+STEP_CRDS = "Updating the Prometheus Operator's resource definitions…"
+STEP_HELM = "Installing {release} with Helm…"
+STEP_WAIT = "Waiting for {label} to be ready ({ready} of {total})…"
+# The waiting step as INSTALL_CANCELLED names it (without the count, which changes as it runs).
+STEP_WAIT_WORDS = "Waiting for {label} to be ready…"
+STEP_CONNECT = "Connecting the sources…"
+# HELM_FAILED's `step` for an upgrade ("Helm couldn't install omnikrux-loki: ...").
+HELM_INSTALL_STEP = "install {release}"
+
+# How the install job ends. `tools` e.g. "Prometheus, Alertmanager, Loki and Grafana Alloy";
+# `project` is " to {project name}" when the sources were added to a project, else empty.
+INSTALLED = "Installed in {namespace}: {tools} are running. Connected {n} sources{project}."
+# Not in the plan's copy list: INSTALLED when one source was connected (logs alone).
+INSTALLED_ONE = "Installed in {namespace}: {tools} are running. Connected 1 source{project}."
+INSTALLED_PROJECT = " to {project}"
+# `status` is the release's Helm status read after the failure (e.g. failed), or unknown.
+INSTALL_HELM_FAILED = "{helm_words} What Helm applied stays as Helm left it ({status}). Check the Pods in {namespace}, then install again, or uninstall the tools."
+INSTALL_NOT_READY = "{label} wasn't ready after 10 minutes: {why}. What Helm applied stays. Check the Pods in {namespace}, then install again, or uninstall the tools."
+INSTALL_CONNECT_FAILED = "The tools are running, but OmniKrux couldn't connect {tool}: {message} Add it from Sources, or install again to try once more."
+# `step` is the current step's words in lower case without the ellipsis.
+INSTALL_CANCELLED = "Install cancelled while {step}. What was already applied stays as Helm left it. Install again to finish, or uninstall the tools."
+# Not in the plan's copy list: creating the namespace or writing a CustomResourceDefinition
+# failed (`words` is the cluster's refusal in plain words, cloud privacy kept).
+INSTALL_STEP_FAILED = (
+    "{words} Nothing after this step was installed. Check the cluster, then install again."
+)
+CREATE_NAMESPACE_STEP = "create the namespace {namespace}"
+WRITE_CRD_STEP = "write the CustomResourceDefinition {crd}"
+# Not in the plan's copy list: Helm couldn't be started for a release (no kubeconfig could be
+# made for it, or the program couldn't run), and Helm's error answer was too long to read.
+HELM_NOT_STARTED = "OmniKrux couldn't run Helm to install {release}."
+HELM_ANSWER_TOO_LONG = "Helm couldn't {step}, and its answer was too long to read in full."
+# Not in the plan's copy list: the CRDs the review counted couldn't be read from the chart again.
+CRDS_GONE = "OmniKrux couldn't read the Prometheus Operator's resource definitions from the chart again. Install again."
+
+# Why a workload isn't ready (the job's `blocked` list and INSTALL_NOT_READY's `why`).
+NOT_CREATED = "Not created yet"
+NOT_READY_YET = "Its Pods aren't ready yet"
+READ_REFUSED = "OmniKrux couldn't read it (the cluster answered {status})"
+READ_NO_ANSWER = "OmniKrux couldn't read it: the cluster didn't answer"

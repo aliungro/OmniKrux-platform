@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from kubernetes_asyncio.client import ApiClient
 
+from omnikrux.actions.jobs import Job, JobFailed, JobRunner
 from omnikrux.actions.pipeline import (
     ActionError,
     Applied,
@@ -33,7 +35,9 @@ from omnikrux.actions.pipeline import (
 from omnikrux.clusters.models import Environment
 from omnikrux.monitoring.install import messages
 from omnikrux.monitoring.install.facts import OPERATOR_VERSION, read_facts
+from omnikrux.monitoring.install.job import release_specs, run_install, settings_from_dict
 from omnikrux.monitoring.install.pins import CHARTS
+from omnikrux.monitoring.install.readiness import step_words
 from omnikrux.monitoring.install.render import (
     Rendered,
     RenderRefused,
@@ -46,38 +50,60 @@ from omnikrux.monitoring.install.settings import (
     ClusterFacts,
     Component,
     InstallSettings,
-    Resources,
     effective_settings,
     validate_settings,
 )
-from omnikrux.monitoring.install.store import InstallRecord
-from omnikrux.monitoring.install.values import MANAGED_BY, RELEASES, ReleaseSpec, values_for
+from omnikrux.monitoring.install.store import InstallBusy, InstallRecord
+from omnikrux.monitoring.install.values import MANAGED_BY, ReleaseSpec, values_for
 from omnikrux.monitoring.projects.store import UnknownProject
 from omnikrux.monitoring.query.run import PROJECT_GONE
+from omnikrux.monitoring.sources.discovery import CLUSTER_GONE
 from omnikrux.resources.kinds import KindSpec, object_name_problem
 
 if TYPE_CHECKING:
     from omnikrux.monitoring.services import MonitoringServices
 
+log = logging.getLogger(__name__)
+
 KIND_KEY = "namespaces"
 _RUNNING = {"installing": "installing", "uninstalling": "uninstalling"}
+# How often the apply looks whether a job stopped before it could begin the install record.
+_BEGUN_POLL_SECONDS = 0.2
 
 
-def settings_from_dict(values: Mapping[str, Any]) -> InstallSettings:
-    """InstallSettings from `asdict` output (the plan's params and state)."""
-    data = dict(values)
-    for name in ("prometheus", "alertmanager", "loki", "alloy"):
-        if isinstance(data.get(name), Mapping):
-            data[name] = Resources(**data[name])
-    return InstallSettings(**data)
+def _settle(future: asyncio.Future[None], outcome: BaseException | None) -> None:
+    if future.done():
+        return
+    if outcome is None:
+        future.set_result(None)
+    else:
+        future.set_exception(outcome)
+
+
+def _not_started() -> ActionError:
+    return ActionError(503, messages.INSTALL_NO_JOBS)
+
+
+async def _begun(started: asyncio.Future[None], jobs: JobRunner, job_id: str, busy: str) -> None:
+    """Wait until the job has begun the install record. A job stopped before it ran (the
+    console shutting down) never settles `started`: its state says so."""
+    while not started.done():
+        await asyncio.wait({started}, timeout=_BEGUN_POLL_SECONDS)
+        if not started.done() and jobs.get(job_id).state != "running":
+            raise _not_started()
+    try:
+        started.result()
+    except InstallBusy:
+        raise ActionError(409, busy) from None
+    except ActionError:
+        raise
+    except Exception as exc:  # noqa: BLE001 (a store failure: in words, logged by type)
+        log.warning("The install record couldn't be begun (%s)", type(exc).__name__)
+        raise ActionError(503, messages.INSTALL_NOT_SAVED) from None
 
 
 def ordered(components: Sequence[str]) -> list[Component]:
     return [c for c in COMPONENT_ORDER if c in components]
-
-
-def release_specs(components: Sequence[str]) -> list[ReleaseSpec]:
-    return [spec for c in ordered(components) for spec in RELEASES[c]]
 
 
 def values_digest(values: Mapping[str, dict]) -> str:
@@ -306,6 +332,8 @@ class InstallAction:
                 "crds": sorted(create + update),
                 "project_id": project_id,
                 "values_digest": values_digest(values),
+                # What was asked for: the apply works out the effective settings again from it.
+                "requested": asdict(settings),
                 "kube_version": facts.kube_version,
                 "default_storage_class": facts.default_storage_class,
             },
@@ -314,9 +342,147 @@ class InstallAction:
     async def apply(
         self, ctx: ApplyContext, target: Target, spec: KindSpec, planned: Planned
     ) -> Applied:
-        raise ActionError(501, messages.APPLY_NOT_YET)
+        """Check that the review still holds (nothing is written otherwise), then start the
+        install job. The job begins the install record itself, so the record names the job, and
+        the apply waits for that: a job already running there answers 409 with the busy words."""
+        jobs = ctx.jobs
+        if jobs is None or jobs.closed:
+            raise ActionError(503, messages.INSTALL_NO_JOBS)
+        services, state = self._services, planned.state
+        namespace: str = state["namespace"]
+        cluster, cloud = await self._cluster(target.cluster_id)
+        record = await services.installs.get(cluster.id)
+        if record is not None and record.state in _RUNNING:
+            raise ActionError(409, self._busy(record.state, cluster))
+        crd_docs = await self._still_as_reviewed(ctx.api, cluster, record, state)
+        components = ordered(state["components"])
+        specs = release_specs(components)
+        started: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        async def work(job: Job) -> str:
+            try:
+                await services.installs.begin(
+                    cluster.id,
+                    namespace,
+                    components,
+                    settings_from_dict(state["settings"]),
+                    {r.chart: CHARTS[r.chart].version for r in specs},
+                    job_id=job.id,
+                    project_id=state.get("project_id"),
+                )
+            except InstallBusy as exc:
+                _settle(started, exc)
+                raise JobFailed(self._busy(exc.state, cluster)) from None
+            except BaseException as exc:
+                _settle(started, exc if isinstance(exc, Exception) else _not_started())
+                raise
+            _settle(started, None)
+            return await run_install(
+                job,
+                services=services,
+                connections=ctx.connections,
+                catalog=getattr(self._state, "catalog", None),
+                cluster=cluster,
+                cloud=cloud,
+                namespace=namespace,
+                plan_state=state,
+                actor=ctx.actor,
+                crds=crd_docs,
+            )
+
+        first = messages.STEP_NAMESPACE.format(namespace=namespace)
+        try:
+            job_id = jobs.start(
+                "install",
+                work,
+                actor=ctx.actor,
+                audit_id=ctx.audit_id,
+                cancelled_message=messages.INSTALL_CANCELLED.format(step=step_words(first)),
+                message=first,
+                cluster_id=cluster.id,
+            )
+        except RuntimeError:  # the runner closed since the check
+            raise ActionError(503, messages.INSTALL_NO_JOBS) from None
+        await _begun(started, jobs, job_id, self._busy("installing", cluster))
+        return Applied(messages.INSTALL_STARTED.format(namespace=namespace), job_id=job_id)
 
     # -- parts -----------------------------------------------------------------------------
+
+    async def _cluster(self, cluster_id: str) -> tuple[ClusterRef, bool]:
+        registry = self._state.registry
+        try:
+            info = await registry.get(cluster_id)
+        except KeyError:
+            raise ActionError(404, CLUSTER_GONE) from None
+        cluster = ClusterRef(
+            id=info.id,
+            name=info.name,
+            provider=info.provider.value,
+            environment=info.environment.value,
+        )
+        return cluster, bool(await registry.is_cloud(cluster_id))
+
+    @staticmethod
+    def _busy(state: str, cluster: ClusterRef) -> str:
+        return messages.BLOCK_BUSY.format(doing=_RUNNING.get(state, state), cluster=cluster.name)
+
+    async def _still_as_reviewed(
+        self, api: ApiClient, cluster: ClusterRef, record: InstallRecord | None, state: dict
+    ) -> list[dict]:
+        """Read the cluster and the chart again; refuse (409 "Review it again", nothing
+        written) when a release's revision, the chart sums, the CustomResourceDefinitions to
+        write, the effective settings or the values differ from what was reviewed, or another
+        Prometheus Operator or release owner appeared. Returns the chart's CRDs (the job writes
+        those the review listed)."""
+        services = self._services
+        namespace: str = state["namespace"]
+        stale = ActionError(409, messages.INSTALL_STALE.format(namespace=namespace))
+        components = ordered(state["components"])
+        specs = release_specs(components)
+        if record is not None and record.namespace != namespace:
+            raise stale
+        tools = await services.install_tools.status()
+        if not tools.available:
+            raise stale
+        crd_docs: list[dict] = []
+        if "metrics" in components:
+            try:
+                crd_docs = await chart_crds(services.helm, tools)
+            except RenderRefused:
+                raise stale from None
+        chart = _chart_crds_by_name(crd_docs)
+        facts = await read_facts(api, cluster, namespace, crd_names=list(chart))
+        effective, _ = effective_settings(settings_from_dict(state["requested"]), facts)
+        create, update, _kept = crds_to_write(chart, facts)
+        values = {
+            r.release: values_for(
+                r.release, effective, namespace=namespace, cluster_name=cluster.name
+            )
+            for r in specs
+        }
+        now = {
+            "settings": asdict(effective),
+            "charts": {r.release: CHARTS[r.chart].sha256 for r in specs},
+            "revisions": {
+                r.release: (
+                    facts.releases[r.release].revision if r.release in facts.releases else None
+                )
+                for r in specs
+            },
+            "crds": sorted(create + update),
+            "values_digest": values_digest(values),
+            "default_storage_class": facts.default_storage_class,
+        }
+        if any(now[key] != state.get(key) for key in now):
+            raise stale
+        if "metrics" in components and facts.foreign_operator is not None:
+            raise stale
+        if any(
+            r.release in facts.releases and facts.releases[r.release].owner_label != MANAGED_BY
+            for r in specs
+        ):
+            raise stale
+        return crd_docs
 
     async def _project_name(self, project_id: str | None) -> str | None:
         if project_id is None:

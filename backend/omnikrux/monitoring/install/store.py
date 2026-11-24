@@ -172,13 +172,19 @@ class InstallStore:
         message: str | None,
         *,
         sources: Mapping[str, str | None] | None = None,
-    ) -> InstallRecord:
+        job_id: str | None = None,
+    ) -> InstallRecord | None:
         """End a job: the state and message, and the sources it made (`prometheus`,
         `alertmanager`, `loki`; a key left out keeps what the record has). KeyError if the
-        cluster has no record."""
+        cluster has no record. With `job_id`, only that job's running record is finished: when
+        another job has begun since, or the record was already finished, nothing changes and
+        None is returned (a stale job never ends a newer one's record)."""
         moment = now()
         async with self._sessionmaker.begin() as session:
+            await lock_first(session)
             row = await _existing(session, cluster_id)
+            if job_id is not None and (row.job_id != job_id or row.state not in _RUNNING):
+                return None
             row.state = state
             row.message = message
             row.updated_at = moment

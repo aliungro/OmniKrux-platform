@@ -27,6 +27,10 @@ Answer = HelmResult | Callable[[list[str]], Awaitable[HelmResult]]
 class FakeCall:
     args: list[str]
     kubeconfig_text: str | None
+    # Where the kubeconfig was during the call (its folder must be gone once the call ended),
+    # and the time limit the caller gave.
+    kubeconfig: Path | None = None
+    timeout: float | None = None
 
 
 @dataclass
@@ -54,7 +58,7 @@ class FakeHelm(HelmRunner):
     ) -> HelmResult:
         args = [str(a) for a in args]
         text = kubeconfig.read_text(encoding="utf-8") if kubeconfig is not None else None
-        self.calls.append(FakeCall(args, text))
+        self.calls.append(FakeCall(args, text, kubeconfig, timeout))
         command = args[0] if args else ""
         if command in self.hang:
             await asyncio.Event().wait()
