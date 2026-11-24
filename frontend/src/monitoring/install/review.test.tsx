@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { Job, Plan } from "../../api/types";
+import { useMonitoringTree } from "../api/hooks";
+import type { SourceOut } from "../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
 import type { InstallPlanOut, InstallSettingsOut } from "./api";
 import { InstallProgress } from "./InstallProgress";
@@ -311,6 +313,50 @@ describe("install review", () => {
     await waitFor(() => expect(document.activeElement).toBe(days));
     expect(document.getElementById(days.getAttribute("aria-describedby")!)?.textContent).toBe("Keep data for 1 to 90 days.");
     expect(planBodies(api)).toHaveLength(1);
+  });
+
+  it("an edited field drops its problem, and the days problem joins the plan's others", async () => {
+    const user = userEvent.setup();
+    const { fallback } = pipeline();
+    installFakeMonitoringApi({
+      install: {
+        plans: [planned({ blocked: ["Fix the settings first."] }, {
+          settings: { ...SETTINGS, namespace: "kube-system" },
+          problems: [
+            { field: "namespace", message: "Use a namespace of its own, not default or a kube- namespace." },
+            { field: "loki.memory_limit", message: "Use memory like 256Mi or 1Gi." },
+          ],
+        })],
+      },
+    }, fallback);
+    renderHost();
+    await user.click(screen.getByRole("button", { name: "Install tools" }));
+    const dialog = await screen.findByRole("dialog");
+    const namespace = within(dialog).getByRole("textbox", { name: "Namespace" });
+    const lokiLimit = within(dialog).getByRole("textbox", { name: "Loki Memory limit" });
+    await waitFor(() => expect(document.activeElement).toBe(namespace));
+    expect(namespace.getAttribute("aria-invalid")).toBe("true");
+    expect(lokiLimit.getAttribute("aria-invalid")).toBe("true");
+
+    // Days that aren't a number: said under the days, and the plan's other problems stay.
+    const days = within(dialog).getByRole("spinbutton", { name: "Keep data for" });
+    await user.clear(days);
+    await user.click(within(dialog).getByRole("button", { name: "Update review" }));
+    await waitFor(() => expect(document.activeElement).toBe(namespace));
+    expect(days.getAttribute("aria-invalid")).toBe("true");
+    expect(within(dialog).getByText("Keep data for 1 to 90 days.")).toBeTruthy();
+    expect(within(dialog).getByText("Use a namespace of its own, not default or a kube- namespace.")).toBeTruthy();
+    expect(lokiLimit.getAttribute("aria-invalid")).toBe("true");
+
+    // Editing a field takes its problem away at once; the others stay until the next review.
+    await user.clear(namespace);
+    await user.type(namespace, "monitoring");
+    expect(namespace.getAttribute("aria-invalid")).toBeNull();
+    expect(within(dialog).queryByText("Use a namespace of its own, not default or a kube- namespace.")).toBeNull();
+    expect(lokiLimit.getAttribute("aria-invalid")).toBe("true");
+    expect(days.getAttribute("aria-invalid")).toBe("true");
+    await user.type(days, "7");
+    expect(days.getAttribute("aria-invalid")).toBeNull();
   });
 
   it("the storage checkbox explains why it is off", async () => {
@@ -699,4 +745,108 @@ describe("install review queue", () => {
     await expect(reviews.uninstall("c1")).resolves.toBe("cancelled");
     await expect(reviews.contacts("c1")).resolves.toBe("cancelled");
   });
+});
+
+describe("a job that carries on after its review closed", () => {
+  /** What the Monitoring sidebar shows: the tree's source count. */
+  function SourcesCount() {
+    const tree = useMonitoringTree();
+    return <p data-testid="count">{tree.data ? `Sources ${tree.data.source_count}` : ""}</p>;
+  }
+
+  /** The pipeline, with the job reads answering whatever `box.job` holds. */
+  function liveJob(first: Job) {
+    const box = { job: first };
+    const { fallback: base, seen } = pipeline();
+    const fallback = (url: string, init?: RequestInit) =>
+      (init?.method ?? "GET").toUpperCase() === "GET" && url.startsWith("/api/actions/jobs/")
+        ? (seen.push(`GET ${url}`), json(box.job))
+        : base(url, init);
+    return { box, seen, fallback };
+  }
+
+  function renderWithCount() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const out = render(
+      <QueryClientProvider client={client}>
+        <main tabIndex={-1}>
+          <InstallReviewHost>
+            <Probe />
+            <SourcesCount />
+          </InstallReviewHost>
+        </main>
+      </QueryClientProvider>,
+    );
+    return { ...out, client };
+  }
+
+  const reads = (api: FakeMonitoringApi, url: string) => api.requests.filter((r) => r.method === "GET" && r.url === url).length;
+  const SOURCE = { id: "s9", name: "kind-install Prometheus" } as SourceOut;
+
+  it("an install closed mid-job reads Monitoring again when it ends", async () => {
+    const user = userEvent.setup();
+    const { box, fallback } = liveJob(job());
+    const api = installFakeMonitoringApi({ install: { plans: [planned()] } }, fallback);
+    renderWithCount();
+    expect(await screen.findByText("Sources 0")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Install tools" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Install" }));
+    await within(dialog).findByText("Installing omnikrux-kps with Helm…");
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(results()).toBe("started"));
+    await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("Sources 0"));
+    const treeReads = reads(api, "/api/monitoring/tree");
+
+    // The job ends on the server, with a source connected.
+    api.state.sources.push(SOURCE);
+    box.job = job({ state: "succeeded", message: "Installed in monitoring: Prometheus is running. Connected 1 source.", done: 6, finished_at: "2026-11-24T10:03:00Z" });
+    expect(await screen.findByText("Sources 1", {}, { timeout: 6000 })).toBeTruthy();
+    expect(reads(api, "/api/monitoring/tree")).toBeGreaterThan(treeReads);
+    expect(status().textContent).toContain("Installed in monitoring: Prometheus is running. Connected 1 source.");
+  }, 15000);
+
+  it("an uninstall closed mid-job reads Monitoring again when it ends", async () => {
+    const user = userEvent.setup();
+    const { box, fallback } = liveJob(job({ action: "uninstall", message: "Uninstalling omnikrux-loki with Helm…" }));
+    const api = installFakeMonitoringApi({
+      sources: [SOURCE],
+      install: { uninstallPlans: [plan({ plan_id: "plan-u", action: "uninstall", title: "Uninstall monitoring tools from monitoring", apply_label: "Uninstall" })] },
+    }, fallback);
+    renderWithCount();
+    expect(await screen.findByText("Sources 1")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Uninstall tools" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Uninstall" }));
+    await within(dialog).findByText("Uninstalling omnikrux-loki with Helm…");
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(results()).toBe("started"));
+    expect(status().textContent).toContain("Uninstalling the monitoring tools from kind-install. Follow it on Monitoring tools.");
+
+    api.state.sources.splice(0);
+    box.job = job({ action: "uninstall", state: "cancelled", message: "Uninstall cancelled while uninstall omnikrux-loki. What was already removed stays removed. Uninstall again to finish." });
+    expect(await screen.findByText("Sources 0", {}, { timeout: 6000 })).toBeTruthy();
+    expect(status().textContent).toContain("Uninstall again to finish.");
+  }, 15000);
+
+  it("a job the server forgot says how it ended isn't known", async () => {
+    const user = userEvent.setup();
+    const { box, fallback } = liveJob(job());
+    const forgot = (url: string, init?: RequestInit) =>
+      box.job.state === "failed" && url.startsWith("/api/actions/jobs/")
+        ? json({ detail: "OmniKrux doesn't know that job (it may have restarted)." }, 404)
+        : fallback(url, init);
+    installFakeMonitoringApi({ install: { plans: [planned()] } }, forgot);
+    renderWithCount();
+    await user.click(screen.getByRole("button", { name: "Install tools" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Install" }));
+    await within(dialog).findByText("Installing omnikrux-kps with Helm…");
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(results()).toBe("started"));
+    box.job = job({ state: "failed" });
+    await waitFor(() => expect(status().textContent).toContain(
+      "OmniKrux doesn't know that job (it may have restarted). How it ended isn't known here: check Monitoring tools and Audit.",
+    ), { timeout: 6000 });
+  }, 15000);
 });

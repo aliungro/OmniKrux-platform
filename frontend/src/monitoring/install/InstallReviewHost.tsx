@@ -8,19 +8,24 @@
 // where the review was asked for (or to the workspace), never to <body>. The screen holds one
 // review across both hosts: each review here, and each one the tool review queue opens, waits for
 // its `turn()` first.
+//
+// A job that carries on after its review closed (Close mid-job, or while it stops) is followed here
+// until it ends, wherever Monitoring is: then Monitoring's data, the tools pages and the audit log
+// are read again, and a status line says how it ended in the job's own words.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { failure } from "../../api/http";
-import type { Plan } from "../../api/types";
+import { failure, getJson, HttpError } from "../../api/http";
+import type { Job, Plan } from "../../api/types";
 import { useClusters } from "../../api/useClusters";
 import { ActionDialog } from "../../features/actions/ActionDialog";
 import { discardPlans, type ActionOutcome } from "../../features/actions/useActions";
 import { OK_STATUS_MS } from "../alerts/reviews/ToolReviewHost";
 import t from "../alerts/reviews/ToolReviewHost.module.css";
+import { invalidateMonitoring } from "../api/hooks";
 import { focusMainFrom } from "../focus";
 import { planInstall, planUninstall, syncContacts, type Component, type InstallPlanIn, type InstallPlanOut, type InstallSettingsIn } from "./api";
-import { InstallProgress, type InstallJobState } from "./InstallProgress";
+import { InstallProgress, LOST, type InstallJobState } from "./InstallProgress";
 import { UninstallOptions } from "./UninstallOptions";
 import { InstallSettingsPanel } from "./InstallSettingsPanel";
 import {
@@ -61,6 +66,49 @@ interface Line {
 }
 
 const MAX_LINES = 6;
+/** How often a job that carries on after its review closed is read, until it ends. */
+export const WATCH_MS = 3000;
+
+/** A job followed after its review closed. */
+interface Watched {
+  jobId: string;
+}
+
+/**
+ * Reads a job every `WATCH_MS` (the first read after one wait: the review's own progress has just
+ * read it) until it ends or the server no longer knows it; a failed read asks again.
+ */
+function JobWatch({ jobId, onEnd }: { jobId: string; onEnd(jobId: string, tone: Line["tone"], text: string): void }) {
+  const latest = useRef(onEnd);
+  latest.current = onEnd;
+  useEffect(() => {
+    let stopped = false;
+    let timer = 0;
+    const tick = async () => {
+      try {
+        const job = await getJson<Job>(`/api/actions/jobs/${encodeURIComponent(jobId)}`);
+        if (stopped) return;
+        if (job.state !== "running") {
+          latest.current(jobId, job.state === "succeeded" ? "ok" : job.state === "cancelled" ? "wait" : "failed", job.message);
+          return;
+        }
+      } catch (err) {
+        if (stopped) return;
+        if (err instanceof HttpError && err.status === 404) {
+          latest.current(jobId, "wait", `${failure(err)} ${LOST}`);
+          return;
+        }
+      }
+      timer = window.setTimeout(() => void tick(), WATCH_MS);
+    };
+    timer = window.setTimeout(() => void tick(), WATCH_MS);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [jobId]);
+  return null;
+}
 
 function focusLost(): boolean {
   const active = document.activeElement;
@@ -104,6 +152,10 @@ export function InstallReviewHost({ children, place }: {
   const closing = useRef<((outcome: InstallOutcome) => void) | null>(null);
   /** Where the job of the review on screen stands; null until an apply started one. */
   const jobState = useRef<InstallJobState | null>(null);
+  /** The job of the review on screen, once its progress showed. */
+  const jobId = useRef<string | null>(null);
+  /** Jobs that carry on after their review closed, followed until they end. */
+  const [watched, setWatched] = useState<Watched[]>([]);
   /** Where the keyboard goes once the closed review's dialog is gone. */
   const backTo = useRef<{ el: FocusAfter | undefined } | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
@@ -155,6 +207,7 @@ export function InstallReviewHost({ children, place }: {
     return new Promise<InstallOutcome>((resolve) => {
       closing.current = resolve;
       jobState.current = null;
+      jobId.current = null;
       show({ item, ...ready });
     });
   }, [nameOf, say, show]);
@@ -200,6 +253,20 @@ export function InstallReviewHost({ children, place }: {
     turn,
   }), [request, turn]);
 
+  /** Follows the job of the review on screen once it closes (nothing to follow without one). */
+  const watch = useCallback(() => {
+    const id = jobId.current;
+    if (id === null) return;
+    setWatched((now) => (now.some((w) => w.jobId === id) ? now : [...now, { jobId: id }]));
+  }, []);
+
+  const onWatchedEnd = useCallback((id: string, tone: Line["tone"], text: string) => {
+    setWatched((now) => now.filter((w) => w.jobId !== id));
+    void invalidateMonitoring(client);
+    void client.invalidateQueries({ queryKey: ["install-live"] });
+    say(tone, text);
+  }, [client, say]);
+
   const finish = useCallback((outcome: InstallOutcome) => {
     const now = shown.current;
     const resolve = closing.current;
@@ -225,12 +292,14 @@ export function InstallReviewHost({ children, place }: {
     if (state === "stopping") {
       // Closed while a cancel waits for Helm: it is being stopped, not carrying on.
       say("wait", stoppingWords(kind === "uninstall" ? "uninstall" : "install", cluster));
+      watch();
       finish("started");
       return;
     }
     if (state === null || state === "running") {
       // Applied, or started and carrying on: say where to follow it.
       say("ok", kind === "install" ? installingWords(cluster) : kind === "uninstall" ? uninstallingWords(cluster) : contactsAppliedWords(cluster));
+      if (state === "running") watch();
       finish(state === null ? "applied" : "started");
       return;
     }
@@ -242,7 +311,7 @@ export function InstallReviewHost({ children, place }: {
     // It ended while the dialog stayed open: say how, in the job's own words.
     say(state === "succeeded" ? "ok" : state === "cancelled" ? "wait" : "failed", outcome.message);
     finish(state === "succeeded" ? "applied" : state === "cancelled" ? "cancelled" : "failed");
-  }, [finish, say]);
+  }, [finish, say, watch]);
 
   // Update review (with settings) and Review again (without): planned again with the settings
   // last edited, and the new plan takes the old one's place. A refusal rejects; the dialog says it.
@@ -276,7 +345,10 @@ export function InstallReviewHost({ children, place }: {
     finish("applied");
   }, [finish, say, show]);
 
-  const onJobState = useCallback((state: InstallJobState) => { jobState.current = state; }, []);
+  const onJobState = useCallback((state: InstallJobState, id: string) => {
+    jobState.current = state;
+    jobId.current = id;
+  }, []);
 
   // Leaving Monitoring: the review on screen is closed on the server, and whoever waits hears
   // "cancelled".
@@ -370,6 +442,7 @@ export function InstallReviewHost({ children, place }: {
     <InstallReviewsContext.Provider value={value}>
       {children}
       {dialog}
+      {watched.map((w) => <JobWatch key={w.jobId} jobId={w.jobId} onEnd={onWatchedEnd} />)}
       <div ref={region} className={hasLines ? t.tray : t.idle} style={hasLines && lift > 0 ? { bottom: 20 + lift } : undefined}
         data-testid="install-review-status">
         <div role="status" aria-live="polite" className={t.lines}>

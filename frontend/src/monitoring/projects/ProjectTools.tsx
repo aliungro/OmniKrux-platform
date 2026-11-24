@@ -10,7 +10,7 @@ import { invalidateMonitoring } from "../api/hooks";
 import type { ProjectOut, SourceOut } from "../api/types";
 import { GenerateTools, type AnsweredTools } from "../install/GenerateTools";
 import { installKeys, installStatus, type InstallStatusOut } from "../install/api";
-import { componentState } from "../install/toolsModel";
+import { componentState, isBusy, POLL_RUNNING_MS } from "../install/toolsModel";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { answeredLabel, answeredSource } from "../setup/setupModel";
 import s from "./ProjectPage.module.css";
@@ -22,8 +22,8 @@ export function toolsStateWords(status: InstallStatusOut): string {
   switch (install.state) {
     case "installing": return "Installing…";
     case "uninstalling": return "Uninstalling…";
-    case "failed": return "The last install failed";
-    case "cancelled": return "The last install was cancelled";
+    case "failed": return "The last change failed";
+    case "cancelled": return "The last change was cancelled";
     case "installed": {
       const states = install.components.map((c) => componentState(status, c));
       if (states.includes("failing")) return "Not healthy";
@@ -49,7 +49,16 @@ export function ProjectTools({ clusterId, clusterName, nav, openInNewTab }: {
   nav: MonitoringPageProps["nav"];
   openInNewTab: MonitoringPageProps["openInNewTab"];
 }) {
-  const query = useQuery({ queryKey: installKeys.status(clusterId), queryFn: () => installStatus(clusterId), retry: false });
+  // Read again every few seconds while a job runs, so "Installing…" ends when the job does.
+  const query = useQuery({
+    queryKey: installKeys.status(clusterId),
+    queryFn: () => installStatus(clusterId),
+    retry: false,
+    refetchInterval: (q) => {
+      const data = q.state.status === "error" ? undefined : q.state.data;
+      return data && isBusy(data) ? POLL_RUNNING_MS : false;
+    },
+  });
   const status = query.isError ? undefined : query.data;
   const openTools = (e: MouseEvent<HTMLButtonElement>) => {
     const target = { page: "tools", clusterId } as const;
@@ -63,7 +72,7 @@ export function ProjectTools({ clusterId, clusterName, nav, openInNewTab }: {
       {query.isPending && <p className={s.muted} role="status">Reading the tools in {clusterName}…</p>}
       {query.isError && (
         <div className={s.toolsLine}>
-          <p className={s.toolsText}>Couldn&apos;t read the monitoring tools: {failure(query.error, "try again")}</p>
+          <p className={s.toolsText}>Couldn&apos;t read the monitoring tools: {failure(query.error, "press Try again")}</p>
           <button type="button" className={s.quiet} onClick={() => void query.refetch()}>Try again</button>
         </div>
       )}
@@ -76,7 +85,7 @@ export function ProjectTools({ clusterId, clusterName, nav, openInNewTab }: {
       {status && !status.problem && status.install === null && (
         <div className={s.toolsLine}>
           <p className={s.toolsText}>OmniKrux hasn&apos;t installed anything in {clusterName}.</p>
-          <button type="button" className={s.secondary} onClick={openTools}>Install what&apos;s missing…</button>
+          <button type="button" className={s.secondary} onClick={openTools}>Open Monitoring tools</button>
         </div>
       )}
       {status && !status.problem && status.install !== null && (

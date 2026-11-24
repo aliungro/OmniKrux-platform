@@ -451,7 +451,7 @@ Into a Kubernetes cluster, in one namespace (`monitoring` unless you change it),
 ### Where to start an install
 
 - **Setup, step 2.** **Install Prometheus…** or **Install Loki…** on a missing tool. After **Create project and review the install**, the review opens, and what gets installed is added to the new project.
-- **A Kubernetes project.** Its page has a **Monitoring tools** section that says what OmniKrux installed in the project's cluster ("Installed by OmniKrux in monitoring · Running", or "Something is missing", "Not healthy", or "OmniKrux hasn't installed anything in …"). **Install what's missing…** or **Open Monitoring tools** opens the cluster's Monitoring tools page.
+- **A Kubernetes project.** Its page has a **Monitoring tools** section that says what OmniKrux installed in the project's cluster ("Installed by OmniKrux in monitoring · Running", or "Something is missing", "Not healthy", or "OmniKrux hasn't installed anything in …"), and reads it again every few seconds while an install or uninstall runs. **Open Monitoring tools** opens the cluster's Monitoring tools page.
 - **Monitoring tools.** The page of one cluster, **Monitoring tools in** followed by the cluster's name. Open it from a project, from **Monitoring tools** beside a source marked **Installed by OmniKrux** on the Sources page, or from that mark in setup; `Ctrl` click (`⌘` click on macOS) opens it in a new Monitoring tab. With nothing installed, tick **Metrics**, **Logs** or both and press **Review install…**.
 
 When the Helm and charts OmniKrux installs with aren't there (OmniKrux run outside its image without them), each of these says so instead ("Installing isn't available here: …") with what to do.
@@ -482,7 +482,7 @@ The review is **blocked**, in words, when installing would clash with what is th
 
 ### Progress, cancelling and failures
 
-After you confirm, the install runs on its own, step by step: "Creating the namespace monitoring…", "Updating the Prometheus Operator's resource definitions…", "Installing omnikrux-metrics with Helm…" (and the other releases), "Waiting for Prometheus to be ready…" with what holds each tool up (for example a Pod still pulling its image), then "Connecting the sources…". You can close the dialog: the install carries on, and the Monitoring tools page follows it.
+After you confirm, the install runs on its own, step by step: "Creating the namespace monitoring…", "Updating the Prometheus Operator's resource definitions…", "Installing omnikrux-metrics with Helm…" (and the other releases), "Waiting for Prometheus to be ready…" with what holds each tool up (for example a Pod still pulling its image), then "Connecting the sources…". You can close the dialog: the install carries on, and the Monitoring tools page follows it (there, **Hide progress** hides it). Wherever you are in Monitoring when it ends, a status line says how it ended, and the sources, projects and dashboards are read again.
 
 - **Cancel install** asks "Stop the install? What Helm already applied stays." **Stop install** stops Helm, which can take up to about 20 seconds ("Stopping the install…"). The message then names the step it stopped in and says that what was applied stays as Helm left it.
 - A failure says what failed, in Helm's or the cluster's words, and what stays. OmniKrux never rolls anything back and never deletes what a failed install made. A tool that isn't ready after 10 minutes stops the wait, with the reason.
@@ -498,7 +498,7 @@ Once everything is ready, OmniKrux adds each installed tool as a source (Prometh
 
 The page reads Helm's own records and the cluster each time, and says when ("Read …", with **Refresh**). If the read fails it says so and shows nothing old as current. It shows:
 
-- the state ("Installed by OmniKrux in monitoring", "Installing…", "The last install failed", "The last install was cancelled" or "Uninstalling…") and the last message;
+- the state ("Installed by OmniKrux in monitoring", "Installing…", "The last change failed", "The last change was cancelled" or "Uninstalling…") and the last message;
 - **Metrics** and **Logs**, each **Installed**, **Not installed**, **Not healthy** or **Working**;
 - each Helm release with its chart, its status in Helm and its revision, and its workloads with their ready and wanted Pods (and why one isn't ready);
 - the **Sources** it connected, and the state of the **Contact points** (see below);
@@ -510,7 +510,7 @@ When a newer OmniKrux ships newer charts than the ones installed, the page offer
 
 ### Contact points and OmniKrux's own Alertmanager
 
-When OmniKrux installed the tools, their Alertmanager is OmniKrux's own, so a rule that runs in that Prometheus can notify OmniKrux's [contact points](#contact-points). The rule form then shows **Notify** with the contact points ("These contact points are sent from the Alertmanager OmniKrux installed; saving asks you to review that change."). A rule whose projects use both kinds of tools shows both the contact points and a **Channel** for the Prometheus you run.
+When OmniKrux installed the tools, their Alertmanager is OmniKrux's own, so a rule that runs in that Prometheus can notify OmniKrux's [contact points](#contact-points). The rule form, and the Alert tab of a dashboard panel, then show **Notify** with the contact points ("These contact points are sent from the Alertmanager OmniKrux installed; saving asks you to review that change."). A rule whose projects use both kinds of tools shows both the contact points and a **Channel** for the Prometheus you run.
 
 - Saving such a rule, or changing or deleting a contact point it uses, opens a review of the contact points in that Alertmanager, for example "Send alerts to 2 contact points from monitoring's Alertmanager" (or an update, or a removal when nothing is left to send). It names each contact point and the rules that use it, and says that the secret values are held in a Secret and never shown. Nothing changes in the cluster until you confirm.
 - The Monitoring tools page shows **Contact points**: "Up to date · 2 contact points for 3 rules", or "Changed since the last review" with **Review** (for example after you cancelled a review), or "Couldn't be updated: …" with **Try again**.
@@ -528,7 +528,7 @@ When OmniKrux installed the tools, their Alertmanager is OmniKrux's own, so a ru
 - what happens to the stored data: kept unless you tick **Also delete the stored data (metrics, logs and alerts history on the volumes)**, which can't be undone;
 - that the namespace and the `monitoring.coreos.com` resource definitions stay, so objects other tools made aren't touched.
 
-The review is blocked while alert rules still run in these tools: "Move or remove the alert rules that run in these tools first: …". Each of those rules has its own review. On a production cluster you type the namespace name. Cancelling an uninstall leaves what was already removed removed; **Uninstall monitoring tools…** again finishes it.
+The review is blocked while alert rules still run in these tools: "Move or remove the alert rules that run in these tools first: …". Each of those rules has its own review. On a production cluster you type the namespace name. Cancelling an uninstall leaves what was already removed removed; **Uninstall monitoring tools…** again finishes it. After an uninstall that failed or was cancelled, the page offers **Uninstall monitoring tools…** first, before **Install again…**.
 
 **Deleting a project never uninstalls anything.** The project's delete review says "Monitoring tools OmniKrux installed in … stay. Uninstall them from Monitoring tools."
 

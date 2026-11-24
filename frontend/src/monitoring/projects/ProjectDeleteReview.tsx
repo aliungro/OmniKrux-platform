@@ -30,7 +30,11 @@ export function ProjectDeleteReview({ review, busy, error, clusterName, restoreF
     const kept = review.sources_kept.map((x) => `${x.name} (used by ${x.used_by.join(", ")})`).join("; ");
     lines.push(`Sources it created that other projects still use stay: ${kept}.`);
   }
-  if (review.sources_unlinked.length > 0) lines.push(`Other sources stay as they are and are only unlinked: ${names(review.sources_unlinked)}.`);
+  if (review.sources_unlinked.length > 0) {
+    // "Other" only beside a line about the sources it created.
+    const others = review.sources_removed.length > 0 || review.sources_kept.length > 0;
+    lines.push(`${others ? "Other sources stay" : "These sources stay"} as they are and are only unlinked: ${names(review.sources_unlinked)}.`);
+  }
   if (review.groups_left.length > 0) lines.push(`It leaves these groups; the groups stay: ${names(review.groups_left)}.`);
   const rules = (review.alert_rules?.length ?? 0) > 0 || waitsForClusterRules(review);
   if (first.length === 0 && lines.length === 0 && !rules) lines.push("Only the project itself is removed.");

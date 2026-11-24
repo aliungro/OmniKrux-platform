@@ -2,8 +2,8 @@
 // (namespace, how long data is kept, where) and opens into the fields. **Update review** (or Enter
 // in a field) plans the install again with them; the dialog then shows the new plan. Each problem
 // the plan has is said under its field, and a plan with problems opens the panel with the keyboard
-// on the first of them. Edits not reviewed yet are kept (also when the review fails) and said so,
-// so the one line never reads as including them.
+// on the first of them; a field's problem goes as soon as that field is edited. Edits not reviewed
+// yet are kept (also when the review fails) and said so, so the one line never reads as including them.
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import type { FactsOut, InstallSettingsIn, InstallSettingsOut, ResourcesOut, SettingProblemOut } from "./api";
@@ -106,6 +106,8 @@ export function InstallSettingsPanel({
   const [updating, setUpdating] = useState(false);
   /** A problem found here before planning (days that aren't a number). */
   const [local, setLocal] = useState<SettingProblemOut | null>(null);
+  /** Fields edited since the plan's problems came: their problems aren't shown any more. */
+  const [edited, setEdited] = useState<ReadonlySet<string>>(() => new Set());
   const alive = useRef(true);
   /** Where the keyboard was when an update started: it goes back there after. */
   const restore = useRef<HTMLElement | null>(null);
@@ -124,6 +126,7 @@ export function InstallSettingsPanel({
   if (seen.settings !== settings || seen.problems !== problems) {
     setSeen({ settings, problems });
     if (seen.settings !== settings && !sameDraft(toDraft(seen.settings), toDraft(settings))) setDraft(toDraft(settings));
+    if (seen.problems !== problems) setEdited(new Set());
     if (problems.length > 0) {
       setOpen(true);
       toProblem.current = true;
@@ -138,7 +141,11 @@ export function InstallSettingsPanel({
     onDraft?.(unsent);
     // `unsentKey` stands for `unsent`, a new object each render.
   }, [unsentKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const shownProblems = local ? [local] : problems;
+  // The plan's problems, less those of fields edited since, with the days problem found here.
+  const shownProblems = [
+    ...(local ? [local] : []),
+    ...problems.filter((p) => !edited.has(p.field) && !(local && p.field === local.field)),
+  ];
   const problemOf = (name: string) => shownProblems.find((p) => p.field === name);
   const strays = shownProblems.filter((p) => !FIELD_ORDER.includes(p.field));
   const noStorageClass = facts.default_storage_class === null;
@@ -197,9 +204,11 @@ export function InstallSettingsPanel({
     }
   };
 
-  const edit = (change: (d: Draft) => Draft) => {
+  /** An edit of the field `name`: its problem goes (the plan's, and the days one found here). */
+  const edit = (name: string, change: (d: Draft) => Draft) => {
     setDraft((d) => change(d));
-    if (local) setLocal(null);
+    if (local?.field === name) setLocal(null);
+    if (problems.some((p) => p.field === name) && !edited.has(name)) setEdited((now) => new Set(now).add(name));
   };
 
   const described = (name: string) => (problemOf(name) ? `${fieldId(name)}-p` : undefined);
@@ -250,7 +259,7 @@ export function InstallSettingsPanel({
         <div className={s.rows}>
           <label className={s.label} htmlFor={fieldId("namespace")}>Namespace</label>
           <div className={s.cell}>
-            {textField("namespace", draft.namespace, (v) => edit((d) => ({ ...d, namespace: v })), { mono: true })}
+            {textField("namespace", draft.namespace, (v) => edit("namespace", (d) => ({ ...d, namespace: v })), { mono: true })}
             {problemLine("namespace")}
           </div>
 
@@ -265,7 +274,7 @@ export function InstallSettingsPanel({
                 step={1}
                 className={`${s.input} ${s.number}`}
                 value={draft.days}
-                onChange={(e) => edit((d) => ({ ...d, days: e.target.value }))}
+                onChange={(e) => edit("retention_days", (d) => ({ ...d, days: e.target.value }))}
                 onKeyDown={onFieldKey}
                 aria-invalid={problemOf("retention_days") ? true : undefined}
                 aria-describedby={described("retention_days")}
@@ -282,7 +291,7 @@ export function InstallSettingsPanel({
             <input
               type="checkbox"
               checked={draft.persist}
-              onChange={(e) => edit((d) => ({ ...d, persist: e.target.checked }))}
+              onChange={(e) => edit("persist", (d) => ({ ...d, persist: e.target.checked }))}
               disabled={disabled || (noStorageClass && !draft.persist)}
               title={noStorageClass ? "This cluster has no default storage class." : undefined}
             />
@@ -293,7 +302,7 @@ export function InstallSettingsPanel({
               {STORAGE.map(([key, label]) => (
                 <div key={key} className={s.size}>
                   <label className={s.sizeLabel} htmlFor={fieldId(key)}>{label}</label>
-                  {textField(key, draft.storage[key], (v) => edit((d) => ({ ...d, storage: { ...d.storage, [key]: v } })), { mono: true })}
+                  {textField(key, draft.storage[key], (v) => edit(key, (d) => ({ ...d, storage: { ...d.storage, [key]: v } })), { mono: true })}
                   {problemLine(key)}
                 </div>
               ))}
@@ -319,7 +328,7 @@ export function InstallSettingsPanel({
                   const name = `${c}.${key}`;
                   return (
                     <td key={key}>
-                      {textField(name, draft.resources[c][key], (v) => edit((d) => ({
+                      {textField(name, draft.resources[c][key], (v) => edit(name, (d) => ({
                         ...d, resources: { ...d.resources, [c]: { ...d.resources[c], [key]: v } },
                       })), { mono: true, labelledBy: `${id}-r-${c} ${id}-c-${key}` })}
                       {problemLine(name)}

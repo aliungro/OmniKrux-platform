@@ -1,6 +1,6 @@
 // What the Monitoring tools page decides from a cluster's status: how each component stands, and
 // whether an install can start. Pure, so the page only draws it.
-import type { Component, InstallStatusOut, ReleaseOut } from "./api";
+import type { Component, InstallOut, InstallStatusOut, ReleaseOut } from "./api";
 
 export type ComponentState = "missing" | "installed" | "failing" | "busy";
 
@@ -14,6 +14,21 @@ export const COMPONENTS: readonly Component[] = ["metrics", "logs"];
 
 /** Helm's word for a release it has no record of (the backend's `RELEASE_MISSING`). */
 export const RELEASE_MISSING = "missing";
+
+/** How often a cluster's tools are read while an install or uninstall runs there. */
+export const POLL_RUNNING_MS = 3000;
+
+/**
+ * Whether a failed or cancelled record was left by an uninstall (its message is the uninstall's
+ * own: every one of them ends with "uninstall again", or says OmniKrux stopped during the uninstall).
+ * The install's own messages offer "install again", never "uninstall again".
+ */
+export function endedUninstall(install: InstallOut): boolean {
+  if (install.state !== "failed" && install.state !== "cancelled") return false;
+  return UNINSTALL_WORDS.test(install.message ?? "");
+}
+
+const UNINSTALL_WORDS = new RegExp(String.raw`\buninstall again\b|\bduring the uninstall\b`, "i");
 
 /** Whether a job is running on the cluster (an install or an uninstall): the page asks more often. */
 export function isBusy(status: InstallStatusOut): boolean {

@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { failure, getJson, HttpError } from "../../api/http";
 import type { Job } from "../../api/types";
 import { cancelJob, JOB_POLL_MS, type ActionOutcome } from "../../features/actions/useActions";
+import { invalidateMonitoring } from "../api/hooks";
 import s from "./InstallProgress.module.css";
 
 /** How long a just-started job may be unknown to the jobs endpoint before that means it's lost. */
@@ -54,15 +55,18 @@ export function InstallProgress({
   onOutcome,
   onState,
   takeFocus = true,
+  inline = false,
 }: {
   jobId: string;
   action: "install" | "uninstall";
   onClose(): void;
   onOutcome(o: ActionOutcome | null): void;
-  /** Hears where the job stands (for whoever opened the review: how to say it ended). */
-  onState?(state: InstallJobState): void;
+  /** Hears where the job stands (for whoever opened the review: how to say it ended, which job to follow). */
+  onState?(state: InstallJobState, jobId: string): void;
   /** Whether Close takes the keyboard when this appears (a dialog: yes; a page asks for it only after the user's own review). */
   takeFocus?: boolean;
+  /** Shown on the Monitoring tools page itself: no "follow it there" note, and Close reads "Hide progress". */
+  inline?: boolean;
 }) {
   const id = useId();
   const copy = COPY[action];
@@ -129,19 +133,19 @@ export function InstallProgress({
     : known === undefined || known.state === "running" ? (stopping ? "stopping" : "running")
     : known.state;
 
-  useEffect(() => { onState?.(state); }, [state, onState]);
+  useEffect(() => { onState?.(state, jobId); }, [state, jobId, onState]);
   useEffect(() => {
     if (lostMessage !== null) onOutcome({ message: lostMessage, tone: "warn" });
     else if (known && known.state !== "running") onOutcome({ message: known.message, tone: known.state === "succeeded" ? "ok" : "warn" });
   }, [lostMessage, known, onOutcome]);
 
-  // Once it has ended: the tools page and the audit log have news.
+  // Once it has ended: all of Monitoring (sources, projects, the tree, the tools) and the audit log
+  // have news.
   const endedOnce = useRef(false);
   useEffect(() => {
     if (running || endedOnce.current) return;
     endedOnce.current = true;
-    void queryClient.invalidateQueries({ queryKey: ["monitoring", "install"] });
-    void queryClient.invalidateQueries({ queryKey: ["audit"] });
+    void invalidateMonitoring(queryClient);
   }, [running, queryClient]);
 
   // After every change: the question takes the keyboard when it opens and hands it back to
@@ -263,14 +267,14 @@ export function InstallProgress({
         </div>
       )}
       <div className={s.actions}>
-        {running && <span className={s.note}>{copy.carriesOn}</span>}
+        {running && !inline && <span className={s.note}>{copy.carriesOn}</span>}
         {canCancel && !asking && !stopping && (
           <button ref={cancelRef} type="button" className={`${s.btn} ${s.quietDanger}`} onClick={ask}>
             {copy.cancel}
           </button>
         )}
         <button ref={closeRef} type="button" className={s.btn} onClick={onClose}>
-          Close
+          {inline ? "Hide progress" : "Close"}
         </button>
       </div>
     </div>

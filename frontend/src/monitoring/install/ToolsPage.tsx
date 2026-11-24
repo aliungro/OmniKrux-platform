@@ -14,11 +14,11 @@ import type { MonitoringPageProps } from "../MonitoringApp";
 import { keyboardIsFree } from "../pages/Gone";
 import { installStatus, type Component, type InstallOut, type InstallStatusOut, type ReleaseOut, type ToolType } from "./api";
 import { InstallProgress } from "./InstallProgress";
-import { componentState, COMPONENTS, isBusy, readAt, RELEASE_MISSING, type ComponentState } from "./toolsModel";
+import { componentState, COMPONENTS, endedUninstall, isBusy, POLL_RUNNING_MS, readAt, RELEASE_MISSING, type ComponentState } from "./toolsModel";
 import { useInstallReviews } from "./useInstallReviews";
 import s from "./ToolsPage.module.css";
 
-export const POLL_RUNNING_MS = 3000;
+export { POLL_RUNNING_MS };
 export const POLL_IDLE_MS = 30_000;
 /** A read this young is shown as it is when the page opens again. */
 const STALE_MS = 10_000;
@@ -55,13 +55,18 @@ const WHAT: Record<Component, { what: string; versions(charts: Charts): string }
 };
 
 const unavailableWords = (message: string | null) => `Installing isn't available here: ${message ?? "OmniKrux can't install tools in this cluster."}`;
+/** The title of a disabled uninstall: the tools' own words, without "Installing". */
+const uninstallUnavailableWords = (message: string | null) =>
+  `Uninstalling isn't available here: ${message ?? "OmniKrux can't change the tools in this cluster."}`;
+/** "1 contact point", "2 contact points". */
+const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 function headline(install: InstallOut): string {
   switch (install.state) {
     case "installed": return `Installed by OmniKrux in ${install.namespace}`;
     case "installing": return "Installing…";
-    case "failed": return "The last install failed";
-    case "cancelled": return "The last install was cancelled";
+    case "failed": return "The last change failed";
+    case "cancelled": return "The last change was cancelled";
     case "uninstalling": return "Uninstalling…";
   }
 }
@@ -112,11 +117,21 @@ interface Gate {
   idle: boolean;
   /** The words for a disabled install button. */
   title: string | undefined;
+  /** The words for a disabled uninstall button. */
+  uninstallTitle: string | undefined;
 }
 
-function Action({ label, gate, kind, onClick }: { label: string; gate: Gate; kind: "primary" | "secondary" | "danger"; onClick: Click }) {
+function Action({ label, gate, kind, lead, onClick }: {
+  label: string;
+  gate: Gate;
+  kind: "primary" | "secondary" | "danger";
+  /** The next step the page suggests (a danger button drawn filled). */
+  lead?: boolean;
+  onClick: Click;
+}) {
+  const title = !gate.available ? (kind === "danger" ? gate.uninstallTitle : gate.title) : undefined;
   return (
-    <button type="button" className={s[kind]} disabled={!gate.available || !gate.idle} title={!gate.available ? gate.title : undefined} onClick={onClick}>
+    <button type="button" className={s[kind]} data-lead={lead ? "" : undefined} disabled={!gate.available || !gate.idle} title={title} onClick={onClick}>
       {label}
     </button>
   );
@@ -169,7 +184,12 @@ export default function ToolsPage({ view, nav, openInNewTab }: MonitoringPagePro
 
   const install = status?.install ?? null;
   const unavailable = status && !status.tools.available ? unavailableWords(status.tools.message) : null;
-  const gate: Gate = { available: status?.tools.available === true, idle: status !== undefined && !isBusy(status), title: unavailable ?? undefined };
+  const gate: Gate = {
+    available: status?.tools.available === true,
+    idle: status !== undefined && !isBusy(status),
+    title: unavailable ?? undefined,
+    uninstallTitle: status && !status.tools.available ? uninstallUnavailableWords(status.tools.message) : undefined,
+  };
 
   /** Opens a review from a button, then reads the cluster again whatever came of it. */
   const review = (open: (from: HTMLElement) => Promise<unknown>): Click => (e) => {
@@ -308,6 +328,8 @@ function Installed({ status, install, others, gate, closed, takeFocus, onClosePr
   const states = COMPONENTS.map((c) => [c, componentState(status, c)] as const);
   const missing = install.state === "installed" && states.some(([, st]) => st === "missing");
   const failedOrCancelled = install.state === "failed" || install.state === "cancelled";
+  // An uninstall that failed or was cancelled is finished by uninstalling again, not by installing.
+  const uninstallLeft = endedUninstall(install);
   const running = install.state === "installing" || install.state === "uninstalling";
   const connected = (Object.keys(install.sources) as ToolType[]).filter((t) => install.sources[t] !== null);
   const contacts = install.contacts;
@@ -321,7 +343,7 @@ function Installed({ status, install, others, gate, closed, takeFocus, onClosePr
       {running && install.job_id && !closed && (
         <div className={s.progress}>
           <InstallProgress key={install.job_id} jobId={install.job_id} action={install.state === "uninstalling" ? "uninstall" : "install"}
-            onClose={onCloseProgress} onOutcome={onOutcome} takeFocus={takeFocus} />
+            onClose={onCloseProgress} onOutcome={onOutcome} takeFocus={takeFocus} inline />
         </div>
       )}
 
@@ -356,7 +378,7 @@ function Installed({ status, install, others, gate, closed, takeFocus, onClosePr
         <span className={s.rowLabel}>Contact points</span>
         <span className={s.contactsText} data-state={contacts.state}>
           {contacts.state === "none" && "No alert rules here send to contact points yet."}
-          {contacts.state === "in_sync" && `Up to date · ${contacts.contact_points} contact points for ${contacts.rules} rules`}
+          {contacts.state === "in_sync" && `Up to date · ${counted(contacts.contact_points, "contact point", "contact points")} for ${counted(contacts.rules, "rule", "rules")}`}
           {contacts.state === "needs_review" && "Changed since the last review"}
           {contacts.state === "failed" && `Couldn't be updated: ${contacts.message ?? "no reason was given."}`}
         </span>
@@ -368,8 +390,9 @@ function Installed({ status, install, others, gate, closed, takeFocus, onClosePr
         <div className={s.actions}>
           {missing && <Action label="Install what's missing…" gate={gate} kind="primary" onClick={onMissing} />}
           {install.update_available && <Action label="Update to the shipped versions…" gate={gate} kind={missing ? "secondary" : "primary"} onClick={onAgain} />}
-          {failedOrCancelled && <Action label="Install again…" gate={gate} kind="primary" onClick={onAgain} />}
-          <Action label="Uninstall monitoring tools…" gate={gate} kind="danger" onClick={onUninstall} />
+          {uninstallLeft && <Action label="Uninstall monitoring tools…" gate={gate} kind="danger" lead onClick={onUninstall} />}
+          {failedOrCancelled && <Action label="Install again…" gate={gate} kind={uninstallLeft ? "secondary" : "primary"} onClick={onAgain} />}
+          {!uninstallLeft && <Action label="Uninstall monitoring tools…" gate={gate} kind="danger" onClick={onUninstall} />}
         </div>
       )}
       {others}

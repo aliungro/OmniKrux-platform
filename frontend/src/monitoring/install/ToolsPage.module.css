@@ -400,6 +400,11 @@
   color: var(--bad);
 }
 
+.danger[data-lead] {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+
 .quiet {
   padding: 3px 9px;
   border: 1px solid transparent;

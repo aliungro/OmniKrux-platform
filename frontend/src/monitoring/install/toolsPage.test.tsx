@@ -202,7 +202,7 @@ describe("an install", () => {
     const { fake } = renderPage({
       seed: { install: { ...AVAILABLE, status: { c1: status({ install: record({ state: "failed", message: "Helm stopped at Prometheus." }) }) }, plans: [planned()] } },
     });
-    expect(await screen.findByText("The last install failed")).toBeTruthy();
+    expect(await screen.findByText("The last change failed")).toBeTruthy();
     expect(screen.getByText("Helm stopped at Prometheus.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Install what's missing…" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Install again…" }));
@@ -212,8 +212,39 @@ describe("an install", () => {
 
   it("a cancelled install says so", async () => {
     renderPage({ seed: { install: { ...AVAILABLE, status: { c1: status({ install: record({ state: "cancelled" }) }) } } } });
-    expect(await screen.findByText("The last install was cancelled")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Install again…" })).toBeTruthy();
+    expect(await screen.findByText("The last change was cancelled")).toBeTruthy();
+    const again = screen.getByRole("button", { name: "Install again…" });
+    expect(again.className).toMatch(/primary/);
+    // The install's own ending: Uninstall stays last and quiet.
+    const buttons = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(buttons.indexOf("Install again…")).toBeLessThan(buttons.indexOf("Uninstall monitoring tools…"));
+  });
+
+  it("a cancelled or failed uninstall leads with Uninstall, not Install again", async () => {
+    const message = "Uninstall cancelled while uninstall omnikrux-loki. What was already removed stays removed. Uninstall again to finish.";
+    renderPage({ seed: { install: { ...AVAILABLE, status: { c1: status({ install: record({ state: "cancelled", message }) }) } } } });
+    expect(await screen.findByText("The last change was cancelled")).toBeTruthy();
+    expect(screen.getByText(message)).toBeTruthy();
+    const uninstall = screen.getByRole("button", { name: "Uninstall monitoring tools…" });
+    expect(uninstall.hasAttribute("data-lead")).toBe(true);
+    expect(screen.getByRole("button", { name: "Install again…" }).className).toMatch(/secondary/);
+    const buttons = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(buttons.indexOf("Uninstall monitoring tools…")).toBeLessThan(buttons.indexOf("Install again…"));
+    cleanup();
+
+    renderPage({ seed: { install: { ...AVAILABLE, status: { c1: status({ install: record({
+      state: "failed", message: "OmniKrux stopped during the uninstall. What Helm applied stays as Helm left it. Open Monitoring tools to see what's there, then run it again.",
+    }) }) } } } });
+    expect(await screen.findByText("The last change failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Uninstall monitoring tools…" }).hasAttribute("data-lead")).toBe(true);
+  });
+
+  it("a disabled uninstall says uninstalling isn't available", async () => {
+    const why = "Installing needs Helm, which ships in the OmniKrux image. It wasn't found.";
+    renderPage({ seed: { install: { tools: { ...TOOLS, available: false, message: why }, status: { c1: status({ install: record(), releases: [release()] }) } } } });
+    const uninstall = await screen.findByRole("button", { name: "Uninstall monitoring tools…" }) as HTMLButtonElement;
+    expect(uninstall.disabled).toBe(true);
+    expect(uninstall.title).toBe(`Uninstalling isn't available here: ${why}`);
   });
 
   it("uninstall opens its review, and the stored data is a choice that plans it again", async () => {
@@ -277,6 +308,10 @@ describe("an install", () => {
     expect(await screen.findByText("Installing omnikrux-kps with Helm…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel install" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Uninstall monitoring tools…" })).toBeNull();
+    // On this page itself: no "follow it on Monitoring tools", and Close hides the progress.
+    expect(screen.getByRole("button", { name: "Hide progress" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    expect(screen.queryByText(/carries on if you close this/)).toBeNull();
     noBody();
   });
 });
@@ -320,6 +355,11 @@ describe("contact points", () => {
     await user.click(screen.getByRole("button", { name: "Review" }));
     await screen.findByRole("dialog");
     expect(fake.requests.some((r) => r.url === "/api/monitoring/install/clusters/c1/contacts/sync")).toBe(true);
+  });
+
+  it("one contact point and one rule read in the singular", async () => {
+    renderPage({ seed: withContacts({ state: "in_sync", contact_points: 1, rules: 1 }) });
+    expect(await screen.findByText("Up to date · 1 contact point for 1 rule")).toBeTruthy();
   });
 
   it("failed says why and offers Try again", async () => {

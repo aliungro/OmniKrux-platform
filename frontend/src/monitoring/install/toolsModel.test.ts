@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InstallStatusOut } from "./api";
-import { canInstall, componentState, readAt } from "./toolsModel";
+import { canInstall, componentState, endedUninstall, readAt } from "./toolsModel";
 import { lokiRelease, record, release, status, TOOLS } from "./toolsFixtures";
 
 const full = (over: Partial<Omit<InstallStatusOut, "tools">> = {}): InstallStatusOut => ({ ...status(over), tools: TOOLS });
@@ -47,5 +47,32 @@ describe("readAt", () => {
     expect(readAt("2026-11-24T10:04:12")).toBe("10:04:12");
     expect(readAt("2026-11-24T09:05:07")).toBe("09:05:07");
     expect(readAt("nope")).toBeNull();
+  });
+});
+
+describe("endedUninstall", () => {
+  // The backend's endings (install/messages.py and store.py), filled in.
+  const uninstallEndings = [
+    "Uninstall cancelled while uninstall omnikrux-loki. What was already removed stays removed. Uninstall again to finish.",
+    "Helm said no. What Helm removed stays removed. Check monitoring, then uninstall again.",
+    "Loki was still there after 5 minutes: a finalizer. What was already removed stays removed. Check monitoring, then uninstall again.",
+    "The source Loki couldn't be removed. What was already removed stays removed. Uninstall again to finish.",
+    "OmniKrux stopped during the uninstall. What Helm applied stays as Helm left it. Open Monitoring tools to see what's there, then run it again.",
+  ];
+  const installEndings = [
+    "Install cancelled while install omnikrux-loki. What was already applied stays as Helm left it. Install again to finish, or uninstall the tools.",
+    "Helm said no. What Helm applied stays as Helm left it (failed). Check the Pods in monitoring, then install again, or uninstall the tools.",
+    "OmniKrux stopped during the install. What Helm applied stays as Helm left it. Open Monitoring tools to see what's there, then run it again.",
+    "Helm's record of omnikrux-metrics says an earlier change never finished (pending-install), so Helm won't change it again. Uninstall the tools, then install them again.",
+  ];
+
+  it("is true only for an uninstall's own failed or cancelled ending", () => {
+    for (const message of uninstallEndings) {
+      expect(endedUninstall(record({ state: "failed", message }))).toBe(true);
+      expect(endedUninstall(record({ state: "cancelled", message }))).toBe(true);
+    }
+    for (const message of installEndings) expect(endedUninstall(record({ state: "failed", message }))).toBe(false);
+    expect(endedUninstall(record({ state: "installed", message: uninstallEndings[0] }))).toBe(false);
+    expect(endedUninstall(record({ state: "failed", message: null }))).toBe(false);
   });
 });

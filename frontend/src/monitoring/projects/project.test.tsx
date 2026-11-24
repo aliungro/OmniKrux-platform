@@ -269,6 +269,17 @@ describe("Project delete review", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete project…" }));
   });
 
+  it("a project that made no source says its sources stay, not other sources", async () => {
+    const user = userEvent.setup();
+    const plain = source("s3", "Plain");
+    installFakeMonitoringApi({ sources: [plain], projects: [project("p1", "Dev", [link(plain)])] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("These sources stay as they are and are only unlinked: Plain.")).toBeTruthy();
+    expect(within(dialog).queryByText(/Other sources/)).toBeNull();
+  });
+
   const clusterRule = (): RuleOut => {
     const target: TargetOut = {
       id: "t1", project_id: "p1", project_name: "Dev", engine: "tool", tool: "prometheus_rule", where: "kind-dev", engine_note: null,
@@ -633,7 +644,7 @@ describe("Project page and the cluster's monitoring tools", () => {
     const { current } = open("p1");
     let section = await toolsSection();
     expect(await tools(section).findByText("OmniKrux hasn't installed anything in kind-dev.")).toBeTruthy();
-    await user.click(tools(section).getByRole("button", { name: "Install what's missing…" }));
+    await user.click(tools(section).getByRole("button", { name: "Open Monitoring tools" }));
     await waitFor(() => expect(current().tabs[0].view).toEqual({ page: "tools", clusterId: "c1" }));
     cleanup();
 
@@ -676,6 +687,47 @@ describe("Project page and the cluster's monitoring tools", () => {
     open("p3");
     await screen.findByRole("heading", { name: "Sources" });
     expect(screen.queryByRole("heading", { name: "Monitoring tools" })).toBeNull();
+  });
+
+  it("an install running in the cluster is read again until it ends", async () => {
+    const api = installFakeMonitoringApi({
+      projects: [kube("p1", "Dev")],
+      install: { tools: TOOLS, status: { c1: status({ cluster_name: "kind-dev", install: record({ state: "installing", job_id: "j1" }) }) } },
+    }, withCluster);
+    open("p1");
+    const section = await toolsSection();
+    expect(await tools(section).findByText("Installed by OmniKrux in monitoring · Installing…")).toBeTruthy();
+    api.state.install.status.c1 = status({ cluster_name: "kind-dev", install: record(), releases: [release()] });
+    expect(await tools(section).findByText("Installed by OmniKrux in monitoring · Running", {}, { timeout: 5000 })).toBeTruthy();
+  }, 10000);
+
+  it("a failed or cancelled change reads in neutral words", async () => {
+    installFakeMonitoringApi({
+      projects: [kube("p1", "Dev")],
+      install: { tools: TOOLS, status: { c1: status({ cluster_name: "kind-dev", install: record({
+        state: "cancelled", message: "Uninstall cancelled while uninstall omnikrux-loki. What was already removed stays removed. Uninstall again to finish.",
+      }) }) } },
+    }, withCluster);
+    open("p1");
+    expect(await tools(await toolsSection()).findByText("Installed by OmniKrux in monitoring · The last change was cancelled")).toBeTruthy();
+    cleanup();
+    installFakeMonitoringApi({
+      projects: [kube("p1", "Dev")],
+      install: { tools: TOOLS, status: { c1: status({ cluster_name: "kind-dev", install: record({ state: "failed" }) }) } },
+    }, withCluster);
+    open("p1");
+    expect(await tools(await toolsSection()).findByText("Installed by OmniKrux in monitoring · The last change failed")).toBeTruthy();
+  });
+
+  it("a cluster that can't be reached says what to do once", async () => {
+    installFakeMonitoringApi({ projects: [kube("p1", "Dev")] }, withCluster);
+    // The install routes don't answer at all (the server is down).
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      String(url).startsWith("/api/monitoring/install/") ? Promise.reject(new TypeError("Failed to fetch")) : inner(url, init));
+    open("p1");
+    const line = await tools(await toolsSection()).findByText(/^Couldn't read the monitoring tools: /);
+    expect(line.textContent).toBe("Couldn't read the monitoring tools: Can't reach the console's server. Check that it's running, then press Try again.");
   });
 
   it("project delete says the tools stay", async () => {
