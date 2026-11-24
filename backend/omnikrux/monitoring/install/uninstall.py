@@ -97,6 +97,9 @@ OPERATOR_RESOURCES = (
 )
 OPERATOR_RESOURCE_PATH = "/apis/monitoring.coreos.com/v1/namespaces/{namespace}/{plural}/{name}"
 INSTANCE_LABEL = "app.kubernetes.io/instance"
+# The TLS Secret the metrics chart's admission-webhook hook Job makes (`--secret-name`): not a
+# release object, so `helm uninstall` leaves it; the uninstall removes it by this exact name.
+ADMISSION_SECRET = f"{METRICS_RELEASE}-admission"
 # Helm's words for a release it has no record of (`helm uninstall` of one already removed).
 _RELEASE_NOT_FOUND = re.compile(r"release: not found", re.IGNORECASE)
 
@@ -295,6 +298,8 @@ class UninstallAction:
             messages.SUMMARY_KEEPS_RELEASE.format(release=r, namespace=namespace)
             for r in seen["keep"]
         ]
+        if METRICS_RELEASE in seen["remove"]:
+            summary.append(messages.SUMMARY_REMOVES_ADMISSION.format(name=ADMISSION_SECRET))
         if seen["contacts"]:
             summary.append(messages.SUMMARY_REMOVES_CONTACTS)
         elif "metrics" in seen["components"]:
@@ -702,6 +707,25 @@ async def _cluster_step(
         ) from None
 
 
+async def _delete_by_name(api: ApiClient, path: str) -> None:
+    """Delete the object at `path` as it is now (by its uid, so one made meanwhile is never
+    touched); one that isn't there counts as removed."""
+    obj = await _read(api, path)
+    if obj is not None:
+        await _delete(api, path, str(_meta(obj).get("uid") or ""))
+
+
+async def remove_admission_secret(
+    connections: ClusterConnections, cluster: ClusterRef, cloud: bool, namespace: str
+) -> None:
+    """The metrics chart's admission-webhook Secret, by its exact name."""
+    path = SECRET_PATH.format(namespace=_q(namespace), name=ADMISSION_SECRET)
+    action = messages.DELETE_OBJECT_STEP.format(
+        kind="Secret", name=f"{namespace}/{ADMISSION_SECRET}"
+    )
+    await _cluster_step(connections, cluster, cloud, action, lambda api: _delete_by_name(api, path))
+
+
 async def remove_contact_settings(
     connections: ClusterConnections, cluster: ClusterRef, cloud: bool, namespace: str
 ) -> None:
@@ -940,6 +964,10 @@ async def _steps(
                 interval=readiness.READY_INTERVAL_SECONDS,
                 clock=CLOCK,
             )
+
+    # The Secret the metrics chart's setup job made, once Helm removed the release.
+    if any(spec.release == METRICS_RELEASE for spec in _removed_specs(plan_state)):
+        await remove_admission_secret(connections, cluster, cloud, namespace)
 
     # 2. OmniKrux's contact-point settings in its Alertmanager: always (only objects with its
     # label; missing ones are fine), as a contact-point sync may have written them after the

@@ -161,6 +161,9 @@ SUMMARY_KEEPS_DATA_ONE = (
     'Keeps the stored data (1 volume). Turn on "Also delete the stored data" to remove it.'
 )
 SUMMARY_DELETES_DATA = "Deletes the stored data: {names}. This can't be undone."
+# Not in the plan's copy list: the TLS Secret the metrics chart's setup Job makes for its
+# admission webhook (not a release object, so Helm leaves it).
+SUMMARY_REMOVES_ADMISSION = "Removes the Secret {name} that the metrics chart's setup job made."
 SUMMARY_KEEPS_NAMESPACE = "Keeps the namespace {namespace} and the monitoring.coreos.com resource definitions, so objects other tools made aren't touched."
 BLOCK_RULES_IN_TOOLS = "Move or remove the alert rules that run in these tools first: {names}. Each opens its own review."
 

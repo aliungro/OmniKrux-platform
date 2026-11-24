@@ -522,6 +522,7 @@ When OmniKrux installed the tools, their Alertmanager is OmniKrux's own, so a ru
 **Uninstall monitoring tools…** opens its own review, which opens with the focus on **Cancel**. It says:
 
 - which Helm releases it removes from the cluster (Grafana Alloy, Loki, then the metrics stack, whose Prometheus and Alertmanager go first);
+- that the Secret `omnikrux-metrics-admission`, which the metrics chart's setup job made, goes too;
 - that OmniKrux's contact-point settings are removed from its Alertmanager;
 - which sources go, and which projects lose them;
 - what happens to the stored data: kept unless you tick **Also delete the stored data (metrics, logs and alerts history on the volumes)**, which can't be undone;

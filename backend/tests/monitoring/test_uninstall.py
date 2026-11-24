@@ -38,6 +38,7 @@ CONTACTS = (
     "Removes OmniKrux's contact-point settings from its Alertmanager (AlertmanagerConfig and "
     "Secret omnikrux-contact-points)."
 )
+ADMISSION = "Removes the Secret omnikrux-metrics-admission that the metrics chart's setup job made."
 VOLUMES = {
     "alertmanager-omnikrux-metrics-alertmanager-db-alertmanager-omnikrux-metrics-alertmanager-0": (
         "omnikrux-metrics-alertmanager"
@@ -116,6 +117,7 @@ async def test_uninstall_review_lists_what_goes(env):
             "Removes the Helm releases omnikrux-alloy, omnikrux-loki and omnikrux-metrics from "
             f"{cluster}."
         ),
+        ADMISSION,
         CONTACTS,
         (
             f"Removes the sources {names[0]}, {names[1]} and {names[2]}. These projects lose "
@@ -132,7 +134,7 @@ async def test_uninstall_review_lists_what_goes(env):
 
     deleting = await uninstall_plan(http, installed.cluster_id, delete_data=True)
     pvcs = sorted(VOLUMES)
-    assert deleting["summary"][3] == (
+    assert deleting["summary"][4] == (
         f"Deletes the stored data: {pvcs[0]}, {pvcs[1]} and {pvcs[2]}. This can't be undone."
     )
     # A review writes nothing and runs no Helm.
@@ -620,6 +622,29 @@ async def test_workloads_that_never_stop(env, monkeypatch):
     )
     record = await app.state.monitoring.installs.get(installed.cluster_id)
     assert record.state == "failed"
+
+
+async def test_the_metrics_charts_admission_secret_goes(env):
+    """The kube-prometheus-stack hook Job makes a TLS Secret Helm doesn't own, so `helm uninstall`
+    leaves it: the uninstall removes it by its exact name and uid, after the metrics release."""
+    http, _, installed, fake_api, fake_helm, _ = env
+    key = (NS, "omnikrux-metrics-admission")
+    fake_api.objects["secrets"][key] = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": key[1], "namespace": NS, "uid": "u-admission"},
+        "type": "kubernetes.io/tls",
+        "data": {},
+    }
+    plan = await uninstall_plan(http, installed.cluster_id)
+    assert ADMISSION in plan["summary"]
+    job = await wait_job(http, (await apply(http, plan))["job_id"])
+    assert job["state"] == "succeeded", job
+    path = f"/api/v1/namespaces/{NS}/secrets/omnikrux-metrics-admission"
+    [deleted] = [d for d in fake_api.deletes if d["path"] == path]
+    assert deleted["body"]["preconditions"] == {"uid": "u-admission"}
+    assert key not in fake_api.objects["secrets"]
+    assert [c.args[1] for c in _uninstalls(fake_helm)][-1] == "omnikrux-metrics"
 
 
 async def test_contact_settings_someone_else_made_stay(env):
