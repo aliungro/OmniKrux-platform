@@ -89,12 +89,15 @@ export function InstallSettingsPanel({
   facts,
   busy,
   onUpdate,
+  onDraft,
 }: {
   settings: InstallSettingsOut;
   problems: SettingProblemOut[];
   facts: FactsOut;
   busy: boolean;
   onUpdate(next: InstallSettingsIn): Promise<boolean>;
+  /** Hears the edits not sent yet (null: none, or days that aren't a number), for Review again. */
+  onDraft?(next: InstallSettingsIn | null): void;
 }) {
   const id = useId();
   const fieldId = (name: string) => `${id}-f-${name.replace(".", "-")}`;
@@ -115,11 +118,12 @@ export function InstallSettingsPanel({
     return () => { alive.current = false; };
   }, []);
 
-  // A new plan: the fields show what it was made with, and its problems open the panel.
+  // A new plan: the fields show what it was made with, and its problems open the panel. A plan
+  // made with the same settings (Review again without sendable edits) keeps the edits not sent.
   const [seen, setSeen] = useState({ settings, problems });
   if (seen.settings !== settings || seen.problems !== problems) {
     setSeen({ settings, problems });
-    if (seen.settings !== settings) setDraft(toDraft(settings));
+    if (seen.settings !== settings && !sameDraft(toDraft(seen.settings), toDraft(settings))) setDraft(toDraft(settings));
     if (problems.length > 0) {
       setOpen(true);
       toProblem.current = true;
@@ -128,6 +132,12 @@ export function InstallSettingsPanel({
 
   const reviewed = toDraft(settings);
   const dirty = !sameDraft(draft, reviewed);
+  const unsent = dirty ? toSettings(draft) : null;
+  const unsentKey = JSON.stringify(unsent);
+  useEffect(() => {
+    onDraft?.(unsent);
+    // `unsentKey` stands for `unsent`, a new object each render.
+  }, [unsentKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownProblems = local ? [local] : problems;
   const problemOf = (name: string) => shownProblems.find((p) => p.field === name);
   const strays = shownProblems.filter((p) => !FIELD_ORDER.includes(p.field));

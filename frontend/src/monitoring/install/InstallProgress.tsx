@@ -20,7 +20,8 @@ export const START_GRACE_MS = 5000;
 /** The slowest a failing poll asks again. */
 const MAX_RETRY_MS = 8000;
 
-export type InstallJobState = "running" | Job["state"] | "lost";
+/** `stopping`: running, with a cancel asked for and not answered yet. */
+export type InstallJobState = "running" | "stopping" | Job["state"] | "lost";
 
 const jobKey = (jobId: string) => ["install-job", jobId] as const;
 
@@ -64,14 +65,22 @@ export function InstallProgress({
   const copy = COPY[action];
   const queryClient = useQueryClient();
   const openedAt = useRef(Date.now());
+  /** Failed reads in a row (TanStack resets its own count at every fetch): the wait grows with it. */
+  const failures = useRef(0);
   const job = useQuery<Job | null>({
     queryKey: jobKey(jobId),
     queryFn: async () => {
       try {
-        return await getJson<Job>(`/api/actions/jobs/${encodeURIComponent(jobId)}`);
+        const out = await getJson<Job>(`/api/actions/jobs/${encodeURIComponent(jobId)}`);
+        failures.current = 0;
+        return out;
       } catch (err) {
         // Not known yet: the job was handed out a moment before the jobs endpoint has it.
-        if (err instanceof HttpError && err.status === 404 && Date.now() - openedAt.current < START_GRACE_MS) return null;
+        if (err instanceof HttpError && err.status === 404 && Date.now() - openedAt.current < START_GRACE_MS) {
+          failures.current = 0;
+          return null;
+        }
+        failures.current += 1;
         throw err;
       }
     },
@@ -80,9 +89,9 @@ export function InstallProgress({
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchInterval: (query) => {
-      const { data, error, fetchFailureCount } = query.state;
+      const { data, error } = query.state;
       if (error instanceof HttpError && error.status === 404) return false; // forgotten: nothing to wait for
-      if (error) return Math.min(JOB_POLL_MS * 2 ** Math.max(0, fetchFailureCount - 1), MAX_RETRY_MS);
+      if (error) return Math.min(JOB_POLL_MS * 2 ** Math.max(0, failures.current - 1), MAX_RETRY_MS);
       return data === undefined || data === null || data.state === "running" ? JOB_POLL_MS : false;
     },
   });
@@ -93,6 +102,8 @@ export function InstallProgress({
   const closeRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
+  /** Where the keyboard goes once the question opens or closes. */
+  const want = useRef<"keep" | "cancel" | null>(null);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -108,7 +119,9 @@ export function InstallProgress({
   const known = job.data ?? undefined;
   const running = !gone && (known === undefined || known.state === "running");
   const lostMessage = gone ? `${failure(job.error)} ${LOST}` : null;
-  const state: InstallJobState = gone ? "lost" : known === undefined ? "running" : known.state;
+  const state: InstallJobState = gone ? "lost"
+    : known === undefined || known.state === "running" ? (stopping ? "stopping" : "running")
+    : known.state;
 
   useEffect(() => { onState?.(state); }, [state, onState]);
   useEffect(() => {
@@ -125,22 +138,29 @@ export function InstallProgress({
     void queryClient.invalidateQueries({ queryKey: ["audit"] });
   }, [running, queryClient]);
 
-  // What held the keyboard may have gone with the job's end (Cancel, the question): Close takes it.
+  // After every change: the question takes the keyboard when it opens and hands it back to
+  // Cancel when it closes; and whatever held it may have gone (Cancel or the question, with the
+  // job's end or a failed read): then Close takes it, never <body>.
   useEffect(() => {
-    if (running) return;
-    setAsking(false);
+    const wanted = want.current;
+    want.current = null;
+    const target = wanted === "keep" ? keepRef.current : wanted === "cancel" ? cancelRef.current : null;
+    if (target) {
+      target.focus();
+      return;
+    }
     const active = document.activeElement;
     if (active === null || active === document.body || !active.isConnected) closeRef.current?.focus();
-  }, [running]);
+  });
 
   const ask = () => {
     setCancelError(null);
     setAsking(true);
-    queueMicrotask(() => keepRef.current?.focus());
+    want.current = "keep";
   };
   const keepGoing = () => {
     setAsking(false);
-    queueMicrotask(() => (cancelRef.current ?? closeRef.current)?.focus());
+    want.current = "cancel";
   };
   // Esc in the question answers "Keep going"; it never closes the dialog from there.
   const onAskKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -218,6 +238,8 @@ export function InstallProgress({
 
   // Cancel is offered once the job is known to be running here (not while starting or unreadable).
   const canCancel = running && data !== undefined;
+  // The question goes with Cancel (a failed read, the job's end); it doesn't come back by itself.
+  if (asking && !canCancel) setAsking(false);
   return (
     <div className={s.progress}>
       {shown}

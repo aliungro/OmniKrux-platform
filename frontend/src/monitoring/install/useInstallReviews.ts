@@ -41,6 +41,8 @@ export function useInstallReviews(): InstallReviews {
 
 export const installingWords = (cluster: string) => `Installing the monitoring tools in ${cluster}. Follow it on Monitoring tools.`;
 export const uninstallingWords = (cluster: string) => `Uninstalling the monitoring tools from ${cluster}. Follow it on Monitoring tools.`;
+export const stoppingWords = (what: "install" | "uninstall", cluster: string) =>
+  `Stopping the ${what} in ${cluster}. Follow it on Monitoring tools.`;
 export const notInstalledWords = (cluster: string) => `Nothing was installed in ${cluster}.`;
 export const notUninstalledWords = (cluster: string) => `Nothing was uninstalled from ${cluster}.`;
 export const contactsAppliedWords = (cluster: string) => `Contact points are up to date in ${cluster}'s Alertmanager.`;

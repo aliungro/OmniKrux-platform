@@ -22,7 +22,7 @@ import { InstallProgress, type InstallJobState } from "./InstallProgress";
 import { InstallSettingsPanel } from "./InstallSettingsPanel";
 import {
   contactsAppliedWords, contactsCancelledWords, installingWords, InstallReviewsContext, notInstalledWords, notUninstalledWords,
-  reviewFailedWords, uninstallingWords, type InstallOutcome, type InstallReviews,
+  reviewFailedWords, stoppingWords, uninstallingWords, type InstallOutcome, type InstallReviews,
 } from "./useInstallReviews";
 
 type Kind = "install" | "uninstall" | "contacts";
@@ -37,6 +37,8 @@ interface Item {
   focusAfter?: HTMLElement | null;
   /** The install settings last edited: every plan of this review is made with them. */
   settings?: InstallSettingsIn;
+  /** Edits in the settings panel not sent yet (null: none, or not sendable): Review again uses them. */
+  draft?: InstallSettingsIn | null;
   resolve(outcome: InstallOutcome): void;
 }
 
@@ -189,6 +191,12 @@ export function InstallReviewHost({ children, place }: {
       return;
     }
     const state = jobState.current;
+    if (state === "stopping") {
+      // Closed while a cancel waits for Helm: it is being stopped, not carrying on.
+      say("wait", stoppingWords(kind === "uninstall" ? "uninstall" : "install", cluster));
+      finish("started");
+      return;
+    }
     if (state === null || state === "running") {
       // Applied, or started and carrying on: say where to follow it.
       say("ok", kind === "install" ? installingWords(cluster) : kind === "uninstall" ? uninstallingWords(cluster) : contactsAppliedWords(cluster));
@@ -210,7 +218,10 @@ export function InstallReviewHost({ children, place }: {
   const onReview = useCallback(async (params?: Record<string, unknown>) => {
     const now = shown.current;
     if (now === null) return;
-    if (now.item.kind === "install" && params && "settings" in params) now.item.settings = params.settings as InstallSettingsIn;
+    if (now.item.kind === "install") {
+      if (params && "settings" in params) now.item.settings = params.settings as InstallSettingsIn;
+      else if (!params && now.item.draft) now.item.settings = now.item.draft;
+    }
     const next = await planFor(now.item);
     if (shown.current !== now) {
       if (next !== "done") discardPlans([next.plan.plan_id]);
@@ -300,7 +311,7 @@ export function InstallReviewHost({ children, place }: {
         onReview={onReview}
         options={install ? ({ busy, review }) => (
           <InstallSettingsPanel settings={install.settings} problems={install.problems} facts={install.facts} busy={busy}
-            onUpdate={(next) => review({ settings: next })} />
+            onUpdate={(next) => review({ settings: next })} onDraft={(next) => { item.draft = next; }} />
         ) : undefined}
         renderProgress={item.kind === "contacts" ? undefined : (p) => <InstallProgress {...p} action={action} onState={onJobState} />}
       />

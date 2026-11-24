@@ -6,6 +6,7 @@ import { useRef, useState } from "react";
 import type { Job, Plan } from "../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
 import type { InstallPlanOut, InstallSettingsOut } from "./api";
+import { InstallProgress } from "./InstallProgress";
 import { InstallReviewHost } from "./InstallReviewHost";
 import { useInstallReviews, type InstallOutcome, type InstallReviews } from "./useInstallReviews";
 
@@ -255,6 +256,47 @@ describe("install review", () => {
     expect((planBodies(api)[2].settings as Record<string, unknown>).namespace).toBe("tools");
   });
 
+  it("review again sends the edits not sent yet and never drops them", async () => {
+    const user = userEvent.setup();
+    const { fallback } = pipeline({ applies: [{ status: 409, body: { detail: "That changed since you looked. Review it again." } }] });
+    // The second plan comes back with the settings it had: the edits stay in the fields anyway.
+    const api = installFakeMonitoringApi({ install: { plans: [planned(), planned({ plan_id: "plan-2" })] } }, fallback);
+    renderHost();
+    await user.click(screen.getByRole("button", { name: "Install tools" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Settings" }));
+    const ns = within(dialog).getByRole("textbox", { name: "Namespace" });
+    await user.clear(ns);
+    await user.type(ns, "tools");
+    expect(within(dialog).getByText("Not in this review yet. Update review to use them.")).toBeTruthy();
+
+    await user.click(within(dialog).getByRole("button", { name: "Install" }));
+    await within(dialog).findByRole("alert");
+    await user.click(within(dialog).getByRole("button", { name: "Review again" }));
+    await waitFor(() => expect(planBodies(api)).toHaveLength(2));
+    expect((planBodies(api)[1].settings as Record<string, unknown>).namespace).toBe("tools");
+    await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
+    expect((within(dialog).getByRole("textbox", { name: "Namespace" }) as HTMLInputElement).value).toBe("tools");
+    expect(within(dialog).getByText("Not in this review yet. Update review to use them.")).toBeTruthy();
+  });
+
+  it("an install on production opens on the typed field", async () => {
+    const user = userEvent.setup();
+    const { fallback } = pipeline();
+    installFakeMonitoringApi({
+      install: {
+        plans: [planned({
+          confirm_text: "monitoring", warnings: ["This is a production cluster."],
+          cluster: { id: "c1", name: "prod-east", provider: "aks", environment: "production" },
+        })],
+      },
+    }, fallback);
+    renderHost();
+    await user.click(screen.getByRole("button", { name: "Install tools" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(document.activeElement).toBe(within(dialog).getByRole("textbox", { name: "Type monitoring to confirm" }));
+  });
+
   it("a days value that isn't a number is said under its field and not sent", async () => {
     const user = userEvent.setup();
     const { fallback } = pipeline();
@@ -334,6 +376,49 @@ describe("install progress", () => {
     expect(status().textContent).toBe(ended.message);
   });
 
+  it("a failed read takes Cancel away without dropping the keyboard", async () => {
+    const user = userEvent.setup();
+    const { fallback } = pipeline({
+      jobs: [{ status: 200, body: job() }, { status: 500, body: { detail: "The server had a problem. Try again." } }, { status: 200, body: job() }],
+    });
+    installFakeMonitoringApi({ install: { plans: [planned()] } }, fallback);
+    renderHost();
+    await user.click(screen.getByRole("button", { name: "Install tools" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Install" }));
+    await user.click(await within(dialog).findByRole("button", { name: "Cancel install" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Keep going" }));
+
+    await within(dialog).findByRole("alert", {}, { timeout: 3000 });
+    expect(within(dialog).queryByRole("button", { name: "Keep going" })).toBeNull();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Close" }));
+    // Read again: Cancel is back, the question isn't.
+    expect(await within(dialog).findByRole("button", { name: "Cancel install" }, { timeout: 3000 })).toBeTruthy();
+    expect(within(dialog).queryByText("Stop the install? What Helm already applied stays.")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("closing while it stops says it is stopping, and reading stops", async () => {
+    const user = userEvent.setup();
+    const { seen, fallback: base } = pipeline({ jobs: [{ status: 200, body: job() }] });
+    const fallback = (url: string, init?: RequestInit) =>
+      url.endsWith("/cancel") ? new Promise<Response>(() => {}) : base(url, init);
+    installFakeMonitoringApi({ install: { plans: [planned()] } }, fallback);
+    renderHost();
+    await user.click(screen.getByRole("button", { name: "Install tools" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Install" }));
+    await user.click(await within(dialog).findByRole("button", { name: "Cancel install" }));
+    await user.click(within(dialog).getByRole("button", { name: "Stop install" }));
+    await within(dialog).findByText("Stopping the install…");
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(results()).toBe("started"));
+    expect(status().textContent).toBe("Stopping the install in kind-install. Follow it on Monitoring tools.");
+    const readsNow = seen.filter((x) => x.startsWith("GET /api/actions/jobs/")).length;
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(seen.filter((x) => x.startsWith("GET /api/actions/jobs/")).length).toBe(readsNow);
+  });
+
   it("stopping says it waits for Helm", async () => {
     const user = userEvent.setup();
     let release: (r: Response) => void = () => {};
@@ -390,7 +475,7 @@ describe("install progress", () => {
     expect(await within(dialog).findByText("Creating the namespace monitoring…", {}, { timeout: 3000 })).toBeTruthy();
   });
 
-  it("a job the server no longer knows reads as unknown, and a failed read says so", async () => {
+  it("a failed read says so and shows no old numbers", async () => {
     const user = userEvent.setup();
     const { fallback } = pipeline({
       jobs: [{ status: 200, body: job() }, { status: 500, body: { detail: "The server had a problem. Try again." } }],
@@ -422,6 +507,55 @@ describe("install progress", () => {
       vi.setSystemTime(Date.now() + 6000);
       const lost = await within(dialog).findByRole("alert", {}, { timeout: 3000 });
       expect(lost.textContent).toBe("OmniKrux doesn't know that job (it may have restarted). How it ended isn't known here: check Monitoring tools and Audit.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("install progress polling", () => {
+  function renderProgress(answers: (() => Response)[]) {
+    const reads: number[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (!String(url).startsWith("/api/actions/jobs/")) return Promise.resolve(new Response("{}", { status: 404 }));
+      reads.push(Date.now());
+      const answer = answers.length > 1 ? answers.shift()! : answers[0];
+      return Promise.resolve(answer());
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const out = render(
+      <QueryClientProvider client={client}>
+        <InstallProgress jobId="j1" action="install" onClose={() => {}} onOutcome={() => {}} />
+      </QueryClientProvider>,
+    );
+    return { ...out, reads };
+  }
+  const ok = () => new Response(JSON.stringify(job()), { status: 200, headers: { "content-type": "application/json" } });
+  const broken = () => new Response(JSON.stringify({ detail: "The server had a problem. Try again." }), { status: 500, headers: { "content-type": "application/json" } });
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
+  it("failed reads back off up to 8 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const { reads } = renderProgress([ok, broken]);
+      await advance(25000);
+      const gaps = reads.slice(1).map((t, i) => t - reads[i]);
+      // The first read answers; then each failed read waits longer than the last, up to 8 s.
+      expect(gaps).toEqual([1000, 1000, 2000, 4000, 8000, 8000]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reading stops when the progress closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { reads, unmount } = renderProgress([ok]);
+      await advance(2500);
+      expect(reads).toHaveLength(3);
+      unmount();
+      await advance(20000);
+      expect(reads).toHaveLength(3);
     } finally {
       vi.useRealTimers();
     }
