@@ -20,7 +20,8 @@ export const POLL_RUNNING_MS = 3000;
 
 /**
  * Whether a failed or cancelled record was left by an uninstall (its message is the uninstall's
- * own: every one of them ends with "uninstall again", or says OmniKrux stopped during the uninstall).
+ * own: every one of them ends with "uninstall again", says OmniKrux stopped during the uninstall, or
+ * that the uninstall stopped on something unexpected or because the cluster was removed).
  * The install's own messages offer "install again", never "uninstall again".
  */
 export function endedUninstall(install: InstallOut): boolean {
@@ -28,7 +29,7 @@ export function endedUninstall(install: InstallOut): boolean {
   return UNINSTALL_WORDS.test(install.message ?? "");
 }
 
-const UNINSTALL_WORDS = new RegExp(String.raw`\buninstall again\b|\bduring the uninstall\b`, "i");
+const UNINSTALL_WORDS = new RegExp(String.raw`\buninstall again\b|\bduring the uninstall\b|\bthe uninstall stopped\b`, "i");
 
 /** Whether a job is running on the cluster (an install or an uninstall): the page asks more often. */
 export function isBusy(status: InstallStatusOut): boolean {

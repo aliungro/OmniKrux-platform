@@ -297,6 +297,15 @@ function AlertForm({
   const installedKnown = capabilities.data === undefined ? null : installedOf(capabilities.data);
   const installed = installedKnown ?? "none";
   const channels = useChannels(scope?.kind === "project" && alert.engine === "tool" && installed !== "all" ? scope.id : null);
+  // A tool alert where OmniKrux is known not to have installed the tools sends no contact points
+  // (the rule form's rule): hidden ones go from the draft once that is known. While it isn't known
+  // (being read, or the read failed), the saved ones stay as they are.
+  const hiddenNotify = alert.engine === "tool" && installedKnown === "none" && alert.notify.length > 0;
+  useEffect(() => {
+    if (hiddenNotify) set({ notify: [] });
+    // `set` writes into the draft; it runs once each time hidden contact points show up.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hiddenNotify]);
   const warnings = where && query
     ? mixedClusterWarnings(where.scope, query.source.type, query.source.id, where.projects, where.groups, where.projectIds)
     : [];

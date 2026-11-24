@@ -200,24 +200,44 @@ describe("the rule form", () => {
     expect(sent.contact_point_ids).toEqual([]);
   });
 
-  it("a tool rule saved while its tools can't be checked sends no hidden contact points", async () => {
+  /** A saved tool rule with a contact point, edited and saved while its capabilities answer `capabilities`. */
+  async function saveToolRuleWhile(capabilities: () => Promise<Response>, answered = false) {
     const user = userEvent.setup();
     const tool = rule("rT", "Paging", dev, {
       engine: "tool", channel: { receiver: "oncall", labels: {} }, contact_points: [{ id: "c1", name: "Slack #ops", type: "slack" }],
       targets: [target("t-rT", dev, { engine: "tool", tool: "prometheus_rule", where: "Prometheus", tool_state: "in_sync" })],
     });
     const { api } = open({ rules: [tool] }, { rule: "rT" });
-    intercept((url) => (url.includes("/alerts/capabilities")
-      ? Promise.resolve(new Response(JSON.stringify({ detail: "Prometheus didn't answer." }), { status: 502, headers: { "content-type": "application/json" } }))
-      : null));
+    intercept((url) => (url.includes("/alerts/capabilities") ? capabilities() : null));
     await waitFor(() => expect(details().textContent).toBe("Paging"));
     await user.click(screen.getByRole("button", { name: "Edit rule" }));
     const name = await screen.findByLabelText("Name");
+    if (answered) await screen.findByText("In Prometheus (dev), fires even when OmniKrux is off");
     await user.type(name, " now");
     await user.click(screen.getByRole("button", { name: "Save rule" }));
     await waitFor(() => expect(api.requests.some((r) => r.method === "PUT" && r.url.endsWith("/alerts/rules/rT"))).toBe(true));
-    const sent = api.requests.find((r) => r.method === "PUT" && r.url.endsWith("/alerts/rules/rT"))!.body as RuleIn;
+    return api.requests.find((r) => r.method === "PUT" && r.url.endsWith("/alerts/rules/rT"))!.body as RuleIn;
+  }
+
+  it("a tool rule saved after its tools couldn't be checked keeps its own contact points", async () => {
+    const sent = await saveToolRuleWhile(() =>
+      Promise.resolve(new Response(JSON.stringify({ detail: "Prometheus didn't answer." }), { status: 502, headers: { "content-type": "application/json" } })));
     expect(sent.engine).toBe("tool");
+    expect(sent.name).toBe("Paging now");
+    expect(sent.contact_point_ids).toEqual(["c1"]);
+    expect(sent.channel).toEqual({ receiver: "oncall", labels: {} });
+  });
+
+  it("a tool rule saved while its tools are still being checked keeps its own contact points", async () => {
+    const sent = await saveToolRuleWhile(() => new Promise<Response>(() => {}));
+    expect(sent.contact_point_ids).toEqual(["c1"]);
+    expect(sent.channel).toEqual({ receiver: "oncall", labels: {} });
+  });
+
+  it("a tool rule on tools OmniKrux didn't install sends no contact points", async () => {
+    const cap: CapabilityOut = { project_id: "p1", project_name: "dev", source_id: "s1", source_name: "Prometheus", tool: "prometheus_rule", reason: null };
+    const sent = await saveToolRuleWhile(() =>
+      Promise.resolve(new Response(JSON.stringify([cap]), { status: 200, headers: { "content-type": "application/json" } })), true);
     expect(sent.contact_point_ids).toEqual([]);
     expect(sent.channel).toEqual({ receiver: "oncall", labels: {} });
   });

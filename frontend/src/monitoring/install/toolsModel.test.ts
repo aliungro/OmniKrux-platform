@@ -58,12 +58,17 @@ describe("endedUninstall", () => {
     "Loki was still there after 5 minutes: a finalizer. What was already removed stays removed. Check monitoring, then uninstall again.",
     "The source Loki couldn't be removed. What was already removed stays removed. Uninstall again to finish.",
     "OmniKrux stopped during the uninstall. What Helm applied stays as Helm left it. Open Monitoring tools to see what's there, then run it again.",
+    // The job runner's own endings (actions/jobs.py).
+    "The uninstall stopped: something unexpected went wrong (KeyError).",
+    "The console stopped during the uninstall.",
   ];
   const installEndings = [
     "Install cancelled while install omnikrux-loki. What was already applied stays as Helm left it. Install again to finish, or uninstall the tools.",
     "Helm said no. What Helm applied stays as Helm left it (failed). Check the Pods in monitoring, then install again, or uninstall the tools.",
     "OmniKrux stopped during the install. What Helm applied stays as Helm left it. Open Monitoring tools to see what's there, then run it again.",
     "Helm's record of omnikrux-metrics says an earlier change never finished (pending-install), so Helm won't change it again. Uninstall the tools, then install them again.",
+    "The install stopped: something unexpected went wrong (KeyError).",
+    "The console stopped during the install.",
   ];
 
   it("is true only for an uninstall's own failed or cancelled ending", () => {

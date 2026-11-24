@@ -6,7 +6,7 @@ import type { AlertChangeOut, CapabilityOut, ContactPointOut, DryRunOut } from "
 import { RANGE_COPY } from "../../alerts/limits";
 import { recommendFor } from "../../build/recommend";
 import { emptyInstallState, installFakeMonitoringApi, type FakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import { newAlert, type DashboardSpec, type PanelAlert, type PanelSpec } from "../schema";
 import { mixedClustersWords } from "../../alerts/rules/clusterWarning";
@@ -337,6 +337,36 @@ describe("The Alert tab", () => {
     expect(sent.spec.panels[0].alert).toMatchObject({ engine: "tool", notify: ["c1"] });
     // The save's contacts change opens the review of that Alertmanager's contact points.
     expect(await screen.findByRole("dialog", { name: "Update contact points in monitoring" })).toBeTruthy();
+  });
+
+  it("a tool alert's hidden contact points go where OmniKrux didn't install the tools, and stay while that isn't known", async () => {
+    const cap: CapabilityOut = { project_id: "p1", project_name: "Shop", source_id: "s1", source_name: "Prometheus", tool: "prometheus_rule", reason: null };
+    const saved = (api: FakeMonitoringApi) => {
+      const put = api.requests.find((r) => r.method === "PUT" && r.url === "/api/monitoring/dashboards/d1");
+      return put ? (put.body as { spec: DashboardSpec }).spec.panels[0].alert : undefined;
+    };
+
+    // Known not to be OmniKrux's: the hidden contact point goes from the draft and isn't sent.
+    let api = shop(doc((p) => withAlert(p, { engine: "tool", notify: ["c1"] })), { capabilities: [cap] });
+    let out = await openedOnAlert();
+    await waitFor(() => expect(draftPanel("p-1").alert?.notify).toEqual([]));
+    expect(within(settings()).queryByRole("group", { name: "Notify" })).toBeNull();
+    await out.user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(saved(api)).toMatchObject({ engine: "tool", notify: [] }));
+    cleanup();
+    editSessions.clear();
+
+    // Not known (the read failed): the saved contact point stays as it is.
+    api = shop(doc((p) => withAlert(p, { engine: "tool", notify: ["c1"] })));
+    intercept((url) => (url.includes("/alerts/capabilities") ? Promise.resolve(json({ detail: "Prometheus didn't answer." }, 502)) : null));
+    out = await openedOnAlert();
+    await waitFor(() => expect(document.activeElement).toBe(threshold()));
+    await within(settings()).findByText(/Prometheus didn't answer/);
+    await out.user.clear(threshold());
+    await out.user.type(threshold(), "0.4");
+    expect(draftPanel("p-1").alert?.notify).toEqual(["c1"]);
+    await out.user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(saved(api)).toMatchObject({ engine: "tool", notify: ["c1"], threshold: 0.4 }));
   });
 
   it("saving a tool-run alert opens its review after the save", async () => {

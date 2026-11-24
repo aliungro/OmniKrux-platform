@@ -106,17 +106,19 @@ function draftOf(rule: RuleOut | undefined, owner: Owner | null, projects: reado
 /**
  * What the server is sent: contact points for a rule OmniKrux checks, a channel for a tool's. A
  * tool's rule where OmniKrux installed the tools sends contact points too (`some`), or only them
- * (`all`). While that isn't known (null: still read, or the read failed), a tool's rule sends its
- * channel and no contact points, as before OmniKrux installed tools: hidden ones are never sent.
+ * (`all`), and none where it didn't (`none`). While that isn't known (null: still read, or the read
+ * failed), a tool's rule sends the saved rule's own contact points unchanged (`saved`; none for a new
+ * rule): an edit never drops them, and none added in the form while they were hidden is sent.
  */
-function ruleIn(d: Draft, owner: Owner, source: SourcePick, installed: Installed | null): RuleIn {
+function ruleIn(d: Draft, owner: Owner, source: SourcePick, installed: Installed | null, saved: readonly string[] = []): RuleIn {
   const tool = d.details.engine === "tool";
-  const notify = !tool || installed === "some" || installed === "all";
+  const contacts = !tool || installed === "some" || installed === "all" ? d.details.notify
+    : installed === null ? [...saved] : [];
   const channel = tool && installed !== "all";
   return {
     name: d.details.name, scope: owner, source, expr: d.expr,
     condition: { ...d.cond }, severity: d.details.severity, message: d.details.message,
-    contact_point_ids: notify ? d.details.notify : [], engine: d.details.engine, channel: channel ? d.details.channel : null,
+    contact_point_ids: contacts, engine: d.details.engine, channel: channel ? d.details.channel : null,
   };
 }
 
@@ -319,7 +321,7 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
     setSaving(true);
     try {
       const out = initial
-        ? await saveRule(initial.id, { ...ruleIn(draft, owner, source, installedKnown), base_version: initial.version })
+        ? await saveRule(initial.id, { ...ruleIn(draft, owner, source, installedKnown, initial.contact_points.map((c) => c.id)), base_version: initial.version })
         : await createRule(ruleIn(draft, owner, source, installedKnown));
       onSaved(out);
       return;
