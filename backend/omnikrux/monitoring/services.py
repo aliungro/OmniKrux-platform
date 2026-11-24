@@ -34,6 +34,7 @@ from omnikrux.monitoring.sources.discovery import Discovery
 from omnikrux.monitoring.sources.health import HealthCache
 from omnikrux.monitoring.sources.store import SourceStore
 from omnikrux.monitoring.sources.transport import TransportFactory
+from omnikrux.monitoring.transfer.grafana_client import GrafanaClient
 from omnikrux.monitoring.transfer.grafana_store import GrafanaStore
 from omnikrux.monitoring.transfer.origins import OriginStore
 from omnikrux.security.secrets import SecretBox
@@ -113,6 +114,8 @@ class MonitoringServices:
     # Where imported dashboards came from, and the Grafana connections (M6).
     origins: OriginStore
     grafana: GrafanaStore
+    # Reads a Grafana through the transports.
+    grafana_client: GrafanaClient
     # Set by `build_services` (they need the services themselves).
     notifier: Notifier = field(init=False)
     engine: AlertEngine = field(init=False)
@@ -222,6 +225,7 @@ def build_services(
         helm=LazyHelm(install_tools),
         origins=OriginStore(sessionmaker),
         grafana=GrafanaStore(sessionmaker, box),
+        grafana_client=GrafanaClient(transports),
     )
     services.notifier = Notifier(services)
     services.engine = AlertEngine(services, enabled=alert_engine)

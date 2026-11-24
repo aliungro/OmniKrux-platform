@@ -39,7 +39,9 @@ from tests.monitoring.alert_env import CONTACT_POINTS, EngineEnv, no_sleep
 from tests.monitoring.fake_helm import AvailableTools, FakeHelm
 from tests.monitoring.fake_receivers import serve_fake_smtp, serve_fake_webhook
 from tests.monitoring.fakes import (
+    Bearer,
     TlsMaterial,
+    grafana_answer,
     make_tls_material,
     serve_fake_alertmanager,
     serve_fake_grafana,
@@ -340,6 +342,24 @@ async def fake_smtp_tls(fake_tls):
 @pytest.fixture
 async def fake_grafana():
     async with serve_fake_grafana() as server:
+        yield server
+
+
+# The service account token `fake_grafana_auth` wants (made up).
+GRAFANA_TOKEN = "glsa_SECRET-11"
+
+
+@pytest.fixture
+async def fake_grafana_auth():
+    """A fake Grafana that wants the bearer token `GRAFANA_TOKEN` for everything but its health,
+    with three dashboards: "Overview" at the root, "api" and "Nodes" in the folder "Platform"."""
+    async with serve_fake_grafana() as server:
+        server.require = Bearer(GRAFANA_TOKEN)
+        server.dashboards = {
+            "nodes": grafana_answer("nodes", "Nodes", folder="Platform", tags=("k8s",)),
+            "api": grafana_answer("api", "api", folder="Platform"),
+            "overview": grafana_answer("overview", "Overview"),
+        }
         yield server
 
 

@@ -94,12 +94,14 @@ class SourceTransport(Protocol):
 
 
 class SourceUnreachable(Exception):
-    """The request got no usable answer. `message` is safe to show, log and store."""
+    """The request got no usable answer. `message` is safe to show, log and store. `status` is
+    the tool's own 401 or 403 when the tool itself refused the credentials (None otherwise)."""
 
-    def __init__(self, code: UnreachableCode, message: str) -> None:
+    def __init__(self, code: UnreachableCode, message: str, *, status: int | None = None) -> None:
         super().__init__(message)
         self.code: UnreachableCode = code
         self.message = message
+        self.status = status
 
     def __repr__(self) -> str:
         return f"SourceUnreachable({self.code!r}, {self.message!r})"
@@ -362,7 +364,9 @@ class DirectTransport:
                     raise SourceUnreachable("redirect", messages.REDIRECT.format(name=name))
                 if status in (401, 403):
                     raise SourceUnreachable(
-                        "unauthorized", messages.REJECTED.format(name=name, status=status)
+                        "unauthorized",
+                        messages.REJECTED.format(name=name, status=status),
+                        status=status,
                     )
                 body = await _read_capped(response.content.iter_any(), name)
                 if status >= 400:
@@ -562,10 +566,10 @@ class ClusterServiceTransport:
         """Raise for an answer that means the tool wasn't reached or refused the request."""
         name = self._config.name
 
-        def raise_(code: UnreachableCode, message: str) -> None:
+        def raise_(code: UnreachableCode, message: str, tool_status: int | None = None) -> None:
             if cloud:
                 message = cloud_kube_error(f"reach {name}", status=status).message
-            raise SourceUnreachable(code, message)
+            raise SourceUnreachable(code, message, status=tool_status)
 
         if 300 <= status < 400:
             raise_("redirect", messages.REDIRECT.format(name=name))
@@ -583,8 +587,8 @@ class ClusterServiceTransport:
                 "unauthorized" if status == 401 else "forbidden",
                 kube_error_message(error, f"reach {name}"),
             )
-        if status in (401, 403):
-            raise_("unauthorized", messages.REJECTED.format(name=name, status=status))
+        if status in (401, 403):  # the tool itself refused the request
+            raise_("unauthorized", messages.REJECTED.format(name=name, status=status), status)
 
 
 @dataclass

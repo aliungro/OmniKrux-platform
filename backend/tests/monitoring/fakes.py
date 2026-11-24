@@ -424,17 +424,83 @@ def _parse_matcher(text: str):
 
 
 class FakeGrafana:
+    """A Grafana's read API, in the shapes Grafana 11 to 13 answer.
+
+    `dashboards` (uid -> the `{dashboard, meta}` answer of `/api/dashboards/uid/{uid}`) also feed
+    `/api/search` (`meta.folderTitle` is the folder when `meta.folderUid` is set; `limit` is
+    honoured); `dashboard_status` (uid -> status) answers that status for one dashboard instead.
+    `datasources` (None: 403), `ruler` (the `/api/ruler/grafana/api/v1/rules` answer; None: 404)
+    and `ruler_status` (a status other than 200 is answered instead). `require` makes every
+    request but `/api/health` (anonymous in Grafana too) without the credentials answer 401;
+    `echo_auth_in_errors` makes error bodies repeat the request's `Authorization` header;
+    `mode="not_grafana"` answers an HTML page everywhere."""
+
     def __init__(self) -> None:
         self.url = ""
         self.requests: list[FakeRequest] = []
+        self.version = "11.3.0"
+        self.dashboards: dict[str, dict] = {}
+        self.dashboard_status: dict[str, int] = {}
+        self.datasources: list[dict] | None = []
+        self.ruler: dict | None = None
+        self.ruler_status = 200
+        self.require: AuthRequirement | None = None
+        self.mode: Literal["ok", "not_grafana"] = "ok"
+        self.echo_auth_in_errors = False
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
         params = {key: request.query.getall(key) for key in request.query}
         headers = dict(request.headers)
         self.requests.append(FakeRequest(request.method, request.path, params, headers))
-        if request.path == "/api/health":
-            return web.json_response({"database": "ok", "version": "11.3.0"})
+        if self.mode == "not_grafana":
+            return web.Response(text="<html><body>Sign in</body></html>", content_type="text/html")
+        path = request.path
+        if path == "/api/health":
+            return web.json_response({"database": "ok", "version": self.version})
+        if not _satisfied(self.require, headers):
+            return self._error(401, {"message": "invalid API key"}, headers)
+        if path == "/api/search":
+            return web.json_response(self._search(params))
+        if path.startswith("/api/dashboards/uid/"):
+            uid = path.removeprefix("/api/dashboards/uid/")
+            if uid in self.dashboard_status:
+                return self._error(self.dashboard_status[uid], {"message": "refused"}, headers)
+            if uid not in self.dashboards:
+                return self._error(404, {"message": "Dashboard not found"}, headers)
+            return web.json_response(self.dashboards[uid])
+        if path == "/api/datasources":
+            if self.datasources is None:
+                return self._error(403, {"message": "Permission denied"}, headers)
+            return web.json_response(self.datasources)
+        if path == "/api/ruler/grafana/api/v1/rules":
+            if self.ruler_status != 200:
+                return self._error(self.ruler_status, {"message": "refused"}, headers)
+            if self.ruler is None:
+                return self._error(404, {"message": "Not found"}, headers)
+            return web.json_response(self.ruler)
         return web.Response(status=404, text="404 page not found")
+
+    def _error(self, status: int, body: dict, headers: dict[str, str]) -> web.Response:
+        if self.echo_auth_in_errors:
+            body = body | {"authorization": headers.get("Authorization", "")}
+        return web.json_response(body, status=status)
+
+    def _search(self, params: dict[str, list[str]]) -> list[dict]:
+        limit = int((params.get("limit") or ["1000"])[0])
+        found = []
+        for uid, answer in self.dashboards.items():
+            dashboard, meta = answer.get("dashboard") or {}, answer.get("meta") or {}
+            item = {
+                "uid": uid,
+                "title": dashboard.get("title", ""),
+                "type": "dash-db",
+                "tags": dashboard.get("tags", []),
+            }
+            if meta.get("folderUid"):
+                item["folderUid"] = meta["folderUid"]
+                item["folderTitle"] = meta.get("folderTitle", "")
+            found.append(item)
+        return found[:limit]
 
 
 _LABEL_VALUES = re.compile(r"^/api/v1/label/(?P<name>[^/]+)/values$")
@@ -580,6 +646,32 @@ async def serve_fake_alertmanager(tls: TlsMaterial | None = None):
     server = FakeAlertmanager()
     async with _serve(server, tls):
         yield server
+
+
+def grafana_answer(
+    uid: str,
+    title: str,
+    *,
+    folder: str | None = None,
+    tags: tuple[str, ...] = (),
+    version: int = 1,
+    panels: list | None = None,
+) -> dict:
+    """A hand-written `/api/dashboards/uid/{uid}` answer, in the shape Grafana 11 to 13 send."""
+    meta: dict = {"type": "db", "slug": title.lower().replace(" ", "-"), "version": version}
+    if folder is not None:
+        meta |= {"folderUid": f"f-{folder.lower()}", "folderTitle": folder}
+    return {
+        "dashboard": {
+            "uid": uid,
+            "title": title,
+            "tags": list(tags),
+            "version": version,
+            "schemaVersion": 39,
+            "panels": panels or [],
+        },
+        "meta": meta,
+    }
 
 
 @asynccontextmanager
