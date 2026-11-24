@@ -200,6 +200,28 @@ describe("the rule form", () => {
     expect(sent.contact_point_ids).toEqual([]);
   });
 
+  it("a tool rule saved while its tools can't be checked sends no hidden contact points", async () => {
+    const user = userEvent.setup();
+    const tool = rule("rT", "Paging", dev, {
+      engine: "tool", channel: { receiver: "oncall", labels: {} }, contact_points: [{ id: "c1", name: "Slack #ops", type: "slack" }],
+      targets: [target("t-rT", dev, { engine: "tool", tool: "prometheus_rule", where: "Prometheus", tool_state: "in_sync" })],
+    });
+    const { api } = open({ rules: [tool] }, { rule: "rT" });
+    intercept((url) => (url.includes("/alerts/capabilities")
+      ? Promise.resolve(new Response(JSON.stringify({ detail: "Prometheus didn't answer." }), { status: 502, headers: { "content-type": "application/json" } }))
+      : null));
+    await waitFor(() => expect(details().textContent).toBe("Paging"));
+    await user.click(screen.getByRole("button", { name: "Edit rule" }));
+    const name = await screen.findByLabelText("Name");
+    await user.type(name, " now");
+    await user.click(screen.getByRole("button", { name: "Save rule" }));
+    await waitFor(() => expect(api.requests.some((r) => r.method === "PUT" && r.url.endsWith("/alerts/rules/rT"))).toBe(true));
+    const sent = api.requests.find((r) => r.method === "PUT" && r.url.endsWith("/alerts/rules/rT"))!.body as RuleIn;
+    expect(sent.engine).toBe("tool");
+    expect(sent.contact_point_ids).toEqual([]);
+    expect(sent.channel).toEqual({ receiver: "oncall", labels: {} });
+  });
+
   it("a tool rule on installed tools picks contact points", async () => {
     const user = userEvent.setup();
     const ops: ContactPointOut = {

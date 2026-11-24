@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Plan } from "../../../api/types";
-import type { AlertChangeOut, DryRunOut } from "../../alerts/api";
+import type { AlertChangeOut, CapabilityOut, ContactPointOut, DryRunOut } from "../../alerts/api";
 import { RANGE_COPY } from "../../alerts/limits";
 import { recommendFor } from "../../build/recommend";
-import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
+import { emptyInstallState, installFakeMonitoringApi, type FakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
 import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import { newAlert, type DashboardSpec, type PanelAlert, type PanelSpec } from "../schema";
@@ -294,6 +294,49 @@ describe("The Alert tab", () => {
     expect(draftPanel("p-1").alert!.threshold).toBe(0.5);
     await waitFor(() => expect(threshold().value).toBe("0.5"));
     expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a panel alert on tools OmniKrux installed notifies contact points", async () => {
+    const ops: ContactPointOut = {
+      id: "c1", name: "Slack #ops", type: "slack", settings: {}, secrets_set: ["url"], summary: "Slack, #ops", used_by: [], last_delivery: null,
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    const cap: CapabilityOut = {
+      project_id: "p1", project_name: "Shop", source_id: "s1", source_name: "Prometheus", tool: "prometheus_rule", reason: null, installed_by_omnikrux: true,
+    };
+    const contactsPlan: Plan = {
+      plan_id: "plan-c", action: "edit",
+      target: { cluster_id: "k1", kind_key: "alertmanagerconfigs.monitoring.coreos.com", namespace: "monitoring", name: "omnikrux-contact-points" },
+      kind: "AlertmanagerConfig", cluster: { id: "k1", name: "kind-install", provider: "kind", environment: "development" },
+      title: "Update contact points in monitoring", summary: ["Routes 1 rule to 1 contact point."], warnings: [], blocked: [], diff: null,
+      confirm_text: null, apply_label: "Update", expires_at: "2026-11-24T10:05:00Z",
+    };
+    const contacts: AlertChangeOut = { target_id: "", rule_id: "", rule_name: "", project_id: "", project_name: "kind-install", kind: "contacts", message: null, cluster_id: "k1" };
+    const api = shop(doc((p) => withAlert(p)), {
+      contactPoints: [ops], capabilities: [cap], alertChangesOnSave: [contacts],
+      install: { ...emptyInstallState(), contacts: { k1: { kind: "review", plan: contactsPlan } } },
+    });
+    const { user } = await openedOnAlert();
+    await waitFor(() => expect(document.activeElement).toBe(threshold()));
+    // Picked while OmniKrux checks it, kept when it moves into the tool OmniKrux installed.
+    const notify = await within(settings()).findByRole("group", { name: "Notify" });
+    await user.click(within(notify).getByRole("checkbox", { name: /Slack #ops/ }));
+    await waitFor(() => expect((within(settings()).getByRole("radio", { name: "In the tool" }) as HTMLInputElement).disabled).toBe(false));
+    await user.click(within(settings()).getByRole("radio", { name: "In the tool" }));
+    const still = within(settings()).getByRole("group", { name: "Notify" });
+    expect(within(still).getByText(
+      "These contact points are sent from the Alertmanager OmniKrux installed; saving asks you to review that change.",
+    )).toBeTruthy();
+    expect((within(still).getByRole("checkbox", { name: /Slack #ops/ }) as HTMLInputElement).checked).toBe(true);
+    expect(within(settings()).queryByLabelText("Channel")).toBeNull();
+    expect(draftPanel("p-1").alert).toMatchObject({ engine: "tool", notify: ["c1"] });
+
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(api.requests.some((r) => r.method === "PUT" && r.url === "/api/monitoring/dashboards/d1")).toBe(true));
+    const sent = api.requests.find((r) => r.method === "PUT" && r.url === "/api/monitoring/dashboards/d1")!.body as { spec: DashboardSpec };
+    expect(sent.spec.panels[0].alert).toMatchObject({ engine: "tool", notify: ["c1"] });
+    // The save's contacts change opens the review of that Alertmanager's contact points.
+    expect(await screen.findByRole("dialog", { name: "Update contact points in monitoring" })).toBeTruthy();
   });
 
   it("saving a tool-run alert opens its review after the save", async () => {

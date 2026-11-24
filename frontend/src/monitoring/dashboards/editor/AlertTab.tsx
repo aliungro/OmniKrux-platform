@@ -18,7 +18,7 @@ import { ALERT_PANEL_TYPES } from "../../alerts/limits";
 import { ruleExpr } from "../../alerts/ruleExpr";
 import { mixedClusterWarnings } from "../../alerts/rules/clusterWarning";
 import { adviceFor, calmerWords, DryRunLine, thresholdText } from "../../alerts/rules/DryRunLine";
-import { RuleDetailsFields, type DetailsValue } from "../../alerts/rules/RuleDetailsFields";
+import { installedOf, RuleDetailsFields, type DetailsValue } from "../../alerts/rules/RuleDetailsFields";
 import { parseThreshold, RuleSentence, seriesWordOf, type SentenceValue } from "../../alerts/rules/RuleSentence";
 import { WhereItRuns } from "../../alerts/rules/WhereItRuns";
 import r from "../../alerts/rules/RuleForm.module.css";
@@ -292,7 +292,11 @@ function AlertForm({
   const reportResult = (out: DryRunOut | null) => report.current?.(out ? { alert, dryRun: out } : null, alertRunKey(panel));
 
   const capabilities = useCapabilities(scope && query ? { scope, sourceType: query.source.type, sourceId: query.source.id } : null);
-  const channels = useChannels(scope?.kind === "project" && alert.engine === "tool" ? scope.id : null);
+  // As in the rule form: whether the tools the alert runs in are ones OmniKrux installed (null while
+  // that isn't known). Where they are, Notify picks contact points sent from OmniKrux's Alertmanager.
+  const installedKnown = capabilities.data === undefined ? null : installedOf(capabilities.data);
+  const installed = installedKnown ?? "none";
+  const channels = useChannels(scope?.kind === "project" && alert.engine === "tool" && installed !== "all" ? scope.id : null);
   const warnings = where && query
     ? mixedClusterWarnings(where.scope, query.source.type, query.source.id, where.projects, where.groups, where.projectIds)
     : [];
@@ -397,10 +401,13 @@ function AlertForm({
         notifyNote={contactPoints.isError ? failure(contactPoints.error, "try again") : contactPoints.data === undefined ? "Loading…" : null}
         onChange={(d) => set({ name: d.name, severity: d.severity, message: d.message, notify: d.notify, engine: d.engine, channel: d.channel })}
         errors={{ name: first("name"), message: first("message"), contact_point_ids: first("contact_point_ids"), channel: first("channel") }}
-        refs={{ name: nameRef, message: messageRef, notify: notifyRef, channel: channelRef }} />
+        refs={{ name: nameRef, message: messageRef, notify: notifyRef, channel: channelRef }} installed={installed} />
 
       <WhereItRuns engine={alert.engine} capabilities={capabilities.data ?? []} waiting={capsWaiting}
-        onChange={(engine) => set(engine === "tool" ? { engine, notify: [] } : { engine, channel: null })} />
+        onChange={(engine) => set(engine === "tool"
+          // Contact points stay only where OmniKrux installed the tools (known to be): the rule form's rule.
+          ? { engine, notify: installedKnown === "some" || installedKnown === "all" ? alert.notify : [] }
+          : { engine, channel: null })} />
 
       {defaults.length > 0 && <p className={s.alertNote}>{defaultsWords(defaults)}</p>}
       {where && <p className={s.alertNote}>{savedWithWords(where.where)}</p>}

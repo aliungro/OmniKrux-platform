@@ -106,11 +106,12 @@ function draftOf(rule: RuleOut | undefined, owner: Owner | null, projects: reado
 /**
  * What the server is sent: contact points for a rule OmniKrux checks, a channel for a tool's. A
  * tool's rule where OmniKrux installed the tools sends contact points too (`some`), or only them
- * (`all`); while that isn't known yet (null), both are sent as they are, so nothing is dropped.
+ * (`all`). While that isn't known (null: still read, or the read failed), a tool's rule sends its
+ * channel and no contact points, as before OmniKrux installed tools: hidden ones are never sent.
  */
 function ruleIn(d: Draft, owner: Owner, source: SourcePick, installed: Installed | null): RuleIn {
   const tool = d.details.engine === "tool";
-  const notify = !tool || installed !== "none";
+  const notify = !tool || installed === "some" || installed === "all";
   const channel = tool && installed !== "all";
   return {
     name: d.details.name, scope: owner, source, expr: d.expr,
