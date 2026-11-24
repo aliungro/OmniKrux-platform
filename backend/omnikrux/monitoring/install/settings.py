@@ -39,6 +39,7 @@ class ReleaseRef:
     revision: int
     status: str
     owner_label: str | None
+    chart_version: str | None = None  # the chart version Helm recorded for the revision
 
 
 @dataclass(frozen=True)

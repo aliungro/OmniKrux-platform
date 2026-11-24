@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from omnikrux.monitoring.alerts.router import router as alerts_router
 from omnikrux.monitoring.dashboards.api import router as dashboards_router
 from omnikrux.monitoring.explore.api import router as explore_router
+from omnikrux.monitoring.install.api import router as install_router
 from omnikrux.monitoring.projects.api import router as projects_router
 from omnikrux.monitoring.query.api import router as query_router
 from omnikrux.monitoring.sources.api import finding_router
@@ -28,3 +29,4 @@ adopt(query_router)
 adopt(dashboards_router)
 adopt(explore_router)
 adopt(alerts_router)
+adopt(install_router)

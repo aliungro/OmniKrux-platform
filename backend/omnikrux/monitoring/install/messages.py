@@ -33,3 +33,34 @@ RENDER_STEP = "read the {chart} chart with these settings"
 CRDS_STEP = "read the {chart} chart's CustomResourceDefinitions"
 RENDER_TOO_LONG = "Helm's answer when it tried to {step} was too long to read in full, so OmniKrux used none of it. Try again."
 RENDER_UNREADABLE = "Helm's answer when it tried to {step} couldn't be read. Try again."
+
+# The install review (a server-built plan through the action pipeline).
+INSTALL_TITLE = "Install monitoring tools in {namespace}"
+UPDATE_TITLE = "Update monitoring tools in {namespace}"
+INSTALL_LABEL = "Install"
+UPDATE_LABEL = "Update"
+SUMMARY_INSTALLS = "Installs {what} into {cluster}, namespace {namespace}. The cluster pulls the container images itself."
+WHAT_METRICS = "Prometheus, Alertmanager, node-exporter and kube-state-metrics (kube-prometheus-stack {version})"
+WHAT_LOGS = "Loki {loki} in single-binary mode and Grafana Alloy {alloy} to collect Pod logs"
+WHAT_BOTH = "{metrics}, and {logs}"
+SUMMARY_RELEASE = "Helm release {release}: chart {chart} {version}; creates {objects}."
+SUMMARY_NAMESPACE = "Creates the namespace {namespace}."
+SUMMARY_CRDS = "Creates {created} and updates {updated} CustomResourceDefinitions of the Prometheus Operator (monitoring.coreos.com)."
+SUMMARY_VOLUMES = (
+    "Keeps data for {days} days on volumes: {volumes} ({storage_class} storage class)."
+)
+SUMMARY_MEMORY = "Keeps data for {days} days, only until the Pods restart."
+# `tools` lists what this install connects (Prometheus, Alertmanager, Loki); the plan's wording
+# is for all three, and these read right for one ("Loki as a source ... adds it").
+SUMMARY_CONNECT = "Then OmniKrux connects {tools} as sources{project}."
+SUMMARY_CONNECT_ONE = "Then OmniKrux connects {tools} as a source{project}."
+SUMMARY_CONNECT_PROJECT = " and adds them to the project {project}"
+SUMMARY_CONNECT_PROJECT_ONE = " and adds it to the project {project}"
+BLOCK_FOREIGN_OPERATOR = "This cluster already runs a Prometheus Operator ({where}) that OmniKrux didn't install. A second one would fight over the same objects. Connect the Prometheus it runs instead."
+BLOCK_FOREIGN_RELEASE = "A Helm release named {release} already exists in {namespace}, and OmniKrux didn't install it. Pick another namespace."
+BLOCK_OTHER_NAMESPACE = "OmniKrux already installed its tools in {namespace} in this cluster. Update them there, or uninstall them first."
+BLOCK_BUSY = "OmniKrux is {doing} in {cluster} right now. Wait for it to finish, or cancel it."
+# Until Task 6 adds the install job, a reviewed install can't be applied.
+APPLY_NOT_YET = (
+    "This version of OmniKrux can review an install but not run it yet. Nothing was installed."
+)
