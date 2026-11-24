@@ -20,6 +20,7 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
 from kubernetes_asyncio.client import ApiClient
@@ -136,12 +137,51 @@ def _pending(status: str) -> bool:
     return status.startswith("pending-")
 
 
+_QUANTITY = re.compile(r"([0-9]+(?:\.[0-9]*)?|\.[0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?")
+_FACTOR: dict[str | None, int] = {
+    None: 1,
+    "Ki": 1024,
+    "Mi": 1024**2,
+    "Gi": 1024**3,
+    "Ti": 1024**4,
+    "Pi": 1024**5,
+    "Ei": 1024**6,
+    "k": 10**3,
+    "M": 10**6,
+    "G": 10**9,
+    "T": 10**12,
+    "P": 10**15,
+    "E": 10**18,
+}
+
+
+def quantity_bytes(text: str) -> Decimal | None:
+    """A Kubernetes storage quantity (`2Gi`, `2048Mi`, `500M`, `1.5Gi`) in bytes; None when it
+    isn't one this reads."""
+    match = _QUANTITY.fullmatch(text.strip())
+    if match is None:
+        return None
+    try:
+        return Decimal(match.group(1)) * _FACTOR[match.group(2)]
+    except InvalidOperation:
+        return None
+
+
+def same_size(installed: str, wanted: str) -> bool:
+    """Whether two volume sizes are the same amount: Kubernetes keeps a quantity in its own form
+    (`2048Mi` reads back as `2Gi`). Texts that aren't quantities are the same only when equal."""
+    if installed == wanted:
+        return True
+    a, b = quantity_bytes(installed), quantity_bytes(wanted)
+    return a is not None and b is not None and a == b
+
+
 def _loki_volume_problem(installed: str | None, s: InstallSettings) -> str | None:
     """Why the installed Loki can't take these settings: Kubernetes never lets a StatefulSet's
     volume claim change, so Helm would refuse the update half way. None when nothing is installed
     or the volume stays as it is."""
     wanted = s.loki_storage if s.persist else NO_VOLUME
-    if installed is None or installed == wanted:
+    if installed is None or same_size(installed, wanted):
         return None
     if installed == NO_VOLUME:
         return messages.BLOCK_LOKI_VOLUME_ADDED

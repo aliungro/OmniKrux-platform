@@ -10,6 +10,7 @@ import yaml
 
 from omnikrux.clusters.registry import SOURCE_UPLOAD
 from omnikrux.config import Settings
+from omnikrux.monitoring.install.action import same_size
 from omnikrux.monitoring.install.facts import decode_release
 from omnikrux.monitoring.install.helm import HelmResult
 from omnikrux.monitoring.install.pins import CHARTS
@@ -554,6 +555,68 @@ async def test_a_running_job_blocks(env):
     name = plan["cluster"]["name"]
     assert plan["blocked"] == [
         f"OmniKrux is installing in {name} right now. Wait for it to finish, or cancel it."
+    ]
+
+
+async def test_no_pending_line_while_a_job_runs(env):
+    """While OmniKrux's own job runs, Helm's `pending-install` is that job's: only the busy line."""
+    http, app, cluster, fake_api, _ = env
+    default_class(fake_api)
+    namespace(fake_api)
+    await _record(app, cluster, state="installing")
+    secret = helm_release_secret(
+        "monitoring", "omnikrux-metrics", 1, "pending-install", chart="kube-prometheus-stack",
+        version=KPS.version,
+    )  # fmt: skip
+    fake_api.objects["secrets"][("monitoring", secret["metadata"]["name"])] = secret
+    plan = (await plan_for(http, cluster, components=["metrics"]))["plan"]
+    name = plan["cluster"]["name"]
+    assert plan["blocked"] == [
+        f"OmniKrux is installing in {name} right now. Wait for it to finish, or cancel it."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("installed", "wanted", "same"),
+    [
+        ("2Gi", "2048Mi", True),
+        ("1Ti", "1024Gi", True),
+        ("2G", "2000M", True),
+        ("1.5Gi", "1536Mi", True),
+        ("2Gi", "3Gi", False),
+        ("2Gi", "2G", False),
+        ("lots", "lots", True),
+        ("lots", "10Gi", False),
+        ("", "10Gi", False),
+    ],
+)
+def test_volume_sizes_compare_as_quantities(installed, wanted, same):
+    assert same_size(installed, wanted) is same
+
+
+async def test_a_loki_volume_written_another_way_is_the_same(env):
+    """Kubernetes keeps `2048Mi` as `2Gi`: the review compares amounts, not text."""
+    http, _, cluster, fake_api, _ = env
+    default_class(fake_api)
+    namespace(fake_api)
+    loki_statefulset(fake_api, "2Gi")
+    same = await plan_for(http, cluster, components=["logs"], settings={"loki_storage": "2048Mi"})
+    assert same["plan"]["blocked"] == []
+    bigger = await plan_for(http, cluster, components=["logs"], settings={"loki_storage": "3Gi"})
+    assert bigger["plan"]["blocked"] == [
+        (
+            "Loki already keeps its data on a 2Gi volume, and its size can't change once Loki has "
+            "it. Set Loki's storage back to 2Gi, or uninstall the tools and install them again."
+        )
+    ]
+    # A size this can't read is named as it is, never a crash.
+    loki_statefulset(fake_api, "lots")
+    odd = await plan_for(http, cluster, components=["logs"], settings={"loki_storage": "2Gi"})
+    assert odd["plan"]["blocked"] == [
+        (
+            "Loki already keeps its data on a lots volume, and its size can't change once Loki has "
+            "it. Set Loki's storage back to lots, or uninstall the tools and install them again."
+        )
     ]
 
 

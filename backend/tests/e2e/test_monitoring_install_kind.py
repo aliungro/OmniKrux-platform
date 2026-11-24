@@ -603,12 +603,13 @@ def test_uninstall_then_install_again(install_client, install_cluster):
     pending = {name: state for name, state in left.items() if state.startswith("pending-")}
     if pending:
         # Helm was stopped before it could record how it ended (a terminate ends it at once on
-        # Windows): Helm refuses to touch that release again, and the review says the way out.
+        # Windows): Helm refuses to touch that release again, and the review says the way out
+        # (one line per release, in the review's order: metrics, Loki, Alloy).
         blocked = plan_install(client, cluster, ["metrics", "logs"])["plan"]["blocked"]
         assert blocked == [
             f"Helm's record of {name} says an earlier change never finished ({state}), so Helm "
             "won't change it again. Uninstall the tools, then install them again."
-            for name, state in pending.items()
+            for name, state in sorted(pending.items(), key=lambda p: RELEASES.index(p[0]))
         ]
         plan = plan_uninstall(client, cluster, delete_data=True)
         assert plan["blocked"] == [], plan["blocked"]
