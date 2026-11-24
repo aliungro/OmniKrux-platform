@@ -236,3 +236,59 @@ def test_every_converted_query_takes_a_filter(name):
         text = fill(expr)
         out = inject_logql(text, matchers) if kind == "loki" else inject_promql(text, matchers)
         assert 'cluster="a"' in out
+
+
+def test_a_variable_after_one_that_was_not_copied_says_so():
+    c = convert_dashboard(
+        [
+            {"name": "env", "type": "custom", "query": "prod,staging"},
+            qvar("job", query='label_values(up{env="$env"}, job)'),
+        ]
+    )
+    assert c.doc["variables"] == []
+    assert (
+        "Variable $job",
+        "Its query",
+        "Uses $env, a Grafana variable OmniKrux couldn't copy.",
+    ) in {(s.where, s.what, s.reason) for s in c.skipped}
+
+
+def test_a_too_long_selector_is_listed():
+    c = convert_dashboard([qvar("job", query='label_values(up{a="' + "x" * 1100 + '"}, job)')])
+    assert c.doc["variables"] == []
+    reason = "Its selector is longer than 1000 characters."
+    assert ("Variable $job", "Its query", reason) in {
+        (s.where, s.what, s.reason) for s in c.skipped
+    }
+
+
+def test_auto_interval_in_braces_stays_a_variable():
+    assert convert_expr("x[${__auto}s]", frozenset()).text == "x[${__interval}s]"
+    assert convert_expr("x[[[__auto]]]", frozenset()).text == "x[${__interval}]"
+
+
+def test_a_variable_the_validator_refuses_is_listed():
+    from omnikrux.monitoring.transfer.grafana.convert import _validated
+
+    bad = {
+        "name": "job",
+        "label": "job",
+        "type": "labelValues",
+        "source": {"type": "prometheus", "id": None},
+        "labelName": "job",
+        "match": "x" * 1100,
+        "multi": False,
+        "includeAll": False,
+        "default": [],
+    }
+    skipped = []
+    head = {
+        "title": "T",
+        "description": "",
+        "time": {"from": "now-6h", "to": "now"},
+        "refresh": None,
+    }
+    doc, _ = _validated(head, [bad], [], skipped)
+    assert doc["variables"] == []
+    assert [(s.where, s.what) for s in skipped] == [("Variable $job", "The whole variable")]
+    assert skipped[0].reason.startswith("It couldn't be converted: variables[0].match: ")

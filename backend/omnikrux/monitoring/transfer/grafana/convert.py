@@ -35,12 +35,9 @@ from omnikrux.monitoring.transfer.types import (
 
 DEFAULT_TITLE = "Imported dashboard"
 MAX_ROW_DEPTH = 50
-_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,39}")
-_LABEL = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _EPOCH_MS = re.compile(r"[0-9]{13}")
 _PANEL_PATH = re.compile(r"panels\[(\d+)\]")
 _VARIABLE_PATH = re.compile(r"variables\[(\d+)\]")
-_LABEL_VALUES = re.compile(r"label_values\(.*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*$", re.DOTALL)
 _PROBLEM_COPY = "The dashboard couldn't be read."
 
 
@@ -282,8 +279,7 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
     )
     alerts: list[tuple[str, AlertDraft]] = []
     if doc:
-        kept = {e["panel"]["id"] for e in entries}
-        alerts, alert_items = _alerts(entries, kept, ctx, identity)
+        alerts, alert_items = _alerts(entries, ctx, identity)
         skipped.extend(alert_items)
     return ConvertedDashboard(
         key=key,
@@ -298,7 +294,7 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
     )
 
 
-def _alerts(entries: list[dict], kept: set[str], ctx: GrafanaContext, identity: Identity):
+def _alerts(entries: list[dict], ctx: GrafanaContext, identity: Identity):
     """One alert per panel, in panel order: the old panel alert first, then unified rules."""
     alerts: dict[str, AlertDraft] = {}
     items: list[SkippedItem] = []
@@ -386,6 +382,15 @@ def _validated(head: dict, variables: list[dict], entries: list[dict], skipped: 
                 elif first == "variables":
                     m = _VARIABLE_PATH.match(problem.path)
                     if m and int(m.group(1)) < len(variables):
+                        dropped = variables[int(m.group(1))]
+                        if isinstance(dropped, dict):
+                            skipped.append(
+                                SkippedItem(
+                                    f"Variable ${dropped.get('name')}",
+                                    "The whole variable",
+                                    f"It couldn't be converted: {problem.path}: {problem.message}",
+                                )
+                            )
                         variables[int(m.group(1))] = None  # type: ignore[call-overload]
                     else:
                         variables = variables[:MAX_VARIABLES]

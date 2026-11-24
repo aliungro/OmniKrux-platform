@@ -119,10 +119,11 @@ def _read_condition(cond: dict) -> tuple[str, str, float] | str:
 
 
 def _states(where: str, no_data: object, on_error: object) -> list[SkippedItem]:
+    """A state the source sets is listed: OmniKrux has no setting for either one."""
     items: list[SkippedItem] = []
-    if isinstance(no_data, str) and no_data.lower().replace("_", "") not in ("nodata", ""):
+    if isinstance(no_data, str) and no_data.strip():
         items.append(SkippedItem(where, f"No data state {clean_text(no_data)}", _NO_DATA))
-    if isinstance(on_error, str) and on_error.lower() not in ("alerting", "error", ""):
+    if isinstance(on_error, str) and on_error.strip():
         items.append(SkippedItem(where, f"Error state {clean_text(on_error)}", _ON_ERROR))
     return items
 

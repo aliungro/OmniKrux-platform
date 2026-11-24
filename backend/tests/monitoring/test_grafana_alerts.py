@@ -246,7 +246,11 @@ def test_legacy_alert_edges():
     assert draft == AlertDraft("A", "last", "below", 2.0, 0, "A", None, None, 600) and items == []
     assert legacy_draft(legacy(noDataState="alerting"), refs)[1][0].what == "No data state alerting"
     quiet = legacy(noDataState="no_data", executionErrorState="alerting")
-    assert legacy_draft(quiet, refs)[1] == []
+    # Grafana's own default states alert too, so every state the source sets is listed
+    assert [i.what for i in legacy_draft(quiet, refs)[1]] == [
+        "No data state no_data",
+        "Error state alerting",
+    ]
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ _LABEL_VALUES = re.compile(
     r"\s*label_values\(\s*(?:(.*?)\s*,\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*", re.DOTALL
 )
 _MAX_VALUES = 100
+_MAX_MATCH = 1000
 _SPECIAL_NAMES = {"mixed": "Mixed", "grafana": "Grafana", "dashboard": "Dashboard"}
 
 
@@ -88,13 +89,12 @@ def convert_variables(
 ) -> VarResult:
     entries = _entries(templating)
     result = VarResult(ds_vars=datasource_variables(templating))
-    all_names = {v["name"] for v in entries if isinstance(v.get("name"), str)}
     known: set[str] = set()
 
     def skip(name: str, what: str, reason: str) -> None:
         result.skipped.append(SkippedItem(f"Variable ${clean_text(name)}", what, reason))
 
-    for v in entries:
+    for index, v in enumerate(entries):
         raw_name = v.get("name")
         name = raw_name if isinstance(raw_name, str) else ""
         kind = v.get("type")
@@ -131,10 +131,16 @@ def convert_variables(
         if plugin is not None:
             skip(name, "Its data source", f"{plugin} variables aren't supported yet.")
             continue
-        later = [n for n in variables_used(selector) if n in all_names and n not in known]
+        after = {
+            n["name"] for n in entries[index:] if isinstance(n.get("name"), str)
+        }  # this variable and the ones after it
+        later = [n for n in variables_used(selector) if n in after and n not in known]
         later = [n for n in later if n not in BUILTIN_VARIABLES]
         if later:
             skip(name, "Its query", "It uses a variable defined after it.")
+            continue
+        if len(selector) > _MAX_MATCH:
+            skip(name, "Its query", "Its selector is longer than 1000 characters.")
             continue
         converted = convert_expr(selector, frozenset(known))
         if converted.text is None:

@@ -33,7 +33,7 @@ def convert_expr(expr: str, known: frozenset[str]) -> ExprResult:
         else:
             name, fmt, form = m.group(5), None, "$"
         if name == "__auto":
-            return "$__interval"
+            return "$__interval" if form == "$" else "${__interval}"
         if name in _KEPT:
             return m.group(0) if form == "$" else f"${{{name}}}"
         if name.startswith("__"):
