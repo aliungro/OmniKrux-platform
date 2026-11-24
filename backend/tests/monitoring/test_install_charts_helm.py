@@ -175,3 +175,15 @@ async def test_a_helm_failure_is_said_in_words():
         "Helm couldn't read the kube-prometheus-stack chart with these settings: "
         "values don't meet the specifications of the schema"
     )
+
+
+async def test_a_template_in_the_cluster_name_renders_literally(real):
+    alloy = next(s for s in ALL_RELEASES if s.release == "omnikrux-alloy")
+    helm, status = real
+    name = "{{ .Release.Name }}"
+    values = values_for(alloy.release, InstallSettings(), namespace="monitoring", cluster_name=name)
+    result = await render(
+        helm, status, alloy, values, namespace="monitoring", kube_version=KUBE_VERSION
+    )
+    config = next(d for d in result.documents if d["kind"] == "ConfigMap")
+    assert f'external_labels = {{ cluster = "{name}" }}' in "".join(config["data"].values())

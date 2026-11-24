@@ -69,12 +69,17 @@ _MEMORY_UNITS = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3}
 RESOURCE_COMPONENTS = ("prometheus", "alertmanager", "loki", "alloy")
 
 
+def _fits(pattern: re.Pattern[str], value: object) -> bool:
+    """The whole value fits the pattern (`$` alone would accept a trailing newline)."""
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
 def _memory_bytes(text: str) -> int:
     return int(text[:-2]) * _MEMORY_UNITS[text[-2:]]
 
 
 def _namespace_problem(namespace: str) -> str | None:
-    if len(namespace) > 63 or not _NAMESPACE.match(namespace):
+    if not _fits(_NAMESPACE, namespace) or len(namespace) > 63:
         return messages.SETTING_NAMESPACE
     if namespace == "default" or namespace.startswith("kube-"):
         return messages.SETTING_NAMESPACE_RESERVED.format(namespace=namespace)
@@ -89,14 +94,14 @@ def validate_settings(s: InstallSettings) -> list[SettingProblem]:
     if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 90:
         problems.append(SettingProblem("retention_days", messages.SETTING_RETENTION))
     for name in ("prometheus_storage", "loki_storage", "alertmanager_storage"):
-        if not _STORAGE.match(getattr(s, name)):
+        if not _fits(_STORAGE, getattr(s, name)):
             problems.append(SettingProblem(name, messages.SETTING_STORAGE))
     for component in RESOURCE_COMPONENTS:
         resources: Resources = getattr(s, component)
-        if not _CPU.match(resources.cpu_request):
+        if not _fits(_CPU, resources.cpu_request):
             problems.append(SettingProblem(f"{component}.cpu_request", messages.SETTING_CPU))
-        request_ok = _MEMORY.match(resources.memory_request) is not None
-        limit_ok = _MEMORY.match(resources.memory_limit) is not None
+        request_ok = _fits(_MEMORY, resources.memory_request)
+        limit_ok = _fits(_MEMORY, resources.memory_limit)
         if not request_ok:
             problems.append(SettingProblem(f"{component}.memory_request", messages.SETTING_MEMORY))
         if not limit_ok:

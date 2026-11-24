@@ -3,7 +3,8 @@
 from dataclasses import replace
 
 from omnikrux.monitoring.install import messages
-from omnikrux.monitoring.install.render import ObjectRef, objects_sentence
+from omnikrux.monitoring.install.helm import HelmResult
+from omnikrux.monitoring.install.render import ObjectRef, chart_crds, objects_sentence
 from omnikrux.monitoring.install.settings import (
     ClusterFacts,
     InstallSettings,
@@ -11,7 +12,13 @@ from omnikrux.monitoring.install.settings import (
     effective_settings,
     validate_settings,
 )
-from omnikrux.monitoring.install.values import RELEASES, alloy_config, values_for
+from omnikrux.monitoring.install.values import (
+    RELEASES,
+    alloy_config,
+    literal_in_tpl,
+    values_for,
+)
+from tests.monitoring.fake_helm import AvailableTools, FakeHelm
 
 
 def facts(**changes) -> ClusterFacts:
@@ -243,3 +250,47 @@ def test_objects_sentence_counts_by_kind():
     assert objects_sentence(many("Deployment", 1)) == "1 Deployment"
     assert objects_sentence(many("Ingress", 1)) == "1 other object"
     assert objects_sentence([]) == "no objects"
+
+
+def test_a_trailing_newline_is_not_a_valid_value():
+    assert "namespace" in problems(namespace="monitoring\n")
+    assert "loki_storage" in problems(loki_storage="10Gi\n")
+    assert "prometheus_storage" in problems(prometheus_storage="20Gi\n")
+    assert "alertmanager_storage" in problems(alertmanager_storage="1Gi\n")
+    assert "prometheus.cpu_request" in problems(prometheus=Resources("200m\n", "512Mi", "2Gi"))
+    assert "loki.memory_request" in problems(loki=Resources("100m", "256Mi\n", "1Gi"))
+    assert "loki.memory_limit" in problems(loki=Resources("100m", "256Mi", "1Gi\n"))
+
+
+def test_a_value_that_is_not_text_is_a_problem_not_an_error():
+    assert "namespace" in problems(namespace=None)
+    assert "loki_storage" in problems(loki_storage=10)
+    assert "retention_days" in problems(retention_days="7")
+    assert "alloy.cpu_request" in problems(alloy=Resources(0.5, "128Mi", "512Mi"))
+    assert "alloy.memory_request" in problems(alloy=Resources("50m", 128, "512Mi"))
+    assert "alloy.memory_limit" in problems(alloy=Resources("50m", "128Mi", None))
+
+
+def test_alloy_strings_escape_control_characters():
+    config = alloy_config("monitoring", "a\x00b\x1bc\x7fd\ne")
+    assert 'cluster = "a\\u0000b\\u001bc\\u007fd\\ne"' in config
+    assert not any(c in config for c in "\x00\x1b\x7f")
+
+
+def test_double_braces_in_a_cluster_name_reach_alloy_literally():
+    assert literal_in_tpl("a {{ b }} c") == 'a {{ "{{" }} b }} c'
+    assert literal_in_tpl("no braces { }") == "no braces { }"
+    v = values_for(
+        "omnikrux-alloy", InstallSettings(), namespace="monitoring", cluster_name="{{ x }}"
+    )
+    assert 'cluster = "{{ "{{" }} x }}"' in v["alloy"]["configMap"]["content"]
+
+
+async def test_chart_crds_reads_a_bare_equals_sign_as_text():
+    crds = (
+        "---\nkind: CustomResourceDefinition\nmetadata: {name: a.monitoring.coreos.com}\n"
+        "enum:\n  - =\n  - '!='\n"
+    )
+    helm = FakeHelm(script={"show": HelmResult(0, crds, "")})
+    result = await chart_crds(helm, await AvailableTools().status())
+    assert result[0]["enum"] == ["=", "!="]

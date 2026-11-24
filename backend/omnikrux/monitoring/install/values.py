@@ -82,15 +82,22 @@ RELEASES: Mapping[Component, tuple[ReleaseSpec, ...]] = MappingProxyType(
 )
 
 
+_ALLOY_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
 def _alloy_string(text: str) -> str:
-    escaped = (
-        text.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .replace("\t", "\\t")
+    """An Alloy string literal: quotes, backslashes and every control character escaped."""
+    escaped = "".join(
+        _ALLOY_ESCAPES.get(c) or (f"\\u{ord(c):04x}" if ord(c) < 0x20 or ord(c) == 0x7F else c)
+        for c in text
     )
     return f'"{escaped}"'
+
+
+def literal_in_tpl(text: str) -> str:
+    """The Alloy chart runs `configMap.content` through Helm's `tpl`: `{{` is written so it
+    comes out as the same two characters."""
+    return text.replace("{{", '{{ "{{" }}')
 
 
 def alloy_config(namespace: str, cluster_name: str) -> str:
@@ -217,7 +224,10 @@ def _alloy(s: InstallSettings, namespace: str, cluster_name: str) -> dict[str, A
         "controller": {"type": "deployment", "replicas": 1},
         "alloy": {
             "resources": _resources(s.alloy),
-            "configMap": {"create": True, "content": alloy_config(namespace, cluster_name)},
+            "configMap": {
+                "create": True,
+                "content": literal_in_tpl(alloy_config(namespace, cluster_name)),
+            },
         },
         "crds": {"create": False},
     }
