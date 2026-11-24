@@ -4,7 +4,7 @@
 // Not a model of the backend.
 import type { DashboardOut } from "../dashboards/api";
 import type {
-  ExportOut, GrafanaDashboardsOut, GrafanaIn, GrafanaOut, GrafanaPatch, ImportInput, ImportPreviewOut, ImportResultOut,
+  ExportOut, GrafanaDashboardsOut, GrafanaIn, GrafanaOut, GrafanaPatch, GrafanaTestOut, ImportInput, ImportPreviewOut, ImportResultOut,
   OriginOut, UpdatePreviewOut,
 } from "../transfer/api";
 
@@ -20,6 +20,8 @@ export interface FakeTransferState {
   grafana: GrafanaOut[];
   /** `GET /grafana/{id}/dashboards` by connection id; `POST /grafana/dashboards` reads `"new"`. */
   grafanaDashboards: Record<string, GrafanaDashboardsOut | Failure>;
+  /** `POST /grafana/{id}/test` by connection id, `POST /grafana/test` by `"new"`; none seeded connects (Grafana 11.0.0, no dashboards). */
+  grafanaTests: Record<string, GrafanaTestOut | Failure>;
   /** `POST /import/preview` by the text of a text input, or `grafana:<connection id or "new">:<uids joined by ",">`. */
   previews: Record<string, ImportPreviewOut | Failure>;
   /** `POST /import/commit`: used in order (the last one repeats), or one refusal. */
@@ -33,12 +35,13 @@ export interface FakeTransferState {
 }
 
 export function emptyTransferState(): FakeTransferState {
-  return { exports: {}, grafana: [], grafanaDashboards: {}, previews: {}, commits: [], origins: {}, updatePreviews: {}, updates: {} };
+  return { exports: {}, grafana: [], grafanaDashboards: {}, grafanaTests: {}, previews: {}, commits: [], origins: {}, updatePreviews: {}, updates: {} };
 }
 
 const NOW = "2026-01-01T00:00:00Z";
 const GRAFANA_GONE = "That Grafana connection no longer exists.";
 const NOTHING_SEEDED = "This fake has no answer for that.";
+const CONNECTED: GrafanaTestOut = { ok: true, version: "11.0.0", message: null, dashboards: 0 };
 
 type Obj = Record<string, unknown>;
 
@@ -103,7 +106,7 @@ export function transferRoute(deps: TransferRouteDeps, method: string, seg: stri
       t.grafana.push(out);
       return json(out, 201);
     }
-    if (method === "POST" && seg.length === 2 && b === "test") return json({ ok: true, version: "11.0.0", message: null, dashboards: 0 });
+    if (method === "POST" && seg.length === 2 && b === "test") return seeded(t.grafanaTests.new ?? CONNECTED);
     if (method === "POST" && seg.length === 2 && b === "dashboards") return seeded(t.grafanaDashboards.new);
     const old = b ? t.grafana.find((g) => g.id === b) : undefined;
     if (b && !old) return refuse(404, "not_found", GRAFANA_GONE);
@@ -117,7 +120,7 @@ export function transferRoute(deps: TransferRouteDeps, method: string, seg: stri
         t.grafana = t.grafana.filter((g) => g.id !== old.id);
         return new Response(null, { status: 204 });
       }
-      if (method === "POST" && seg.length === 3 && c === "test") return json({ ok: true, version: "11.0.0", message: null, dashboards: 0 });
+      if (method === "POST" && seg.length === 3 && c === "test") return seeded(t.grafanaTests[old.id] ?? CONNECTED);
       if (method === "GET" && seg.length === 3 && c === "dashboards") return seeded(t.grafanaDashboards[old.id]);
     }
     return null;

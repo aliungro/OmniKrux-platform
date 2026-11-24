@@ -70,10 +70,13 @@ export function pruneRuleForms(tabs: AppTabs<MonitoringView>): void {
 // with changes marks its tab here (its title and where it lives, never what was typed), and every
 // way out of that tab asks first, switching tabs included.
 
-/** Where a marked form lives on the Alerts page, and its name for the leave question. */
+/** Where a marked form lives, and its name for the leave question. */
 export interface AlertFormMark {
   title: string;
-  tab: "silences" | "contacts";
+  /** The Alerts view it lives on (Silences, Contact points). */
+  tab?: "silences" | "contacts";
+  /** Or the Monitoring page it lives on (a Grafana connection form): any view of it keeps the form. */
+  page?: MonitoringView["page"];
 }
 
 /** By Monitoring tab id, then by form. */
@@ -125,7 +128,8 @@ export function heldFormLeave(
   const found = first(action.id);
   if (!found) return null;
   const held = { tabId: action.id, title: found.mark.title };
-  const stays = (v: MonitoringView) => v.page === "alerts" && (v.tab ?? "rules") === found.mark.tab;
+  const stays = (v: MonitoringView) =>
+    (found.mark.page !== undefined ? v.page === found.mark.page : v.page === "alerts" && (v.tab ?? "rules") === found.mark.tab);
   if (action.type === "closeTab") return held;
   const tab = tabs.tabs.find((t) => t.id === action.id);
   if (!tab) return null;

@@ -5,6 +5,7 @@ import { deleteSource, sourceDeleteReview, testSource } from "../api/client";
 import { invalidateMonitoring, useSourceHealth, useSources } from "../api/hooks";
 import type { HealthOut, SourceDeleteReviewOut, SourceOut } from "../api/types";
 import { ageNote, STATE_WORDS, stateOf } from "../home/ProjectCard";
+import { GrafanaConnections } from "../transfer/GrafanaConnections";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { SourceDeleteReview } from "./SourceDeleteReview";
 import { SourceForm } from "./SourceForm";
@@ -16,7 +17,7 @@ const STALE_REVIEW = "Something changed since the review. Review it again.";
 
 type Editing = { kind: "new" } | { kind: "edit"; id: string } | null;
 
-export default function SourcesPage({ nav, openInNewTab }: MonitoringPageProps) {
+export default function SourcesPage({ nav, openInNewTab, tabId }: MonitoringPageProps) {
   const client = useQueryClient();
   const sources = useSources();
   const healthQuery = useSourceHealth();
@@ -172,6 +173,8 @@ export default function SourcesPage({ nav, openInNewTab }: MonitoringPageProps) 
           })}
         </ul>
       )}
+
+      <GrafanaConnections tabId={tabId} />
 
       {review && (
         <SourceDeleteReview review={review.data} busy={reviewBusy !== null} error={reviewError} restoreFocusTo={opener}

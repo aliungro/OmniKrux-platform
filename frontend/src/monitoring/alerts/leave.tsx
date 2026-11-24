@@ -22,11 +22,12 @@ export function useLeaveGuard(leaveRef: LeaveRef | undefined, changed: boolean, 
   const tabId = mark?.tabId;
   const title = mark?.title;
   const tab = mark?.tab;
+  const page = mark?.page;
   useEffect(() => {
-    if (tabId === undefined || title === undefined || tab === undefined) return;
-    markAlertForm(tabId, formId, changed ? { title, tab } : null);
+    if (tabId === undefined || title === undefined || (tab === undefined && page === undefined)) return;
+    markAlertForm(tabId, formId, changed ? { title, ...(tab ? { tab } : { page }) } : null);
     return () => markAlertForm(tabId, formId, null);
-  }, [tabId, formId, title, tab, changed]);
+  }, [tabId, formId, title, tab, page, changed]);
   const [asking, setAsking] = useState<(() => void) | null>(null);
   const request = useCallback((then: () => void) => {
     if (busy) return;
