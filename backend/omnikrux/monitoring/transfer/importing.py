@@ -749,8 +749,8 @@ class _NewGrafana:
     name: str
 
 
-def _choices(
-    body: ImportCommitIn,
+def mapping_choices(
+    mapping: Sequence[MappingIn],
     target: Target,
     refs: Mapping[str, SourceRefFound],
     sources: Mapping[str, SourceConfig],
@@ -758,7 +758,7 @@ def _choices(
     """The mapping as chosen, checked: a source must be one the target project links, of the
     reference's type. A group's documents read no source of their own, so none is kept."""
     choices: dict[str, MappingChoice] = {}
-    for m in body.mapping:
+    for m in mapping:
         if m.leave_out:
             choices[m.key] = MappingChoice(None, True)
             continue
@@ -890,7 +890,7 @@ async def commit(request: Request, body: ImportCommitIn) -> ImportResultOut:
     target, new_group = await _place(services, body, read)
     refs = {r.key: r for r in _all_refs([by_key[k] for k in keys])}
     sources = {s.id: s for s in await services.sources.list()}
-    choices = _choices(body, target, refs, sources)
+    choices = mapping_choices(body.mapping, target, refs, sources)
     taken = await _owner_titles(services, target)
     planned: list[_Planned] = []
     for d in body.dashboards:

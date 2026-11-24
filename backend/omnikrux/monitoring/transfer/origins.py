@@ -150,11 +150,13 @@ class OriginStore:
         mapping: Mapping[str, MappingChoice],
         now: datetime,
         panels: Mapping[str, str] | None = None,
+        session: AsyncSession | None = None,
     ) -> OriginRecord:
         """The dashboard was updated from its source as `version`; `panels` None keeps the stored
-        panel map. KeyError when the dashboard has no origin."""
-        async with self._sessionmaker.begin() as session:
-            row = await session.get(DashboardOriginRow, dashboard_id)
+        panel map. KeyError when the dashboard has no origin. With `session`, the change is part
+        of the caller's transaction (the dashboard's save) and commits with it."""
+        async with writing(self._sessionmaker, session) as s:
+            row = await s.get(DashboardOriginRow, dashboard_id)
             if row is None:
                 raise KeyError(dashboard_id)
             row.updated_version = version
@@ -164,7 +166,7 @@ class OriginStore:
             row.mapping = mapping_json(mapping)
             if panels is not None:
                 row.panels = _panels_json(panels)
-            await session.flush()
+            await s.flush()
             return _record(row)
 
     async def from_grafana(self, grafana_id: str) -> list[str]:

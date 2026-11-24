@@ -10,11 +10,12 @@ an import is checked, audited and reconciled exactly as an editor's save is. Eve
 `HTTPException` with `detail = {"code": DashboardErrorCode, "message": plain words}`."""
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnikrux.audit.store import Action
 from omnikrux.monitoring.alerts.sync import CONTACT_POINT_GONE, AlertChangeOut, change_out
@@ -34,6 +35,7 @@ from omnikrux.monitoring.dashboards.store import (
     UnknownDashboard,
     VersionConflict,
 )
+from omnikrux.monitoring.models import lock_first
 from omnikrux.monitoring.projects.types import UnknownGroup, UnknownProject
 from omnikrux.monitoring.services import MonitoringServices
 from omnikrux.monitoring.sources.types import NameTaken
@@ -55,6 +57,10 @@ NOT_LINKED = "This source isn't linked to {project}."
 NOT_SAVED = "The dashboard couldn't be saved. Try again."
 
 log = logging.getLogger(__name__)
+
+# A step that must commit with a save, or not at all: it runs inside the save's transaction with
+# the saved record (an update from source records it on the dashboard's origin, say).
+AlongWithSave = Callable[[AsyncSession, DashboardRecord], Awaitable[None]]
 
 
 # --- Refusals ----------------------------------------------------------------------------------
@@ -283,6 +289,7 @@ async def save_dashboard_audited(
     copied_from: str | None = None,
     action: Action = "dashboard_save",
     details: dict | None = None,
+    along: AlongWithSave | None = None,
 ) -> tuple[DashboardRecord, list[AlertChangeOut]]:
     """Check `spec` for the dashboard's owner, audit, then store it as the version after
     `base_version` recording `origin` and `copied_from`; then bring its panels' rules in line.
@@ -290,7 +297,8 @@ async def save_dashboard_audited(
     409 `read_only` (a ready-made view), 404 `not_found`/`unknown_owner`, 422
     `invalid_dashboard`, 409 `version_conflict` (nothing changed) or `name_taken`; 503 when the
     audit record can't be written. `details` replace the default audit details (owner, owner
-    name, versions, panels and the alerts added, changed and removed)."""
+    name, versions, panels and the alerts added, changed and removed). `along` runs inside the
+    save's transaction: when it fails, nothing is saved and the audit record ends as failed."""
     return await save_audited(
         request,
         dashboard_id,
@@ -300,6 +308,7 @@ async def save_dashboard_audited(
         copied_from=copied_from,
         action=action,
         details=details,
+        along=along,
     )
 
 
@@ -314,6 +323,7 @@ async def save_audited(
     action: Action = "dashboard_save",
     details: dict | None = None,
     from_explore: bool = False,
+    along: AlongWithSave | None = None,
 ) -> tuple[DashboardRecord, list[AlertChangeOut]]:
     """`save_dashboard_audited`, and the editor's save from Explore (`from_explore`): its record
     says so and names the panels it added; it is refused before the audit when the dashboard
@@ -351,7 +361,15 @@ async def save_audited(
         stamp["copied_from"] = copied_from
     record = await begin_change(request, action, "dashboard", doc["title"], details)
     try:
-        saved = await services.dashboards.save(dashboard_id, base_version, doc, **stamp)
+        if along is None:
+            saved = await services.dashboards.save(dashboard_id, base_version, doc, **stamp)
+        else:
+            async with services.sessionmaker.begin() as session:
+                await lock_first(session)
+                saved = await services.dashboards.save(
+                    dashboard_id, base_version, doc, session=session, **stamp
+                )
+                await along(session, saved)
     except VersionConflict as exc:
         await finish_change(request, record, False, str(exc))
         raise version_conflict(exc) from None
