@@ -10,6 +10,7 @@ from omnikrux.monitoring.projects.api import router as projects_router
 from omnikrux.monitoring.query.api import router as query_router
 from omnikrux.monitoring.sources.api import finding_router
 from omnikrux.monitoring.sources.api import router as sources_router
+from omnikrux.monitoring.transfer.api import router as transfer_router
 from omnikrux.monitoring.web import adopt as adopt_routes
 from omnikrux.monitoring.web import refuse_cross_origin
 
@@ -30,3 +31,4 @@ adopt(dashboards_router)
 adopt(explore_router)
 adopt(alerts_router)
 adopt(install_router)
+adopt(transfer_router)

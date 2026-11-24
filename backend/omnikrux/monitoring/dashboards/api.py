@@ -15,8 +15,7 @@ page rules; a copy never copies an alert."""
 import copy
 import json
 import logging
-from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Literal
 
@@ -25,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnikrux.monitoring.alerts.sync import CONTACT_POINT_GONE, AlertChangeOut, change_out
+from omnikrux.monitoring.alerts.sync import AlertChangeOut
 from omnikrux.monitoring.audit import begin_change, finish_change
 from omnikrux.monitoring.dashboards.ready_made import (
     DESCRIPTIONS,
@@ -41,13 +40,9 @@ from omnikrux.monitoring.dashboards.ready_made import (
     ready_id,
 )
 from omnikrux.monitoring.dashboards.schema import (
-    MAX_PROBLEMS,
-    DashboardInvalid,
     OwnerKind,
-    Problem,
     adapt_sources,
     panel_count,
-    validate_dashboard,
 )
 from omnikrux.monitoring.dashboards.store import (
     DashboardRecord,
@@ -58,30 +53,33 @@ from omnikrux.monitoring.dashboards.store import (
     VersionConflict,
     VersionRecord,
 )
+from omnikrux.monitoring.dashboards.writes import (
+    DASHBOARD_GONE,
+    NOT_SAVED,
+    READ_ONLY,  # noqa: F401 (other modules write dashboards with it: `alerts/api.py`)
+    check_document,  # noqa: F401 (as READ_ONLY)
+    check_notify,  # noqa: F401 (as READ_ONLY)
+    create_dashboard_audited,
+    dashboard_error,
+    dashboard_gone,
+    dashboard_record,
+    name_taken,
+    owner_details,
+    owner_of,
+    reconcile_alerts,
+    refuse_ready_made,
+    save_audited,
+    version_conflict,
+)
 from omnikrux.monitoring.models import ContactPointRow, lock_first
-from omnikrux.monitoring.projects.types import Project, UnknownGroup, UnknownProject
+from omnikrux.monitoring.projects.types import Project, UnknownProject
 from omnikrux.monitoring.services import MonitoringServices
 from omnikrux.monitoring.sources.connector import QueryRejected
 from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE
 from omnikrux.monitoring.sources.transport import SourceUnreachable
 from omnikrux.monitoring.sources.types import NameTaken, SourceConfig
 
-DashboardErrorCode = Literal[
-    "invalid_dashboard",
-    "version_conflict",
-    "name_taken",
-    "not_found",
-    "unknown_owner",
-    "read_only",
-    "bad_request",
-]
-
-DASHBOARD_GONE = "That dashboard no longer exists."
 VERSION_GONE = "That version of the dashboard no longer exists."
-OWNER_GONE = "That project or group no longer exists."
-READ_ONLY = "Ready-made views can't be changed. Copy one to edit it."
-NOT_LINKED = "This source isn't linked to {project}."
-NOT_SAVED = "The dashboard couldn't be saved. Try again."
 NOT_REMOVED = "The dashboard couldn't be removed. Try again."
 CANT_READ_ALL = "OmniKrux couldn't read every metric name, so it can't tell what's missing."
 # Metric names read to tell which exporters report; well past a large Prometheus.
@@ -204,39 +202,8 @@ class DashboardCopyIn(_Body):
 # --- Helpers -----------------------------------------------------------------------------------
 
 
-def dashboard_error(
-    status: int, code: DashboardErrorCode, message: str, **extra: object
-) -> HTTPException:
-    return HTTPException(status_code=status, detail={"code": code, "message": message, **extra})
-
-
-def _invalid(exc: DashboardInvalid) -> HTTPException:
-    return dashboard_error(
-        422,
-        "invalid_dashboard",
-        str(exc),
-        problems=[{"path": p.path, "message": p.message} for p in exc.problems],
-    )
-
-
-def _conflict(exc: VersionConflict) -> HTTPException:
-    return dashboard_error(409, "version_conflict", str(exc), current_version=exc.current)
-
-
-def _taken(exc: NameTaken) -> HTTPException:
-    return dashboard_error(409, "name_taken", str(exc))
-
-
-def _dashboard_gone() -> HTTPException:
-    return dashboard_error(404, "not_found", DASHBOARD_GONE)
-
-
 def _version_gone() -> HTTPException:
     return dashboard_error(404, "not_found", VERSION_GONE)
-
-
-def _owner_gone() -> HTTPException:
-    return dashboard_error(404, "unknown_owner", OWNER_GONE)
 
 
 def _schema(model: type[BaseModel]) -> dict:
@@ -293,47 +260,19 @@ def _services(request: Request) -> MonitoringServices:
     return request.app.state.monitoring
 
 
-@dataclass(frozen=True)
-class Owner:
-    kind: OwnerKind
-    id: str
-    name: str
-    # The sources a project's dashboards may name; a group's name none.
-    linked: frozenset[str]
-
-
-async def _owner(services: MonitoringServices, kind: OwnerKind, id: str) -> Owner:
-    """The owner as it is now; 404 `unknown_owner` when it is gone."""
-    try:
-        if kind == "project":
-            project = await services.projects.get(id)
-            return Owner(kind, id, project.name, frozenset(l.source_id for l in project.links))
-        group = await services.groups.get(id)
-        return Owner(kind, id, group.name, frozenset())
-    except (UnknownProject, UnknownGroup):
-        raise _owner_gone() from None
-
-
 async def _owner_name(services: MonitoringServices, kind: OwnerKind, id: str) -> str:
     """The owner's name for reading or deleting a dashboard; empty when the owner is gone."""
     try:
-        return (await _owner(services, kind, id)).name
+        return (await owner_of(services, kind, id)).name
     except HTTPException:
         return ""
-
-
-async def _dashboard(services: MonitoringServices, id: str) -> DashboardRecord:
-    try:
-        return await services.dashboards.get(id)
-    except UnknownDashboard:
-        raise _dashboard_gone() from None
 
 
 async def _ready_project(services: MonitoringServices, project_id: str) -> Project:
     try:
         return await services.projects.get(project_id)
     except UnknownProject:
-        raise _dashboard_gone() from None
+        raise dashboard_gone() from None
 
 
 async def _source_configs(services: MonitoringServices, project: Project) -> list[SourceConfig]:
@@ -352,49 +291,15 @@ async def _ready_document(services: MonitoringServices, id: str) -> tuple[Projec
     project is gone or has no such view."""
     parsed = parse_ready_id(id)
     if parsed is None:
-        raise _dashboard_gone()
+        raise dashboard_gone()
     project_id, key = parsed
     project = await _ready_project(services, project_id)
     configs = await _source_configs(services, project)
     types = {c.id: c.type for c in configs}
     if key not in project_ready_keys(project, types):
-        raise _dashboard_gone()
+        raise dashboard_gone()
     doc = build_ready_made(key, kind=project.kind, has_loki="loki" in types.values())
     return project, key, doc
-
-
-def _refuse_ready_made(id: str) -> None:
-    """Ready-made views are never changed: 409 `read_only`."""
-    if parse_ready_id(id) is not None:
-        raise dashboard_error(409, "read_only", READ_ONLY)
-
-
-def _sources(doc: dict) -> Iterator[tuple[str, dict]]:
-    """(path, source) of every source the document names, in document order."""
-    for i, variable in enumerate(doc["variables"]):
-        yield f"variables[{i}].source", variable["source"]
-    for i, panel in enumerate(doc["panels"]):
-        for j, query in enumerate(panel["queries"]):
-            yield f"panels[{i}].queries[{j}].source", query["source"]
-
-
-def _checked(spec: dict, owner: Owner) -> dict:
-    """The validated, normalised document for `owner`; 422 `invalid_dashboard` when it isn't
-    valid or names a source the project isn't linked to."""
-    try:
-        doc = validate_dashboard(spec, owner_kind=owner.kind)
-    except DashboardInvalid as exc:
-        raise _invalid(exc) from None
-    if owner.kind == "project":
-        message = NOT_LINKED.format(project=owner.name)
-        problems = [
-            Problem(f"{path}.id", message)
-            for path, source in _sources(doc)
-            if source["id"] is not None and source["id"] not in owner.linked
-        ]
-        if problems:
-            raise _invalid(DashboardInvalid(tuple(problems[:MAX_PROBLEMS])))
-    return doc
 
 
 def _out(
@@ -416,53 +321,6 @@ def _out(
 
 
 dashboard_out = _out
-
-
-async def owner_of(services: MonitoringServices, kind: OwnerKind, id: str) -> Owner:
-    """The owner as it is now; 404 `unknown_owner` when it is gone."""
-    return await _owner(services, kind, id)
-
-
-def check_document(spec: dict, owner: Owner) -> dict:
-    """The validated, normalised document for `owner`; 422 `invalid_dashboard` otherwise."""
-    return _checked(spec, owner)
-
-
-async def check_notify(services: MonitoringServices, doc: dict) -> None:
-    """422 `invalid_dashboard` naming each panel alert's contact point that doesn't exist."""
-    named = [
-        (i, j, cp_id)
-        for i, panel in enumerate(doc["panels"])
-        if isinstance(panel.get("alert"), dict)
-        for j, cp_id in enumerate(panel["alert"].get("notify") or [])
-    ]
-    if not named:
-        return
-    known = {cp.id for cp in await services.contact_points.list()}
-    problems = [
-        Problem(f"panels[{i}].alert.notify[{j}]", CONTACT_POINT_GONE)
-        for i, j, cp_id in named
-        if cp_id not in known
-    ]
-    if problems:
-        raise _invalid(DashboardInvalid(tuple(problems[:MAX_PROBLEMS])))
-
-
-async def reconcile_alerts(
-    services: MonitoringServices, dashboard_id: str, *, deleted: bool = False
-) -> list[AlertChangeOut]:
-    """Bring the rules of the dashboard's panels in line with it. The dashboard is already
-    written: a failure here is logged, and the next start converges (`reconcile_all`)."""
-    try:
-        changes = await services.alert_sync.reconcile_dashboard(dashboard_id, deleted=deleted)
-    except Exception as exc:  # noqa: BLE001 (the save stands; the rules converge at start)
-        log.warning(
-            "Bringing the alerts of dashboard %s up to date failed (%s)",
-            dashboard_id,
-            type(exc).__name__,
-        )
-        return []
-    return [change_out(c) for c in changes]
 
 
 def _save_failure(exc: Exception) -> str:
@@ -488,7 +346,7 @@ async def save_document(
     transaction with `also` (run first, under the write lock). VersionConflict, UnknownDashboard,
     NameTaken or what `also` raises: nothing changed, and the record says why."""
     services = _services(request)
-    details = _owner_details(current.owner_kind, owner_name) | {
+    details = owner_details(current.owner_kind, owner_name) | {
         "version": current.version + 1,
         "previous_version": current.version,
         "panels": panel_count(doc),
@@ -608,42 +466,6 @@ def _version_out(version: VersionRecord) -> VersionOut:
     )
 
 
-def _owner_details(owner_kind: OwnerKind, owner_name: str) -> dict:
-    return {"owner": owner_kind, "owner_name": owner_name}
-
-
-async def _add(
-    request: Request,
-    owner: Owner,
-    doc: dict,
-    *,
-    origin: Origin = "created",
-    copied_from: str | None = None,
-) -> DashboardOut:
-    """Audit, then store the new dashboard; 409 when the title is taken, 404 when the owner went
-    away meanwhile."""
-    services = _services(request)
-    details = _owner_details(owner.kind, owner.name) | {"version": 1, "panels": panel_count(doc)}
-    if copied_from is not None:
-        details["copied_from"] = copied_from
-    record = await begin_change(request, "dashboard_add", "dashboard", doc["title"], details)
-    try:
-        created = await services.dashboards.create(
-            owner.kind, owner.id, doc, origin=origin, copied_from=copied_from
-        )
-    except NameTaken as exc:
-        await finish_change(request, record, False, str(exc))
-        raise _taken(exc) from None
-    except (UnknownProject, UnknownGroup):
-        await finish_change(request, record, False, OWNER_GONE)
-        raise _owner_gone() from None
-    except Exception:
-        await finish_change(request, record, False, NOT_SAVED)
-        raise
-    await finish_change(request, record, True)
-    return _out(created, owner.name, await reconcile_alerts(services, created.id))
-
-
 # --- Routes ------------------------------------------------------------------------------------
 
 
@@ -660,11 +482,11 @@ async def list_dashboards(
 @router.post("/dashboards", status_code=201, openapi_extra=_schema(DashboardCreateIn))
 async def add_dashboard(request: Request) -> DashboardOut:
     body = await _body(request, DashboardCreateIn)
-    services = _services(request)
-    owner = await _owner(services, body.owner_kind, body.owner_id)
-    doc = _checked(body.spec, owner)
-    await check_notify(services, doc)
-    return await _add(request, owner, doc)
+    created, changes = await create_dashboard_audited(
+        request, owner_kind=body.owner_kind, owner_id=body.owner_id, spec=body.spec
+    )
+    owner_name = await _owner_name(_services(request), created.owner_kind, created.owner_id)
+    return _out(created, owner_name, changes)
 
 
 @router.post("/dashboards/copy", status_code=201, openapi_extra=_schema(DashboardCopyIn))
@@ -677,9 +499,9 @@ async def copy_dashboard(request: Request) -> DashboardOut:
         _, _, spec = await _ready_document(services, body.from_id)
         source_title, base = spec["title"], spec["title"]  # a ready-made view isn't "a copy"
     else:
-        source = await _dashboard(services, body.from_id)
+        source = await dashboard_record(services, body.from_id)
         spec, source_title, base = source.spec, source.title, f"{source.title} (copy)"
-    owner = await _owner(services, body.owner_kind, body.owner_id)
+    owner = await owner_of(services, body.owner_kind, body.owner_id)
     if body.title is not None:
         title = body.title
     else:
@@ -688,8 +510,15 @@ async def copy_dashboard(request: Request) -> DashboardOut:
     for panel in adapted.get("panels", []):
         if isinstance(panel, dict):
             panel["alert"] = None  # an alert is its panel's alone: a copy starts without one
-    doc = _checked(adapted | {"title": title}, owner)
-    return await _add(request, owner, doc, origin="copied", copied_from=source_title)
+    created, changes = await create_dashboard_audited(
+        request,
+        owner_kind=owner.kind,
+        owner_id=owner.id,
+        spec=adapted | {"title": title},
+        origin="copied",
+        copied_from=source_title,
+    )
+    return _out(created, owner.name, changes)
 
 
 @router.get("/dashboards/{id}")
@@ -709,104 +538,52 @@ async def get_dashboard(id: str, request: Request) -> DashboardOut:
             created_at=None,
             updated_at=None,
         )
-    record = await _dashboard(services, id)
+    record = await dashboard_record(services, id)
     return _out(record, await _owner_name(services, record.owner_kind, record.owner_id))
-
-
-def alert_changes(old: dict, new: dict) -> dict[str, list[str]]:
-    """The panel alerts a save adds, changes and removes, by name, for its audit record (each
-    becomes, changes or removes an alert rule); only the lists that aren't empty."""
-
-    def alerts(doc: dict) -> dict[str, dict]:
-        return {
-            str(p.get("id")): p["alert"]
-            for p in doc.get("panels", [])
-            if isinstance(p, dict) and isinstance(p.get("alert"), dict)
-        }
-
-    before, after = alerts(old), alerts(new)
-    out = {
-        "alerts_added": [a.get("name", "") for k, a in after.items() if k not in before],
-        "alerts_changed": [
-            a.get("name", "") for k, a in after.items() if k in before and before[k] != a
-        ],
-        "alerts_removed": [a.get("name", "") for k, a in before.items() if k not in after],
-    }
-    return {k: [str(n) for n in v] for k, v in out.items() if v}
 
 
 @router.put("/dashboards/{id}", openapi_extra=_schema(DashboardSaveIn))
 async def save_dashboard(id: str, request: Request) -> DashboardOut:
     """Save the document as the next version; 409 (nothing changed) when another save landed
     since `base_version`."""
-    _refuse_ready_made(id)
-    services = _services(request)
+    refuse_ready_made(id)
     body = await _body(request, DashboardSaveIn)
-    current = await _dashboard(services, id)
-    owner = await _owner(services, current.owner_kind, current.owner_id)
-    doc = _checked(body.spec, owner)
-    await check_notify(services, doc)
-    details = _owner_details(owner.kind, owner.name) | {
-        "version": body.base_version + 1,
-        "previous_version": body.base_version,
-        "panels": panel_count(doc),
-    }
-    if body.origin == "explore":
-        if current.version != body.base_version:
-            # The save would be refused: no audit record may name panels against another document.
-            raise _conflict(VersionConflict(current.version))
-        # Versions never change: a save that goes through was made over exactly `current`'s
-        # document (the store refuses it under its lock otherwise), so its panel ids are the old ones.
-        stored = {p.get("id") for p in current.spec.get("panels", [])}
-        details |= {
-            "from": "explore",
-            "added_panels": [p["title"] for p in doc["panels"] if p["id"] not in stored],
-        }
-    details |= alert_changes(current.spec, doc)
-    record = await begin_change(request, "dashboard_save", "dashboard", doc["title"], details)
-    try:
-        saved = await services.dashboards.save(id, body.base_version, doc)
-    except VersionConflict as exc:
-        await finish_change(request, record, False, str(exc))
-        raise _conflict(exc) from None
-    except NameTaken as exc:
-        await finish_change(request, record, False, str(exc))
-        raise _taken(exc) from None
-    except UnknownDashboard:
-        await finish_change(request, record, False, DASHBOARD_GONE)
-        raise _dashboard_gone() from None
-    except Exception:
-        await finish_change(request, record, False, NOT_SAVED)
-        raise
-    await finish_change(request, record, True)
-    return _out(saved, owner.name, await reconcile_alerts(services, saved.id))
+    saved, changes = await save_audited(
+        request,
+        id,
+        base_version=body.base_version,
+        spec=body.spec,
+        from_explore=body.origin == "explore",
+    )
+    owner_name = await _owner_name(_services(request), saved.owner_kind, saved.owner_id)
+    return _out(saved, owner_name, changes)
 
 
 @router.delete("/dashboards/{id}", status_code=204)
 async def remove_dashboard(id: str, request: Request, version: str | None = None) -> Response:
     """Delete the dashboard and every version of it; 409 (nothing changed) when it is no longer
     at `version`."""
-    _refuse_ready_made(id)
+    refuse_ready_made(id)
     services = _services(request)
     base = _whole(version)
     if base is None:
         raise dashboard_error(422, "bad_request", VERSION_NUMBER)
-    current = await _dashboard(services, id)
+    current = await dashboard_record(services, id)
     try:
         versions = len(await services.dashboards.versions(id))
     except UnknownDashboard:
-        raise _dashboard_gone() from None
+        raise dashboard_gone() from None
     owner_name = await _owner_name(services, current.owner_kind, current.owner_id)
-    details = _owner_details(current.owner_kind, owner_name) | {"versions": versions}
+    details = owner_details(current.owner_kind, owner_name) | {"versions": versions}
     record = await begin_change(request, "dashboard_remove", "dashboard", current.title, details)
     try:
         await services.dashboards.delete(id, base)
     except VersionConflict as exc:
         await finish_change(request, record, False, str(exc))
-        raise _conflict(exc) from None
+        raise version_conflict(exc) from None
     except UnknownDashboard:
         await finish_change(request, record, False, DASHBOARD_GONE)
-        raise _dashboard_gone() from None
+        raise dashboard_gone() from None
     except Exception:
         await finish_change(request, record, False, NOT_REMOVED)
         raise
@@ -822,7 +599,7 @@ async def list_versions(id: str, request: Request) -> list[VersionOut]:
     try:
         versions = await _services(request).dashboards.versions(id)
     except UnknownDashboard:
-        raise _dashboard_gone() from None
+        raise dashboard_gone() from None
     return [_version_out(v) for v in versions]
 
 
@@ -834,7 +611,7 @@ async def _version(services: MonitoringServices, id: str, v: str) -> tuple[Versi
             raise UnknownVersion(v)
         return await services.dashboards.version(id, number)
     except UnknownDashboard:
-        raise _dashboard_gone() from None
+        raise dashboard_gone() from None
     except UnknownVersion:
         raise _version_gone() from None
 
@@ -849,10 +626,10 @@ async def get_version(id: str, v: str, request: Request) -> VersionDetailOut:
 async def restore_version(id: str, v: str, request: Request) -> DashboardOut:
     """Save an earlier version's document as the next version; 409 (nothing changed) when
     another save landed since `base_version`."""
-    _refuse_ready_made(id)
+    refuse_ready_made(id)
     services = _services(request)
     body = await _body(request, RestoreIn)
-    current = await _dashboard(services, id)
+    current = await dashboard_record(services, id)
     old, old_spec = await _version(services, id, v)
     details: dict = {"from_version": old.version, "version": body.base_version + 1}
     # A panel alert of that version may name a contact point deleted since: it is left out (the
@@ -875,13 +652,13 @@ async def restore_version(id: str, v: str, request: Request) -> DashboardOut:
             )
     except VersionConflict as exc:
         await finish_change(request, record, False, str(exc))
-        raise _conflict(exc) from None
+        raise version_conflict(exc) from None
     except NameTaken as exc:
         await finish_change(request, record, False, str(exc))
-        raise _taken(exc) from None
+        raise name_taken(exc) from None
     except UnknownDashboard:
         await finish_change(request, record, False, DASHBOARD_GONE)
-        raise _dashboard_gone() from None
+        raise dashboard_gone() from None
     except UnknownVersion:
         await finish_change(request, record, False, VERSION_GONE)
         raise _version_gone() from None

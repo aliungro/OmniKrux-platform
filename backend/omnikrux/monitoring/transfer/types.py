@@ -60,9 +60,10 @@ class SkippedItem:
 
 @dataclass(frozen=True)
 class ExportedCluster:
-    """A cluster service as an export names it (by cluster name, never by internal id)."""
+    """A cluster service as an export names it (by cluster name, never by internal id). `name`
+    is None when the exporting OmniKrux no longer knew the cluster."""
 
-    name: str
+    name: str | None
     namespace: str
     service: str
     port: str

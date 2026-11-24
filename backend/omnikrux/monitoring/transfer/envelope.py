@@ -3,6 +3,7 @@
 The reader is a hand-written walker over plain JSON values that reports exact paths. A broken
 dashboard inside the file does not break the others: it stays in the result with its problems."""
 
+import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -43,6 +44,10 @@ _UNLISTED_SOURCE = "It named a source the file doesn't list, so it uses the firs
 
 @dataclass(frozen=True)
 class EnvelopeDashboard:
+    """One dashboard of the file. `doc` is checked as M2 checks a document, except that each
+    panel alert's `notify` is left as the file has it (contact point names: `import_alert` maps
+    them to this instance's ids)."""
+
     key: str
     export_id: str | None
     owner_kind: OwnerKind
@@ -75,7 +80,7 @@ def source_entry(
     if cfg.reach == "cluster" and cfg.cluster is not None:
         c = cfg.cluster
         cluster = {
-            "name": cluster_name or "",
+            "name": cluster_name,  # None: OmniKrux no longer knows the cluster
             "namespace": c.namespace,
             "service": c.service,
             "port": c.port,
@@ -145,11 +150,16 @@ def _cluster(raw: object, path: str, problems: list[Problem]) -> ExportedCluster
     if raw is None:
         return None
     if isinstance(raw, dict):
-        fields = [raw.get(k) for k in ("name", "namespace", "service", "port")]
-        if _is_int(fields[3]):
-            fields[3] = str(fields[3])
-        if all(isinstance(f, str) for f in fields) and raw.get("scheme") in ("http", "https"):
-            return ExportedCluster(*fields, raw["scheme"])
+        name = raw.get("name")
+        fields = [raw.get(k) for k in ("namespace", "service", "port")]
+        if _is_int(fields[2]):
+            fields[2] = str(fields[2])
+        if (
+            (name is None or isinstance(name, str))
+            and all(isinstance(f, str) for f in fields)
+            and raw.get("scheme") in ("http", "https")
+        ):
+            return ExportedCluster(name, *fields, raw["scheme"])
     problems.append(Problem(path, _CLUSTER_COPY))
     return None
 
@@ -233,6 +243,23 @@ def _unlisted_sources(
     return doc, tuple(skipped)
 
 
+def _without_notify(body: object) -> tuple[object, dict[int, object]]:
+    """`body` with each panel alert's `notify` set aside, and what was set aside by panel index.
+
+    A file names contact points by name (`{"name": …}`), which the dashboard check refuses (it
+    takes this instance's ids): the names go back in after the check, for `import_alert` to map
+    or leave out in words."""
+    if not isinstance(body, dict) or not isinstance(body.get("panels"), list):
+        return body, {}
+    out = copy.deepcopy(body)
+    held: dict[int, object] = {}
+    for i, panel in enumerate(out["panels"]):
+        alert = panel.get("alert") if isinstance(panel, dict) else None
+        if isinstance(alert, dict) and "notify" in alert:
+            held[i] = alert.pop("notify")
+    return out, held
+
+
 def _dashboards(
     raw: object, owner_kind: OwnerKind, listed: set[str], problems: list[Problem]
 ) -> tuple[list[EnvelopeDashboard], dict[str, tuple[SkippedItem, ...]]]:
@@ -252,8 +279,9 @@ def _dashboards(
         export_id = _optional_text(entry.get("exportId"))
         body = entry.get("dashboard")
         title = _text(body.get("title")) if isinstance(body, dict) else ""
+        checked, held = _without_notify(body)
         try:
-            doc = validate_dashboard(body, owner_kind=owner)
+            doc = validate_dashboard(checked, owner_kind=owner)
         except DashboardInvalid as e:
             found = tuple(
                 Problem(f"dashboard.{p.path}" if p.path else "dashboard", p.message)
@@ -262,6 +290,8 @@ def _dashboards(
             out.append(EnvelopeDashboard(key, export_id, owner, title, None, found))
             skipped_by_key[key] = ()
             continue
+        for i, notify in held.items():
+            doc["panels"][i]["alert"]["notify"] = notify
         doc, skipped = _unlisted_sources(doc, listed, owner)
         out.append(EnvelopeDashboard(key, export_id, owner, doc["title"], doc, ()))
         skipped_by_key[key] = skipped
