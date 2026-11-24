@@ -1,0 +1,372 @@
+{
+  "uid": "cl-ov",
+  "title": "Cluster overview",
+  "schemaVersion": 39,
+  "version": 12,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "timezone": "utc",
+  "tags": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "loki",
+          "uid": "loki-main"
+        },
+        "enable": true,
+        "name": "Deploys",
+        "expr": "{app=\"deployer\"}",
+        "iconColor": "blue"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Runbook",
+      "type": "link",
+      "url": "https://runbooks.example.invalid/cluster"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "prom-main",
+          "value": "prom-main"
+        }
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds}"
+        },
+        "query": {
+          "query": "label_values(kube_namespace_status_phase, namespace)",
+          "refId": "ns"
+        },
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": [
+            "api",
+            "web"
+          ],
+          "value": [
+            "api",
+            "web"
+          ]
+        }
+      },
+      {
+        "name": "pod",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds}"
+        },
+        "query": "label_values(kube_pod_info{namespace=~\"$namespace\"}, pod)",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "app",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "loki-main"
+        },
+        "query": {
+          "label": "app",
+          "stream": "{namespace=~\"$namespace\"}",
+          "type": 1
+        },
+        "current": {
+          "text": "api",
+          "value": "api"
+        }
+      },
+      {
+        "name": "env",
+        "type": "custom",
+        "query": "prod,staging",
+        "current": {
+          "text": "prod",
+          "value": "prod"
+        }
+      },
+      {
+        "name": "window",
+        "type": "interval",
+        "query": "1m,5m,15m",
+        "current": {
+          "text": "5m",
+          "value": "5m"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "CPU by namespace",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "web"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (rate(container_cpu_usage_seconds_total{namespace=~\"${namespace:regex}\"}[$__rate_interval]))",
+          "legendFormat": "__auto"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "API logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-main"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "wrapLogMessage": false,
+        "sortOrder": "Ascending",
+        "showTime": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{namespace=~\"$namespace\", app=\"$app\"} |= \"error\"",
+          "maxLines": 500
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "row",
+      "title": "Details",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Env pods",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prom-main"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 9,
+            "w": 6,
+            "h": 4
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "count(kube_pod_info{env=\"$env\"})"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Mixed",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Mixed --"
+          },
+          "gridPos": {
+            "x": 6,
+            "y": 9,
+            "w": 18,
+            "h": 6
+          },
+          "repeat": "namespace",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(up)",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prom-main"
+              }
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "grafana-testdata-datasource",
+                "uid": "td"
+              },
+              "scenarioId": "random_walk"
+            },
+            {
+              "refId": "C",
+              "expr": "increase(x[$__range_s])",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prom-main"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "piechart",
+      "title": "Share",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom-main"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (kube_pod_info)"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "libraryPanel": {
+        "uid": "lib-1",
+        "name": "Shared CPU"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 15,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "id": 8,
+      "type": "barchart",
+      "title": "Restarts",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom-main"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 15,
+        "w": 8,
+        "h": 8
+      },
+      "options": {
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (increase(kube_pod_container_status_restarts_total[1h]))",
+          "legendFormat": "{{namespace}}"
+        }
+      ]
+    }
+  ]
+}

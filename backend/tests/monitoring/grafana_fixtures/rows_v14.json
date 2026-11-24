@@ -1,0 +1,129 @@
+{
+  "id": null,
+  "title": "Node overview",
+  "schemaVersion": 14,
+  "version": 7,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "tags": [],
+  "rows": [
+    {
+      "title": "CPU",
+      "showTitle": true,
+      "height": "250px",
+      "collapse": false,
+      "panels": [
+        {
+          "id": 1,
+          "type": "graph",
+          "title": "CPU busy",
+          "span": 6,
+          "datasource": "Prometheus",
+          "stack": true,
+          "fill": 1,
+          "legend": {
+            "show": true
+          },
+          "yaxes": [
+            {
+              "format": "percentunit",
+              "min": 0
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "thresholds": [
+            {
+              "value": 0.9,
+              "op": "gt",
+              "colorMode": "critical",
+              "fill": true,
+              "line": true
+            }
+          ],
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\",instance=~\"[[instance]]\"}[5m]))",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "singlestat",
+          "title": "Load",
+          "span": 3,
+          "datasource": "Prometheus",
+          "valueName": "avg",
+          "format": "short",
+          "thresholds": "4,8",
+          "colors": [
+            "#299c46",
+            "rgba(237, 129, 40, 0.89)",
+            "#d44a3a"
+          ],
+          "sparkline": {
+            "show": true
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "node_load1{instance=~\"$instance\"}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "text",
+          "title": "Notes",
+          "span": 3,
+          "mode": "markdown",
+          "content": "Node notes"
+        }
+      ]
+    },
+    {
+      "title": "Disks",
+      "showTitle": false,
+      "height": 300,
+      "panels": [
+        {
+          "id": 4,
+          "type": "table",
+          "title": "Filesystems",
+          "span": 12,
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "node_filesystem_avail_bytes{instance=~\"$instance\"}",
+              "format": "table",
+              "instant": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(node_uname_info, instance)",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  }
+}

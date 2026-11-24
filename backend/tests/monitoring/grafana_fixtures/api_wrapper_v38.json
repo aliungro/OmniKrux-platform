@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "folderTitle": "Platform"
+  },
+  "dashboard": {
+    "uid": "plat-1",
+    "title": "Platform requests",
+    "schemaVersion": 38,
+    "version": 4,
+    "panels": [
+      {
+        "id": 1,
+        "type": "timeseries",
+        "title": "Requests",
+        "gridPos": {
+          "x": 0,
+          "y": 0,
+          "w": 24,
+          "h": 8
+        },
+        "datasource": {
+          "uid": "P1809F7CD0C75ACF3"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum(rate(http_requests_total[5m]))"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "type": "timeseries",
+        "title": "Errors in logs",
+        "gridPos": {
+          "x": 0,
+          "y": 8,
+          "w": 24,
+          "h": 8
+        },
+        "datasource": "P8E80F9AEF21F6940",
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum(count_over_time({app=\"api\"} |= \"error\" [5m]))"
+          }
+        ]
+      }
+    ]
+  }
+}
