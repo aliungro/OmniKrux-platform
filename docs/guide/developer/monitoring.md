@@ -1,6 +1,6 @@
 # Monitoring: developer guide
 
-Monitoring reads metrics and logs from tools you already run (a Prometheus-compatible service, Loki) and shows them per project. It has sources, projects, groups, label filters, discovery in known clusters, the query proxy, dashboards, the catalog that the building tools and Explore read, the faster ways to build a panel, Explore, alerts (rules, the alert engine, contact points, silences and rules that run in Prometheus or Loki), and installing the tools (Helm into a cluster, or generated files for Docker hosts and servers). For what the app does for its users, see the [user guide](../user/monitoring.md).
+Monitoring reads metrics and logs from tools you already run (a Prometheus-compatible service, Loki) and shows them per project. It has sources, projects, groups, label filters, discovery in known clusters, the query proxy, dashboards, the catalog that the building tools and Explore read, the faster ways to build a panel, Explore, alerts (rules, the alert engine, contact points, silences and rules that run in Prometheus or Loki), and installing the tools (Helm into a cluster, or generated files for Docker hosts and servers), and import and export of dashboards (the export file, and importing from files and from Grafana). For what the app does for its users, see the [user guide](../user/monitoring.md).
 
 ## Code layout
 
@@ -18,13 +18,14 @@ Backend, under `backend/omnikrux/monitoring/`:
 | `explore/` | `catalog.py` (the catalog cache and `project_catalog`) and `api.py` (`GET /projects/{id}/catalog`). See [The catalog](#the-catalog). |
 | `alerts/` | Rules, the alert engine, contact points, silences and the tool handlers. See [Alerts](#alerts). |
 | `install/` | Installing the tools: the pins, the Helm runner, the install, uninstall and contact-point reviews and jobs, the status, and the generators. See [Installing the tools](#installing-the-tools). |
+| `transfer/` | Export and import: the export file, the Grafana converter and client, Grafana connections, origins and Update from source. See [Import and export](#import-and-export). |
 | `audit.py` | Writes Monitoring's entries to the shared audit log. |
 
 Frontend, under `frontend/src/monitoring/`: `MonitoringApp.tsx` (the app and its pages), `shell/` (tab state), `sidebar/`, `home/`, `sources/`, `setup/`, `projects/`, `groups/`, `search/`, `api/` (client, hooks, types, query helper), `dashboards/` and `charts/` (see [Dashboards](#dashboards)), `catalog/` (the catalog's client and merge, see [The catalog](#the-catalog)), `build/` (the finder, suggestions, recommendations and Add panel's search and rail, see [Building faster](#building-faster-the-finder-and-the-suggestions)), `explore/` (see [Explore](#explore)), `alerts/` (see [Alerts](#alerts)), `install/` (see [Installing the tools](#installing-the-tools)) and `test/` (a fake API for tests).
 
 ### Tables and migrations
 
-Migration `0006` adds an `app` column to the audit log, so each entry records which app made it. Migration `0007` creates the Monitoring tables, `0008` the dashboard tables (see [Dashboards](#dashboards)), `0009` the alert tables (see [Alerts](#alerts)) and `0010` the install records (see [Installing the tools](#installing-the-tools)). `0007` holds:
+Migration `0006` adds an `app` column to the audit log, so each entry records which app made it. Migration `0007` creates the Monitoring tables, `0008` the dashboard tables (see [Dashboards](#dashboards)), `0009` the alert tables (see [Alerts](#alerts)), `0010` the install records (see [Installing the tools](#installing-the-tools)) and `0011` the Grafana connections and the origins of imported dashboards (see [Import and export](#import-and-export)). `0007` holds:
 
 - `monitoring_sources`: one row per source. Secrets are stored encrypted; the API never returns them, only whether one is set.
 - `monitoring_projects`: one row per project (kind, optional cluster).
@@ -679,6 +680,85 @@ The values come only from M4's `export_receivers`, which refuses (`SecretRuleRef
 
 It needs the pinned Helm and charts (`OMNIKRUX_HELM_BINARY` and `OMNIKRUX_CHARTS_DIR`, or `.tools/`), and port 9911 free. The first install pulls about 1 to 1.5 GB of images into the cluster.
 
+## Import and export
+
+Dashboards, projects and groups leave OmniKrux as an export file, and dashboards come in from an export file, a pasted document, a Grafana dashboard file or a Grafana itself. Everything lives in `backend/omnikrux/monitoring/transfer/`; the user guide's [Export and import](../user/monitoring.md#export-and-import) says what users see.
+
+### Code layout and routes
+
+| Path | What it holds |
+| --- | --- |
+| `types.py` | The shared shapes: `ConvertedDashboard`, `AlertDraft`, `SkippedItem`, `SourceRefFound`, `Identity`, `TransferError` and the words of refusals. |
+| `envelope.py`, `export.py` | The export file: writing it, and reading it back with exact paths for every problem. |
+| `detect.py` | Reading pasted or uploaded text (10 MB limit) and telling what kind of file it is. |
+| `grafana/` | The Grafana converter (below). |
+| `alerts.py` | `alert_from_draft`, `draft_from_alert`, and the import and export of a panel alert. |
+| `mapping.py` | The source mapping: the suggestion offered for each source reference and the document once mapped. |
+| `importing.py` | `POST /import/preview` and `POST /import/commit`. |
+| `update.py` | The origin route and Update from source. |
+| `origins.py`, `grafana_store.py` | The tables behind them. |
+| `grafana_client.py` | Reading a Grafana. |
+| `api.py` | `POST /export` and the Grafana connection routes. |
+
+Routes under `/api/monitoring`: `POST /export`; `GET` and `POST /grafana`, `PATCH` and `DELETE /grafana/{id}`, `POST /grafana/test` and `POST /grafana/{id}/test`, `GET /grafana/{id}/dashboards` and `POST /grafana/dashboards` (a connection as entered, not stored); `POST /import/preview` and `POST /import/commit`; `GET /dashboards/{id}/origin`, `POST /dashboards/{id}/update-from-source/preview` and `POST /dashboards/{id}/update-from-source`. Request bodies are read by the handler itself (`read_body`), so a bad body answers in plain words (`invalid_input`) and never echoes what was sent. Frontend code is in `frontend/src/monitoring/transfer/`, and the setup's step 3 in `frontend/src/monitoring/setup/`.
+
+### Tables
+
+Migration `0011` (`0011_monitoring_transfer.py`) adds two tables:
+
+- `monitoring_grafana`: a Grafana connection (name, `reach` of `url` or `cluster`, the address or the cluster, namespace, service, port and scheme, a path prefix, `auth_type`, an optional user name and the encrypted secret). A name is unique. The secret is encrypted with the same secret box as a source's.
+- `monitoring_dashboard_origins`: one row per imported dashboard (`dashboard_id` is the key): where it came from (`kind` and `via`, the label shown to the user, the Grafana connection, uid and dashboard version, or the export id), the source mapping the import used, which source panel became which panel (`panels`), a digest of what was imported, and when and at which version it was imported and last updated. The row is deleted with its dashboard in the same transaction (`DashboardStore.delete` and `delete_owned`); removing a Grafana connection only clears `grafana_id`.
+
+### The export envelope, format 1
+
+An export is one JSON object:
+
+| Field | Meaning |
+| --- | --- |
+| `omnikrux` | The literal `"monitoring-export"`. |
+| `formatVersion` | `1`. |
+| `kind` | `dashboard`, `project` or `group`. |
+| `exportedAt` | UTC time as `YYYY-MM-DDTHH:MM:SSZ`. |
+| `owner` | `{kind, name}` of the project or group the dashboards belonged to. |
+| `project` | For a project: `name`, `kind`, `cluster` (a name) and `links` (a source key and its filter). |
+| `group` | For a group: `name` and `projects` (names). |
+| `sources` | The sources the dashboards use: `key` (`src-1`, `src-2`, …), `type`, `name`, `reach`, `url` or `cluster` (name, namespace, service, port, scheme), `pathPrefix`, `auth` (the type only), `headerNames`. |
+| `dashboards` | One to 200 entries: `exportId`, `owner`, `version` and `dashboard`, the dashboard document with every source id replaced by its key (or null). |
+
+Sources are named by keys, never by this instance's ids. **Never exported**: a password, token, API key, client key, certificate, header value, a source's user name, an internal cluster id, or a contact point's settings (a panel alert names its contact points by name only). A file with a `formatVersion` above 1 is refused with the words "comes from a newer OmniKrux". An incompatible change to the envelope (a renamed or removed field, a changed meaning) needs `formatVersion` 2 and a reader for both versions; adding an optional field does not.
+
+### Detecting and converting
+
+`detect_format` is the one place a format is recognised, and so the place a new importer plugs in. It tells an export (by its `omnikrux` mark), a Grafana API answer (a `dashboard` object beside `meta`), a bare OmniKrux dashboard (panels with `queries` and no `gridPos`) and a bare Grafana dashboard (`panels`, `rows` or a `schemaVersion` of 2 or more); a list or anything else is refused in words. A new format adds a branch there, a converter that returns a `ConvertedDashboard` (the document, the source references it reads, the skipped items, its alerts as drafts and its problems) and a name in `FormatName`; preview and commit then work on it unchanged. Datadog, New Relic and Netdata dashboards are the importers we expect next.
+
+### The Grafana converter
+
+`grafana/convert.py` reads a dashboard as the classic API serves it: the panels list with `gridPos`, panels inside collapsed rows (a row's own panels are put where the row was), and the old `rows` of spans. Nothing in it raises: a failure inside becomes a problem for that dashboard, so one broken dashboard never sinks an import.
+
+- **Layout** (`layout.py`): `gridPos` is clamped to a 24-column grid. Old rows turn spans into widths and pixel heights into rows of 30 px. `place` then moves overlapping panels down to the first free row, moves each panel up as far as the panels above allow, and leaves out any that would end below row 999.
+- **Panels** (`panels.py`): `PANEL_TYPES` maps `graph` and `timeseries` to time series, `singlestat` and `stat` to stat, `gauge` to gauge, `bargauge` and `barchart` to bar, `table` and `table-old` to table and `logs` to logs. Every other type is skipped by name. `UNIT_MAP` maps units, thresholds become good, warning and bad tones, and at most 10 queries and 10 thresholds are kept. Anything dropped is a `SkippedItem` (where, what, why).
+- **Variables** (`variables.py`): only `label_values(...)` query variables on Prometheus or Loki; data source variables only decide which source a panel reads.
+- **Data sources** (`datasources.py`, `expressions.py`): a Grafana data source (by uid or name) becomes a source reference keyed `grafana:uid:…` or `grafana:name:…`, with its type guessed when Grafana didn't say. Expressions are rewritten for OmniKrux's variables.
+- **The skipped copy** is written for the person importing, never the converter's internals; the review shows the list per dashboard and a total.
+
+To add a fixture, put the Grafana JSON in `backend/tests/monitoring/grafana_fixtures/`, convert it in `test_grafana_convert.py` with `conv(name)` and assert the layout, types, queries, `skipped` and `problems`. The live check dashboard has its own fixture and test (see [The Grafana check](#the-grafana-check)).
+
+### The alert adapter
+
+`grafana/alerts.py` turns Grafana's two alert kinds into an `AlertDraft` (one query, a reducer, `above` or `below`, a threshold and a wait): the old per-panel alert, and a Grafana-managed rule in the ruler's shape (`grafana_alert` with `data` and `condition`, plus `for` and the annotations). A unified rule belongs to a panel by its `__dashboardUid__` and `__panelId__` annotations, and its query is matched to the panel's own by its expression text. It must reduce one query with last, mean, max, min or sum and compare it with `lt` or `gt`; its no-data and error states and a paused rule are reported, not copied. `transfer/alerts.py` then builds M4's alert from the draft (`alert_from_draft`): engine `omnikrux`, no contact points, the rule's summary as message and its `severity` label, or M4's defaults, and only a `last` reducer (the others are skipped in words). `draft_from_alert` reads an M4 alert back as a draft, which the kind check uses. See [The alert object of the dashboard document](#the-alert-object-of-the-dashboard-document).
+
+### Preview and commit
+
+Both calls take the same input (a text, or a Grafana connection and the uids) and nothing is kept between them. `preview` reads and converts the input and answers each dashboard's problems, skipped list, whether its title is taken and a **digest** of what was shown, with the source references and a suggested source for each. `commit` reads and converts the input again and checks everything before writing: each chosen dashboard still has its digest (else 409 `changed`), the target exists and fits the export, each mapped source is linked to the target project, each document is valid for its owner once mapped, and the titles are free. Every write is audited first, then the dashboards go in one transaction (all of them or none), and the new panel alerts reconcile afterwards; the answer carries their `alert_changes` for M4's review. Audit details never hold a document, a query, a file's content or a secret.
+
+### Origins and Update from source
+
+Every import writes an origin row. `update.py` re-reads the source (the saved Grafana connection, or the file or text the person gives again), converts it, maps its sources with the stored mapping, keeps the dashboard's title and panel ids, and answers the document beside the current one with a digest. Applying it repeats the steps and writes only when the source and the result are what was reviewed and the dashboard is still at `base_version` (409 otherwise); when nothing differs it answers unchanged, with no version and no audit entry. Each alert keeps the user's contact points, engine and interval; its definition comes from the source.
+
+### The Grafana client and the anonymous cluster limit
+
+`GrafanaClient` reads `/api/health`, `/api/search`, `/api/dashboards/uid/{uid}`, the data sources and the ruler (`/api/ruler/grafana/api/v1/rules`). It goes through M1's transports, so it never follows a redirect, keeps to a timeout and caps an answer at 32 MB, and its errors are plain words, never a response body. A connection by address signs in with its token or user name and password. A connection through a cluster goes through the Kubernetes API's service proxy, which carries no Grafana sign-in, so it is read **anonymously**, and a Grafana that refuses answers a message saying to use its address instead. A dashboard that Grafana's classic API won't send is that dashboard's problem, not the whole request's. Reading the data sources or the alert rules may be refused to an anonymous reader; the dashboards still import, and the review says that no alert was copied.
+
 ## Running the tests
 
 Backend, from `backend`:
@@ -704,7 +784,7 @@ The Monitoring app is a lazy chunk: the shell loads it only when you open Monito
 
 ### The kind tests
 
-`backend/tests/e2e/test_monitoring_kind.py` checks discovery, setup, queries, filters, dashboards, the catalog, the suggestion templates and alerts against a real Prometheus and Loki in the `omnikrux-dev` kind cluster (see [Setup](setup.md) for the cluster). They run with the other kind tests:
+`backend/tests/e2e/test_monitoring_kind.py` checks discovery, setup, queries, filters, dashboards, the catalog, the suggestion templates and alerts against a real Prometheus and Loki (and, for import and export, a Grafana: see [The Grafana check](#the-grafana-check)) in the `omnikrux-dev` kind cluster (see [Setup](setup.md) for the cluster). They run with the other kind tests:
 
 ```bash
 cd backend
@@ -811,3 +891,17 @@ done
 ```
 
 These lines age out: the catalog tests read Loki's labels over the last hour, so push them again before a run when a test reports that the pushed log lines are missing. (The older `omnikrux-live-check` lines are read over seven days, so they last until Loki's pod is replaced.)
+
+#### The Grafana check
+
+The import tests (`test_grafana_is_found_and_lists_dashboards`, `test_import_from_the_cluster_grafana`, `test_export_and_import_round_trip` and `test_update_from_source_with_no_change`) need a Grafana in the namespace `monitoring` with a Service named `grafana` on port 80. Without that Service they skip with "Grafana isn't installed in the monitoring namespace". A Service whose Pod isn't ready is a failure with discovery's words, not a skip.
+
+On the development cluster the Grafana is an Argo CD application (the `grafana-community/grafana` chart, 14.4.0, Grafana 13.3.0, release `grafana`), and everything the tests read is provisioned through its Helm `valuesObject`, so it comes back after every Pod restart (persistence is off). The values, besides the usual `grafana.ini`, `resources` and an admin Secret that is not described here:
+
+- `grafana.ini` sets `auth.anonymous` to enabled with the role `Viewer`. The tests read the Grafana through the cluster, which carries no Grafana sign-in, so they use no token or password anywhere.
+- `datasources.datasources.yaml` has two data sources: Prometheus with uid `prom` (default) at `http://prometheus-server.monitoring.svc:80`, and Loki with uid `loki` at `http://loki.monitoring.svc:3100`. They are the services the tests' own project reads, so every converted query runs against the same data.
+- `dashboardProviders.dashboardproviders.yaml` declares one file provider named `omnikrux-check`, folder **OmniKrux check**, with `allowUiUpdates: true` and the path `/var/lib/grafana/dashboards/omnikrux-check`.
+- `dashboards.omnikrux-check.omnikrux-live-check.json` holds `backend/tests/e2e/fixtures/grafana_live_check.json` verbatim: the dashboard **OmniKrux live check** (uid `omnikrux-live`) with a time series `rate(prometheus_http_requests_total[5m])`, a stat `sum(up)` (panel id 2), a logs panel `{job="omnikrux-live-check"}` and a `job` variable `label_values(up, job)`. The repository file is the source: when you change it, change the values too. A unit test (`tests/monitoring/test_grafana_live_fixture.py`) checks that the file converts with no problems.
+- `alerting.rules.yaml` provisions one rule, **Targets down**, in the group `omnikrux-live-check` of the same folder: query `sum(up)` on `prom`, a reduce expression `last`, a threshold `lt 1`, `for: 5m`, and the annotations `__dashboardUid__: omnikrux-live` and `__panelId__: "2"`. The test expects the imported stat panel to carry an alert that reads `below 1`.
+
+The tests target discovery's Grafana (`monitoring/grafana`, port `80`, scheme `http`, reach `cluster`, no sign-in). Grafana 13 serves the provisioned dashboard through the classic `/api/dashboards/uid` route, which is what OmniKrux reads. The logs panel may return no lines; the check is that none of its queries fails as `bad_query`. Each test removes what it made through the API (its projects, with their reviews, and the Grafana connection that the import saved), leaving the tools and the provisioned dashboard.

@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 
 from omnikrux.config import Settings
 from omnikrux.main import create_app
+from omnikrux.monitoring.transfer.alerts import draft_from_alert
+from omnikrux.monitoring.transfer.types import AlertDraft
 from tests.e2e.support import kubectl, wait_for
 
 pytestmark = pytest.mark.kind
@@ -927,3 +929,212 @@ def test_loki_ruler_on_kind(alert_client, alert_cluster, alert_tools):
 
         remove_rule(client, rule["id"])
         assert group not in ruler_groups()
+
+
+# --- Import and export: the Grafana in kind's `monitoring` namespace ---------------------------
+#
+# The Grafana is an Argo CD app. Its folder, the dashboard `omnikrux-live` and the rule on its stat
+# panel are provisioned through its Helm values, so they come back after every restart. It is read
+# anonymously through the cluster (no token anywhere): see docs/guide/developer/monitoring.md.
+
+NO_GRAFANA = (
+    "Grafana isn't installed in the monitoring namespace (see docs/guide/developer/monitoring.md)."
+)
+LIVE_UID = "omnikrux-live"
+LIVE_TITLE = "OmniKrux live check"
+
+
+@pytest.fixture
+def grafana_target(client, cluster) -> dict:
+    """A Grafana as the setup step sends it: the cluster's `monitoring/grafana`, no sign-in.
+
+    Skips only when the Service is missing; a Grafana that is there but not ready is a failure
+    with discovery's words."""
+    if "service/grafana" not in kubectl("-n", "monitoring", "get", "svc", "-o", "name").split():
+        pytest.skip(NO_GRAFANA)
+    found = client.get(f"{API}/discovery/{cluster}").json()["found"]
+    grafana = next((t for t in found if t["type"] == "grafana" and t["service"] == "grafana"), None)
+    assert grafana is not None, "Discovery doesn't list the Grafana service."
+    assert grafana["state"] == "reachable", grafana["message"]
+    assert (grafana["namespace"], grafana["port"], grafana["scheme"]) == (
+        "monitoring",
+        "80",
+        "http",
+    )
+    return {
+        "reach": "cluster",
+        "cluster_id": cluster,
+        "namespace": grafana["namespace"],
+        "service": grafana["service"],
+        "port": grafana["port"],
+        "scheme": grafana["scheme"],
+        "auth": {"type": "none"},
+    }
+
+
+@contextmanager
+def grafana_cleanup(client):
+    """Collects the ids of Grafana connections a test makes and removes them afterwards."""
+    made: list[str] = []
+    try:
+        yield made
+    finally:
+        for grafana_id in made:
+            assert client.delete(f"{API}/grafana/{grafana_id}").status_code in (204, 404)
+
+
+def live_project(client, cluster: str, tools: dict, name: str) -> dict:
+    sources = [{"source": new_source(cluster, tools[t]), "filter": ""} for t in tools]
+    return set_up(client, cluster, name, sources)
+
+
+def grafana_input(target: dict) -> dict:
+    return {"kind": "grafana", "connection": target, "uids": [LIVE_UID]}
+
+
+def choose(preview: dict, project: dict) -> list[dict]:
+    """Each source the import names goes to the project's own source of that type."""
+    return [
+        {"key": s["key"], "source_id": link_of(project, s["type"])["source_id"], "leave_out": False}
+        for s in preview["sources"]
+    ]
+
+
+def commit_body(preview: dict, project: dict, input: dict) -> dict:
+    return {
+        "input": input,
+        "target": {"kind": "project", "id": project["id"]},
+        "mapping": choose(preview, project),
+        "dashboards": [
+            {"key": d["key"], "title": d["title"], "digest": d["digest"]}
+            for d in preview["dashboards"]
+        ],
+    }
+
+
+def import_live(client, project: dict, target: dict) -> tuple[dict, dict]:
+    """Preview then commit the live check dashboard; (the saved dashboard, the commit answer)."""
+    input = grafana_input(target)
+    body = {"input": input, "target": {"kind": "project", "id": project["id"]}}
+    preview = client.post(f"{API}/import/preview", json=body)
+    assert preview.status_code == 200, preview.text
+    shown = preview.json()
+    assert [d["problems"] for d in shown["dashboards"]] == [[]]
+    committed = client.post(f"{API}/import/commit", json=commit_body(shown, project, input))
+    assert committed.status_code == 201, committed.text
+    result = committed.json()
+    [made] = result["dashboards"]
+    saved = client.get(f"{API}/dashboards/{made['id']}")
+    assert saved.status_code == 200, saved.text
+    return saved.json(), result
+
+
+def test_grafana_is_found_and_lists_dashboards(client, cluster, grafana_target):
+    listed = client.post(f"{API}/grafana/dashboards", json=grafana_target)
+    assert listed.status_code == 200, listed.text
+    titles = {d["uid"]: d["title"] for d in listed.json()["items"]}
+    assert titles.get(LIVE_UID) == LIVE_TITLE
+
+
+def test_import_from_the_cluster_grafana(client, cluster, tools, grafana_target):
+    with project_cleanup(client) as made, grafana_cleanup(client) as connections:
+        project = live_project(client, cluster, tools, "Kind Grafana import")
+        made.append(project["id"])
+        dashboard, result = import_live(client, project, grafana_target)
+        connections.append(result["grafana_id"])
+
+        spec = dashboard["spec"]
+        assert spec["title"] == LIVE_TITLE
+        assert [p["type"] for p in spec["panels"]] == ["timeseries", "stat", "logs"]
+        assert [v["name"] for v in spec["variables"]] == ["job"]
+        stat = spec["panels"][1]
+        assert draft_from_alert(stat["alert"]) == AlertDraft(
+            query_ref=stat["queries"][0]["ref"],
+            reducer="last",
+            op="below",
+            threshold=1,
+            for_seconds=300,
+            title="Targets down",
+            message="Fewer than one target is up",
+            severity="warning",
+            window_seconds=None,
+        )
+
+        now = time.time()
+        requests = [
+            {
+                "source_id": q["source"]["id"],
+                "project_id": project["id"],
+                "kind": "range",
+                "query": q["expr"],
+                "start": now - 3600,
+                "end": now,
+                "step": 60,
+            }
+            for p in spec["panels"]
+            for q in p["queries"]
+        ]
+        assert len(requests) == 3
+        for request, answer in zip(requests, run_batch(client, requests), strict=True):
+            code = (answer.get("error") or {}).get("code")
+            assert code != "bad_query", f"{request['query']}: {answer['error']}"
+
+
+def test_export_and_import_round_trip(client, cluster, tools, grafana_target):
+    with project_cleanup(client) as made, grafana_cleanup(client) as connections:
+        first = live_project(client, cluster, tools, "Kind export first")
+        made.append(first["id"])
+        dashboard, result = import_live(client, first, grafana_target)
+        connections.append(result["grafana_id"])
+
+        exported = client.post(f"{API}/export", json={"kind": "project", "id": first["id"]})
+        assert exported.status_code == 200, exported.text
+        assert exported.json()["dashboards"] == 1
+
+        second = set_up(
+            client,
+            cluster,
+            "Kind export second",
+            [{"source_id": link["source_id"], "filter": ""} for link in first["links"]],
+        )
+        made.append(second["id"])
+        text = json.dumps(exported.json()["export"])
+        input = {"kind": "text", "text": text, "file_name": "round-trip.json", "via": "file"}
+        body = {"input": input, "target": {"kind": "project", "id": second["id"]}}
+        preview = client.post(f"{API}/import/preview", json=body)
+        assert preview.status_code == 200, preview.text
+        shown = preview.json()
+        assert [d["problems"] for d in shown["dashboards"]] == [[]]
+        committed = client.post(f"{API}/import/commit", json=commit_body(shown, second, input))
+        assert committed.status_code == 201, committed.text
+        [made_copy] = committed.json()["dashboards"]
+        copied = client.get(f"{API}/dashboards/{made_copy['id']}").json()["spec"]
+
+        def shape(spec: dict) -> list:
+            return [
+                (p["type"], p["title"], [q["expr"] for q in p["queries"]]) for p in spec["panels"]
+            ]
+
+        assert shape(copied) == shape(dashboard["spec"])
+
+
+def test_update_from_source_with_no_change(client, cluster, tools, grafana_target):
+    with project_cleanup(client) as made, grafana_cleanup(client) as connections:
+        project = live_project(client, cluster, tools, "Kind Grafana update")
+        made.append(project["id"])
+        dashboard, result = import_live(client, project, grafana_target)
+        connections.append(result["grafana_id"])
+
+        shown = client.post(
+            f"{API}/import/preview", json={"input": grafana_input(grafana_target)}
+        ).json()
+        mapping = [
+            {"key": s["key"], "source_id": link_of(project, s["type"])["source_id"]}
+            for s in shown["sources"]
+        ]
+        preview = client.post(
+            f"{API}/dashboards/{dashboard['id']}/update-from-source/preview",
+            json={"mapping": mapping},
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["same"] is True

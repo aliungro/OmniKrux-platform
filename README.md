@@ -119,7 +119,7 @@ Run the command without the live opt-in to verify that the live checks are skipp
 
 ## Monitoring
 
-Monitoring (in development) is the second app in the rail, opened with `Alt 2`. It connects projects to the Prometheus-compatible and Loki tools you already run, shows each project only its own part of them through label filters, and records its changes in Audit. Dashboards, Explore and Alerts come in later updates. See the [user guide](docs/guide/user/monitoring.md) and the [developer guide](docs/guide/developer/monitoring.md).
+Monitoring (in development) is the second app in the rail, opened with `Alt 2`. It connects projects to the Prometheus-compatible and Loki tools you already run, shows each project only its own part of them through label filters, and records its changes in Audit. Dashboards, Explore and Alerts come in later updates. Dashboards can be exported to a JSON file, and imported from a file, pasted JSON or a Grafana, after a review of what converts. See the [user guide](docs/guide/user/monitoring.md) and the [developer guide](docs/guide/developer/monitoring.md).
 
 ## Finding your way
 

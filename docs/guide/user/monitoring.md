@@ -1,6 +1,6 @@
 # Monitoring
 
-Monitoring is the second app in OmniKrux. It is in development. So far you can describe what you run, connect the tools that hold its metrics and logs, have OmniKrux check that it can reach them and query them safely, build dashboards on top of that, ask one-off questions of your metrics and logs in Explore, get alerts when something crosses a line, and install the tools a project is missing.
+Monitoring is the second app in OmniKrux. It is in development. So far you can describe what you run, connect the tools that hold its metrics and logs, have OmniKrux check that it can reach them and query them safely, build dashboards on top of that, ask one-off questions of your metrics and logs in Explore, get alerts when something crosses a line, install the tools a project is missing, and export and import dashboards, also from Grafana.
 
 Open it from the left rail, or press `Alt 2`.
 
@@ -18,8 +18,8 @@ Open it from the left rail, or press `Alt 2`.
 Use **+** next to Projects in the sidebar, or **Set up a project** on Home. When no project exists yet, Home offers a button for each connected cluster that starts the setup for that cluster. The setup has four steps.
 
 1. **What to monitor.** Choose **A Kubernetes cluster**, **A Docker host**, **Servers** or **Something of your own**. For a cluster, pick one of the clusters OmniKrux already knows. If none is connected, **Open Settings** takes you to where you add one.
-2. **Sources.** For a cluster, OmniKrux looks inside it for Prometheus, Loki and Grafana and lists what it found. A tool shows as **Reachable** or **Missing**; Grafana only shows as **Found**, because importing its dashboards is not available yet. A tool OmniKrux installed carries **Installed by OmniKrux** and a **Monitoring tools** link. Tick the tools to use. A missing Prometheus or Loki has an **Install Prometheus…** or **Install Loki…** button: press it to install that tool once the project is created (the row then says **To install**; see [Installing the tools](#installing-the-tools)). Where OmniKrux can't install, the row says why ("Installing isn't available here: …"). A source you added earlier can be reused under **Use an existing source**. If nothing is found, or you want a tool that runs elsewhere, use **Add a source by hand**. **Look again** searches the cluster again. For **A Docker host** or **Servers**, this step can also write the files that run the tools there (see [Docker hosts and servers](#docker-hosts-and-servers)).
-3. **Import.** Marked "Comes later". Importing dashboards arrives in a later update.
+2. **Sources.** For a cluster, OmniKrux looks inside it for Prometheus, Loki and Grafana and lists what it found. A tool shows as **Reachable** or **Missing**; Grafana only shows as **Found**, because OmniKrux doesn't read from it as a source: step 3 copies its dashboards instead. A tool OmniKrux installed carries **Installed by OmniKrux** and a **Monitoring tools** link. Tick the tools to use. A missing Prometheus or Loki has an **Install Prometheus…** or **Install Loki…** button: press it to install that tool once the project is created (the row then says **To install**; see [Installing the tools](#installing-the-tools)). Where OmniKrux can't install, the row says why ("Installing isn't available here: …"). A source you added earlier can be reused under **Use an existing source**. If nothing is found, or you want a tool that runs elsewhere, use **Add a source by hand**. **Look again** searches the cluster again. For **A Docker host** or **Servers**, this step can also write the files that run the tools there (see [Docker hosts and servers](#docker-hosts-and-servers)).
+3. **Import from Grafana.** When step 2 found a Grafana, tick the dashboards to copy into the new project. Each Grafana data source reads the project's first source of the same type, and what can't be copied is counted in the step's summary (see [What converts from Grafana](#what-converts-from-grafana)). Nothing in Grafana changes. When the Grafana asks for a sign-in that OmniKrux can't give, **Use its address instead** opens a form for a token, and **Enter it again** appears when a sign-in wasn't kept with your half-finished setup. **Skip import** leaves the step; with nothing found it reads **Nothing to import**, and **Continue without importing** moves on. The dashboards are copied right after the project is created. If that fails, the project stays, and **Try the import again** and **Open the project** are offered.
 4. **Name and review.** Give the project a name (leave it empty to keep the suggested one), check the summary of sources, their filters and what will be installed, and press **Create project** (**Create project and review the install** when you asked for an install). The project, its new sources and all the links are created together, or not at all. The install review opens right after; nothing is installed until you confirm it there.
 
 A setup you leave half way is kept in that Monitoring tab and comes back when you open setup there again, until you create the project or close the tab. Passwords, tokens and header values are never kept: a source that needed one comes back **Not in use**, with **Enter it again**.
@@ -548,6 +548,78 @@ To remove them, run the script with `--uninstall` (add `--purge` to delete the d
 
 An install is recorded as **Installed** and an uninstall as **Uninstalled**, with the cluster, the namespace and how it ended. The sources OmniKrux connects or removes are recorded as **Added a source** and **Removed a source**, and the contact-point review as a change to the `AlertmanagerConfig` `omnikrux-contact-points`. No entry holds a secret.
 
+## Export and import
+
+Dashboards, projects and groups can leave OmniKrux as a JSON file and come back, and dashboards can be copied from a Grafana. Importing only adds dashboards: nothing existing is changed, and nothing is saved before you have seen what converts.
+
+### Export
+
+- **Export as JSON** in a dashboard's **More actions** menu (**⋯**) saves that dashboard.
+- **Export project** on a project's page saves its dashboards together with the sources they use and each source's label filter.
+- **Export group** on a group's page saves the group's dashboards and the names of its projects.
+
+The browser saves the file, named after what you exported (for example `node-overview.omnikrux.json`), and a line says what went in. A file holds the dashboards, their panel alerts (contact points by name only) and, for a project, the sources by type, name, address and kind of sign-in. **Passwords, tokens, API keys, certificates and header values are never in a file**, and neither are a source's user name or OmniKrux's internal ids. A source that needs a secret asks for it when you add it after an import.
+
+### Import
+
+Open **Import dashboards** with the **Import** button in the sidebar (or press `I`), with **Import dashboards…** on a project's or group's page, or with **Import into …** in a dashboard's **More actions** menu. Ctrl+click opens it in a new tab. The page asks what to **Import from**:
+
+- **A file**: an OmniKrux export or a Grafana dashboard as `.json`. Use **Choose a file** or drop the file on the page. Files over 10 MB are refused.
+- **Pasted JSON**: a Grafana dashboard's JSON model or an OmniKrux export. Ctrl+Enter checks it.
+- **A Grafana**: pick a saved connection (or **Connect a Grafana…**) and tick up to 100 dashboards.
+
+**Check what converts** reads the input and opens the **Review**. Nothing has been saved yet. The review shows:
+
+- **Goes to**: the project or group the dashboards are added to. An export is suggested the project or group with the name it was exported from, when there is one; a group export also offers **A new group…** with the projects it named. Without a project, the page says to set one up first.
+- **Data sources**: a table with **In the file** and **Uses here**. Each data source the dashboards read is matched to one of the target project's own sources of the same type, and you can change the match. **Leave its panels out** drops the panels that read it. OmniKrux never creates a source from a file, so no address or sign-in is ever invented. In a group dashboard each project uses its own source.
+- Each dashboard, with a tick (**Import** and its title), an editable **Title** (unused by that owner), and **Skipped (n)**, which lists what won't be copied and why. A dashboard that can't be imported says why and can't be ticked.
+
+A summary line counts the dashboards chosen and the things not copied. **Import 1 dashboard** (or **Import n dashboards**; also Ctrl+Enter) saves all of them, or none if something fails. If something changed since the check, the review is checked again and says so, and you press Import once more. A single dashboard opens right away; several are listed under **Imported** with **Open** buttons and **Import more**. Imported alerts open their usual review (see [An alert on a panel](#an-alert-on-a-panel)); an imported alert notifies no one until you pick contact points.
+
+### Grafana connections
+
+Connect a Grafana from the import page (**Connect a Grafana…**) or on the **Sources** page, under **Grafana connections**, where each connection can be tested (**Test** says the Grafana's version and how many dashboards it lists), edited or removed. A connection is one of:
+
+- **By its address**, such as `http://grafana.example:3000`, with a **Sign-in** of **None**, **Service account token** or **User name and password**. Secrets are write-only: once saved, the form says "Saved. Leave empty to keep it."
+- **Inside a cluster**: a Grafana found in a connected cluster (cluster, namespace, service and port), reached through the cluster's own API. This way is read **without a sign-in**, so that Grafana must allow anonymous viewing; use its address if it needs a token.
+
+OmniKrux only reads from a Grafana. Removing a connection leaves the dashboards imported through it; to update them later you pick their file.
+
+### What converts from Grafana
+
+A Grafana dashboard becomes an OmniKrux dashboard on a 24-column grid. Whatever doesn't convert is listed under **Skipped** in the review rather than dropped silently.
+
+| Grafana panel | In OmniKrux |
+| --- | --- |
+| Time series, Graph | Time series |
+| Stat, Singlestat | Stat |
+| Gauge | Gauge |
+| Bar gauge, Bar chart | Bar |
+| Table | Table |
+| Logs | Logs |
+| Text and any other type | Skipped; row headers only organise panels |
+
+- **Layout**: panel positions are kept. Overlapping panels are moved down and then up into free space, and an old dashboard made of rows gets a grid from them.
+- **Units**: none, short, percent, percentunit, seconds, milliseconds, bytes, bytes per second and requests per second are kept; the duration and decimal or binary byte units map to the nearest one; rate-like units (ops, rps, wps, iops, cps) show as plain numbers; any other unit is dropped and listed.
+- **Thresholds and colours** become OmniKrux's good, warning and bad tones.
+- **Variables**: query variables built on `label_values(...)` become label-values variables. Other kinds (interval, custom, text, ad hoc and the like) are skipped, and a variable's regex is dropped; each is listed.
+- **Queries** keep their text and legend; what OmniKrux can't run is listed.
+- **Alerts**: an old per-panel alert, or a Grafana-managed alert rule linked to a panel, becomes one OmniKrux alert on that panel when it checks a value **above** or **below** a threshold with last, mean, max, min or sum, with its wait time. Notification channels, the no-data and error states, and rules that combine queries or check anything else are listed as skipped. Grafana's rules are read only when the connection's sign-in can read them; otherwise the review says that no alert was copied.
+
+### Update from source
+
+A dashboard that was imported says where it came from under its title ("Imported from … on 3 Mar 2026"). **Update from source…** in its **More actions** menu re-reads that source:
+
+- For a dashboard imported through a saved Grafana connection, OmniKrux reads the Grafana again. For one imported from a file or pasted JSON, it asks you to **Pick the file again** or paste its JSON, then press **Check**.
+- The dialog shows the dashboard **Now (version n)** beside **From the source**, with any **New data sources** and **Skipped (n)**. When nothing differs it says **Nothing changed: the source matches this dashboard.**
+- When the dashboard was changed in OmniKrux after it was imported, the dialog warns that updating replaces those changes. They stay in **Versions**, where the update appears as a new version.
+- **Replace with the source** saves the source as the next version. The dashboard keeps its title, and each alert keeps its contact points, where it runs and how often it is checked; the rest of an alert comes from the source.
+- An update is refused while a draft of the dashboard is open: save or discard the draft first.
+
+### Audit
+
+Audit shows **Imported a dashboard**, **Updated a dashboard from its source**, **Exported from Monitoring**, **Connected a Grafana**, **Changed a Grafana connection** and **Removed a Grafana connection**. Entries say what and where (a title, counts, the kind of sign-in), never a document, a query, a file's content or a secret.
+
 ## Rename, unlink and delete
 
 - Use **Rename** beside a project's or group's name to change it.
@@ -568,5 +640,4 @@ Every change in Monitoring is written to the Audit log, marked as coming from Mo
 
 ## What comes in later updates
 
-- Importing existing Grafana dashboards.
 - Finding the tools that already run on a Docker host or servers by itself (today OmniKrux checks only the addresses you give it).
