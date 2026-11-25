@@ -281,14 +281,16 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
       </div>
 
       <div className={s.signIn}>
-        <div className={s.field}>
-          <label htmlFor={`${ids}-auth`}>Sign-in</label>
-          <select id={`${ids}-auth`} className={s.input} value={authType} disabled={byCluster}
-            aria-describedby={byCluster ? `${ids}-anon` : undefined} onChange={(e) => edit({ authType: e.target.value as GrafanaAuth })}>
-            {(Object.keys(AUTH_LABELS) as GrafanaAuth[]).map((k) => <option key={k} value={k}>{AUTH_LABELS[k]}</option>)}
-          </select>
-          {byCluster && <span id={`${ids}-anon`} className={s.hint}>{CLUSTER_ANONYMOUS}</span>}
-        </div>
+        {byCluster ? (
+          <p className={s.hint}>{CLUSTER_ANONYMOUS}</p>
+        ) : (
+          <div className={s.field}>
+            <label htmlFor={`${ids}-auth`}>Sign-in</label>
+            <select id={`${ids}-auth`} className={s.input} value={authType} onChange={(e) => edit({ authType: e.target.value as GrafanaAuth })}>
+              {(Object.keys(AUTH_LABELS) as GrafanaAuth[]).map((k) => <option key={k} value={k}>{AUTH_LABELS[k]}</option>)}
+            </select>
+          </div>
+        )}
         {authType === "bearer" && <Secret label="Token" value={token} onChange={typeToken} saved={sameType && !!stored?.has_token} />}
         {authType === "basic" && (
           <>

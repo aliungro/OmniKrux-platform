@@ -162,7 +162,7 @@ export default function MonitoringHome({ nav, openInNewTab, onOpenSettings }: Mo
     const owner = tree.data.projects.find((x) => x.dashboards.some((d) => d.id === r.id))
       ?? tree.data.groups.find((x) => x.dashboards.some((d) => d.id === r.id));
     const title = owner?.dashboards.find((d) => d.id === r.id)?.title;
-    return title ? [{ key: `dashboard:${r.id}`, name: title, what: "Dashboard", view: { page: "dashboard", id: r.id } as MonitoringView }] : [];
+    return title ? [{ key: `dashboard:${r.id}`, name: `${title} · ${owner?.name ?? ""}`, what: "Dashboard", view: { page: "dashboard", id: r.id } as MonitoringView }] : [];
   });
 
   return (

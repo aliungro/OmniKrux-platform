@@ -179,11 +179,41 @@
   outline-offset: 2px;
 }
 
+/* The mark sits on the name's first line: a box as tall as the line, the dot centred in it. */
 .cardHead {
-  display: flex;
-  align-items: center;
+  --line: 20px;
+
+  display: grid;
+  grid-template-columns: 11px minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: start;
   min-width: 0;
+}
+
+.headMark {
+  position: relative;
+  width: 11px;
+  height: var(--line);
+  background: none !important;
+}
+
+.headMark::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--mark, var(--ink-3));
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.folder.headMark::before {
+  width: 11px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--ink-3);
 }
 
 .cardName {
@@ -191,6 +221,7 @@
   overflow: hidden;
   font-size: 14px;
   font-weight: 600;
+  line-height: var(--line, 20px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -230,12 +261,15 @@
 }
 
 .row {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
+  --line: 18px;
+
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
   gap: 0 7px;
+  align-items: start;
   color: var(--ink-2);
   font-size: 12.5px;
+  line-height: var(--line);
 }
 
 .rowText {
@@ -246,7 +280,8 @@
   width: 7px;
   height: 7px;
   flex: none;
-  align-self: center;
+  align-self: start;
+  margin-top: calc((var(--line) - 7px) / 2);
   border-radius: 50%;
   background: var(--ink-3);
 }
@@ -513,6 +548,7 @@
   font-weight: 600;
 }
 
-.row .cardWarn {
-  flex: 1 1 100%;
+.row .cardWarn,
+.row > :only-child {
+  grid-column: 1 / -1;
 }

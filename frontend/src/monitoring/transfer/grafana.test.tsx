@@ -92,9 +92,7 @@ describe("Grafana connections on the Sources page", () => {
     expect((within(dialog).getByLabelText("Address") as HTMLInputElement).placeholder).toBe("http://grafana.example:3000");
     await user.selectOptions(within(dialog).getByLabelText("Sign-in"), "bearer");
     await user.click(within(reach).getByRole("radio", { name: "Inside a cluster" }));
-    const signIn = within(dialog).getByLabelText("Sign-in") as HTMLSelectElement;
-    expect(signIn.value).toBe("none");
-    expect(signIn.disabled).toBe(true);
+    expect(within(dialog).queryByLabelText("Sign-in")).toBeNull();
     expect(within(dialog).getByText("A Grafana reached through its cluster is read without a sign-in (anonymous access).")).toBeTruthy();
     expect(within(dialog).queryByLabelText("Token")).toBeNull();
     // The backend's words for what is missing.
@@ -470,5 +468,17 @@ describe("Grafana dashboard checklist", () => {
     await user.type(screen.getByLabelText("Filter dashboards"), "zzz");
     expect(screen.getByText("No dashboard matches. Try other words.")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Dashboards in Main" })).toBeNull();
+  });
+});
+
+describe("Grafana connections, words", () => {
+  it("removing a connection with nothing imported says so", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ transfer: { grafana: [grafana("g1", "Main", { dashboards_imported: 0 })] } }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Remove Main" }));
+    const ask = screen.getByRole("alertdialog", { name: "Remove the connection Main?" });
+    expect(within(ask).getByText("No dashboards were imported from it.")).toBeTruthy();
+    expect(within(ask).queryByText(/Dashboards imported from it stay/)).toBeNull();
   });
 });

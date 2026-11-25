@@ -6,6 +6,7 @@ import { healthSummary } from "./MonitoringHome";
 import { recordRecent } from "./recent";
 import { installFakeMonitoringApi, type FakeMonitoringState } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject } from "../test/renderMonitoringApp";
+import { seedDashboard, spec } from "../test/dashboardSeeds";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -324,5 +325,60 @@ describe("Home errors in plain words", () => {
     expect(await screen.findByRole("heading", { name: "Set up your first project" })).toBeTruthy();
     expect(await screen.findByText(DOWN)).toBeTruthy();
     expect(document.body.textContent).not.toContain("Failed to fetch");
+  });
+});
+
+describe("Home, states and words", () => {
+  it("home cards list sources in one order", async () => {
+    const alerts = { ...source("s3", "Alerts"), type: "alertmanager" as const };
+    const loki = { ...source("s2", "Loki · kind"), type: "loki" as const };
+    const prom = source("s1", "Prometheus · kind");
+    installFakeMonitoringApi({
+      sources: [alerts, loki, prom],
+      projects: [withLinks(seedProject("p1", "Dev cluster"), alerts, loki, prom)],
+      health: { s1: health("up"), s2: health("up"), s3: health("up") },
+    }, clustersFallback([]));
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Dev cluster/ });
+    const text = card.textContent ?? "";
+    expect(text.indexOf("Prometheus · kind")).toBeGreaterThan(-1);
+    expect(text.indexOf("Prometheus · kind")).toBeLessThan(text.indexOf("Loki · kind"));
+    expect(text.indexOf("Loki · kind")).toBeLessThan(text.indexOf("Alerts"));
+  });
+
+  it("a source that answers reads as answering on a card", async () => {
+    const prom = source("s1", "Prometheus · kind");
+    installFakeMonitoringApi({
+      sources: [prom],
+      projects: [withLinks(seedProject("p1", "Dev cluster"), prom)],
+      health: { s1: { ...health("down", 0, "Prometheus · kind answered, but not as a Prometheus API (HTTP 404). Check the address and the type."), answered: true } },
+    }, clustersFallback([]));
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Dev cluster/ });
+    await waitFor(() => expect(card.textContent).toContain("Answers, but not as Prometheus"));
+    expect(card.textContent).not.toContain("Can't be reached");
+  });
+
+  it("recently opened names the project", async () => {
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "Dev cluster")],
+      dashboards: { d1: seedDashboard("d1", { kind: "project", id: "p1", name: "Dev cluster" }, spec("API latency", [])) },
+    }, clustersFallback([]));
+    recordRecent({ kind: "dashboard", id: "d1" }, 1);
+    renderMonitoringApp();
+    const section = await screen.findByRole("region", { name: "Recently opened" });
+    const [item] = within(section).getAllByRole("button");
+    expect(item.textContent).toContain("API latency · Dev cluster");
+  });
+
+  it("an empty group says it has no projects", async () => {
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "Dev cluster")],
+      groups: [group("g1", "Nothing yet", [])],
+    }, clustersFallback([]));
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Nothing yet/ });
+    expect(card.textContent).toContain("No projects yet");
+    expect(card.textContent).not.toContain("Sources not checked yet");
   });
 });

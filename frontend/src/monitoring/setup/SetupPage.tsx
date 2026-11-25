@@ -579,6 +579,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
   const lookedInto = discovery.data?.state === "error" || (discovery.isError && !discovery.data);
   const installOffered = offer?.available === true && !lookedInto;
   const heading = useRef<HTMLHeadingElement>(null);
+  const foot = useRef<HTMLElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const addButton = useRef<HTMLButtonElement>(null);
   const nameTouched = useRef(restored?.named ?? false);
@@ -958,6 +959,17 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
   const next: SetupStep = draft.step === 1 ? 2 : draft.step === 2 && importStep ? 3 : 4;
   const back: SetupStep = draft.step === 4 ? (importStep ? 3 : 2) : draft.step === 3 ? 2 : 1;
 
+
+  // The sticky footer's height, for the forms above it: what they scroll into view stays clear of it.
+  useEffect(() => {
+    const el = foot.current;
+    const page = el?.parentElement;
+    if (!el || !page || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(() => page.style.setProperty("--foot-height", `${el.offsetHeight}px`));
+    watch.observe(el);
+    return () => { watch.disconnect(); page.style.removeProperty("--foot-height"); };
+  }, [created]);
+
   return (
     <section className={s.setup} aria-labelledby="monitoring-setup-title" onKeyDown={onKeyDown}>
       <nav className={s.rail} aria-label="Setup">
@@ -1042,7 +1054,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
         </div>
 
         {!created && (
-          <footer className={s.foot}>
+          <footer ref={foot} className={s.foot}>
             {draft.step > 1 && (
               <button type="button" className={s.secondary} onClick={() => goTo(back)}>Back</button>
             )}

@@ -90,6 +90,23 @@
 }
 
 .error,
+.ok,
+.actions {
+  /* Above a sticky footer (the setup page's), which sets its own height. */
+  scroll-margin-bottom: var(--foot-height, 0px);
+}
+
+.fixedLabel {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fixedValue {
+  color: var(--ink);
+}
+
+.error,
 .ok {
   margin: 0;
   padding: 8px 10px;

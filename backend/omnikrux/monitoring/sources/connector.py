@@ -14,6 +14,7 @@ family from the base's entry, never its help or unit, which could be another pro
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -33,6 +34,9 @@ QueryRejectedCode = Literal["bad_query", "tool_error", "unauthorized"]
 
 MAX_TOOL_MESSAGE = 300
 TOOL_ERROR = "{name} answered HTTP {status}. Try again, or check the tool."
+NOT_AN_API = (
+    "{name} answered, but not as a {type} API (HTTP {status}). Check the address and the type."
+)
 QUERY_REFUSED = "{name} couldn't run that query."
 NOT_LIKE = "{name} answered, but not like {what}. Check the address and its path."
 RULER_OFF = "This Loki doesn't have its ruler turned on."
@@ -49,6 +53,8 @@ class TestResult:
     ok: bool
     version: str | None
     message: str | None
+    # The tool answered over HTTP, but not as its type (`NOT_AN_API`).
+    answered: bool = False
 
 
 @dataclass(frozen=True)
@@ -283,6 +289,31 @@ def status_message(name: str, status: int) -> str:
     if status in (401, 403):
         return messages.REJECTED.format(name=name, status=status)
     return TOOL_ERROR.format(name=name, status=status)
+
+
+def probe_failure(name: str, status: int, type_word: str) -> TestResult:
+    """What a non-2xx answer to a probe says: 404 and 405 mean the address isn't that kind of
+    API at all (the tool answered); other statuses are `status_message`'s."""
+    if status in (404, 405):
+        message = NOT_AN_API.format(name=name, type=type_word, status=status)
+        return TestResult(False, None, message, answered=True)
+    return TestResult(False, None, status_message(name, status))
+
+
+_NOT_AN_API = re.compile(
+    "^"
+    + re.escape(NOT_AN_API)
+    .replace(re.escape("{name}"), ".+")
+    .replace(re.escape("{type}"), "(?:Prometheus|Loki|Alertmanager)")
+    .replace(re.escape("{status}"), "[0-9]+")
+    + "$",
+    re.DOTALL,
+)
+
+
+def is_not_an_api(message: str | None) -> bool:
+    """Whether a stored check message is `NOT_AN_API`'s (the stored check keeps no flag)."""
+    return message is not None and _NOT_AN_API.match(message) is not None
 
 
 def reject(response: TransportResponse, name: str) -> QueryRejected:

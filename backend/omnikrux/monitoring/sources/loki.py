@@ -28,7 +28,7 @@ from omnikrux.monitoring.sources.connector import (
     gather_all,
     json_object,
     number_text,
-    status_message,
+    probe_failure,
 )
 from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreachable
 from omnikrux.monitoring.sources.types import SourceConfig
@@ -59,12 +59,12 @@ class LokiConnector:
         if got.status == 404:
             ready = await t.request("GET", "/ready", timeout=PROBE_SECONDS)
             if ready.status != 200:
-                return TestResult(False, None, status_message(name, ready.status))
+                return probe_failure(name, ready.status, "Loki")
             if ready.body.strip().lower() != b"ready":
                 return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))
             return TestResult(True, None, None)
         if got.status != 200:
-            return TestResult(False, None, status_message(name, got.status))
+            return probe_failure(name, got.status, "Loki")
         data = json_object(got.body)
         if data is None:
             return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))

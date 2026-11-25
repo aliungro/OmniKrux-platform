@@ -14,6 +14,7 @@ const EMPTY = {
   project: "No dashboards yet. Start one with New dashboard, or copy a ready-made view.",
   group: "No group dashboards yet. A group dashboard runs each panel once per project in the group.",
 } as const;
+const CANT_CHECK = "Can't be checked now.";
 const NO_READY = "Link a Prometheus-compatible or Loki source to get ready-made views.";
 
 /** "saved just now", "saved 5 min ago", "saved 3 h ago", "saved 2 days ago", then the date. */
@@ -69,8 +70,8 @@ function DashboardRow({ d, onOpen }: { d: DashboardSummaryOut; onOpen(id: string
 }
 
 /** A project's ready-made views: what each shows, what its sources lack, and Copy to edit. */
-function ReadyMadeViews({ projectId, readyMade, opener, onOpen }: {
-  projectId: string; readyMade: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void;
+function ReadyMadeViews({ projectId, readyMade, opener, onOpen, clusterDown }: {
+  projectId: string; readyMade: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void; clusterDown: boolean;
 }) {
   const ready = useReadyMade(projectId);
   const copy = useCopyToEdit(opener);
@@ -89,7 +90,7 @@ function ReadyMadeViews({ projectId, readyMade, opener, onOpen }: {
                 <button type="button" className={s.readyTitle} onClick={(e) => onOpen(r.id, toNewTab(e))}>{r.title}</button>
                 {r.description && <p className={s.description}>{r.description}</p>}
                 {r.notes.map((n) => <p key={n} className={s.readyNote}>{n}</p>)}
-                {!r.checked && r.check_message && <p className={s.readyNote}>{r.check_message}</p>}
+                {!r.checked && r.check_message && <p className={s.readyNote}>{clusterDown ? CANT_CHECK : r.check_message}</p>}
                 {copy.error?.from === r.id && <p className={s.bad} role="alert">{copy.error.text}</p>}
               </div>
               <button type="button" className={s.copy} aria-label={`Copy to edit ${r.title}`} aria-disabled={copy.busy !== null || undefined}
@@ -104,7 +105,7 @@ function ReadyMadeViews({ projectId, readyMade, opener, onOpen }: {
   );
 }
 
-export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = false }: {
+export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = false, clusterDown = false }: {
   owner: Owner;
   /** The tab the page is in: a dashboard made here opens in it (or a new one when it holds unsaved edits). */
   tabId: string;
@@ -112,6 +113,8 @@ export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = f
   openInNewTab(view: MonitoringView): void;
   /** A project with a Prometheus-compatible or Loki source linked (ready-made views come from them). */
   readyMade?: boolean;
+  /** The project's cluster can't be reached, which its page says once: a view doesn't say why again. */
+  clusterDown?: boolean;
 }) {
   const list = useOwnerDashboards(owner);
   const [creating, setCreating] = useState(false);
@@ -143,7 +146,7 @@ export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = f
           {list.data.map((d) => <DashboardRow key={d.id} d={d} onOpen={open} />)}
         </ul>
       )}
-      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} readyMade={readyMade} opener={opener} onOpen={open} />}
+      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} readyMade={readyMade} opener={opener} onOpen={open} clusterDown={clusterDown} />}
       {creating && (
         <NewDashboardDialog owner={owner} restoreFocusTo={newButton} onCancel={() => setCreating(false)}
           onCreated={(out) => { setCreating(false); openMade(out, { edit: true }, opener); }} />

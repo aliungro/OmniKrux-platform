@@ -75,7 +75,7 @@ export default function GroupForm({ nav }: MonitoringPageProps) {
         <div className={s.nameField}>
           <label htmlFor={`${ids}-n`} className={s.fieldLabel}>Name</label>
           <input id={`${ids}-n`} ref={name} className={s.input} type="text" autoComplete="off" maxLength={80} value={text}
-            aria-invalid={error && text.trim() === "" ? true : undefined} onChange={(e) => setText(e.target.value)} />
+            aria-invalid={error && text.trim() === "" ? true : undefined} onChange={(e) => { setText(e.target.value); setError(null); }} />
         </div>
         {projects.isError && !projects.data && <p className={s.bad} role="alert">{failure(projects.error)}</p>}
         {projects.data && (

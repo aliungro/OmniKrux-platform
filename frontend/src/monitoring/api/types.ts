@@ -90,6 +90,8 @@ export interface HealthOut {
   message: string | null;
   version: string | null;
   checked_at: string | null;
+  /** The tool answered over HTTP, but not as its type (down, with the address or type to check). */
+  answered?: boolean;
 }
 
 export interface SourceOut {

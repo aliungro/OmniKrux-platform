@@ -965,3 +965,40 @@ describe("Setup and project links", () => {
     expect(screen.queryByText(/^Unlinked Prom\./)).toBeNull();
   });
 });
+
+describe("Project page, one cluster banner", () => {
+  it("a project with an unreachable cluster says it once", async () => {
+    const prom = source("s1", "Prom in dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "prom", port: "9090" });
+    const loki = source("s2", "Loki in dev", { type: "loki", reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "loki", port: "3100" });
+    const refused = "Can't reach dev, so it can't be read. Check that the cluster is running.";
+    const bad = () => ({ state: "down" as const, message: refused, version: null, checked_at: new Date().toISOString() });
+    const READY = { key: "cluster" as const, id: "ready:p1:cluster", title: "Cluster health", description: "Nodes and pods.", missing: [], notes: [], checked: false, check_message: refused };
+    installFakeMonitoringApi({
+      sources: [prom, loki],
+      projects: [project("p1", "Dev", [link(prom, "", { source_cluster_id: "c1" }), link(loki, "", { source_cluster_id: "c1" })], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: { s1: bad(), s2: bad() },
+      dashboards: { "ready:p1:cluster": seedDashboard("ready:p1:cluster", { kind: "project", id: "p1", name: "Dev" }, spec("Cluster health", []), true) },
+      readyMade: { p1: [READY] },
+    }, async (url: string) => json(url === "/api/clusters" ? [{ id: "c1", name: "dev", provider: "kind", state: "ready" }] : []));
+    open("p1");
+    expect(await screen.findByText("dev can't be reached, so this project's data can't be read now.")).toBeTruthy();
+    expect(await screen.findByText("Can't be checked now.")).toBeTruthy();
+    expect(screen.queryByText(refused)).toBeNull();
+  });
+
+  it("a failing source of another cluster keeps its own reason", async () => {
+    const a = source("s1", "Prom in dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev" });
+    const b = source("s2", "By address");
+    installFakeMonitoringApi({
+      sources: [a, b],
+      projects: [project("p1", "Dev", [link(a, "", { source_cluster_id: "c1" }), link(b)], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: {
+        s1: { state: "down", message: "x", version: null, checked_at: new Date().toISOString() },
+        s2: { state: "down", message: "y", version: null, checked_at: new Date().toISOString() },
+      },
+    }, fallback);
+    open("p1");
+    await screen.findByRole("textbox", { name: "Filter for Prom in dev" });
+    expect(screen.queryByText(/can't be reached, so this project's data/)).toBeNull();
+  });
+});

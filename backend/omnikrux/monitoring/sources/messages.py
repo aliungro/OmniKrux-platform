@@ -31,6 +31,11 @@ CLUSTER_UNREACHABLE = (
 )
 
 
+SOURCE_CLUSTER_DOWN = (
+    "Can't reach {cluster}, so {name} can't be read. Check that the cluster is running."
+)
+
+
 def cluster_words(
     exc: Exception, cluster_name: str, action: str, unreachable: str | None = None
 ) -> str:

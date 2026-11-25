@@ -134,7 +134,7 @@ export function GrafanaConnections({ tabId }: { tabId: string }) {
         <DeleteReviewDialog title={`Remove the connection ${removing.name}?`} action="Remove connection" busy={remove.isPending}
           error={removeError} restoreFocusTo={opener} onCancel={() => { setRemoving(null); setRemoveError(null); }}
           onConfirm={() => void confirmRemove()}>
-          <p>Dashboards imported from it stay. To update them from their source later, pick their file.</p>
+          <p>{removing.dashboards_imported === 0 ? "No dashboards were imported from it." : "Dashboards imported from it stay. To update them from their source later, pick their file."}</p>
         </DeleteReviewDialog>
       )}
     </section>

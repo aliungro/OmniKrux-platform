@@ -11,12 +11,12 @@ import { readyAddedBy, readyViewsPhrase } from "../dashboards/readyViews";
 import { EditableName } from "../EditableName";
 import { escapeCloses } from "../focus";
 import { mayMixClusters, mixedLinkWords } from "../alerts/rules/clusterWarning";
-import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
+import { ageNote, kindLine, projectDot, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
 import { clearImportFailure, importFailedWords, importFailure } from "../setup/importNotice";
 import { SourceForm } from "../sources/SourceForm";
-import { isQueryable, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
+import { isQueryable, sortLinks, sourceTypeLabel, stateWords, whereLabel } from "../sources/sourceLabels";
 import { FilterField, validFilter } from "./FilterField";
 import { ProjectDeleteReview } from "./ProjectDeleteReview";
 import { ExportButton, ImportButton } from "../transfer/ExportButton";
@@ -27,15 +27,17 @@ const UNKNOWN: HealthOut = { state: "unknown", message: null, version: null, che
 const STALE_REVIEW = "Something changed since the review. Review it again.";
 
 /** The project's dashboards, then its ready-made views (generated from its Prometheus and Loki). */
-export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab }: {
+export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab, clusterDown = false }: {
   project: ProjectOut;
+  /** Every failing source is down for one cluster, which the page says once: views don't repeat why. */
+  clusterDown?: boolean;
   tabId: string;
   nav: MonitoringPageProps["nav"];
   openInNewTab(view: MonitoringView): void;
 }) {
   return (
     <OwnerDashboards owner={{ kind: "project", id: project.id, name: project.name }} tabId={tabId} nav={nav} openInNewTab={openInNewTab}
-      readyMade={project.links.some((l) => l.source_type === "prometheus" || l.source_type === "loki")} />
+      readyMade={project.links.some((l) => l.source_type === "prometheus" || l.source_type === "loki")} clusterDown={clusterDown} />
   );
 }
 
@@ -142,7 +144,7 @@ function LinkRow({ project, link, health, onUnlinked, onAct }: {
           <span className={s.name}>{link.source_name}</span>
           <span className={s.kind}>{sourceTypeLabel(link.source_type)}</span>
           <span className={s.health} data-state={state} title={state === "down" ? (health.message ?? undefined) : undefined}>
-            <i className={s.pip} aria-hidden="true" />{STATE_WORDS[state]}{age ? ` · ${age}` : ""}
+            <i className={s.pip} aria-hidden="true" />{stateWords(health, link.source_type)}{age ? ` · ${age}` : ""}
           </span>
         </div>
         <div className={s.filterLine}>
@@ -359,6 +361,12 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
     && !clusters.data!.some((c) => c.id === project.cluster_id);
   const clusterName = clusterGone ? null
     : (project.cluster_name ?? clusters.data?.find((c) => c.id === project.cluster_id)?.name ?? null);
+  // Every failing source is reached through the one cluster, which can't be reached: said once here.
+  const failing = project.links.filter((l) => stateOf(health[l.source_id]) === "down");
+  const failingIn = new Set(failing.map((l) => l.source_cluster_id ?? null));
+  const downClusterId = failing.length > 0 && failingIn.size === 1 && !failingIn.has(null) ? [...failingIn][0] : null;
+  const downCluster = downClusterId === null ? null
+    : (clusters.data?.find((c) => c.id === downClusterId)?.name ?? (project.cluster_id === downClusterId ? project.cluster_name : null) ?? "The cluster");
   const inGroups = (groups.data ?? []).filter((g) => g.project_ids.includes(project.id));
 
   const rename = async (name: string) => {
@@ -413,7 +421,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
   };
 
   /** A source made by hand here is saved already; give it a link, with a suggested filter where one can be made. */
-  const linkNew = async (saved: SourceOut) => {
+  const linkNew = async (saved: SourceOut, info?: { failedTest: boolean }) => {
     const sourceId = saved.id;
     const adds = addsLine(project, saved.type);
     setPageError(null);
@@ -430,7 +438,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
     try {
       await linkSource(project.id, sourceId, filter, originOf(filter, origin));
       await invalidateMonitoring(client);
-      setLinkedNote({ projectId: project.id, sourceId, text: `Linked ${saved.name}.${adds ? ` It ${adds}` : ""}` });
+      setLinkedNote({ projectId: project.id, sourceId, text: `Linked ${saved.name}.${adds ? ` It ${adds}` : ""}${info?.failedTest ? " It didn't answer the last test, so its panels say so until it does." : ""}` });
     } catch (err) {
       setPageError(`The source was saved but could not be linked to this project: ${failure(err)} Use an existing source to link it.`);
       void invalidateMonitoring(client);
@@ -467,6 +475,10 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
         {clusterGone && <p className={s.warn}>Cluster no longer connected</p>}
       </header>
 
+      {downCluster !== null && (
+        <p className={s.bad} role="status">{`${downCluster} can't be reached, so this project's data can't be read now.`}</p>
+      )}
+
       {pageError && <p className={s.bad} role="alert">{pageError}</p>}
       {/* Always mounted, so filling it is announced; shown only for this project while its source is still linked. */}
       <p className={s.live} role="status">{linkedText}</p>
@@ -484,7 +496,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
         {project.links.length === 0 && <p className={s.muted}>No sources yet. Use an existing one or add one by hand.</p>}
         {project.links.length > 0 && (
           <ul className={s.list}>
-            {project.links.map((l) => (
+            {sortLinks(project.links).map((l) => (
               <LinkRow key={l.source_id} project={project} link={l} health={health[l.source_id] ?? UNKNOWN}
                 onAct={settle}
                 onUnlinked={(gone) => { setLinkedNote(null); setUnlinked({ projectId: project.id, link: gone }); sourcesHeading.current?.focus(); }} />
@@ -506,7 +518,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
           <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} onAct={settle} />
         ) : (
           <div className={s.panel}>
-            <SourceForm mode="save" closeOnEscape tabId={tabId} page="project" pageId={id} onSaved={(saved) => linkNew(saved)} onCancel={closePanel} />
+            <SourceForm mode="save" closeOnEscape tabId={tabId} page="project" pageId={id} onSaved={(saved, info) => linkNew(saved, info)} onCancel={closePanel} />
           </div>
         )}
       </section>
@@ -523,7 +535,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
           <ExportButton kind="project" id={project.id} label="Export project" name={project.name} />
           <ImportButton onOpen={(e) => open({ page: "import", target: { kind: "project", id: project.id } }, e)} />
         </div>
-        <ProjectDashboardsSlot project={project} tabId={tabId} nav={nav} openInNewTab={openInNewTab} />
+        <ProjectDashboardsSlot project={project} tabId={tabId} nav={nav} openInNewTab={openInNewTab} clusterDown={downCluster !== null} />
       </section>
 
       <section aria-labelledby="monitoring-project-groups" className={s.section}>

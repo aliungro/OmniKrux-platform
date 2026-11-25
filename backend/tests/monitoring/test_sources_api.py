@@ -512,3 +512,53 @@ async def test_filter_check_refuses_a_bad_filter(monitoring_app, fake_prometheus
     cross = await http.post(url, json={"filter": 'a="b"'}, headers={"Origin": "http://evil.test"})
     assert cross.status_code in (403, 400)
     assert [r for r in fake_prometheus.requests if "label" in r.path] == []
+
+
+NO_PROMETHEUS_PATHS = {"/api/v1/status/buildinfo": 404, "/api/v1/query": 404}
+
+
+async def test_a_404_answer_is_not_an_api(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    fake_prometheus.fail_paths.update(NO_PROMETHEUS_PATHS)
+    entered = {"type": "prometheus", "reach": "url", "url": fake_prometheus.url, "name": "Metrics"}
+    body = (await http.post(f"{BASE}/test", json=entered)).json()
+    assert body["ok"] is False
+    assert body["message"] == (
+        "Metrics answered, but not as a Prometheus API (HTTP 404). Check the address and the type."
+    )
+    fake_prometheus.fail_paths.clear()
+    fake_prometheus.fail_paths["/api/v1/status/buildinfo"] = 500
+    again = (await http.post(f"{BASE}/test", json=entered)).json()
+    assert "not as a" not in again["message"] and "HTTP 500" in again["message"]
+
+
+async def test_health_marks_an_answering_source(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    fake_prometheus.fail_paths.update(NO_PROMETHEUS_PATHS)
+    created = (
+        await http.post(
+            BASE, json={"type": "prometheus", "reach": "url", "url": fake_prometheus.url}
+        )
+    ).json()
+    health = (await http.get(f"{BASE}/health", params={"refresh": "true"})).json()[created["id"]]
+    assert health["state"] == "down" and health["answered"] is True
+    refused = (
+        await http.post(BASE, json={"type": "prometheus", "reach": "url", "url": closed_port_url()})
+    ).json()
+    health = (await http.get(f"{BASE}/health", params={"refresh": "true"})).json()[refused["id"]]
+    assert health["state"] == "down" and health["answered"] is False
+
+
+async def test_a_stored_not_an_api_check_still_answers(monitoring_app, fake_prometheus):
+    http, app = monitoring_app
+    fake_prometheus.fail_paths.update(NO_PROMETHEUS_PATHS)
+    created = (
+        await http.post(
+            BASE, json={"type": "prometheus", "reach": "url", "url": fake_prometheus.url}
+        )
+    ).json()
+    await http.get(f"{BASE}/health", params={"refresh": "true"})
+    app.state.monitoring.health._entries.clear()  # as after a restart: only the stored check
+    listed = (await http.get(BASE)).json()
+    health = next(s for s in listed if s["id"] == created["id"])["health"]
+    assert health["state"] == "down" and health["answered"] is True

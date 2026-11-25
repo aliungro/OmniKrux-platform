@@ -32,18 +32,18 @@ export function GroupCard({ name, projectCount, sourceIds, health, now, firing, 
   return (
     <button type="button" className={s.card} onClick={(e) => onOpen(e.ctrlKey || e.metaKey)}>
       <span className={s.cardHead}>
-        <i className={s.folder} aria-hidden="true" />
+        <i className={`${s.folder} ${s.headMark}`} aria-hidden="true" />
         <span className={s.cardName}>{name}</span>
         {firing !== undefined && firing > 0 && <span className={s.firingCount}>{firingWords(firing)}</span>}
       </span>
-      <span className={s.cardSub}>{`${projectCount} ${projectCount === 1 ? "project" : "projects"}`}</span>
-      <span className={s.rows}>
+      <span className={s.cardSub}>{projectCount === 0 ? "No projects yet" : `${projectCount} ${projectCount === 1 ? "project" : "projects"}`}</span>
+      {projectCount > 0 && <span className={s.rows}>
         <span className={s.row} data-state={state}>
           <i className={s.pip} aria-hidden="true" />
           <span className={s.rowText}>{line}</span>
           {age && <span className={s.age}>{age}</span>}
         </span>
-      </span>
+      </span>}
     </button>
   );
 }

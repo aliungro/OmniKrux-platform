@@ -12,6 +12,10 @@ import s from "./SourceForm.module.css";
 
 const MAX_HEADERS = 20;
 const KEEP = "Saved. Leave empty to keep it.";
+
+/** Said after a source was saved although its last test failed. */
+export const savedAfterFailedTest = (name: string) =>
+  `Saved ${name}. It didn't answer the last test, so its panels say so until it does.`;
 const AUTH_LABELS: Record<AuthType, string> = {
   none: "None", basic: "Basic", bearer: "Bearer token", api_key: "API key header", mtls: "Client certificate (mTLS)",
 };
@@ -36,7 +40,7 @@ interface CommonProps {
 /** `save` stores the source and reports it; `collect` hands the entered source to `onCollect` and stores nothing. */
 export type SourceFormProps = CommonProps & (
   /** The form stays busy until a promise `onSaved` returns has settled: Save can't be pressed twice. */
-  | { mode: "save"; onSaved(source: SourceOut): void | Promise<void>; onCollect?: never }
+  | { mode: "save"; onSaved(source: SourceOut, info?: { failedTest: boolean }): void | Promise<void>; onCollect?: never }
   | { mode: "collect"; onCollect?(body: SourceIn): void; onSaved?: never }
 );
 
@@ -103,7 +107,7 @@ export function SourceForm(props: SourceFormProps) {
 
   const [type, setType] = useState<SourceType>(initial?.type ?? "prometheus");
   const [url, setUrl] = useState(initial?.url ?? "");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initial?.name ?? "");
   const [authType, setAuthType] = useState<AuthType>(initial?.auth.type ?? "none");
   const [username, setUsername] = useState(initial?.auth.username ?? "");
   const [headerName, setHeaderName] = useState(initial?.auth.header_name ?? "");
@@ -116,6 +120,7 @@ export function SourceForm(props: SourceFormProps) {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const message = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => { (byCluster ? nameInput : address).current?.focus(); }, [byCluster]);
 
@@ -126,6 +131,11 @@ export function SourceForm(props: SourceFormProps) {
     headers.map((h) => [h.name, h.value !== ""]), ca, removeCa,
   ]);
   const [start] = useState(fields);
+  // A test answers for what was entered when it ran: changing what is reached or how clears it.
+  const reached = JSON.stringify([type, url, authType, username, headerName, Object.values(secrets).map((v) => v !== ""), headers, ca, removeCa]);
+  useEffect(() => { setResult(null); }, [reached]);
+  // An error or a test answer is brought into view above any sticky footer (its scroll margin).
+  useEffect(() => { if (error || result) message.current?.scrollIntoView?.({ block: "nearest" }); }, [error, result]);
   // Saved or cancelled: the form is done and holds the tab no more, whatever it still shows.
   const [done, setDone] = useState(false);
   const formId = useId();
@@ -198,7 +208,7 @@ export function SourceForm(props: SourceFormProps) {
       setCa("");
       await invalidateMonitoring(client);
       release();
-      await props.onSaved?.(saved);
+      await props.onSaved?.(saved, { failedTest: result !== null && !result.ok });
     } catch (err) {
       setError(failure(err));
     } finally {
@@ -233,14 +243,21 @@ export function SourceForm(props: SourceFormProps) {
   return (
     <form className={s.form} onSubmit={save} noValidate onKeyDown={closeOnEscape ? escapeCloses(() => { release(); onCancel(); }, busy) : undefined} aria-label={initial ? `Edit ${initial.name}` : "Add a source by hand"}>
       <h2 className={s.title}>{initial ? `Edit ${initial.name}` : "Add a source by hand"}</h2>
-      <div className={s.field}>
-        <label htmlFor={`${ids}-type`}>Type</label>
-        <select id={`${ids}-type`} className={s.input} value={type} onChange={(e) => setType(e.target.value as SourceType)}>
-          <option value="prometheus">{sourceTypeLabel("prometheus")}</option>
-          <option value="loki">{sourceTypeLabel("loki")}</option>
-          <option value="alertmanager">{sourceTypeLabel("alertmanager")}</option>
-        </select>
-      </div>
+      {byCluster ? (
+        <div className={s.field}>
+          <span className={s.fixedLabel}>Type</span>
+          <span className={s.fixedValue} data-fixed-type>{sourceTypeLabel(type)}</span>
+        </div>
+      ) : (
+        <div className={s.field}>
+          <label htmlFor={`${ids}-type`}>Type</label>
+          <select id={`${ids}-type`} className={s.input} value={type} onChange={(e) => setType(e.target.value as SourceType)}>
+            <option value="prometheus">{sourceTypeLabel("prometheus")}</option>
+            <option value="loki">{sourceTypeLabel("loki")}</option>
+            <option value="alertmanager">{sourceTypeLabel("alertmanager")}</option>
+          </select>
+        </div>
+      )}
       {byCluster ? (
         <p className={s.fixed}>Reached inside the cluster. Its address and sign-in can&apos;t be changed here.</p>
       ) : (
@@ -254,7 +271,6 @@ export function SourceForm(props: SourceFormProps) {
         <label htmlFor={`${ids}-name`}>Name</label>
         <input id={`${ids}-name`} ref={nameInput} className={s.input} type="text" autoComplete="off" placeholder={initial ? initial.name : autoName}
           value={name} onChange={(e) => setName(e.target.value)} />
-        {initial && <span className={s.hint}>Leave empty to keep the name.</span>}
       </div>
 
       {!byCluster && (
@@ -315,7 +331,7 @@ export function SourceForm(props: SourceFormProps) {
         </>
       )}
 
-      <div className={s.field}>
+      {!byCluster && <div className={s.field}>
         <label htmlFor={`${ids}-ca`}>CA certificate (PEM, optional)</label>
         <textarea id={`${ids}-ca`} className={`${s.input} ${s.pem}`} rows={3} autoComplete="off" spellCheck={false} value={ca} disabled={removeCa}
           aria-describedby={initial?.has_ca ? `${ids}-cah` : undefined} onChange={(e) => setCa(e.target.value)} />
@@ -325,10 +341,10 @@ export function SourceForm(props: SourceFormProps) {
             <input type="checkbox" checked={removeCa} onChange={(e) => setRemoveCa(e.target.checked)} /> Remove saved CA
           </label>
         )}
-      </div>
+      </div>}
 
-      {error && <p className={s.error} role="alert">{error}</p>}
-      {result && <p className={result.ok ? s.ok : s.error} role="status">{result.text}</p>}
+      {error && <p ref={message} className={s.error} role="alert">{error}</p>}
+      {result && <p ref={error ? undefined : message} className={result.ok ? s.ok : s.error} role="status">{result.text}</p>}
       <div className={s.actions}>
         {/* aria-disabled, not disabled: a pressed button keeps the keyboard while it waits. */}
         <button type="button" className={s.secondary} onClick={() => void test()} aria-disabled={busy || testing || undefined}>

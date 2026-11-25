@@ -16,7 +16,12 @@ from pydantic import BaseModel
 
 from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.monitoring.sources import messages
-from omnikrux.monitoring.sources.connector import Connector, ConnectorRegistry, TestResult
+from omnikrux.monitoring.sources.connector import (
+    Connector,
+    ConnectorRegistry,
+    TestResult,
+    is_not_an_api,
+)
 from omnikrux.monitoring.sources.store import SourceStore
 from omnikrux.monitoring.sources.transport import SourceTransport, TransportFactory
 from omnikrux.monitoring.sources.types import SourceCheck, SourceConfig
@@ -35,6 +40,8 @@ class HealthOut(BaseModel):
     message: str | None
     version: str | None
     checked_at: datetime | None
+    # The tool answered over HTTP, but not as its type: down, with the address or type to check.
+    answered: bool = False
 
 
 UNKNOWN = HealthOut(state="unknown", message=None, version=None, checked_at=None)
@@ -67,6 +74,7 @@ def _from_check(check: SourceCheck) -> HealthOut:
         message=check.message,
         version=check.version,
         checked_at=check.checked_at,
+        answered=check.answered or (not check.ok and is_not_an_api(check.message)),
     )
 
 
@@ -171,7 +179,11 @@ class HealthCache:
         ok, version, message = result.ok, result.version, result.message
         checked_at = datetime.now(UTC)
         health = HealthOut(
-            state="up" if ok else "down", message=message, version=version, checked_at=checked_at
+            state="up" if ok else "down",
+            message=message,
+            version=version,
+            checked_at=checked_at,
+            answered=result.answered,
         )
         self._entries[source.id] = _Entry(health, source.updated_at, time.monotonic())
         try:

@@ -36,6 +36,7 @@ from omnikrux.clusters.registry import SOURCE_CLOUD, ClusterRegistry
 from omnikrux.kube.connections import ClusterConnections, cloud_kube_error, kube_error_message
 from omnikrux.kube.tokens import ClusterUnavailable
 from omnikrux.monitoring.sources import messages
+from omnikrux.monitoring.sources.messages import cluster_words
 from omnikrux.monitoring.sources.types import SourceConfig
 
 MAX_ANSWER_BYTES = 32 * 1024 * 1024
@@ -497,7 +498,12 @@ class ClusterServiceTransport:
             message = (
                 cloud_kube_error(f"reach {name}", exc=exc).message
                 if cloud
-                else kube_error_message(exc, f"reach {name}")
+                else cluster_words(
+                    exc,
+                    info.name,
+                    f"reach {name}",
+                    unreachable=messages.SOURCE_CLUSTER_DOWN.format(cluster=info.name, name=name),
+                )
             )
             raise SourceUnreachable("unreachable", message) from None
 
