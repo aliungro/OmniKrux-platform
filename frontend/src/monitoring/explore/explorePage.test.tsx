@@ -104,6 +104,23 @@ describe("Explore", () => {
     expect(batches(api)).toHaveLength(1);
   });
 
+  it("an empty metric answer says why once the reason arrives", async () => {
+    const MISSING = "This Prometheus doesn't collect node metrics (node-exporter) for this project: node_load1 has no series.";
+    const api = shop({ node_load1: { result_type: "matrix", series: [] } }, three, { whyEmpty: { reason: "missing_metric", message: MISSING } });
+    await openExplore({ page: "explore", project: "p1", expr: "node_load1" });
+    const reason = await screen.findByText(MISSING);
+    expect(reason.hasAttribute("data-empty-reason")).toBe(true);
+    expect(screen.queryByText("No data in this time range.")).toBeNull();
+    const why = api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty");
+    expect(why).toHaveLength(1);
+    expect(why[0].body).toMatchObject({ source_id: "s1", project_id: "p1", query: "node_load1", metrics: ["node_load1"] });
+    // A new text with data: the reason goes with the empty answer it was about.
+    fireEvent.change(query(), { target: { value: "up" } });
+    expect(await screen.findByText("chart 3")).toBeTruthy();
+    expect(screen.queryByText(MISSING)).toBeNull();
+    expect(api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty")).toHaveLength(1);
+  });
+
   it("a failed run shows Source unreachable with Try again", async () => {
     const api = shop({ up: { error: { code: "unreachable", message: "Prometheus didn't answer in time." }, status: 502 } });
     await openExplore();

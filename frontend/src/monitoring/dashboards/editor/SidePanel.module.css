@@ -319,6 +319,17 @@
   color: var(--ink-3);
 }
 
+/* Why the run was empty: under the count, in reading type (the count stays mono). */
+.runReason {
+  margin: 0;
+  padding-left: 13px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.45;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
 .hint {
   margin: 0;
   padding-left: 13px;

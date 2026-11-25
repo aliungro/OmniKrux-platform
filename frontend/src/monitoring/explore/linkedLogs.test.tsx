@@ -418,6 +418,42 @@ describe("Metrics and logs on one timeline", () => {
     for (const q of linesSent(sent)) expect(q.project_id).toBe(q.source_id === "l1" ? "p1" : "p2");
   });
 
+  it("Explore's empty lines say the newest line is older", async () => {
+    const api = shop();
+    const OLDER = "No lines in this time range. The newest matching line is 3 days old: try a longer range.";
+    api.state.whyEmpty = { reason: "older_lines", message: OLDER };
+    const sent = batchItems((q) => (q.limit != null ? noLines(q) : null));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
+    const reason = await within(await screen.findByRole("region", { name: "Log lines" })).findByText(OLDER);
+    expect(reason.hasAttribute("data-empty-reason")).toBe(true);
+    expect(within(section()).queryByText("No log lines in this time range.")).toBeNull();
+    const why = () => api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty").map((r) => r.body as Record<string, unknown>);
+    // About the lines request that ran: its project, source, text, range and selector.
+    const ran = linesSent(sent).at(-1) as QueryRequest;
+    expect(why()).toEqual([{
+      source_id: "l1", project_id: "p1", query: '{app="shop"}', start: ran.start, end: ran.end, metrics: [], selector: '{app="shop"}',
+    }]);
+    // A window chosen on the chart asks about that window.
+    await user.click(screen.getByRole("button", { name: "Drag a window" }));
+    const win = windowOf(lastRange as Range);
+    await waitFor(() => expect(why().at(-1)).toMatchObject({ start: win.start, end: win.end, selector: '{app="shop"}' }));
+    expect(await within(section()).findByText(OLDER)).toBeTruthy();
+    expect(within(section()).queryByText("No log lines in this window.")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("an unknown reason keeps the plain empty lines note", async () => {
+    const api = shop();
+    batchItems((q) => (q.limit != null ? noLines(q) : null));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
+    expect(await within(await screen.findByRole("region", { name: "Log lines" })).findByText("No log lines in this time range.")).toBeTruthy();
+    await waitFor(() => expect(api.requests.some((r) => r.url === "/api/monitoring/query/why-empty")).toBe(true));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(within(section()).getByText("No log lines in this time range.")).toBeTruthy();
+    expect(section().querySelector("[data-empty-reason]")).toBeNull();
+  });
+
   it("l focuses the log lines", async () => {
     shop();
     batchItems();

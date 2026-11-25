@@ -264,6 +264,16 @@
   text-align: center;
 }
 
+/* Why the answer is empty: a sentence to read, centred under the query, a step darker than the note. */
+.reason {
+  max-inline-size: 60ch;
+  margin-inline: auto;
+  color: var(--ink-2);
+  line-height: 1.5;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
 /* 260 px of plot with the legend under it. */
 .chartBox {
   height: 300px;

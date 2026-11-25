@@ -6,7 +6,7 @@ import { ALERT_PANEL_TYPES } from "../../alerts/limits";
 import { RecommendationBar } from "../../build/RecommendationBar";
 import { useOwnerCatalog } from "../../catalog/merge";
 import { escapeCloses } from "../../focus";
-import type { DashboardOwner, PanelData } from "../runPanel";
+import type { DashboardOwner, PanelData, PanelRun } from "../runPanel";
 import type { OwnerKind, PanelSpec, Problem } from "../schema";
 import { AlertTab, alertRunKey, type AlertDryRun } from "./AlertTab";
 import { ChartTab } from "./ChartTab";
@@ -28,6 +28,8 @@ export interface PanelLive {
   flush(): void;
   /** The step the run used, in seconds; null when the panel has no run. */
   step: number | null;
+  /** The run itself (what an empty answer is asked about); null or absent when the panel has no run. */
+  run?: PanelRun | null;
 }
 
 /** Changes one panel of the draft; `update` gets the panel as the draft has it. */

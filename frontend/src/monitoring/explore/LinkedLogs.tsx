@@ -4,6 +4,7 @@
 // goes back. Its states are its own: a failure here never touches the chart above.
 
 import { forwardRef, lazy, Suspense, useMemo, type Ref } from "react";
+import { useEmptyReason } from "../dashboards/emptyReason";
 import type { PanelData } from "../dashboards/runPanel";
 import { newPanel, type PanelSpec } from "../dashboards/schema";
 import { LINES_LIMIT, lineCount, lineTone, windowLabel } from "./logLinks";
@@ -59,6 +60,9 @@ export const LinkedLogs = forwardRef<HTMLElement, LinkedLogsProps>(function Link
   const done = !nothing && current && state.status === "done";
   const failed = !nothing && current && state.status === "failed";
   const invalid = !nothing && current && state.status === "invalid";
+  // Empty lines: why, about the request that ran (a chosen window is in it), once the check proves it.
+  const none = done && state.lines.length === 0;
+  const reason = useEmptyReason(none && state.request ? { sourceType: "loki", request: state.request } : null);
 
   let said = "";
   if (done) {
@@ -117,9 +121,9 @@ export const LinkedLogs = forwardRef<HTMLElement, LinkedLogsProps>(function Link
             </div>
           )}
           {invalid && <p className={s.note}>{state.message}</p>}
-          {done && state.lines.length === 0 && (
-            <p className={s.note}>{state.window ? "No log lines in this window." : "No log lines in this time range."}</p>
-          )}
+          {none && (reason
+            ? <p className={`${s.note} ${s.reason}`} data-empty-reason="">{reason}</p>
+            : <p className={s.note}>{state.window ? "No log lines in this window." : "No log lines in this time range."}</p>)}
           {done && state.lines.length > 0 && (
             <div className={s.lines} style={{ height: Math.min(MAX_LIST, state.lines.length * ROW + 8) }}>
               <Suspense fallback={<p className={s.note}>Loading lines…</p>}>

@@ -67,6 +67,8 @@ export type ExploreRunState = {
   /** The project and source the last run read. A change of either starts over from INITIAL. */
   projectId: string | null;
   sourceId: string | null;
+  /** The request whose answer is shown (set when a run ends `done`): what an empty answer is asked about. */
+  request: QueryRequest | null;
 };
 
 export interface ExploreRunInput {
@@ -86,7 +88,7 @@ export interface ExploreRunInput {
 const INITIAL: ExploreRunState = {
   status: "idle", data: null, lastGood: null, message: null, tookMs: null, runId: 0,
   shown: "idle", expr: null, failure: null, range: null, step: null, kind: null, panel: null, at: null,
-  timeText: null, projectId: null, sourceId: null,
+  timeText: null, projectId: null, sourceId: null, request: null,
 };
 
 /** The tool couldn't answer: the same family M2 calls unreachable. */
@@ -144,10 +146,10 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
         projectId: project?.id ?? null, sourceId: source?.source_id ?? null, ...patch,
       }));
     const invalid = (message: string) =>
-      end({ status: "invalid", shown: "invalid", data: null, message, failure: null, tookMs: null });
+      end({ status: "invalid", shown: "invalid", data: null, message, failure: null, tookMs: null, request: null });
 
     if (!project || !source || expr.trim() === "") {
-      end({ status: "idle", shown: "idle", data: null, message: null, failure: null, tookMs: null, at: null });
+      end({ status: "idle", shown: "idle", data: null, message: null, failure: null, tookMs: null, at: null, request: null });
       return;
     }
     const unreadable = quickCheck(expr);
@@ -164,7 +166,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
     // Without variables nothing is skipped; if something is, it is the text's fault.
     if (run.skipped.length > 0) { invalid(run.skipped[0].message); return; }
     if (run.requests.length === 0) {
-      end({ status: "idle", shown: "idle", data: null, message: null, failure: null, tookMs: null, at: null });
+      end({ status: "idle", shown: "idle", data: null, message: null, failure: null, tookMs: null, at: null, request: null });
       return;
     }
 
@@ -181,12 +183,12 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
         const message = first?.error?.message || NO_ANSWER;
         if (INVALID.has(code)) invalid(message);
         // A failure replaces the chart for good: a later typo never brings back what came before it.
-        else end({ status: "failed", shown: "failed", data: null, lastGood: null, message, failure: UNREACHABLE.has(code) ? "unreachable" : "error", tookMs: null });
+        else end({ status: "failed", shown: "failed", data: null, lastGood: null, message, failure: UNREACHABLE.has(code) ? "unreachable" : "error", tookMs: null, request: null });
         return;
       }
       const data = mergePanelResults(panel, run, results, "project");
       end({
-        status: "done", shown: "done", data, message: null, failure: null, tookMs: data.summary.tookMs, panel,
+        status: "done", shown: "done", data, message: null, failure: null, tookMs: data.summary.tookMs, panel, request: run.requests[0],
         lastGood: { expr, data, range: run.range, step: run.step, kind, panel }, range: run.range, step: run.step,
       });
     } catch (err) {
@@ -194,7 +196,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
       const code = err instanceof DashboardRequestError ? err.code : "network";
       end({
         status: "failed", shown: "failed", data: null, lastGood: null, message: failure(err, "try again") || NO_ANSWER,
-        failure: UNREACHABLE.has(code as QueryErrorCode) ? "unreachable" : "error", tookMs: null,
+        failure: UNREACHABLE.has(code as QueryErrorCode) ? "unreachable" : "error", tookMs: null, request: null,
       });
     } finally {
       if (controller.current === ctl) controller.current = null;
@@ -272,6 +274,8 @@ export type LinesRunState = {
   /** The text, place and range (`linesKey`) the shown state is about; `null` before any. */
   key: string | null;
   runId: number;
+  /** The request whose lines are shown (set on `done`; its window included): what empty lines are asked about. */
+  request: QueryRequest | null;
 };
 
 export interface LinesRunInput {
@@ -288,6 +292,7 @@ export interface LinesRunInput {
 
 const LINES_INITIAL: LinesRunState = {
   status: "idle", lines: [], message: null, window: null, timeText: null, marks: [], marksFor: null, key: null, runId: 0,
+  request: null,
 };
 const NO_LINES = "The log lines didn't answer. Try again.";
 
@@ -360,7 +365,7 @@ export function useLinesRun(input: LinesRunInput): { state: LinesRunState; retry
       }
       const lines = mergePanelResults(panel, run, results, "project").logs;
       setState((s) => ({
-        status: "done", lines, message: null, window, timeText, key: forKey, runId,
+        status: "done", lines, message: null, window, timeText, key: forKey, runId, request,
         marks: window ? (s.marksFor === forKey ? s.marks : []) : lines,
         marksFor: window ? (s.marksFor === forKey ? forKey : null) : forKey,
       }));

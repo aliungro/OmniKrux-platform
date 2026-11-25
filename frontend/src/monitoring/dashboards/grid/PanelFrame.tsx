@@ -185,8 +185,8 @@ export const PanelFrame = memo(function PanelFrame({
   const report = tile?.report;
   const { pending, flush } = debounced;
   useEffect(() => {
-    report?.(panel.id, { data: result.data, fetching: result.fetching, waiting, pending, flush, step: owner ? run.step : null });
-  }, [report, panel.id, result.data, result.fetching, waiting, pending, flush, owner, run.step]);
+    report?.(panel.id, { data: result.data, fetching: result.fetching, waiting, pending, flush, step: owner ? run.step : null, run: owner ? run : null });
+  }, [report, panel.id, result.data, result.fetching, waiting, pending, flush, owner, run]);
   useEffect(() => () => report?.(panel.id, null), [report, panel.id]);
 
   // The keyboard was inside this panel (a table header, a log line, Try again) and what held it

@@ -8,7 +8,7 @@ import type {
   QueryErrorCode, QueryRequest, QueryResponse, SetupIn, SourceIn, SourceOut, SuggestOut, TreeColor, TreeDashboard, TreeOut,
 } from "../api/types";
 import type { CatalogOut } from "../catalog/api";
-import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut } from "../dashboards/api";
+import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut, WhyEmptyOut } from "../dashboards/api";
 import { emptyTransferState, transferRoute, type FakeTransferState } from "./fakeTransferApi";
 import { alertsRoute, emptyAlertsState, type FakeAlertsState, type FakeRefusal } from "./fakeAlertsApi";
 import type { Plan } from "../../api/types";
@@ -81,6 +81,9 @@ export interface FakeMonitoringState extends FakeAlertsState {
   labelValues: Record<string, string[]>;
   /** Project catalogs by project id (`GET /projects/{id}/catalog`; absent answers 404). */
   catalogs: Record<string, CatalogOut>;
+  /** `POST /query/why-empty`'s answer to every check (after the body, project and link checks);
+   * `unknown` by default, so an empty panel keeps the generic words. */
+  whyEmpty: WhyEmptyOut | { error: { code: QueryErrorCode; message: string }; status: number };
 }
 
 /** A seed: any part of the state; `install` may be seeded in part (the rest keeps its defaults). */
@@ -117,6 +120,8 @@ const NO_ANSWER = "This fake has no answer for that query.";
 const OWNER_KIND_CHOICE = 'Choose "project" or "group" as the owner kind.';
 const QUERY_PROJECT_GONE = "That project no longer exists.";
 const QUERY_NOT_LINKED = "This source isn't linked to that project.";
+const WHY_PROJECT = "Choose the project the query ran for.";
+const WINDOW_ORDER = "Send the time range the query ran over: a start, and an end after it.";
 const RANGE_NEEDS = "A range query needs a start, an end after it, and a step.";
 const TOO_MANY_POINTS = "This range has too many points for the step. Use a larger step.";
 const MAX_TITLE = 120;
@@ -165,6 +170,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
     sources: [], projects: [], groups: [], health: {}, discovery: {}, fields: {}, queries: {},
     suggestion: { filter: "", origin: "none", reason: null },
     queryAnswers: {}, dashboards: {}, readyMade: {}, labelValues: {}, catalogs: {},
+    whyEmpty: { reason: "unknown", message: null },
     ...emptyAlertsState(),
     ...seed,
     install: { ...emptyInstallState(), ...seed.install },
@@ -482,6 +488,17 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
           : { ok: false, response: null, error: { ...got.error, status: got.status } };
       });
       return json({ results });
+    }
+    if (is("POST", "query", "why-empty")) {
+      const { source_id: sourceId, project_id: projectId, query: text, start, end } = body as Obj;
+      if (typeof sourceId !== "string" || !sourceId) return queryError(422, "bad_request", "Choose a source to query.");
+      if (typeof projectId !== "string" || !projectId) return queryError(422, "bad_request", WHY_PROJECT);
+      if (typeof text !== "string" || !text) return queryError(422, "bad_request", "Write a query.");
+      if (typeof start !== "number" || typeof end !== "number" || !(end > start)) return queryError(422, "bad_request", WINDOW_ORDER);
+      const refused = linkRefusal(projectId, sourceId);
+      if (refused) return queryError(refused.status, refused.error.code, refused.error.message);
+      const out = state.whyEmpty;
+      return "error" in out ? queryError(out.status, out.error.code, out.error.message) : json(out);
     }
     if (is("GET", "label-values")) {
       if (!query.get("source_id")) return queryError(400, "bad_request", "Choose a source to query.");

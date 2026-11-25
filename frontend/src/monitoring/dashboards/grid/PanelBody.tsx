@@ -3,6 +3,7 @@
 import { lazy, Suspense } from "react";
 import type { PanelDataResult, PanelRun } from "../runPanel";
 import type { PanelSpec } from "../schema";
+import { usePanelEmptyReason } from "../emptyReason";
 import { PANEL_COPY, PanelFailure, PanelNote } from "./PanelState";
 
 const ChartView = lazy(() => import("../../charts"));
@@ -21,6 +22,8 @@ interface Props {
 
 export function PanelBody({ panel, run, result, waiting, changeId, animate }: Props) {
   const { data } = result;
+  // Before any return (hooks keep their order): why an empty answer was empty, once it is known.
+  const reason = usePanelEmptyReason(panel, run, !waiting && data?.state === "empty", !waiting && !result.fetching);
   // Waiting on variables, nothing read yet, or the last thing kept is from before this panel had a run.
   if (waiting || data === null || (data.state === "noQuery" && run.requests.length > 0)) {
     return <PanelNote text={PANEL_COPY.loading} busy />;
@@ -29,7 +32,8 @@ export function PanelBody({ panel, run, result, waiting, changeId, animate }: Pr
     case "noQuery":
       return <PanelNote text={PANEL_COPY.noQuery} />;
     case "empty":
-      return <PanelNote text={PANEL_COPY.empty} />;
+      // The generic words stay until a reason is proved; a reason replaces them, never a "checking" line.
+      return reason ? <PanelNote text={reason} reason /> : <PanelNote text={PANEL_COPY.empty} />;
     case "unreachable":
       return <PanelFailure kind="unreachable" reason={data.problems[0]} onRetry={result.refetch} />;
     case "error":

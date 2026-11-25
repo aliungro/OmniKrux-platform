@@ -156,6 +156,14 @@
   font-size: 12.5px;
 }
 
+/* Why there are no lines: a sentence to read, a step darker than the plain note. */
+.reason {
+  max-inline-size: 72ch;
+  color: var(--ink-2);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .failure {
   display: flex;
   flex-wrap: wrap;

@@ -326,6 +326,19 @@
   text-align: center;
 }
 
+/* Why there is no data: a sentence to read, a step darker than the generic words. Long metric
+   names wrap anywhere; a short tile scrolls the sentence rather than cutting it. */
+.noteReason {
+  max-inline-size: 46ch;
+  max-block-size: 100%;
+  padding-inline: 14px;
+  overflow-y: auto;
+  color: var(--ink-2);
+  line-height: 1.45;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
 .failure {
   flex: 1;
   min-height: 0;

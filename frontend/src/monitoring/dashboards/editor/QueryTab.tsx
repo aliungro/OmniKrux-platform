@@ -4,6 +4,7 @@
 import { useId, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 import { pressed } from "../../../features/chrome/shortcuts";
 import { isQueryable } from "../../sources/sourceLabels";
+import { usePanelEmptyReason } from "../emptyReason";
 import { PANEL_COPY } from "../grid/PanelState";
 import type { DashboardOwner, PanelData } from "../runPanel";
 import { MAX_QUERIES, type OwnerKind, type PanelSpec, type QuerySpec, type SourceRef } from "../schema";
@@ -107,6 +108,9 @@ export function QueryTab({ panel, update, owner, ownerKind, data, live }: {
   };
 
   const line = runLine(panel, data, live);
+  // Under the run line's count: why the run came back empty, once the check proves it.
+  const settled = !live?.pending && !live?.waiting && !live?.fetching;
+  const reason = usePanelEmptyReason(panel, live?.run ?? null, settled && data?.state === "empty", settled);
   const canAdd = panel.type !== "logs" && panel.queries.length < MAX_QUERIES;
 
   return (
@@ -126,6 +130,7 @@ export function QueryTab({ panel, update, owner, ownerKind, data, live }: {
       {canAdd && <button type="button" className={s.add} onClick={add}>+ Add query</button>}
       <div className={s.run}>
         <p className={s.runLine} data-tone={line.tone}>{line.text}</p>
+        {reason && <p className={s.runReason}>{reason}</p>}
         <p className={s.hint}>Ctrl+Enter runs it now.</p>
       </div>
     </div>

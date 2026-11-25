@@ -87,6 +87,27 @@ export interface LabelValuesOut {
   truncated: boolean;
 }
 
+/** What an empty answer is checked against: the query that ran, on its project, over its range
+ * (seconds). Prometheus sends the query's metric names, Loki its stream selector. */
+export interface WhyEmptyIn {
+  source_id: string;
+  project_id: string;
+  query: string;
+  start: number;
+  end: number;
+  metrics?: string[];
+  selector?: string | null;
+}
+
+export type WhyEmptyReason =
+  | "missing_metric" | "nothing_matched" | "missing_labels" | "no_streams" | "older_lines" | "filtered_out" | "unknown";
+
+/** Why it was empty, in OmniKrux's words; `message` is null exactly for `unknown` (nothing proved). */
+export interface WhyEmptyOut {
+  reason: WhyEmptyReason;
+  message: string | null;
+}
+
 export interface BatchError {
   code: QueryErrorCode;
   message: string;
@@ -241,6 +262,10 @@ export async function runBatch(queries: QueryRequest[], signal?: AbortSignal): P
   return out.results;
 }
 
+/** Why a query that ran came back empty. A plain read: it changes nothing, so no mutation cache. */
+export const whyEmpty = (body: WhyEmptyIn, signal?: AbortSignal) =>
+  request<WhyEmptyOut>("POST", "/query/why-empty", body, signal);
+
 // --- Hooks ------------------------------------------------------------------------------------
 
 export const dashboardKey = (id: string) => ["monitoring", "dashboard", id] as const;
@@ -269,12 +294,13 @@ export const useLabelValues = (p: LabelValuesParams | null): UseQueryResult<Labe
   });
 
 /**
- * Keys a dashboard change leaves alone: panel queries, label values and catalogs did not change, and
+ * Keys a dashboard change leaves alone: panel queries, label values, catalogs and empty reasons did not change, and
  * an alert's dry run answers for the alert as written in an open Alert tab, which a save doesn't change.
  */
 function keepsData(key: readonly unknown[]): boolean {
   return key[0] === "monitoring"
-    && (key[1] === "panel" || key[1] === "labelValues" || key[1] === "catalog" || (key[1] === "alerts" && key[2] === "dryRun"));
+    && (key[1] === "panel" || key[1] === "labelValues" || key[1] === "catalog" || key[1] === "why-empty"
+      || (key[1] === "alerts" && key[2] === "dryRun"));
 }
 
 /**

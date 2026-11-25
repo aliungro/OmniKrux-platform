@@ -15,6 +15,7 @@ import { firstMetric, isLogQlMetric, logSelector, quickCheck } from "../build/pr
 import { guessUnit, humanTitle } from "../build/writeQuery";
 import { useOwnerCatalog } from "../catalog/merge";
 import { browseMetrics } from "../catalog/metrics";
+import { useEmptyReason } from "../dashboards/emptyReason";
 import { PANEL_COPY } from "../dashboards/grid/PanelState";
 import { usePrefersReducedMotion } from "../dashboards/motion";
 import { pageLetter } from "../dashboards/page/keys";
@@ -415,11 +416,19 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     [state.panel, panelId, state.expr, expr, source, state.kind, kind],
   );
   const lastGoodPanel = state.lastGood?.panel ?? null;
+  // An empty metric answer: why, about the request whose answer is shown, once the check proves it.
+  // Logs mode says it under the lines instead (the volume chart and the lines ask the same thing).
+  const emptyShown = state.shown === "done" && state.data?.state === "empty" && state.kind === "metrics";
+  const emptyReason = useEmptyReason(emptyShown && state.request && state.panel
+    ? { sourceType: state.panel.queries[0]?.source.type ?? "prometheus", request: state.request, range: state.range ?? undefined }
+    : null);
   let result: ReactNode = null;
   if (state.shown === "done" && state.data && state.range) {
     const empty = state.data.state === "empty";
     result = empty ? (
-      <p className={s.note}>{PANEL_COPY.empty}</p>
+      emptyReason
+        ? <p className={`${s.note} ${s.reason}`} data-empty-reason="">{emptyReason}</p>
+        : <p className={s.note}>{PANEL_COPY.empty}</p>
     ) : (
       <>
         {state.data.state === "partial" && state.data.problems[0] && <p className={s.partial}>{state.data.problems[0]}</p>}

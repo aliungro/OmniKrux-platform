@@ -9,11 +9,11 @@ export const PANEL_COPY = {
   error: "Query error",
 } as const;
 
-/** A quiet one-line state: loading, no query, no data. */
-export function PanelNote({ text, busy = false }: { text: string; busy?: boolean }) {
+/** A quiet one-line state: loading, no query, no data, or why there is no data (`reason`). */
+export function PanelNote({ text, busy = false, reason = false }: { text: string; busy?: boolean; reason?: boolean }) {
   return (
     <div className={s.note} aria-busy={busy || undefined}>
-      <p className={s.noteText}>{text}</p>
+      <p className={reason ? `${s.noteText} ${s.noteReason}` : s.noteText} data-empty-reason={reason || undefined}>{text}</p>
     </div>
   );
 }
