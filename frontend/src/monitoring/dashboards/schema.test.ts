@@ -102,6 +102,28 @@ describe("constants", () => {
 });
 
 describe("TS-only parity checks", () => {
+  it("accepts the bars style", () => {
+    const doc = (style: string) => ({
+      schemaVersion: 1,
+      title: "Doc",
+      panels: [
+        {
+          id: "p-1",
+          type: "timeseries",
+          title: "T",
+          layout: { x: 0, y: 0, w: 12, h: 8 },
+          queries: [{ ref: "A", source: { type: "prometheus" }, expr: "up" }],
+          options: { style },
+        },
+      ],
+    });
+    const ok = validateDashboard(doc("bars"), "project");
+    expect(ok.ok && ok.spec.panels[0].type === "timeseries" && ok.spec.panels[0].options.style).toBe("bars");
+    expect(problemsOf(validateDashboard(doc("columns"), "project"))).toEqual([
+      { path: "panels[0].options.style", message: "Use one of: lines, area, stacked, bars." },
+    ]);
+  });
+
   const withThreshold = (value: unknown) => ({
     schemaVersion: 1,
     title: "Doc",

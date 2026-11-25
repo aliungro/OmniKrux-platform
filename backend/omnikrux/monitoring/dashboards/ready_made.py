@@ -465,11 +465,14 @@ def _namespaces() -> dict:
             _pq(
                 "A",
                 "sum by (namespace) "
-                f"(increase(kube_pod_container_status_restarts_total{{{ns}}}[$__rate_interval]))",
+                f"(kube_pod_container_status_restarts_total{{{ns}}}"
+                f" - kube_pod_container_status_restarts_total{{{ns}}} offset $__interval) > 0",
                 "{{namespace}}",
             )
         ],
         unit="short",
+        decimals=0,
+        style="bars",
     )
     return _document("namespaces", p, [_namespace_variable()])
 
@@ -629,11 +632,14 @@ def _pods(has_loki: bool, loki: LokiFacts | None) -> dict:
             _pq(
                 "A",
                 "sum by (namespace, pod) "
-                f"(increase(kube_pod_container_status_restarts_total{{{sel}}}[$__rate_interval]))",
+                f"(kube_pod_container_status_restarts_total{{{sel}}}"
+                f" - kube_pod_container_status_restarts_total{{{sel}}} offset $__interval) > 0",
                 legend,
             )
         ],
         unit="short",
+        decimals=0,
+        style="bars",
     )
     throttled = "container_cpu_cfs_throttled_periods_total"
     periods = "container_cpu_cfs_periods_total"
@@ -718,8 +724,7 @@ def _logs(loki: LokiFacts | None) -> dict:
         "Errors and warnings",
         (0, 8, 12, 8),
         errors_and_warnings,
-        # Task 2 of M7 switches this to bars (a count per step).
-        style="stacked",
+        style="bars",
         decimals=0,
     )
     p.add(

@@ -119,6 +119,31 @@ describe("buildFrame and drawTimeSeries", () => {
     expect(frame.columns).toBe(Math.floor(frame.plot.w));
   });
 
+  it("bars draw one rect per sample and nothing for zero", () => {
+    const o = { ...options, style: "bars" as const, thresholds: [], min: null, max: null };
+    const data = [series("a", [2, 0, 3]), series("b", [1, null, 1])];
+    const frame = buildFrame(data, o, SIZE, RANGE, new Set());
+    expect(frame.yTicks[0]).toBe(0);
+    expect(frame.yTicks[frame.yTicks.length - 1]).toBeGreaterThanOrEqual(4);
+    const painted: { color: unknown; args: number[] }[] = [];
+    let fillStyle: unknown = "";
+    const ctx = new Proxy({} as Record<string, unknown>, {
+      get: (_t, prop: string) => (prop === "fillStyle" ? fillStyle : (...args: number[]) => { if (prop === "fillRect") painted.push({ color: fillStyle, args }); }),
+      set: (_t, prop: string, value) => { if (prop === "fillStyle") fillStyle = value; return true; },
+    }) as unknown as CanvasLike;
+    drawTimeSeries(ctx, frame, (token) => `color(${token})`);
+    const bars = painted.filter((p) => !["color(--rule)", "color(--ink-3)"].includes(p.color as string));
+    // Series a: samples 0 and 2; series b: samples 0 and 2 (the zero and the null draw nothing).
+    expect(bars).toHaveLength(4);
+    expect(frame.bars).toHaveLength(4);
+    const gap = (60 / (RANGE.end - RANGE.start)) * frame.plot.w;
+    expect(bars[0].args[2]).toBeCloseTo(Math.max(1, 0.7 * gap));
+    // The second series stacks on the first at the same time: it ends where the first starts.
+    const [a0, b0] = [bars[0].args, bars.find((b) => b.color !== bars[0].color)!.args];
+    expect(b0[1] + b0[3]).toBeCloseTo(a0[1], 0);
+    expect(frame.series[0].values.length).toBe(frame.columns);
+  });
+
   it("breaks the line at a gap", () => {
     const frame = buildFrame([series("a", [1, null, 3])], options, SIZE, RANGE, new Set());
     const ys = frame.series[0].ys;

@@ -155,6 +155,15 @@ describe("The panel side panel", () => {
     await waitFor(() => expect(batches(api).at(-1)?.body).toMatchObject({ queries: [{ query: "up2", project_id: "p1" }, { query: "up2", project_id: "p2" }] }));
   });
 
+  it("the Style select offers Bars", async () => {
+    const { user } = await openSettings();
+    await user.click(tabNamed("Chart"));
+    const style = within(settings()).getByRole("combobox", { name: "Style" });
+    expect(within(style).getAllByRole("option").map((o) => o.textContent)).toEqual(["Lines", "Area", "Stacked", "Bars"]);
+    await user.selectOptions(style, "Bars");
+    expect((draftPanel("p-1").options as { style: string }).style).toBe("bars");
+  });
+
   it("changing type keeps queries and unit", async () => {
     const { user } = await openSettings();
     const before = draftPanel("p-1");

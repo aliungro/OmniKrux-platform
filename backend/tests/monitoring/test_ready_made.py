@@ -116,6 +116,42 @@ def test_restarts_in_the_last_hour_are_whole_numbers():
     assert panel["options"]["decimals"] == 0
 
 
+RESTARTS = (
+    "sum by ({by}) (kube_pod_container_status_restarts_total{{{sel}}}"
+    " - kube_pod_container_status_restarts_total{{{sel}}} offset $__interval) > 0"
+)
+
+
+def test_pod_restarts_count_whole_restarts_per_step():
+    doc = build_ready_made("pods", kind="kubernetes", has_loki=False)
+    panel = next(p for p in doc["panels"] if p["title"] == "Restarts")
+    [query] = panel["queries"]
+    sel = 'namespace=~"$namespace",pod=~"$pod"'
+    assert query["expr"] == RESTARTS.format(by="namespace, pod", sel=sel)
+    assert "increase(" not in query["expr"]
+    assert query["legend"] == "{{namespace}}/{{pod}}"
+    options = panel["options"]
+    assert (options["style"], options["decimals"], options["unit"]) == ("bars", 0, "short")
+
+
+def test_namespace_restarts_use_the_same_count():
+    doc = build_ready_made("namespaces", kind="kubernetes", has_loki=False)
+    panel = next(p for p in doc["panels"] if p["title"] == "Container restarts")
+    [query] = panel["queries"]
+    assert query["expr"] == RESTARTS.format(by="namespace", sel='namespace=~"$namespace"')
+    assert "increase(" not in query["expr"]
+    assert query["legend"] == "{{namespace}}"
+    options = panel["options"]
+    assert (options["style"], options["decimals"], options["unit"]) == ("bars", 0, "short")
+
+
+def test_logs_errors_and_warnings_are_bars():
+    for loki in (FACTS["otel"], FACTS["classic"], FACTS["no level"]):
+        doc = build_ready_made("logs", kind="kubernetes", has_loki=True, loki=loki)
+        panel = next(p for p in doc["panels"] if p["title"] == "Errors and warnings")
+        assert panel["options"]["style"] == "bars"
+
+
 def test_ready_keys():
     assert ready_keys("kubernetes", True, False) == tuple(PROMETHEUS_KEYS)
     assert ready_keys("kubernetes", True, True) == (*PROMETHEUS_KEYS, "logs")
@@ -408,7 +444,7 @@ def test_logs_overview_uses_otel_labels():
         'level=~"(?i)(error|err|fatal|critical|crit|warn|warning)"}[$__interval]))'
     )
     assert query["legend"] == "{{level}}"
-    assert errors["options"]["style"] == "stacked" and errors["options"]["decimals"] == 0
+    assert errors["options"]["style"] == "bars" and errors["options"]["decimals"] == 0
     noisy = panels["Noisiest streams"]
     assert (noisy["type"], noisy["layout"]) == ("bar", {"x": 12, "y": 8, "w": 12, "h": 8})
     assert noisy["queries"][0]["expr"] == (

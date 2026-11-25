@@ -123,7 +123,7 @@ export interface TimeseriesOptions extends CommonOptions {
   min: number | null;
   max: number | null;
   legend: "bottom" | "hidden";
-  style: "lines" | "area" | "stacked";
+  style: "lines" | "area" | "stacked" | "bars";
 }
 export interface StatOptions extends CommonOptions {
   calc: "last" | "mean" | "max" | "min" | "sum";
@@ -684,7 +684,7 @@ function options(w: Walk, raw: unknown, path: string, kind: PanelType): Obj {
     out.min = optNumber(w, obj, path, "min", null);
     out.max = optNumber(w, obj, path, "max", null);
     out.legend = optEnum(w, obj, path, "legend", LEGENDS);
-    out.style = optEnum(w, obj, path, "style", ["lines", "area", "stacked"] as const);
+    out.style = optEnum(w, obj, path, "style", ["lines", "area", "stacked", "bars"] as const);
   } else if (kind === "stat") {
     out.calc = optEnum(w, obj, path, "calc", CALCS);
     out.sparkline = optBool(w, obj, path, "sparkline", true);

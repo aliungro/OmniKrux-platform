@@ -64,7 +64,7 @@ export function ChartTab({ panel, update, onRunNow }: { panel: PanelSpec; update
       </div>
       {panel.type === "timeseries" && (
         <SelectRow label="Style" value={panel.options.style} onChange={(style) => set({ style })}
-          choices={[["lines", "Lines"], ["area", "Area"], ["stacked", "Stacked"]] as const} />
+          choices={[["lines", "Lines"], ["area", "Area"], ["stacked", "Stacked"], ["bars", "Bars"]] as const} />
       )}
       {(panel.type === "stat" || panel.type === "gauge") && (
         <SelectRow label="Show" value={panel.options.calc} choices={CALCS} onChange={(calc) => set({ calc })} />
