@@ -92,7 +92,7 @@ describe("Setup page", () => {
     const current = within(steps).getAllByRole("listitem").filter((li) => li.getAttribute("aria-current") === "step");
     expect(current).toHaveLength(1);
     expect(current[0].textContent).toContain("Sources");
-    expect(within(steps).getByText("Comes later")).toBeTruthy();
+    expect(within(steps).getByText("Nothing to import")).toBeTruthy();
 
     const prom = await screen.findByRole("group", { name: "Prometheus" });
     expect(within(prom).getByText("monitoring/prometheus-server · v3.1.0")).toBeTruthy();
@@ -165,7 +165,7 @@ describe("Setup page", () => {
 
     const grafana = screen.getByRole("group", { name: "Grafana" });
     expect(within(grafana).getByText("Found")).toBeTruthy();
-    expect(within(grafana).getByText("Importing its dashboards comes in a later update.")).toBeTruthy();
+    expect(within(grafana).getByText("You can copy its dashboards in the next step.")).toBeTruthy();
     expect(within(grafana).queryByRole("checkbox")).toBeNull();
     const prom = screen.getByRole("group", { name: "Prometheus" });
     expect(await within(prom).findByText("Already a source: Loki · central")).toBeTruthy();
@@ -669,8 +669,14 @@ describe("Setup draft in this browser", () => {
   it("secrets never reach browser storage", async () => {
     const user = userEvent.setup();
     const setItem = vi.spyOn(Storage.prototype, "setItem");
+    // M6 (F26): a Grafana token typed on step 3 never reaches storage either.
+    const GRAFANA_TOKEN = "glsa_typed-grafana-token-value";
+    const SIGN_IN = `Grafana · ${CLUSTER} needs a sign-in, and a Grafana reached through its cluster can't take one. Reach it by its address instead, with a service account token.`;
     try {
-      install({ discovery: { c1: LOKI_MISSING } });
+      const api = install({
+        discovery: { c1: found(tool("prometheus", "reachable"), tool("loki", "missing"), tool("grafana", "reachable", { service: "grafana", port: "80" })) },
+        transfer: { grafanaDashboards: { new: { status: 502, detail: { code: "grafana", message: SIGN_IN, key: null, problems: [] } } } },
+      });
       const { navigate } = startFromCluster();
       await screen.findByRole("group", { name: "Prometheus" });
       await addByHand(user, "http://basic.example:9090", async () => {
@@ -693,6 +699,15 @@ describe("Setup draft in this browser", () => {
       await user.type(screen.getByLabelText("Token"), "half-typed-token-value");
       await user.click(screen.getByRole("button", { name: "Cancel" }));
       await user.click(continueButton());
+      await screen.findByRole("heading", { name: "Import from Grafana" });
+      await user.click(await screen.findByRole("button", { name: "Use its address instead" }));
+      await user.type(await screen.findByLabelText("Address"), "http://grafana.example.invalid:3000");
+      await user.selectOptions(screen.getByLabelText("Sign-in"), "bearer");
+      await user.type(screen.getByLabelText("Token"), GRAFANA_TOKEN);
+      api.state.transfer.grafanaDashboards.new = { items: [{ uid: "u1", title: "Node overview", folder: null, tags: [] }], truncated: false };
+      await user.click(screen.getByRole("button", { name: "Use it" }));
+      await screen.findByRole("checkbox", { name: "Node overview" });
+      await user.click(continueButton());
       await screen.findByRole("heading", { name: "Name and review" });
       navigate({ page: "home" }, "push");
       await waitFor(() => expect(screen.queryByRole("heading", { name: "Name and review" })).toBeNull());
@@ -700,13 +715,13 @@ describe("Setup draft in this browser", () => {
       const drafts = setItem.mock.calls.filter(([k]) => String(k).startsWith(SETUP_DRAFT_PREFIX));
       expect(drafts.length).toBeGreaterThan(0);
       for (const [k, v] of setItem.mock.calls) {
-        for (const secret of [PASSWORD, TOKEN, HEADER_VALUE, "half-typed-token-value"]) {
+        for (const secret of [PASSWORD, TOKEN, HEADER_VALUE, "half-typed-token-value", GRAFANA_TOKEN]) {
           expect(String(k)).not.toContain(secret);
           expect(String(v)).not.toContain(secret);
         }
       }
       for (const [, v] of Object.entries(localStorage)) {
-        for (const secret of [PASSWORD, TOKEN, HEADER_VALUE, "half-typed-token-value"]) expect(v).not.toContain(secret);
+        for (const secret of [PASSWORD, TOKEN, HEADER_VALUE, "half-typed-token-value", GRAFANA_TOKEN]) expect(v).not.toContain(secret);
       }
       const [[, last]] = stored();
       const kept = JSON.parse(last) as { draft: SetupDraft };
@@ -716,6 +731,10 @@ describe("Setup draft in this browser", () => {
         { type: "basic", username: "reader" }, { type: "bearer" }, { type: "none" },
       ]);
       expect("new" in hand[2].source && hand[2].source.new.headers).toEqual([{ name: "X-Scope-OrgID" }]);
+      expect(kept.draft.importFrom).toEqual({
+        connection: { reach: "url", name: `Grafana · ${CLUSTER}`, url: "http://grafana.example.invalid:3000", auth: { type: "bearer" } },
+        label: `Grafana · ${CLUSTER}`, uids: ["u1"], preview: null, secretsDropped: true,
+      });
     } finally {
       setItem.mockRestore();
     }

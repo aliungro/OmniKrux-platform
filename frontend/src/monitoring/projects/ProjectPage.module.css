@@ -333,3 +333,24 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Setup made the project but its dashboards weren't imported (M6): the words and the way back. */
+.importFailed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.importFailed p {
+  flex: 1 1 300px;
+  margin: 0;
+  color: var(--ink);
+}

@@ -1,15 +1,31 @@
 // The setup page's draft and the rules around it. The draft is kept in this browser per Monitoring
 // tab (`setupDraftStore.ts`) so a setup left mid-way comes back: the step, what is monitored, the
-// picks, their filters, the name and the install toggles. Secrets never are: a new source's
-// password, token, API key, client key and header values, and an address carrying a sign-in, are
-// dropped before anything is written (the pick comes back unticked), and the "add by hand" form
-// being typed is never kept. Nothing here goes in a query or mutation cache.
+// picks, their filters, the name, the install toggles and the Grafana dashboards to copy. Secrets
+// never are: a new source's password, token, API key, client key and header values, a Grafana
+// connection's password and token, and an address carrying a sign-in, are dropped before anything
+// is written (the pick comes back unticked, the Grafana asks for its sign-in again), and the forms
+// being typed are never kept. Nothing here goes in a query or mutation cache.
 import type { DiscoveryOut, FilterOrigin, FoundTool, ProjectKind, SetupIn, SetupSourceIn, SourceIn, SourceOut, SourceType } from "../api/types";
 import type { Component, ToolType } from "../install/api";
 import { validFilter } from "../projects/FilterField";
+import type { GrafanaIn, ImportCommitIn, ImportPreviewOut, PreviewDashboardOut } from "../transfer/api";
 
-/** Step 3 (import) comes in a later update, so the page skips it. */
-export type SetupStep = 1 | 2 | 4;
+/** Step 3 (import) is shown only when discovery found a Grafana it can reach (`hasImportStep`). */
+export type SetupStep = 1 | 2 | 3 | 4;
+
+/**
+ * The Grafana dashboards to copy into the new project: the connection (the cluster's Grafana, or
+ * its address with a sign-in), the dashboards chosen, and the preview made for exactly those
+ * (null until it is made; never kept in this browser).
+ */
+export type SetupImport = {
+  connection: GrafanaIn;
+  label: string;
+  uids: string[];
+  preview: ImportPreviewOut | null;
+  /** Restored without the connection's secret: it asks for its sign-in again instead of loading. */
+  secretsDropped?: boolean;
+};
 
 export type SetupPick = {
   /** `found:<type>:<namespace>/<service>`, `existing:<id>` or `hand:<n>`. */
@@ -39,6 +55,8 @@ export type SetupDraft = {
   name: string;
   /** Left out: nothing to install. */
   install?: SetupInstall;
+  /** Left out or null: nothing to import. */
+  importFrom?: SetupImport | null;
 };
 
 export const TOOL_NAMES: Record<FoundTool["type"], string> = { prometheus: "Prometheus", loki: "Loki", grafana: "Grafana", alertmanager: "Alertmanager" };
@@ -152,3 +170,48 @@ export function blockedBy(draft: SetupDraft, opts: { installOffered?: boolean } 
 }
 
 export const canContinue = (draft: SetupDraft, opts: { installOffered?: boolean } = {}): boolean => blockedBy(draft, opts) === null;
+
+// --- Import from the Grafana found in the cluster --------------------------------------------
+
+/** The first Grafana discovery could reach, as a connection through its cluster (no sign-in). */
+export function grafanaFromDiscovery(d: DiscoveryOut): GrafanaIn | null {
+  const g = d.found.find((t) => t.type === "grafana" && t.state === "reachable" && t.namespace && t.service && t.port);
+  if (!g) return null;
+  return {
+    name: `Grafana · ${d.cluster_name}`, reach: "cluster", cluster_id: d.cluster_id,
+    namespace: g.namespace, service: g.service, port: g.port, scheme: g.scheme, auth: { type: "none" },
+  };
+}
+
+/** Whether the page shows step 3: a Kubernetes cluster whose discovery found a reachable Grafana. */
+export function hasImportStep(draft: Pick<SetupDraft, "kind" | "clusterId">, discovery: DiscoveryOut | null | undefined): boolean {
+  return draft.kind === "kubernetes" && draft.clusterId !== null && discovery != null
+    && discovery.cluster_id === draft.clusterId && grafanaFromDiscovery(discovery) !== null;
+}
+
+/** The dashboards of the preview that will be copied. */
+export const importable = (p: ImportPreviewOut): PreviewDashboardOut[] => p.dashboards.filter((d) => d.importable);
+
+/** What won't be copied, over the dashboards that will be. */
+export const importSkipped = (p: ImportPreviewOut): number => importable(p).reduce((n, d) => n + d.skipped.length, 0);
+
+/**
+ * The import into the new project, or null when there is nothing to import (no dashboards chosen,
+ * no preview yet, or none of them converts). Each dashboard keeps its preview's suggested title
+ * (unique within the batch) and digest; every Grafana data source reads the project's first source
+ * of its type (`source_id: null`), which covers a type being installed: its panels pick up the
+ * installed source once it is linked.
+ */
+export function importCommitBody(draft: Pick<SetupDraft, "importFrom">, projectId: string): ImportCommitIn | null {
+  const imp = draft.importFrom;
+  if (!imp || imp.uids.length === 0 || !imp.preview) return null;
+  const dashboards = importable(imp.preview).map((d) => ({ key: d.key, title: d.suggested_title, digest: d.digest }));
+  if (dashboards.length === 0) return null;
+  return {
+    input: { kind: "grafana", connection: imp.connection, uids: [...imp.uids] },
+    target: { kind: "project", id: projectId },
+    new_group: null,
+    mapping: imp.preview.sources.map((r) => ({ key: r.key, source_id: null })),
+    dashboards,
+  };
+}

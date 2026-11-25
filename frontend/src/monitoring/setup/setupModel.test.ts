@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscoveryOut, FoundTool, SourceIn, SourceOut } from "../api/types";
 import { BAD_FILTER, NO_METRIC_NAME, validFilter } from "../projects/FilterField";
-import { keepableSource, pruneSetupDrafts, readSetupDraft, removeSetupDraft, SETUP_DRAFT_PREFIX, writeSetupDraft } from "./setupDraftStore";
-import { blockedBy, canContinue, installComponents, picksFromDiscovery, setupBody, type SetupDraft, type SetupPick } from "./setupModel";
+import type { ImportPreviewOut, PreviewDashboardOut } from "../transfer/api";
+import { keepableGrafana, keepableSource, pruneSetupDrafts, readSetupDraft, removeSetupDraft, SETUP_DRAFT_PREFIX, writeSetupDraft } from "./setupDraftStore";
+import {
+  blockedBy, canContinue, grafanaFromDiscovery, hasImportStep, importCommitBody, installComponents, picksFromDiscovery, setupBody,
+  type SetupDraft, type SetupImport, type SetupPick,
+} from "./setupModel";
 
 const T = "2026-01-01T00:00:00Z";
 
@@ -188,7 +192,7 @@ describe("setup draft store", () => {
         step: 2,
         picks: [{ ...pick({ key: "hand:1", source: { new: { type: "loki", reach: "url", url: "http://loki:3100" } } }), connection: { token: "pick-extra-token" } } as SetupPick],
       });
-      const withImport = { ...extra, importFrom: { connection: { url: "http://grafana:3000", token: "draft-extra-token" } } } as SetupDraft;
+      const withImport = { ...extra, importFrom: { connection: { url: "http://grafana:3000", token: "draft-extra-token" } } } as unknown as SetupDraft;
       writeSetupDraft("t1", "c1", withImport, false);
       expect(setItem).toHaveBeenCalled();
       for (const [k, v] of setItem.mock.calls) {
@@ -203,7 +207,7 @@ describe("setup draft store", () => {
   });
 
   it("a bad or old entry is ignored, and closed tabs' drafts go", () => {
-    for (const bad of ["{", "null", JSON.stringify({ v: 2 }), JSON.stringify({ v: 1, start: "", named: false, draft: { step: 3, kind: null, clusterId: null, picks: [], name: "" } })]) {
+    for (const bad of ["{", "null", JSON.stringify({ v: 2 }), JSON.stringify({ v: 1, start: "", named: false, draft: { step: 5, kind: null, clusterId: null, picks: [], name: "" } })]) {
       localStorage.setItem(`${SETUP_DRAFT_PREFIX}t1`, bad);
       expect(readSetupDraft("t1", "")).toBeNull();
     }
@@ -231,3 +235,82 @@ describe("setup draft store", () => {
     }
   });
 });
+
+describe("setup import from Grafana (M6)", () => {
+  const GRAFANA = tool("grafana", "reachable", { service: "grafana", port: "80", version: "12.1.0" });
+  const dash = (key: string, over: Partial<PreviewDashboardOut> = {}): PreviewDashboardOut => ({
+    key, title: key, suggested_title: key, title_taken: false, panels: 1, alerts: 0, skipped: [], problems: [], importable: true, digest: `dg-${key}`, ...over,
+  });
+  const preview: ImportPreviewOut = {
+    format: "grafana_instance", format_label: "Grafana dashboards", target_kinds: ["project"], suggested_target: null, bundle: null,
+    sources: [
+      { key: "prom", type: "prometheus", type_guessed: false, name: "Prometheus", detail: null, suggestion: null, leave_out: false, reason: "" },
+      { key: "logs", type: "loki", type_guessed: false, name: "Loki", detail: null, suggestion: null, leave_out: false, reason: "" },
+    ],
+    dashboards: [dash("u1", { suggested_title: "Overview" }), dash("u2", { suggested_title: "Overview (2)" }), dash("u3", { importable: false })],
+    skipped_total: 0,
+  };
+
+  it("grafanaFromDiscovery takes the first reachable Grafana through its cluster", () => {
+    expect(grafanaFromDiscovery(discovery(tool("grafana", "unreachable"), GRAFANA))).toEqual({
+      name: "Grafana · prod-east", reach: "cluster", cluster_id: "c1", namespace: "monitoring", service: "grafana", port: "80", scheme: "http", auth: { type: "none" },
+    });
+    expect(grafanaFromDiscovery(discovery(tool("grafana", "unreachable"), tool("prometheus", "reachable")))).toBeNull();
+  });
+
+  it("hasImportStep needs this cluster's discovery with a reachable Grafana", () => {
+    const d = discovery(GRAFANA);
+    expect(hasImportStep(draft({}), d)).toBe(true);
+    expect(hasImportStep(draft({}), undefined)).toBe(false);
+    expect(hasImportStep(draft({ clusterId: "c2" }), d)).toBe(false);
+    expect(hasImportStep(draft({ kind: "docker", clusterId: null }), d)).toBe(false);
+    expect(hasImportStep(draft({}), discovery(tool("grafana", "unreachable")))).toBe(false);
+  });
+
+  it("importCommitBody sends the preview's titles and digests and the project's first source for every ref", () => {
+    const connection = grafanaFromDiscovery(discovery(GRAFANA))!;
+    const importFrom: SetupImport = { connection, label: "Grafana", uids: ["u1", "u2", "u3"], preview };
+    expect(importCommitBody({ importFrom }, "p9")).toEqual({
+      input: { kind: "grafana", connection, uids: ["u1", "u2", "u3"] },
+      target: { kind: "project", id: "p9" },
+      new_group: null,
+      mapping: [{ key: "prom", source_id: null }, { key: "logs", source_id: null }],
+      dashboards: [{ key: "u1", title: "Overview", digest: "dg-u1" }, { key: "u2", title: "Overview (2)", digest: "dg-u2" }],
+    });
+    expect(importCommitBody({ importFrom: { ...importFrom, preview: null } }, "p9")).toBeNull();
+    expect(importCommitBody({ importFrom: { ...importFrom, uids: [] } }, "p9")).toBeNull();
+    expect(importCommitBody({ importFrom: null }, "p9")).toBeNull();
+    expect(importCommitBody({ importFrom: { ...importFrom, preview: { ...preview, dashboards: [dash("u3", { importable: false })] } } }, "p9")).toBeNull();
+  });
+
+  it("a kept import holds no secret and no preview, and asks for its sign-in again", () => {
+    beforeEachClear();
+    const importFrom: SetupImport = {
+      connection: { name: "Main", reach: "url", url: "http://admin:pw-in-url@grafana.example.invalid:3000/g?x=1", auth: { type: "basic", username: "admin", password: "pw-secret", token: "tk-secret" } },
+      label: "Main", uids: ["u1", "u2"], preview,
+    };
+    expect(keepableGrafana(importFrom.connection)).toEqual({
+      connection: { name: "Main", reach: "url", url: "http://grafana.example.invalid:3000/g", auth: { type: "basic", username: "admin" } }, dropped: true,
+    });
+    writeSetupDraft("t1", "c1", draft({ step: 3, importFrom }), false);
+    const raw = localStorage.getItem(`${SETUP_DRAFT_PREFIX}t1`) ?? "";
+    expect(raw).not.toMatch(/pw-secret|tk-secret|pw-in-url|digest|dg-u1/);
+    const back = readSetupDraft("t1", "c1");
+    expect(back?.draft.step).toBe(3);
+    expect(back?.draft.importFrom).toEqual({
+      connection: { name: "Main", reach: "url", url: "http://grafana.example.invalid:3000/g", auth: { type: "basic", username: "admin" } },
+      label: "Main", uids: ["u1", "u2"], preview: null, secretsDropped: true,
+    });
+    // Through its cluster nothing is secret: it comes back ready to load.
+    const cluster = grafanaFromDiscovery(discovery(GRAFANA))!;
+    writeSetupDraft("t1", "c1", draft({ step: 4, importFrom: { connection: cluster, label: "Grafana", uids: ["u1"], preview } }), false);
+    expect(readSetupDraft("t1", "c1")?.draft.importFrom).toEqual({ connection: cluster, label: "Grafana", uids: ["u1"], preview: null });
+    // An import that doesn't fit is read as no draft at all.
+    localStorage.setItem(`${SETUP_DRAFT_PREFIX}t1`, JSON.stringify({ v: 1, start: "c1", named: false, draft: { ...draft({}), importFrom: { connection: { reach: "ftp" }, label: "x", uids: [] } } }));
+    expect(readSetupDraft("t1", "c1")).toBeNull();
+  });
+});
+
+function beforeEachClear() {
+  localStorage.clear();
+}

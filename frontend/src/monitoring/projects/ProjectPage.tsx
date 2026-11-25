@@ -13,6 +13,7 @@ import { mayMixClusters, mixedLinkWords } from "../alerts/rules/clusterWarning";
 import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
+import { clearImportFailure, importFailedWords, importFailure } from "../setup/importNotice";
 import { SourceForm } from "../sources/SourceForm";
 import { isQueryable, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
 import { FilterField, validFilter } from "./FilterField";
@@ -253,6 +254,9 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
   const [review, setReview] = useState<ProjectDeleteReviewOut | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  // Setup created this project but couldn't import its dashboards: said once, as the page opens.
+  const [importFailed] = useState(() => ({ id, message: importFailure(id) }));
+  useEffect(() => { if (importFailed.message !== null) clearImportFailure(importFailed.id); }, [importFailed]);
 
   // After a panel closes the keyboard returns to the button that opened it.
   useEffect(() => {
@@ -374,6 +378,14 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
       </header>
 
       {pageError && <p className={s.bad} role="alert">{pageError}</p>}
+      {importFailed.id === project.id && importFailed.message !== null && (
+        <div className={s.importFailed} role="alert">
+          <p>{importFailedWords(importFailed.message)}</p>
+          <button type="button" className={s.secondary} onClick={(e) => open({ page: "import", target: { kind: "project", id: project.id } }, e)}>
+            Import dashboards…
+          </button>
+        </div>
+      )}
 
       <section aria-labelledby="monitoring-project-sources" className={s.section}>
         <h2 id="monitoring-project-sources" ref={sourcesHeading} tabIndex={-1} className={s.heading}>Sources</h2>

@@ -622,6 +622,25 @@
   color: var(--ink);
 }
 
+.summaryImport {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--focus) 55%, transparent);
+  color: var(--ink-2);
+}
+
+/* The project exists, its import didn't: the retry. */
+.created {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 640px;
+}
+
+.createdActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .installNext {
   margin: 0;
   color: var(--ink-2);

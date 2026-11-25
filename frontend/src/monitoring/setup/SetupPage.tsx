@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { failure, HttpError } from "../../api/http";
 import type { Cluster } from "../../api/types";
 import { useClusters } from "../../api/useClusters";
 import { setupProject, suggestFilter } from "../api/client";
 import { invalidateMonitoring, useDiscovery, useSources } from "../api/hooks";
-import type { FoundTool, ProjectKind, SourceIn, SourceOut, SuggestIn } from "../api/types";
+import type { FoundTool, ProjectKind, ProjectOut, SourceIn, SourceOut, SuggestIn } from "../api/types";
+import { useToolReviews } from "../alerts/reviews/useToolReviews";
 import { GenerateTools, type AnsweredTools } from "../install/GenerateTools";
 import { installKeys, installTools, type Component } from "../install/api";
 import { useInstallReviews } from "../install/useInstallReviews";
@@ -14,9 +15,14 @@ import { FilterField } from "../projects/FilterField";
 import { DOT } from "../sidebar/Sidebar";
 import { SourceForm } from "../sources/SourceForm";
 import { autoTypeName, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
+import { commitImport, previewImport, TransferRequestError, type GrafanaIn, type ImportResultOut } from "../transfer/api";
+import { dashboardsWord } from "../transfer/grafanaLabels";
+import { CHECKING, ImportStep, skippedWords, type ImportCheck } from "./ImportStep";
+import { importFailedWords, noteImportFailed } from "./importNotice";
 import { readSetupDraft, removeSetupDraft, SECRET_NOT_KEPT, writeSetupDraft } from "./setupDraftStore";
 import {
-  blockedBy, foundDetail, foundKey, installComponents, INSTALLS, inUse, isAnswered, NO_INSTALL, picksFromAnswered, picksFromDiscovery, setupBody, TOOL_NAMES,
+  blockedBy, foundDetail, foundKey, grafanaFromDiscovery, hasImportStep, importable, importCommitBody, importSkipped, installComponents, INSTALLS, inUse,
+  isAnswered, NO_INSTALL, picksFromAnswered, picksFromDiscovery, setupBody, TOOL_NAMES,
   type SetupDraft, type SetupPick, type SetupStep,
 } from "./setupModel";
 import s from "./SetupPage.module.css";
@@ -25,6 +31,11 @@ const EMPTY: SourceOut[] = [];
 const GENERATES = "OmniKrux connects to tools that already run there, or writes the files to install them for you to run.";
 /** How long the draft waits for typing to settle before it is kept in this browser. */
 const KEEP_AFTER_MS = 300;
+/** How long the chosen Grafana dashboards settle before what converts is checked. */
+const PREVIEW_AFTER_MS = 500;
+const NOTHING_TO_IMPORT = "Nothing to import";
+const CHECK_AGAIN = "Check what converts again on the Import step.";
+const NONE_CONVERTS = "None of the chosen dashboards can be copied any more. Import them from the project instead.";
 
 /** What each component installs: the line under a pressed row, and the review's summary line. */
 const INSTALL_WORDS: Record<Component, { line: string; summary: string }> = {
@@ -60,6 +71,22 @@ const inUseAndInstalls = (n: number, m: number) => (m > 0 ? `${sourcesInUse(n)} 
 /** Where the keyboard goes once the install review over a new project closes: its name. */
 const projectHeading = () => document.getElementById("monitoring-project-title");
 
+/** Calls `then` with the project's heading once its page shows, or null when it doesn't within a while. */
+function whenProjectHeading(then: (heading: HTMLElement | null) => void) {
+  const started = Date.now();
+  const look = () => {
+    const h = projectHeading();
+    if (h && h.isConnected) return then(h);
+    if (Date.now() - started > 10_000) return then(null);
+    setTimeout(look, 40);
+  };
+  setTimeout(look, 0);
+}
+
+/** The same Grafana reached through the same cluster Service. */
+const sameClusterGrafana = (a: GrafanaIn, b: GrafanaIn) =>
+  a.reach === "cluster" && a.cluster_id === b.cluster_id && a.namespace === b.namespace && a.service === b.service && a.port === b.port;
+
 function hostOf(url: string | null | undefined): string {
   try { return new URL((url ?? "").trim()).hostname; } catch { return ""; }
 }
@@ -92,7 +119,7 @@ function retarget(draft: SetupDraft, kind: ProjectKind, clusterId: string | null
   const picks = draft.picks.filter(isHand).map((p): SetupPick => ({
     ...p, suggestedFor: undefined, ...(p.origin === "user" ? {} : { filter: "", origin: "none" as const, reason: null }),
   }));
-  return { ...draft, kind, clusterId, picks, install: NO_INSTALL };
+  return { ...draft, kind, clusterId, picks, install: NO_INSTALL, importFrom: null };
 }
 
 function Chip({ tone, children }: { tone: "ok" | "bad" | "warn" | "plain" | "focus"; children: ReactNode }) {
@@ -167,7 +194,7 @@ function FoundRow({ tool, pick, existing, offer, installing, onChange, onInstall
         {tool.state === "unreachable" && tool.message && <span className={s.why}>{tool.message}</span>}
       </div>
       {component !== undefined && <InstallToggle name={name} component={component} offer={offer} pressed={pressed} onToggle={onInstall} />}
-      {!missing && tool.type === "grafana" && <p className={s.later}>Importing its dashboards comes in a later update.</p>}
+      {tool.type === "grafana" && tool.state === "reachable" && <p className={s.later}>You can copy its dashboards in the next step.</p>}
       {pick && <PickControls pick={pick} onChange={onChange} />}
     </div>
   );
@@ -433,9 +460,9 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
   );
 }
 
-function ReviewStep({ draft, setDraft, heading, clusterName, nameInput, nameError, onNameEdit, onEnter, installs }: StepProps & {
+function ReviewStep({ draft, setDraft, heading, clusterName, nameInput, nameError, onNameEdit, onEnter, installs, importLine }: StepProps & {
   clusterName: string; nameInput: RefObject<HTMLInputElement | null>; nameError: string | null; onNameEdit(): void; onEnter(): void;
-  installs: Component[];
+  installs: Component[]; importLine: string;
 }) {
   const ids = useId();
   const what = draft.kind === "kubernetes" ? `Kubernetes cluster · ${clusterName}` : kindInfo(draft.kind ?? "custom").what;
@@ -461,21 +488,33 @@ function ReviewStep({ draft, setDraft, heading, clusterName, nameInput, nameErro
           </li>
         ))}
         {installs.map((c) => <li key={c} className={s.summaryInstall}>{INSTALL_WORDS[c].summary}</li>)}
+        <li className={s.summaryImport}>{importLine}</li>
       </ul>
       {installs.length > 0 && <p className={s.installNext}>You review the install right after the project is created.</p>}
     </>
   );
 }
 
+/** The project exists but its import failed (no install was chosen): the page offers to retry. */
+interface Created {
+  project: ProjectOut;
+  message: string;
+  retrying: boolean;
+}
+
 function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: MonitoringPageProps) {
   const client = useQueryClient();
   const reviews = useInstallReviews();
+  const { enqueue } = useToolReviews();
   const start = view.page === "setup" ? view.clusterId ?? null : null;
-  // A setup left mid-way in this tab comes back (for the same start), without its secrets.
+  // A setup left mid-way in this tab comes back (for the same start), without its secrets. A
+  // Grafana import whose sign-in wasn't kept goes back to step 3 to enter it again.
   const [restored] = useState(() => readSetupDraft(tabId, start ?? ""));
-  const [draft, setDraftState] = useState<SetupDraft>(() => restored?.draft ?? ({
-    step: start ? 2 : 1, kind: start ? "kubernetes" : null, clusterId: start, picks: [], name: "", install: NO_INSTALL,
-  }));
+  const [draft, setDraftState] = useState<SetupDraft>(() => {
+    const back = restored?.draft;
+    if (back) return back.step === 4 && back.importFrom?.secretsDropped && back.importFrom.uids.length > 0 ? { ...back, step: 3 } : back;
+    return { step: start ? 2 : 1, kind: start ? "kubernetes" : null, clusterId: start, picks: [], name: "", install: NO_INSTALL };
+  });
   const setDraft = useCallback((update: (d: SetupDraft) => SetupDraft) => setDraftState(update), []);
   const clusters = useClusters();
   const sources = useSources();
@@ -493,7 +532,9 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
   const nameTouched = useRef(restored?.named ?? false);
   const busyRef = useRef(false);
   const [handOpen, setHandOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"project" | "import" | null>(null);
+  const [created, setCreated] = useState<Created | null>(null);
+  const tryAgain = useRef<HTMLButtonElement>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const handCount = useRef(Math.max(0, ...draft.picks.map((p) => (isHand(p) ? Number(p.key.slice("hand:".length)) || 0 : 0))));
@@ -520,17 +561,111 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
 
   // The draft is kept in this browser once typing settles, and as the page closes; never once the
   // project is created. What is kept holds no secret (setupDraftStore).
-  const created = useRef(false);
+  const made = useRef(false);
   const latest = useRef({ draft, named: nameTouched.current });
   latest.current = { draft, named: nameTouched.current };
   const keep = useCallback(() => {
-    if (!created.current) writeSetupDraft(tabId, start ?? "", latest.current.draft, latest.current.named);
+    if (!made.current) writeSetupDraft(tabId, start ?? "", latest.current.draft, latest.current.named);
   }, [tabId, start]);
   useEffect(() => {
     const timer = window.setTimeout(keep, KEEP_AFTER_MS);
     return () => window.clearTimeout(timer);
   }, [draft, keep]);
   useEffect(() => () => keep(), [keep]);
+
+  // --- Step 3: the Grafana found in the cluster --------------------------------------------------
+  const found = discovery.data?.cluster_id === draft.clusterId ? discovery.data : undefined;
+  const importStep = hasImportStep(draft, found);
+  /** Step 3 is known not to exist: another kind, or the cluster's discovery found no reachable Grafana. */
+  const noImport = draft.kind !== null && (draft.kind !== "kubernetes" || draft.clusterId === null || (found !== undefined && !importStep));
+  const grafanaTool = found?.found.find((t) => t.type === "grafana" && t.state === "reachable");
+  /** Changes with every new connection (its dashboards load again). */
+  const [connectionRev, setConnectionRev] = useState(0);
+  /** The connection whose dashboards were chosen at least once: all start chosen only before that. */
+  const [chosenRev, setChosenRev] = useState<number | null>(() => (restored?.draft.importFrom?.uids.length ? 0 : null));
+  const [check, setCheck] = useState<ImportCheck>({ state: "idle" });
+  const [checkRun, setCheckRun] = useState(0);
+
+  // Arriving on step 3, the Grafana found in the cluster is the connection (one entered by its
+  // address stays). Restored on step 3 with no reachable Grafana any more: step 4, nothing to import.
+  useEffect(() => {
+    if (draft.step !== 3 || !found) return;
+    const g = grafanaFromDiscovery(found);
+    if (!g || !importStep) {
+      setDraftState((d) => (d.step === 3 ? { ...d, step: 4, importFrom: null } : d));
+      return;
+    }
+    setDraftState((d) => {
+      const now = d.importFrom;
+      if (now && (now.connection.reach === "url" || sameClusterGrafana(now.connection, g))) return d;
+      return { ...d, importFrom: { connection: g, label: g.name ?? "Grafana", uids: [], preview: null } };
+    });
+  }, [draft.step, found, importStep]);
+
+  const imp = importStep ? (draft.importFrom ?? null) : null;
+  /** Dashboards are chosen to import, through a connection that can load them. */
+  const importChosen = imp !== null && !imp.secretsDropped && imp.uids.length > 0;
+  const previewKey = importChosen && imp.preview === null ? `${connectionRev}|${imp.uids.join(",")}` : null;
+
+  // What converts is checked once the choice settles (a plain call: the connection may carry a
+  // token). A newer choice, or leaving, stops it; an answer for an older choice is dropped.
+  useEffect(() => {
+    if (previewKey === null) {
+      setCheck({ state: "idle" });
+      return;
+    }
+    const ctl = new AbortController();
+    setCheck({ state: "checking" });
+    const timer = window.setTimeout(() => {
+      const asked = latest.current.draft.importFrom;
+      if (!asked) return;
+      previewImport({ input: { kind: "grafana", connection: asked.connection, uids: [...asked.uids] }, target: null }, ctl.signal).then(
+        (p) => {
+          if (ctl.signal.aborted) return;
+          setDraftState((d) => (d.importFrom && d.importFrom.connection === asked.connection && d.importFrom.uids === asked.uids
+            ? { ...d, importFrom: { ...d.importFrom, preview: p } } : d));
+          setCheck({ state: "idle" });
+        },
+        (err: unknown) => {
+          if (!ctl.signal.aborted) setCheck({ state: "failed", message: failure(err, "check again") });
+        },
+      );
+    }, PREVIEW_AFTER_MS);
+    return () => {
+      window.clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [previewKey, checkRun]);
+
+  const onUids = (uids: string[]) => {
+    setChosenRev(connectionRev);
+    setDraftState((d) => {
+      const i = d.importFrom;
+      if (!i || (i.uids.length === uids.length && i.uids.every((u, n) => u === uids[n]))) return d;
+      return { ...d, importFrom: { ...i, uids, preview: null } };
+    });
+  };
+  const onConnection = (connection: GrafanaIn) => {
+    const rev = connectionRev + 1;
+    // Its sign-in entered again after a restore: the dashboards chosen before stay chosen.
+    const kept = draft.importFrom?.secretsDropped ? draft.importFrom.uids : [];
+    setConnectionRev(rev);
+    if (kept.length > 0) setChosenRev(rev);
+    setDraftState((d) => ({ ...d, importFrom: { connection, label: connection.name ?? "Grafana", uids: kept, preview: null } }));
+  };
+  const skipImport = () => {
+    setDraftState((d) => (d.importFrom ? { ...d, importFrom: { ...d.importFrom, uids: [], preview: null } } : d));
+    goTo(4);
+  };
+
+  /** What the import does: what step 4 lists, and whether Create waits for it. */
+  const importReady = importChosen && imp.preview !== null && importable(imp.preview).length > 0;
+  const importWait: string | null = !importChosen || imp.preview !== null ? null
+    : check.state === "failed" ? CHECK_AGAIN : CHECKING;
+  const importLine = !importChosen ? "Import: none"
+    : imp.preview === null ? (check.state === "failed" ? `Import: ${check.message}` : `Import: ${CHECKING}`)
+    : importable(imp.preview).length === 0 ? "Import: none"
+    : `Import: ${dashboardsWord(importable(imp.preview).length)} from Grafana · ${skippedWords(importSkipped(imp.preview))}`;
 
   // A Kubernetes project asks OmniKrux which filter each source needs. A plain call, never cached:
   // the body of a source added by hand can hold its secrets.
@@ -597,37 +732,108 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     setHandOpen(false);
   };
 
+  /**
+   * Creates the project, then copies the chosen Grafana dashboards into it, then opens it (the
+   * install is reviewed over it). An import that fails after the project exists keeps this page with
+   * a retry, unless an install was chosen: then the project says so and the install review opens.
+   */
   async function create() {
-    if (busyRef.current || blockedBy(draft, { installOffered }) !== null) return;
+    if (busyRef.current || created || blockedBy(draft, { installOffered }) !== null || importWait !== null) return;
     const components = installOffered ? installComponents(draft) : [];
     const clusterId = draft.clusterId;
+    const willImport = importReady ? draft : null;
     busyRef.current = true;
-    setBusy(true);
+    setBusy("project");
     setNameError(null);
     setError(null);
+    let project: ProjectOut;
     try {
       // A plain call, not a mutation: TanStack would keep this body (secrets in it) in its cache.
-      const made = await setupProject(setupBody(draft));
-      created.current = true;
-      removeSetupDraft(tabId);
-      await invalidateMonitoring(client);
-      // The page closes with the draft, and every secret typed into it.
-      nav.navigate({ page: "project", id: made.id }, "replace");
-      // The install is reviewed over the new project; closed, the keyboard goes to the project's name.
-      if (components.length > 0 && clusterId !== null) {
-        void reviews.install({ clusterId, components, projectId: made.id, focusAfter: projectHeading });
-      }
+      project = await setupProject(setupBody(draft));
     } catch (err) {
       busyRef.current = false;
-      setBusy(false);
+      setBusy(null);
       if (err instanceof HttpError && err.status === 409) {
         setNameError(err.message);
         nameInput.current?.focus();
       } else {
         setError(failure(err, "try again"));
       }
+      return;
+    }
+    made.current = true;
+    removeSetupDraft(tabId);
+    let result: ImportResultOut | null = null;
+    let importError: string | null = null;
+    const body = willImport ? importCommitBody(willImport, project.id) : null;
+    if (body) {
+      setBusy("import");
+      try {
+        // Plain too: the connection in it may carry a token.
+        result = await commitImport(body);
+      } catch (err) {
+        importError = failure(err, "try again");
+      }
+    }
+    await invalidateMonitoring(client);
+    const installing = components.length > 0 && clusterId !== null;
+    if (importError !== null && !installing) {
+      busyRef.current = false;
+      setBusy(null);
+      setCreated({ project, message: importError, retrying: false });
+      return;
+    }
+    if (importError !== null) noteImportFailed(project.id, importError);
+    // The page closes with the draft, and every secret typed into it.
+    nav.navigate({ page: "project", id: project.id }, "replace");
+    const changes = result?.alert_changes ?? [];
+    if (installing) {
+      // The install is reviewed over the new project; closed, the keyboard goes to the project's
+      // name. The imported alerts' cluster reviews follow it.
+      void reviews.install({ clusterId, components, projectId: project.id, focusAfter: projectHeading }).then(() => {
+        if (changes.length > 0) enqueue(changes, { focus: projectHeading() });
+      });
+    } else if (changes.length > 0) {
+      whenProjectHeading((h) => enqueue(changes, { focus: h }));
     }
   }
+
+  /** The import again, into the project made already; a `changed` answer checks what converts first. */
+  async function retryImport() {
+    if (!created || created.retrying) return;
+    const project = created.project;
+    setCreated({ ...created, retrying: true });
+    const fail = (err: unknown) => setCreated({ project, message: failure(err, "try again"), retrying: false });
+    let out: ImportResultOut;
+    try {
+      const body = importCommitBody(latest.current.draft, project.id);
+      if (!body) return fail(new Error(NONE_CONVERTS));
+      out = await commitImport(body);
+    } catch (err) {
+      if (!(err instanceof TransferRequestError && err.code === "changed")) return fail(err);
+      try {
+        const asked = latest.current.draft.importFrom;
+        if (!asked) return fail(new Error(NONE_CONVERTS));
+        const p = await previewImport({ input: { kind: "grafana", connection: asked.connection, uids: [...asked.uids] }, target: { kind: "project", id: project.id } });
+        const next: SetupDraft = { ...latest.current.draft, importFrom: { ...asked, preview: p } };
+        setDraftState(next);
+        const body = importCommitBody(next, project.id);
+        if (!body) return fail(new Error(NONE_CONVERTS));
+        out = await commitImport(body);
+      } catch (again) {
+        return fail(again);
+      }
+    }
+    await invalidateMonitoring(client);
+    nav.navigate({ page: "project", id: project.id }, "replace");
+    const changes = out.alert_changes;
+    if (changes.length > 0) whenProjectHeading((h) => enqueue(changes, { focus: h }));
+  }
+
+  // The import failed after the project was made: the keyboard goes to the retry.
+  useLayoutEffect(() => {
+    if (created && !created.retrying) tryAgain.current?.focus();
+  }, [created]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key === "Escape" && handOpen) {
@@ -641,15 +847,23 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
   };
 
   const blocked = blockedBy(draft, { installOffered });
+  const reason = blocked ?? (draft.step === 4 ? importWait : null);
   const used = inUse(draft).length;
   const installs = installOffered ? installComponents(draft) : [];
+  const copying = importReady && imp.preview ? importable(imp.preview).length : 0;
   const stepNote = (n: number): string | null => {
     if (n === 1 && draft.kind) return draft.kind === "kubernetes" && clusterName ? `${clusterName} · Kubernetes` : kindInfo(draft.kind).what;
     if (n === 2 && draft.step > 2) return inUseAndInstalls(used, installs.length);
-    if (n === 3) return "Comes later";
+    if (n === 3 && noImport) return NOTHING_TO_IMPORT;
+    if (n === 3 && draft.step > 3 && copying > 0) return `${dashboardsWord(copying)} to copy`;
     return null;
   };
   const stepProps: StepProps = { draft, setDraft, heading };
+  const createLabel = busy === "project" ? "Creating project…" : busy === "import" ? "Importing dashboards…"
+    : installs.length > 0 && importReady ? "Create project, import and review the install"
+    : installs.length > 0 ? "Create project and review the install" : "Create project";
+  const next: SetupStep = draft.step === 1 ? 2 : draft.step === 2 && importStep ? 3 : 4;
+  const back: SetupStep = draft.step === 4 ? (importStep ? 3 : 2) : draft.step === 3 ? 2 : 1;
 
   return (
     <section className={s.setup} aria-labelledby="monitoring-setup-title" onKeyDown={onKeyDown}>
@@ -657,7 +871,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
         <h1 id="monitoring-setup-title" className={s.title}>New project</h1>
         <ol className={s.steps} aria-label="Steps">
           {STEPS.map((st) => {
-            const state = st.n === 3 ? "later" : st.n === draft.step ? "current" : st.n < draft.step ? "done" : "next";
+            const state = st.n === 3 && noImport ? "later" : st.n === draft.step ? "current" : st.n < draft.step ? "done" : "next";
             const note = stepNote(st.n);
             return (
               <li key={st.n} className={s.step} data-state={state} aria-current={state === "current" ? "step" : undefined}>
@@ -686,29 +900,69 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
               }}
               form={<div className={s.handForm}><SourceForm mode="collect" onCollect={collect} onCancel={() => setHandOpen(false)} /></div>} />
           )}
-          {draft.step === 4 && (
+          {draft.step === 3 && (
+            <>
+              {/* One heading whatever shows under it: the keyboard stays on it while the step fills in. */}
+              <h2 ref={heading} tabIndex={-1} className={s.stepTitle}>Import from Grafana</h2>
+              {importStep && draft.importFrom ? (
+                <ImportStep heading={heading} clusterName={clusterName} tool={grafanaTool} imp={draft.importFrom} connectionRev={connectionRev}
+                  defaultAll={chosenRev !== connectionRev} check={check} onUids={onUids} onConnection={onConnection}
+                  onCheckAgain={() => setCheckRun((n) => n + 1)} onSkip={skipImport} />
+              ) : discovery.isError && !found ? (
+                <div className={s.note} role="alert">
+                  <p>{failure(discovery.error, "look again")}</p>
+                  <button type="button" className={s.secondary} onClick={skipImport}>Skip import</button>
+                </div>
+              ) : <p className={s.note} role="status">{`Looking inside ${clusterName}…`}</p>}
+            </>
+          )}
+          {draft.step === 4 && !created && (
             <ReviewStep {...stepProps} clusterName={clusterName} nameInput={nameInput} nameError={nameError}
-              onNameEdit={() => { nameTouched.current = true; setNameError(null); }} onEnter={() => void create()} installs={installs} />
+              onNameEdit={() => { nameTouched.current = true; setNameError(null); }} onEnter={() => void create()} installs={installs}
+              importLine={importLine} />
+          )}
+          {created && (
+            <div className={s.created}>
+              <h2 ref={heading} tabIndex={-1} className={s.stepTitle}>{created.project.name}</h2>
+              <p className={s.problem} role="alert">{importFailedWords(created.message)}</p>
+              <div className={s.createdActions}>
+                {/* aria-disabled, not disabled: the button keeps the keyboard while it retries. */}
+                <button ref={tryAgain} type="button" className={s.primary} aria-disabled={created.retrying || undefined} onClick={() => void retryImport()}>
+                  {created.retrying ? "Importing dashboards…" : "Try the import again"}
+                </button>
+                <button type="button" className={s.secondary} aria-disabled={created.retrying || undefined}
+                  onClick={() => { if (!created.retrying) nav.navigate({ page: "project", id: created.project.id }, "replace"); }}>
+                  Open the project
+                </button>
+              </div>
+            </div>
           )}
           {error && <p className={s.problem} role="alert">{error}</p>}
         </div>
 
-        <footer className={s.foot}>
-          {draft.step > 1 && (
-            <button type="button" className={s.secondary} onClick={() => goTo(draft.step === 4 ? 2 : 1)}>Back</button>
-          )}
-          {draft.step === 2 && <span className={s.sum}>{inUseAndInstalls(used, installs.length)}</span>}
-          {blocked && <span id={reasonId} className={s.reason}>{blocked}</span>}
-          {draft.step === 4 ? (
-            <button type="button" className={s.primary} disabled={blocked !== null} aria-disabled={busy || undefined}
-              aria-describedby={blocked ? reasonId : undefined} onClick={() => void create()}>
-              {busy ? "Creating…" : installs.length > 0 ? "Create project and review the install" : "Create project"}
-            </button>
-          ) : (
-            <button type="button" className={s.primary} disabled={blocked !== null} aria-describedby={blocked ? reasonId : undefined}
-              onClick={() => goTo(draft.step === 1 ? 2 : 4)}>Continue</button>
-          )}
-        </footer>
+        {!created && (
+          <footer className={s.foot}>
+            {draft.step > 1 && (
+              <button type="button" className={s.secondary} onClick={() => goTo(back)}>Back</button>
+            )}
+            {draft.step === 2 && <span className={s.sum}>{inUseAndInstalls(used, installs.length)}</span>}
+            {draft.step === 3 && (
+              <span className={s.sum}>{copying > 0 ? `${inUseAndInstalls(used, installs.length)} · ${dashboardsWord(copying)} to copy` : inUseAndInstalls(used, installs.length)}</span>
+            )}
+            {reason && <span id={reasonId} className={s.reason}>{reason}</span>}
+            {draft.step === 4 ? (
+              <button type="button" className={s.primary} disabled={reason !== null} aria-disabled={busy !== null || undefined}
+                aria-describedby={reason ? reasonId : undefined} onClick={() => void create()}>
+                {createLabel}
+              </button>
+            ) : (
+              <button type="button" className={s.primary} disabled={blocked !== null} aria-describedby={blocked ? reasonId : undefined}
+                onClick={() => goTo(next)}>
+                {draft.step === 3 && !importChosen ? "Continue without importing" : "Continue"}
+              </button>
+            )}
+          </footer>
+        )}
       </div>
     </section>
   );

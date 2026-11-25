@@ -6,10 +6,14 @@
 // (never spread: a field added later is left out until it is named here); a new source goes without its
 // password, token, API key, client key or header values; an address with a sign-in, a query or a
 // fragment is cut back to its host and path. A pick that lost something is marked `secretsDropped`
-// and comes back unticked. The "add by hand" form being typed is not in the draft at all.
+// and comes back unticked. The "add by hand" form being typed is not in the draft at all. The
+// Grafana import keeps its connection without its password or token (`keepableGrafana`), its label
+// and the chosen dashboards; its preview is never kept (it is made again). A connection that lost
+// its secret is marked `secretsDropped` and asks for its sign-in again.
 
 import type { AuthIn, AuthType, FilterOrigin, ProjectKind, Reach, Scheme, SourceIn, SourceType } from "../api/types";
-import type { SetupDraft, SetupInstall, SetupPick, SetupStep } from "./setupModel";
+import type { GrafanaAuth, GrafanaAuthIn, GrafanaIn } from "../transfer/api";
+import type { SetupDraft, SetupImport, SetupInstall, SetupPick, SetupStep } from "./setupModel";
 
 export const SETUP_DRAFT_PREFIX = "omnikrux.monitoring.setupDraft.";
 export const SECRET_NOT_KEPT = "Its secret wasn't kept. Enter it again to use this source.";
@@ -87,6 +91,51 @@ export function keepableSource(src: SourceIn): { source: SourceIn; dropped: bool
   return { source: out, dropped };
 }
 
+/** A Grafana connection as it may be kept: named fields only, never its password or token. */
+export function keepableGrafana(g: GrafanaIn): { connection: GrafanaIn; dropped: boolean } {
+  let dropped = false;
+  const out: GrafanaIn = { reach: g.reach };
+  if (g.name !== undefined) out.name = g.name;
+  if (g.url !== undefined && g.url !== null) {
+    const url = plainUrl(g.url);
+    if (url !== g.url) dropped = true;
+    out.url = url;
+  } else if (g.url === null) {
+    out.url = null;
+  }
+  if (g.cluster_id !== undefined) out.cluster_id = g.cluster_id;
+  if (g.namespace !== undefined) out.namespace = g.namespace;
+  if (g.service !== undefined) out.service = g.service;
+  if (g.port !== undefined) out.port = g.port;
+  if (g.scheme !== undefined) out.scheme = g.scheme;
+  if (g.path_prefix !== undefined) out.path_prefix = g.path_prefix;
+  if (g.auth) {
+    if (filled(g.auth.password) || filled(g.auth.token)) dropped = true;
+    const auth: GrafanaAuthIn = {};
+    if (g.auth.type !== undefined) auth.type = g.auth.type;
+    if (g.auth.username !== undefined) auth.username = g.auth.username;
+    out.auth = auth;
+  }
+  return { connection: out, dropped };
+}
+
+/** At most this many dashboards are chosen for one import (F15). */
+const MAX_UIDS = 100;
+
+/**
+ * The import as it may be kept, or undefined when it doesn't have the import's shape (then it is
+ * left out): never the preview, never a secret.
+ */
+function keepableImport(x: SetupImport): SetupImport | undefined {
+  const c: unknown = x.connection;
+  if (!isObj(c) || !isGrafanaReach(c.reach) || !str(x.label) || !Array.isArray(x.uids) || !x.uids.every(str)) return undefined;
+  const kept = keepableGrafana(c as unknown as GrafanaIn);
+  return {
+    connection: kept.connection, label: x.label, uids: x.uids.slice(0, MAX_UIDS), preview: null,
+    ...(kept.dropped || x.secretsDropped === true ? { secretsDropped: true } : {}),
+  };
+}
+
 /**
  * A pick as it may be kept: named fields only (never spread), so a field added to `SetupPick`
  * later is left out until it is named here, after checking it holds no secret.
@@ -115,9 +164,11 @@ function keepablePick(p: SetupPick): SetupPick {
  * later (M6's Grafana connection, which may hold a token) is left out until it is named here.
  */
 function keepableDraft(d: SetupDraft): SetupDraft {
+  const importFrom = d.importFrom ? keepableImport(d.importFrom) : undefined;
   return {
     step: d.step, kind: d.kind, clusterId: d.clusterId, name: d.name, picks: d.picks.map(keepablePick),
     ...(d.install ? { install: { metrics: d.install.metrics === true, logs: d.install.logs === true } } : {}),
+    ...(importFrom ? { importFrom } : {}),
   };
 }
 
@@ -167,13 +218,15 @@ const strOrNull = (x: unknown): x is string | null => x === null || typeof x ===
 const optional = <T,>(x: unknown, ok: (y: unknown) => y is T): boolean => x === undefined || ok(x);
 const oneOf = <T extends string>(values: readonly T[]) => (x: unknown): x is T => typeof x === "string" && (values as readonly string[]).includes(x);
 
-const STEPS: readonly SetupStep[] = [1, 2, 4];
+const STEPS: readonly SetupStep[] = [1, 2, 3, 4];
 const isKind = oneOf<ProjectKind>(["kubernetes", "docker", "servers", "custom"]);
 const isType = oneOf<SourceType>(["prometheus", "loki", "alertmanager"]);
 const isReach = oneOf<Reach>(["url", "cluster"]);
 const isScheme = oneOf<Scheme>(["http", "https"]);
 const isAuthType = oneOf<AuthType>(["none", "basic", "bearer", "api_key", "mtls"]);
 const isOrigin = oneOf<FilterOrigin>(["auto", "user", "none"]);
+const isGrafanaReach = oneOf<Reach>(["url", "cluster"]);
+const isGrafanaAuth = oneOf<GrafanaAuth>(["none", "basic", "bearer"]);
 
 function readSource(x: unknown): SourceIn | null {
   if (!isObj(x) || !isType(x.type) || !isReach(x.reach)) return null;
@@ -213,6 +266,23 @@ function readPick(x: unknown): SetupPick | null {
   };
 }
 
+function readImport(x: unknown): SetupImport | undefined | null {
+  if (x === undefined || x === null) return undefined;
+  if (!isObj(x) || !str(x.label) || !Array.isArray(x.uids) || !x.uids.every(str) || x.uids.length > MAX_UIDS) return null;
+  if (!optional(x.secretsDropped, (y): y is boolean => typeof y === "boolean")) return null;
+  const c = x.connection;
+  if (!isObj(c) || !isGrafanaReach(c.reach)) return null;
+  for (const f of ["name", "url", "cluster_id", "namespace", "service", "port"] as const) if (!optional(c[f], strOrNull)) return null;
+  if (!optional(c.scheme, isScheme) || !optional(c.path_prefix, str)) return null;
+  if (c.auth !== undefined && !(isObj(c.auth) && optional(c.auth.type, isGrafanaAuth) && optional(c.auth.username, strOrNull))) return null;
+  // What comes back is copied again without secrets, whatever the entry held.
+  const kept = keepableGrafana(c as unknown as GrafanaIn);
+  return {
+    connection: kept.connection, label: x.label, uids: x.uids as string[], preview: null,
+    ...(kept.dropped || x.secretsDropped === true ? { secretsDropped: true } : {}),
+  };
+}
+
 function readInstall(x: unknown): SetupInstall | undefined | null {
   if (x === undefined) return undefined;
   return isObj(x) && typeof x.metrics === "boolean" && typeof x.logs === "boolean" ? { metrics: x.metrics, logs: x.logs } : null;
@@ -241,11 +311,14 @@ export function readSetupDraft(tabId: string, start: string): RestoredDraft | nu
   if (picks.some((p) => p === null)) return null;
   const install = readInstall(d.install);
   if (install === null) return null;
+  const importFrom = readImport(d.importFrom);
+  if (importFrom === null) return null;
   return {
     named: x.named,
     draft: {
       step: d.step as SetupStep, kind: d.kind as ProjectKind | null, clusterId: d.clusterId, picks: picks as SetupPick[], name: d.name,
       ...(install ? { install } : {}),
+      ...(importFrom ? { importFrom } : {}),
     },
   };
 }
