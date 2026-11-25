@@ -53,8 +53,11 @@ async def suggest_filter(
     )
     for answer in values:
         if isinstance(answer, SourceUnreachable | QueryRejected):
-            # What the source's own error says already names the source: no prefix before it.
-            return Suggestion((), "none", answer.message)
+            # Words that already name the source need no prefix; the tool's own text does.
+            named = source.name in answer.message
+            return Suggestion(
+                (), "none", answer.message if named else CANT_CHECK.format(message=answer.message)
+            )
         if isinstance(answer, BaseException):
             raise answer
 

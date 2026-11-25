@@ -1024,7 +1024,7 @@ describe("Project page, the cluster banner needs the cluster's own words", () =>
     expect(screen.queryByText("Can't be checked now.")).toBeNull();
   });
 
-  it("one failing link with the cluster's words says it once, even beside an up link", async () => {
+  it("a link that is up keeps every other link's own reason", async () => {
     const a = inDev("s1", "Prom in dev");
     const b = inDev("s2", "Loki in dev");
     installFakeMonitoringApi({
@@ -1036,6 +1036,7 @@ describe("Project page, the cluster banner needs the cluster's own words", () =>
       },
     }, clusters);
     open("p1");
-    expect(await screen.findByText("dev can't be reached, so this project's data can't be read now.")).toBeTruthy();
+    await screen.findByRole("textbox", { name: "Filter for Prom in dev" });
+    expect(screen.queryByText(/can't be reached, so this project's data/)).toBeNull();
   });
 });

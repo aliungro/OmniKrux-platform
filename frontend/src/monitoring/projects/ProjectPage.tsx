@@ -57,7 +57,8 @@ const SAVED_FOR_MS = 5_000;
  */
 export function unreachableCluster(links: LinkOut[], health: Record<string, HealthOut>, nameOf: (id: string) => string | null): string | null {
   const failing = links.filter((l) => stateOf(health[l.source_id]) === "down");
-  if (failing.length === 0) return null;
+  // One link that answers (or has not been checked) is enough to keep each link's own reason.
+  if (failing.length === 0 || failing.length < links.length) return null;
   const ids = new Set(failing.map((l) => l.source_cluster_id ?? null));
   const id = ids.size === 1 ? [...ids][0] : null;
   const name = id === null ? null : nameOf(id);
