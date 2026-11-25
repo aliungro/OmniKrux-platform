@@ -166,6 +166,16 @@ export default function TimeSeriesChart({
 
   // The same tokens the frame draws with, for the tooltip and the legend.
   const colors = useMemo(() => seriesColors(series), [series]);
+  // A new list only when the series change, so the legend can tell a refresh from a hover.
+  const legendItems = useMemo(
+    () => series.map((s) => ({ key: s.key, name: s.name, color: colors.get(s.key) as string })),
+    [series, colors],
+  );
+  // A highlighted series that a refresh took away is forgotten, so it doesn't light up again
+  // when it comes back without a hover or focus.
+  useEffect(() => {
+    if (highlighted !== null && !series.some((s) => s.key === highlighted)) setHighlighted(null);
+  }, [series, highlighted]);
   const frame = useMemo(
     () => (size.width > 0 && size.height > 0
       ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden, alert, runStep, highlighted)
@@ -506,7 +516,7 @@ export default function TimeSeriesChart({
       </div>
       {opts.legend === "bottom" && series.length > 0 ? (
         <Legend
-          items={series.map((s) => ({ key: s.key, name: s.name, color: colors.get(s.key) as string }))}
+          items={legendItems}
           hidden={hidden}
           onSolo={solo}
           onToggle={toggle}

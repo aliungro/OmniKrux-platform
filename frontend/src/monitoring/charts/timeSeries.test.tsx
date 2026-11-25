@@ -526,6 +526,8 @@ describe("ChartView time series", () => {
       render(<ChartView {...base({ data: dataOf(many) })} />);
       const fold = screen.getByRole("button", { name: "13 series" });
       expect(fold.getAttribute("aria-expanded")).toBe("false");
+      // Folded, it controls nothing on the page.
+      expect(fold.hasAttribute("aria-controls")).toBe(false);
       expect(screen.queryByRole("button", { name: /^s0$/ })).toBeNull();
       act(() => fold.focus());
       await user.keyboard("{Enter}");
@@ -538,15 +540,84 @@ describe("ChartView time series", () => {
       // Esc in the list folds it again and hands the keyboard back to the button.
       await user.tab();
       expect(document.activeElement?.textContent).toBe("s0");
+      expect(document.activeElement).not.toBe(document.body);
       await user.keyboard("{Escape}");
       expect(fold.getAttribute("aria-expanded")).toBe("false");
       expect(document.activeElement).toBe(fold);
+      expect(document.activeElement).not.toBe(document.body);
+      expect(fold.hasAttribute("aria-controls")).toBe(false);
       // Twelve series: no fold.
       cleanup();
       stubBrowser();
       render(<ChartView {...base({ data: dataOf(many.slice(0, 12)) })} />);
       expect(screen.queryByRole("button", { name: /series$/ })).toBeNull();
       expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(12);
+    });
+
+    it("a refresh across the fold keeps the keyboard in the legend", () => {
+      stubBrowser();
+      const of = (n: number) => dataOf(Array.from({ length: n }, (_, i) => series(`s${i}`, [i, i + 1])));
+      const { rerender } = render(<ChartView {...base({ data: of(12) })} />);
+      // Twelve to thirteen while a series has the keyboard: the "13 series" button takes it.
+      act(() => screen.getByRole("button", { name: /^s3$/ }).focus());
+      rerender(<ChartView {...base({ data: of(13) })} />);
+      const fold = screen.getByRole("button", { name: "13 series" });
+      expect(document.activeElement).toBe(fold);
+      expect(document.activeElement).not.toBe(document.body);
+      // Thirteen to twelve while the button has the keyboard: the first series takes it.
+      rerender(<ChartView {...base({ data: of(12) })} />);
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: /^s0$/ }));
+      expect(document.activeElement).not.toBe(document.body);
+      // The focused series goes away with a refresh: the first series takes it.
+      act(() => screen.getByRole("button", { name: /^s11$/ }).focus());
+      rerender(<ChartView {...base({ data: of(11) })} />);
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: /^s0$/ }));
+      // A refresh while the keyboard is elsewhere leaves it there.
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      act(() => outside.focus());
+      rerender(<ChartView {...base({ data: of(13) })} />);
+      expect(document.activeElement).toBe(outside);
+      outside.remove();
+    });
+
+    it("folding clears the highlight, and a series that comes back is not highlighted again", async () => {
+      stubBrowser();
+      const user = userEvent.setup();
+      const of = (n: number) => dataOf(Array.from({ length: n }, (_, i) => series(`s${i}`, [i, i + 1])));
+      const last = () => painted[painted.length - 1].highlight;
+      const { rerender } = render(<ChartView {...base({ data: of(13) })} />);
+      const fold = screen.getByRole("button", { name: "13 series" });
+      await user.click(fold);
+      // The pointer rests on s5 while the keyboard is on s1; Esc folds the list under both.
+      act(() => screen.getByRole("button", { name: /^s1$/ }).focus());
+      fireEvent.mouseEnter(screen.getByRole("button", { name: /^s5$/ }));
+      expect(last()).toBe("k-s5");
+      await user.keyboard("{Escape}");
+      expect(fold.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(fold);
+      expect(last()).toBeNull();
+      // Closing with the button does the same.
+      await user.click(fold);
+      fireEvent.mouseEnter(screen.getByRole("button", { name: /^s2$/ }));
+      expect(last()).toBe("k-s2");
+      await user.click(fold);
+      expect(last()).toBeNull();
+      // A refresh that folds the list under the pointer clears it too.
+      rerender(<ChartView {...base({ data: of(12) })} />);
+      fireEvent.mouseEnter(screen.getByRole("button", { name: /^s4$/ }));
+      expect(last()).toBe("k-s4");
+      rerender(<ChartView {...base({ data: of(13) })} />);
+      expect(last()).toBeNull();
+      // A highlighted series a refresh takes away doesn't light up when it comes back.
+      rerender(<ChartView {...base({ data: of(3) })} />);
+      fireEvent.mouseEnter(screen.getByRole("button", { name: /^s2$/ }));
+      expect(last()).toBe("k-s2");
+      rerender(<ChartView {...base({ data: of(2) })} />);
+      expect(last()).toBeNull();
+      rerender(<ChartView {...base({ data: of(3) })} />);
+      expect(last()).toBeNull();
+      expect(screen.getByRole("button", { name: /^s2$/ }).className).not.toMatch(/legendLit/);
     });
 
     it("a legend name is cut with its full name in the title", () => {
