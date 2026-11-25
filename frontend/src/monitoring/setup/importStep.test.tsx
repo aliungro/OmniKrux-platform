@@ -290,16 +290,35 @@ describe("Setup step 3: import from Grafana", () => {
     expect(document.activeElement).toBe(button("Try the import again"));
     expect(posts(api, "setup")).toHaveLength(1);
 
-    // Changed since the check: what converts is checked again (for the project), then imported.
-    api.state.transfer.commits = failed(409, "changed", "Something changed since you checked. Check again.");
+    // Changed since the check: what converts is checked again for the project and shown; nothing
+    // is imported until the next try.
+    const NOW = preview([
+      dash("u1", "Node overview", { digest: "dg2-u1", skipped: [SKIPPED[2]] }),
+      dash("u2", "API latency", { digest: "dg2-u2", skipped: SKIPPED }),
+      dash("u3", "Ingress", { importable: false, problems: [{ path: "", message: "Grafana couldn't send it" }] }),
+    ]);
+    api.state.transfer.previews = { ...PREVIEWS, "grafana:new:u1,u2,u3": NOW };
+    api.state.transfer.commits = failed(409, "changed", '"Ingress" changed since you checked it. Check again.');
+    const before = previewsSent(api).length;
     await user.click(button("Try the import again"));
-    await waitFor(() => expect(previewsSent(api).some((p) => p.target?.id === api.state.projects[0].id)).toBe(true));
-    await waitFor(() => expect(commitsSent(api)).toHaveLength(4));
+    expect(await screen.findByText("2 dashboards to copy · 4 things won't be copied")).toBeTruthy();
+    expect(screen.getByText("Something changed since you checked. Here is the new result.")).toBeTruthy();
+    expect(screen.getByText("This dashboard can't be imported: Grafana couldn't send it.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Skipped (3)" })).toBeTruthy();
+    const rechecks = previewsSent(api).slice(before);
+    expect(rechecks).toHaveLength(1);
+    expect(rechecks[0].target).toEqual({ kind: "project", id: api.state.projects[0].id });
+    expect(commitsSent(api)).toHaveLength(3);
+    await waitFor(() => expect(document.activeElement).toBe(button("Try the import again")));
 
     api.state.transfer.commits = [result()];
     await user.click(button("Try the import again"));
     await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "project", id: api.state.projects[0].id }));
-    expect(commitsSent(api)).toHaveLength(5);
+    expect(commitsSent(api)).toHaveLength(4);
+    expect(commitsSent(api)[3].dashboards).toEqual([
+      { key: "u1", title: "Node overview", digest: "dg2-u1" },
+      { key: "u2", title: "API latency", digest: "dg2-u2" },
+    ]);
     expect(posts(api, "setup")).toHaveLength(1);
   });
 
@@ -351,6 +370,109 @@ describe("Setup step 3: import from Grafana", () => {
     expect(boxes().map((b) => b.checked)).toEqual([true, false, true]);
     expect(await summaryOf("2 dashboards to copy · everything converts")).toBeTruthy();
     expect(previewsSent(api)[0].input).toEqual({ kind: "grafana", connection: listLoads(api)[0], uids: ["u1", "u3"] });
+  });
+
+  it("quick changes make one check, and an answer for an older choice is dropped", async () => {
+    const user = userEvent.setup();
+    const ONE = preview([dash("u1", "Node overview")]);
+    const { api } = setUp({ transfer: { previews: { ...PREVIEWS, "grafana:new:u1": ONE } } });
+    // The check of every dashboard is held, and answers only after a newer choice was checked.
+    const inner = globalThis.fetch;
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/monitoring/import/preview" && (JSON.parse(String(init?.body)) as ImportPreviewIn).input.kind === "grafana") {
+        const uids = ((JSON.parse(String(init?.body)) as ImportPreviewIn).input as { uids: string[] }).uids.join(",");
+        if (uids === "u1,u2,u3") {
+          await held;
+          return inner(input, { ...init, signal: undefined });
+        }
+      }
+      return inner(input, init);
+    }));
+    await toImport(user);
+    await waitFor(() => expect(boxes()).toHaveLength(3));
+    expect(await screen.findByText("Checking what converts…")).toBeTruthy();
+    // (The fake records a request once it reaches it: the held one shows after it is released.)
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Two changes inside 500 ms: one check, for the last choice.
+    const list = screen.getByRole("group", { name: "Dashboards in Grafana" });
+    await user.click(within(list).getByRole("checkbox", { name: "API latency" }));
+    await user.click(within(list).getByRole("checkbox", { name: "Ingress" }));
+    expect(await summaryOf("1 dashboard to copy · everything converts")).toBeTruthy();
+    expect(previewsSent(api).map((p) => (p.input as { uids: string[] }).uids)).toEqual([["u1"]]);
+
+    // The first check answers late: what shows stays the answer for the current choice.
+    release();
+    await waitFor(() => expect(previewsSent(api)).toHaveLength(2));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByText("1 dashboard to copy · everything converts")).toBeTruthy();
+    expect(screen.queryByText("3 dashboards to copy · 3 things won't be copied")).toBeNull();
+  });
+
+  it("a later look inside the cluster keeps an import by its address, shown without its sign-in", async () => {
+    const user = userEvent.setup();
+    const { api, app } = setUp({ transfer: { grafanaDashboards: { new: failed(502, "grafana", SIGN_IN) } } });
+    await toImport(user);
+    await user.click(await screen.findByRole("button", { name: "Use its address instead" }));
+    await user.type(await screen.findByLabelText("Address"), "http://viewer:pw-in-url@grafana.example.invalid:3000/");
+    api.state.transfer.grafanaDashboards.new = DASHBOARDS;
+    await user.click(button("Use it"));
+    await waitFor(() => expect(boxes()).toHaveLength(3));
+    const row = screen.getByRole("group", { name: "Grafana" });
+    expect(within(row).getByText("http://grafana.example.invalid:3000/")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("pw-in-url");
+
+    // The cluster's Grafana is no longer found: the import by its address stays, with its choice.
+    api.state.discovery.c1 = found(tool("prometheus", "reachable"));
+    await app.client.refetchQueries();
+    await waitFor(() => expect(api.requests.filter((r) => r.url === "/api/monitoring/discovery/c1").length).toBeGreaterThan(1));
+    expect(screen.getByRole("heading", { name: "Import from Grafana" })).toBeTruthy();
+    expect(boxes().every((b) => b.checked)).toBe(true);
+    expect(await summaryOf("3 dashboards to copy · 3 things won't be copied")).toBeTruthy();
+  });
+
+  it("Esc on a restored sign-in keeps the import and offers to enter it again", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("omnikrux.monitoring.setupDraft.start0", JSON.stringify({
+      v: 1, start: "c1", named: true,
+      draft: {
+        step: 3, kind: "kubernetes", clusterId: "c1", picks: [], name: "Shop",
+        importFrom: { connection: { reach: "url", url: "http://grafana.example.invalid:3000", auth: { type: "bearer" } }, label: "Main", uids: ["u1"], secretsDropped: true },
+      },
+    }));
+    setUp();
+    const address = await screen.findByLabelText("Address");
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    address.focus();
+    await user.keyboard("{Escape}");
+    const again = await screen.findByRole("button", { name: "Enter it again" });
+    expect(screen.getByRole("heading", { name: "Import from Grafana" })).toBeTruthy();
+    expect(screen.getByText("Its sign-in wasn't kept. Enter it again to load its dashboards.")).toBeTruthy();
+    expect(button("Skip import")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(again));
+    await user.click(again);
+    expect(await screen.findByLabelText("Token")).toBeTruthy();
+  });
+
+  it("a restored choice of none stays none", async () => {
+    localStorage.setItem("omnikrux.monitoring.setupDraft.start0", JSON.stringify({
+      v: 1, start: "c1", named: true,
+      draft: {
+        step: 3, kind: "kubernetes", clusterId: "c1", picks: [], name: "Shop",
+        importFrom: {
+          connection: { name: `Grafana · ${CLUSTER}`, reach: "cluster", cluster_id: "c1", namespace: "monitoring", service: "grafana", port: "80", scheme: "http", auth: { type: "none" } },
+          label: "Grafana", uids: [], chosen: true,
+        },
+      },
+    }));
+    const { api } = setUp();
+    await waitFor(() => expect(boxes()).toHaveLength(3));
+    expect(boxes().some((b) => b.checked)).toBe(false);
+    expect(button("Continue without importing")).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 600));
+    expect(previewsSent(api)).toHaveLength(0);
   });
 
   it("a draft restored on step 3 without a Grafana any more opens on step 4", async () => {

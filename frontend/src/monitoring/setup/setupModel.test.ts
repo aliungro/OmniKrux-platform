@@ -284,7 +284,7 @@ describe("setup import from Grafana (M6)", () => {
   });
 
   it("a kept import holds no secret and no preview, and asks for its sign-in again", () => {
-    beforeEachClear();
+    clearStorage();
     const importFrom: SetupImport = {
       connection: { name: "Main", reach: "url", url: "http://admin:pw-in-url@grafana.example.invalid:3000/g?x=1", auth: { type: "basic", username: "admin", password: "pw-secret", token: "tk-secret" } },
       label: "Main", uids: ["u1", "u2"], preview,
@@ -311,6 +311,6 @@ describe("setup import from Grafana (M6)", () => {
   });
 });
 
-function beforeEachClear() {
+function clearStorage() {
   localStorage.clear();
 }

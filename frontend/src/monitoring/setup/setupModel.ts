@@ -25,6 +25,8 @@ export type SetupImport = {
   preview: ImportPreviewOut | null;
   /** Restored without the connection's secret: it asks for its sign-in again instead of loading. */
   secretsDropped?: boolean;
+  /** The dashboards were chosen (none included): a restored list doesn't choose them all again. */
+  chosen?: boolean;
 };
 
 export type SetupPick = {

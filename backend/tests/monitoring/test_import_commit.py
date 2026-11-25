@@ -593,6 +593,46 @@ async def test_import_from_a_grafana_instance(monitoring_app, linked_project, fa
     assert [c["dashboards_imported"] for c in listed] == [2]
 
 
+async def test_a_preview_without_a_target_commits_into_a_new_project(
+    monitoring_app, fake_grafana_auth
+):
+    """Setup's path (Task 13): the dashboards are checked before the project exists (no target),
+    then the project is made with `/setup` and the import goes into it with the preview's titles
+    and digests, every data source on the project's first source of its type."""
+    http, _ = monitoring_app
+    one = with_last_reducer(load("gridpos_v22_inputs")) | {"uid": "a", "title": "Overview"}
+    two = load("gridpos_v39_objects") | {"uid": "b", "title": "Overview"}
+    fake_grafana_auth.dashboards = {"a": grafana_entry(one), "b": grafana_entry(two)}
+    connection = {
+        "reach": "url",
+        "url": fake_grafana_auth.url,
+        "auth": {"type": "bearer", "token": GRAFANA_TOKEN},
+    }
+    input = grafana_input(["a", "b"], connection=connection)
+    p = await preview(http, input)
+    assert [(d["suggested_title"], d["alerts"]) for d in p["dashboards"]] == [
+        ("Overview", 1),
+        ("Overview (2)", 0),
+    ]
+    project_id, source_id = await project_with_source(
+        http, "Fresh", "http://prometheus.example.invalid:9090"
+    )
+    mapping = [{"key": r["key"], "source_id": None} for r in p["sources"]]
+    result = await committed(
+        http, input, chosen(p), target=target("project", project_id), mapping=mapping
+    )
+    assert [d["title"] for d in result["dashboards"]] == ["Overview", "Overview (2)"]
+    assert {(d["owner_kind"], d["owner_id"]) for d in result["dashboards"]} == {
+        ("project", project_id)
+    }
+    # No source id kept: each query reads the project's first source of its type (its link).
+    for d in result["dashboards"]:
+        spec = (await http.get(f"{DASHBOARDS}/{d['id']}")).json()["spec"]
+        assert sources_of(spec) and all(s["id"] in (None, source_id) for s in sources_of(spec))
+    first = (await http.get(f"{DASHBOARDS}/{result['dashboards'][0]['id']}")).json()["spec"]
+    assert first["panels"][0]["alert"]["name"] == "p95 too slow"
+
+
 async def test_a_dashboard_grafana_cant_send_is_not_importable(
     monitoring_app, linked_project, fake_grafana_auth
 ):

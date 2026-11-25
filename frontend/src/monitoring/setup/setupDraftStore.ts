@@ -45,7 +45,7 @@ function store(): Storage | null {
 const filled = (v: unknown): boolean => typeof v === "string" && v !== "";
 
 /** An address without a sign-in, a query or a fragment (the server refuses those anyway). */
-function plainUrl(url: string): string {
+export function plainUrl(url: string): string {
   if (!/[@?#]/.test(url)) return url;
   try {
     const u = new URL(url);
@@ -133,6 +133,7 @@ function keepableImport(x: SetupImport): SetupImport | undefined {
   return {
     connection: kept.connection, label: x.label, uids: x.uids.slice(0, MAX_UIDS), preview: null,
     ...(kept.dropped || x.secretsDropped === true ? { secretsDropped: true } : {}),
+    ...(x.chosen === true ? { chosen: true } : {}),
   };
 }
 
@@ -269,7 +270,8 @@ function readPick(x: unknown): SetupPick | null {
 function readImport(x: unknown): SetupImport | undefined | null {
   if (x === undefined || x === null) return undefined;
   if (!isObj(x) || !str(x.label) || !Array.isArray(x.uids) || !x.uids.every(str) || x.uids.length > MAX_UIDS) return null;
-  if (!optional(x.secretsDropped, (y): y is boolean => typeof y === "boolean")) return null;
+  const bool = (y: unknown): y is boolean => typeof y === "boolean";
+  if (!optional(x.secretsDropped, bool) || !optional(x.chosen, bool)) return null;
   const c = x.connection;
   if (!isObj(c) || !isGrafanaReach(c.reach)) return null;
   for (const f of ["name", "url", "cluster_id", "namespace", "service", "port"] as const) if (!optional(c[f], strOrNull)) return null;
@@ -280,6 +282,7 @@ function readImport(x: unknown): SetupImport | undefined | null {
   return {
     connection: kept.connection, label: x.label, uids: x.uids as string[], preview: null,
     ...(kept.dropped || x.secretsDropped === true ? { secretsDropped: true } : {}),
+    ...(x.chosen === true ? { chosen: true } : {}),
   };
 }
 

@@ -635,6 +635,22 @@
   max-width: 640px;
 }
 
+.createdLedger {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--focus) 6%, transparent);
+}
+
+.createdNotice {
+  margin: 0;
+  color: var(--warn);
+  font-size: 13px;
+}
+
 .createdActions {
   display: flex;
   flex-wrap: wrap;

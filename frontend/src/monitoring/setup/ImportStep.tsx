@@ -6,13 +6,14 @@
 // saved here: the import runs after the project is created.
 import { useCallback, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { FoundTool } from "../api/types";
-import type { GrafanaIn } from "../transfer/api";
+import type { GrafanaIn, ImportPreviewOut } from "../transfer/api";
 import { newGrafanaDashboards, TransferRequestError } from "../transfer/api";
 import { GrafanaDashboardList } from "../transfer/GrafanaDashboardList";
 import { GrafanaForm } from "../transfer/GrafanaForm";
 import { dashboardsWord } from "../transfer/grafanaLabels";
 import { notImportableWords } from "../transfer/importModel";
 import { SkippedList } from "../transfer/SkippedList";
+import { plainUrl } from "./setupDraftStore";
 import { foundDetail, importable, importSkipped, type SetupImport } from "./setupModel";
 import s from "./SetupPage.module.css";
 import i from "./ImportStep.module.css";
@@ -53,18 +54,54 @@ export interface ImportStepProps {
   onSkip(): void;
 }
 
+/**
+ * What a preview says will be copied: the count and what won't be copied, each dashboard with its
+ * **Skipped (k)** list or why it can't be imported, and how its data sources are read. Shown before
+ * anything is saved, here and on the retry after setup.
+ */
+export function PreviewLedger({ preview: p }: { preview: ImportPreviewOut }) {
+  const ids = useId();
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  return (
+    <>
+      <p className={i.summary} aria-live="polite">{copyWords(importable(p).length, importSkipped(p))}</p>
+      <ul className={i.dashboards} aria-label="Dashboards to copy">
+        {p.dashboards.map((d) => {
+          const k = d.skipped.length;
+          const base = `${ids}-${d.key}`;
+          return (
+            <li key={d.key} className={i.dashboard} data-off={!d.importable || undefined}>
+              <span className={i.dashboardTitle}>{d.title}</span>
+              {!d.importable && <span className={i.cant}>{notImportableWords(d)}</span>}
+              {d.importable && k > 0 && (
+                <button type="button" className={i.skippedButton} aria-expanded={!!open[d.key]}
+                  aria-controls={open[d.key] ? `${base}-s` : undefined}
+                  onClick={() => setOpen((o) => ({ ...o, [d.key]: !o[d.key] }))}>
+                  Skipped ({k})
+                </button>
+              )}
+              {d.importable && k > 0 && open[d.key] && <div id={`${base}-s`} className={i.skipped}><SkippedList items={d.skipped} /></div>}
+            </li>
+          );
+        })}
+      </ul>
+      <p className={i.mapping}>{FIRST_SOURCE}</p>
+    </>
+  );
+}
+
 function isSignIn(err: unknown): err is TransferRequestError {
   return err instanceof TransferRequestError && err.code === "grafana" && err.message.endsWith(SIGN_IN_CLUSTER);
 }
 
 export function ImportStep({ heading, clusterName, tool, imp, connectionRev, defaultAll, check, onUids, onConnection, onCheckAgain, onSkip }: ImportStepProps) {
-  const ids = useId();
   const panel = useRef<HTMLDivElement>(null);
+  /** "Use its address instead", or "Enter it again": the button that opens the form. */
   const useAddress = useRef<HTMLButtonElement>(null);
   /** The Grafana's own words when it asked for a sign-in, for the connection it was asked with. */
   const [signIn, setSignIn] = useState<{ rev: number; message: string } | null>(null);
-  const [form, setForm] = useState(false);
-  const [open, setOpen] = useState<Record<string, boolean>>({});
+  // Restored without its secret, the form for it opens at once.
+  const [form, setForm] = useState(imp.secretsDropped === true);
   const asking = signIn !== null && signIn.rev === connectionRev ? signIn.message : null;
   const enterAgain = imp.secretsDropped === true;
 
@@ -87,11 +124,9 @@ export function ImportStep({ heading, clusterName, tool, imp, connectionRev, def
     setSignIn(null);
     onConnection(body);
   };
-  const closeForm = () => {
-    setForm(false);
-    // Restored without its secret, nothing else can load: closing the form skips the import.
-    if (enterAgain) onSkip();
-  };
+  // Closed without a connection: back to the choice that opened it (for a restored one, its note
+  // with "Enter it again" and "Skip import"); the import is never skipped by Esc.
+  const closeForm = () => setForm(false);
   // Back from the form: the keyboard returns to the button that opened it.
   const formWasOpen = useRef(false);
   useLayoutEffect(() => {
@@ -99,8 +134,18 @@ export function ImportStep({ heading, clusterName, tool, imp, connectionRev, def
     formWasOpen.current = form;
   }, [form, heading]);
 
-  const where = connection.reach === "url" ? (connection.url ?? "") : tool ? foundDetail(tool) : `${connection.namespace ?? ""}/${connection.service ?? ""}`;
+  // An address is shown without a sign-in, a query or a fragment in it.
+  const where = connection.reach === "url" ? plainUrl(connection.url ?? "") : tool ? foundDetail(tool) : `${connection.namespace ?? ""}/${connection.service ?? ""}`;
   const p = imp.preview;
+  const choice = (words: string, label: string) => (
+    <div className={i.signIn}>
+      <p role="alert" className={i.signInWords}>{words}</p>
+      <div className={i.actions}>
+        <button ref={useAddress} type="button" className={s.secondary} onClick={() => setForm(true)}>{label}</button>
+        <button type="button" className={s.quiet} onClick={onSkip}>Skip import</button>
+      </div>
+    </div>
+  );
 
   return (
     <>
@@ -115,21 +160,15 @@ export function ImportStep({ heading, clusterName, tool, imp, connectionRev, def
           </div>
         </div>
 
-        {form || enterAgain ? (
+        {form ? (
           <div className={i.form}>
             {enterAgain && <p className={i.note}>{SIGN_IN_AGAIN}</p>}
             <GrafanaForm mode="collect" closeOnEscape preset={enterAgain ? connection : { name: connection.name, reach: "url" }}
               onCollect={collect} onCancel={closeForm} />
           </div>
-        ) : asking ? (
-          <div className={i.signIn}>
-            <p role="alert" className={i.signInWords}>{asking}</p>
-            <div className={i.actions}>
-              <button ref={useAddress} type="button" className={s.secondary} onClick={() => setForm(true)}>Use its address instead</button>
-              <button type="button" className={s.quiet} onClick={onSkip}>Skip import</button>
-            </div>
-          </div>
-        ) : (
+        ) : enterAgain ? choice(SIGN_IN_AGAIN, "Enter it again")
+          : asking ? choice(asking, "Use its address instead")
+          : (
           <GrafanaDashboardList load={load} loadKey={String(connectionRev)} selected={selected} defaultAll={defaultAll}
             name="Grafana" onChange={(next) => onUids([...next])} />
         )}
@@ -143,32 +182,7 @@ export function ImportStep({ heading, clusterName, tool, imp, connectionRev, def
                 <button type="button" className={s.secondary} onClick={onCheckAgain}>Check again</button>
               </div>
             )}
-            {check.state === "idle" && p && (
-              <>
-                <p className={i.summary} aria-live="polite">{copyWords(importable(p).length, importSkipped(p))}</p>
-                <ul className={i.dashboards} aria-label="Dashboards to copy">
-                  {p.dashboards.map((d) => {
-                    const k = d.skipped.length;
-                    const base = `${ids}-${d.key}`;
-                    return (
-                      <li key={d.key} className={i.dashboard} data-off={!d.importable || undefined}>
-                        <span className={i.dashboardTitle}>{d.title}</span>
-                        {!d.importable && <span className={i.cant}>{notImportableWords(d)}</span>}
-                        {d.importable && k > 0 && (
-                          <button type="button" className={i.skippedButton} aria-expanded={!!open[d.key]}
-                            aria-controls={open[d.key] ? `${base}-s` : undefined}
-                            onClick={() => setOpen((o) => ({ ...o, [d.key]: !o[d.key] }))}>
-                            Skipped ({k})
-                          </button>
-                        )}
-                        {d.importable && k > 0 && open[d.key] && <div id={`${base}-s`} className={i.skipped}><SkippedList items={d.skipped} /></div>}
-                      </li>
-                    );
-                  })}
-                </ul>
-                <p className={i.mapping}>{FIRST_SOURCE}</p>
-              </>
-            )}
+            {check.state === "idle" && p && <PreviewLedger preview={p} />}
           </div>
         )}
       </div>

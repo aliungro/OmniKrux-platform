@@ -17,7 +17,8 @@ import { SourceForm } from "../sources/SourceForm";
 import { autoTypeName, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
 import { commitImport, previewImport, TransferRequestError, type GrafanaIn, type ImportResultOut } from "../transfer/api";
 import { dashboardsWord } from "../transfer/grafanaLabels";
-import { CHECKING, ImportStep, skippedWords, type ImportCheck } from "./ImportStep";
+import { CHANGED } from "../transfer/importModel";
+import { CHECKING, ImportStep, PreviewLedger, skippedWords, type ImportCheck } from "./ImportStep";
 import { importFailedWords, noteImportFailed } from "./importNotice";
 import { readSetupDraft, removeSetupDraft, SECRET_NOT_KEPT, writeSetupDraft } from "./setupDraftStore";
 import {
@@ -500,6 +501,8 @@ interface Created {
   project: ProjectOut;
   message: string;
   retrying: boolean;
+  /** The import changed since it was checked: what converts was checked again and is shown; the next try imports it. */
+  rechecked?: boolean;
 }
 
 function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: MonitoringPageProps) {
@@ -575,34 +578,49 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
 
   // --- Step 3: the Grafana found in the cluster --------------------------------------------------
   const found = discovery.data?.cluster_id === draft.clusterId ? discovery.data : undefined;
-  const importStep = hasImportStep(draft, found);
+  const grafanaHere = hasImportStep(draft, found);
+  // Once there is an import (step 3 was entered, or a draft brought one back), the step stays: a
+  // later look inside the cluster doesn't take it, or what was typed into it, away.
+  const importStep = onCluster && (grafanaHere || draft.importFrom != null);
   /** Step 3 is known not to exist: another kind, or the cluster's discovery found no reachable Grafana. */
-  const noImport = draft.kind !== null && (draft.kind !== "kubernetes" || draft.clusterId === null || (found !== undefined && !importStep));
+  const noImport = draft.kind !== null && (!onCluster || (found !== undefined && !importStep));
   const grafanaTool = found?.found.find((t) => t.type === "grafana" && t.state === "reachable");
   /** Changes with every new connection (its dashboards load again). */
   const [connectionRev, setConnectionRev] = useState(0);
   /** The connection whose dashboards were chosen at least once: all start chosen only before that. */
-  const [chosenRev, setChosenRev] = useState<number | null>(() => (restored?.draft.importFrom?.uids.length ? 0 : null));
+  const [chosenRev, setChosenRev] = useState<number | null>(() => (restored?.draft.importFrom?.chosen || restored?.draft.importFrom?.uids.length ? 0 : null));
   const [check, setCheck] = useState<ImportCheck>({ state: "idle" });
   const [checkRun, setCheckRun] = useState(0);
+  /** A restored import was checked against this cluster's discovery (F28), once. */
+  const [restoreSettled, setRestoreSettled] = useState(() => !restored?.draft.importFrom && restored?.draft.step !== 3);
+
+  // Restored, an import through the cluster whose Grafana discovery no longer reaches is dropped
+  // (on step 3, the page goes to step 4 with nothing to import). One by its address stays: it
+  // doesn't depend on the cluster. Only once, for the draft that came back.
+  useEffect(() => {
+    if (restoreSettled || (!found && !discovery.isError)) return;
+    setRestoreSettled(true);
+    if (grafanaHere) return;
+    setDraftState((d) => (d.importFrom?.connection.reach === "url" ? d : { ...d, importFrom: null, step: d.step === 3 ? 4 : d.step }));
+  }, [restoreSettled, found, grafanaHere, discovery.isError]);
 
   // Arriving on step 3, the Grafana found in the cluster is the connection (one entered by its
-  // address stays). Restored on step 3 with no reachable Grafana any more: step 4, nothing to import.
+  // address stays, and so does one already there when a later look no longer finds it).
   useEffect(() => {
-    if (draft.step !== 3 || !found) return;
+    if (draft.step !== 3 || !found || !restoreSettled) return;
     const g = grafanaFromDiscovery(found);
-    if (!g || !importStep) {
-      setDraftState((d) => (d.step === 3 ? { ...d, step: 4, importFrom: null } : d));
-      return;
-    }
     setDraftState((d) => {
       const now = d.importFrom;
+      if (!g) return now ? d : { ...d, step: 4 };
       if (now && (now.connection.reach === "url" || sameClusterGrafana(now.connection, g))) return d;
       return { ...d, importFrom: { connection: g, label: g.name ?? "Grafana", uids: [], preview: null } };
     });
-  }, [draft.step, found, importStep]);
+  }, [draft.step, found, restoreSettled]);
 
-  const imp = importStep ? (draft.importFrom ?? null) : null;
+  /** A restored import waits for discovery before it is used (an address doesn't). */
+  const usable = restoreSettled || draft.importFrom?.connection.reach === "url";
+  const restoring = !usable && (draft.importFrom?.uids.length ?? 0) > 0;
+  const imp = importStep && usable ? (draft.importFrom ?? null) : null;
   /** Dashboards are chosen to import, through a connection that can load them. */
   const importChosen = imp !== null && !imp.secretsDropped && imp.uids.length > 0;
   const previewKey = importChosen && imp.preview === null ? `${connectionRev}|${imp.uids.join(",")}` : null;
@@ -641,8 +659,9 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     setChosenRev(connectionRev);
     setDraftState((d) => {
       const i = d.importFrom;
-      if (!i || (i.uids.length === uids.length && i.uids.every((u, n) => u === uids[n]))) return d;
-      return { ...d, importFrom: { ...i, uids, preview: null } };
+      if (!i) return d;
+      if (i.uids.length === uids.length && i.uids.every((u, n) => u === uids[n])) return i.chosen ? d : { ...d, importFrom: { ...i, chosen: true } };
+      return { ...d, importFrom: { ...i, uids, preview: null, chosen: true } };
     });
   };
   const onConnection = (connection: GrafanaIn) => {
@@ -651,7 +670,9 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     const kept = draft.importFrom?.secretsDropped ? draft.importFrom.uids : [];
     setConnectionRev(rev);
     if (kept.length > 0) setChosenRev(rev);
-    setDraftState((d) => ({ ...d, importFrom: { connection, label: connection.name ?? "Grafana", uids: kept, preview: null } }));
+    setDraftState((d) => ({
+      ...d, importFrom: { connection, label: connection.name ?? "Grafana", uids: kept, preview: null, ...(kept.length > 0 ? { chosen: true } : {}) },
+    }));
   };
   const skipImport = () => {
     setDraftState((d) => (d.importFrom ? { ...d, importFrom: { ...d.importFrom, uids: [], preview: null } } : d));
@@ -660,9 +681,9 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
 
   /** What the import does: what step 4 lists, and whether Create waits for it. */
   const importReady = importChosen && imp.preview !== null && importable(imp.preview).length > 0;
-  const importWait: string | null = !importChosen || imp.preview !== null ? null
+  const importWait: string | null = restoring ? CHECKING : !importChosen || imp.preview !== null ? null
     : check.state === "failed" ? CHECK_AGAIN : CHECKING;
-  const importLine = !importChosen ? "Import: none"
+  const importLine = restoring ? `Import: ${CHECKING}` : !importChosen ? "Import: none"
     : imp.preview === null ? (check.state === "failed" ? `Import: ${check.message}` : `Import: ${CHECKING}`)
     : importable(imp.preview).length === 0 ? "Import: none"
     : `Import: ${dashboardsWord(importable(imp.preview).length)} from Grafana · ${skippedWords(importSkipped(imp.preview))}`;
@@ -811,18 +832,18 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
       out = await commitImport(body);
     } catch (err) {
       if (!(err instanceof TransferRequestError && err.code === "changed")) return fail(err);
+      // Changed since it was checked: check it again for the project and show what converts now.
+      // Nothing is imported until the next try, so nothing new is skipped unseen.
       try {
         const asked = latest.current.draft.importFrom;
         if (!asked) return fail(new Error(NONE_CONVERTS));
         const p = await previewImport({ input: { kind: "grafana", connection: asked.connection, uids: [...asked.uids] }, target: { kind: "project", id: project.id } });
-        const next: SetupDraft = { ...latest.current.draft, importFrom: { ...asked, preview: p } };
-        setDraftState(next);
-        const body = importCommitBody(next, project.id);
-        if (!body) return fail(new Error(NONE_CONVERTS));
-        out = await commitImport(body);
+        setDraftState((d) => (d.importFrom === asked ? { ...d, importFrom: { ...asked, preview: p } } : d));
+        setCreated({ project, message: failure(err, "try again"), retrying: false, rechecked: true });
       } catch (again) {
-        return fail(again);
+        fail(again);
       }
+      return;
     }
     await invalidateMonitoring(client);
     nav.navigate({ page: "project", id: project.id }, "replace");
@@ -904,8 +925,8 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
             <>
               {/* One heading whatever shows under it: the keyboard stays on it while the step fills in. */}
               <h2 ref={heading} tabIndex={-1} className={s.stepTitle}>Import from Grafana</h2>
-              {importStep && draft.importFrom ? (
-                <ImportStep heading={heading} clusterName={clusterName} tool={grafanaTool} imp={draft.importFrom} connectionRev={connectionRev}
+              {imp ? (
+                <ImportStep heading={heading} clusterName={clusterName} tool={grafanaTool} imp={imp} connectionRev={connectionRev}
                   defaultAll={chosenRev !== connectionRev} check={check} onUids={onUids} onConnection={onConnection}
                   onCheckAgain={() => setCheckRun((n) => n + 1)} onSkip={skipImport} />
               ) : discovery.isError && !found ? (
@@ -925,6 +946,12 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
             <div className={s.created}>
               <h2 ref={heading} tabIndex={-1} className={s.stepTitle}>{created.project.name}</h2>
               <p className={s.problem} role="alert">{importFailedWords(created.message)}</p>
+              {created.rechecked && draft.importFrom?.preview && (
+                <div className={s.createdLedger}>
+                  <p className={s.createdNotice}>{CHANGED}</p>
+                  <PreviewLedger preview={draft.importFrom.preview} />
+                </div>
+              )}
               <div className={s.createdActions}>
                 {/* aria-disabled, not disabled: the button keeps the keyboard while it retries. */}
                 <button ref={tryAgain} type="button" className={s.primary} aria-disabled={created.retrying || undefined} onClick={() => void retryImport()}>

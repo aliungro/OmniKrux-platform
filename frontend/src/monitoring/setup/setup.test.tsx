@@ -733,12 +733,12 @@ describe("Setup draft in this browser", () => {
       expect("new" in hand[2].source && hand[2].source.new.headers).toEqual([{ name: "X-Scope-OrgID" }]);
       expect(kept.draft.importFrom).toEqual({
         connection: { reach: "url", name: `Grafana · ${CLUSTER}`, url: "http://grafana.example.invalid:3000", auth: { type: "bearer" } },
-        label: `Grafana · ${CLUSTER}`, uids: ["u1"], preview: null, secretsDropped: true,
+        label: `Grafana · ${CLUSTER}`, uids: ["u1"], preview: null, secretsDropped: true, chosen: true,
       });
     } finally {
       setItem.mockRestore();
     }
-  });
+  }, 15_000); // M6 (F26) made it longer: a Grafana sign-in typed on step 3.
 
   it("a restored pick without its secret isn't used", async () => {
     const user = userEvent.setup();
