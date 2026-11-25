@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import type { GroupOut } from "../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
-import { gate, intercept, linkedProject, panel, seedDashboard, serverFailure, spec, watchCalls } from "../../test/dashboardSeeds";
+import { gate, intercept, linkedProject, linkTo, panel, seedDashboard, serverFailure, spec, watchCalls } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import { editSessions } from "../editor/useDashboardEditor";
 import type { DashboardSpec } from "../schema";
@@ -151,5 +151,42 @@ describe("Empty panels say why", () => {
     });
     await open();
     expect(await within(frame("p-1")).findByText(/kube-state-metrics/)).toBeTruthy();
+  });
+});
+
+describe("A log query in a chart panel", () => {
+  const LOGS = "{job=\"omnikrux-live-check\"}";
+  const SAYS = "This is a log query: it lists lines, and a chart can't draw lines.";
+  const lines = { result_type: "streams" as const, streams: [{ labels: { job: "omnikrux-live-check" }, entries: [["1700000000000000000", "hello"]] as [string, string][] }] };
+  const logsDoc = () => {
+    const p = panel("p-1", "Lines", LOGS, { x: 0, y: 0, w: 12, h: 8 });
+    p.queries[0].source = { type: "loki", id: null };
+    return spec("Logs", [p]);
+  };
+
+  it("the grid tile says a chart can't draw a log query", async () => {
+    const api = shop({
+      projects: [{ ...linkedProject("p1", "Shop"), links: [linkTo("l1", "loki")] }],
+      dashboards: { d1: seedDashboard("d1", SHOP, logsDoc()) },
+      queryAnswers: { [LOGS]: lines },
+    });
+    const calls = watchCalls("/query/why-empty");
+    await open();
+    expect(await within(frame("p-1")).findByText(SAYS)).toBeTruthy();
+    expect(within(frame("p-1")).queryByText(GENERIC)).toBeNull();
+    await calls.settled();
+    expect(asked(api)).toHaveLength(0);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("an empty answer says it too, and asks nothing", async () => {
+    const api = shop({
+      projects: [{ ...linkedProject("p1", "Shop"), links: [linkTo("l1", "loki")] }],
+      dashboards: { d1: seedDashboard("d1", SHOP, logsDoc()) },
+      queryAnswers: { [LOGS]: { result_type: "streams" as const, streams: [] } },
+    });
+    await open();
+    expect(await within(frame("p-1")).findByText(SAYS)).toBeTruthy();
+    expect(asked(api)).toHaveLength(0);
   });
 });

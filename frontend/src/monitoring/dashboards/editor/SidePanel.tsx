@@ -146,7 +146,8 @@ export function SidePanel({
       <div ref={body} id={`${base}-panel`} role="tabpanel" aria-labelledby={`${base}-tab-${tab}`}
         tabIndex={tab === "alert" && !ALERT_PANEL_TYPES.includes(panel.type) ? 0 : undefined} className={s.body}>
         {tab === "query" && (
-          <QueryTab panel={panel} update={update} owner={owner} ownerKind={ownerKind} data={panelData} live={live} />
+          <QueryTab panel={panel} update={update} owner={owner} ownerKind={ownerKind} data={panelData} live={live}
+            jsonPending={state.jsonText !== null} />
         )}
         {tab === "chart" && <ChartTab panel={panel} update={update} onRunNow={live?.flush} />}
         {tab === "options" && <OptionsTab panel={panel} update={update} />}

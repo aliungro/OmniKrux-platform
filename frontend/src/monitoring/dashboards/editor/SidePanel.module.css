@@ -397,6 +397,38 @@
   font-size: 12px;
 }
 
+.warningText,
+.warningRefused {
+  margin: 0;
+}
+
+.warningRefused {
+  margin-top: 6px;
+  color: var(--bad);
+}
+
+.warningAction {
+  margin-top: 6px;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.warningAction:hover {
+  border-color: var(--warn);
+}
+
+.warningAction:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .note {
   margin: -4px 0 0;
   color: var(--ink-3);

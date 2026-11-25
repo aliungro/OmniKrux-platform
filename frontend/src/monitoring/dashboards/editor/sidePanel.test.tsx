@@ -15,6 +15,21 @@ vi.mock("../../charts", async () => {
   return { default: ({ data }: { data: { series: unknown[] } }) => createElement("span", null, `chart ${data.series.length}`) };
 });
 
+// CodeMirror does not run in jsdom: the JSON editor is a textarea.
+vi.mock("../../../features/actions/lazyCodeMirror", () => ({
+  loadCodeMirror: () => Promise.resolve({
+    mergeView: () => ({ destroy: () => {} }),
+    editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string) => {
+      const area = document.createElement("textarea");
+      area.value = doc;
+      area.setAttribute("aria-label", label);
+      area.addEventListener("input", () => onChange(area.value));
+      parent.append(area);
+      return { focus: () => area.focus(), destroy: () => area.remove() };
+    },
+  }),
+}));
+
 beforeEach(() => { localStorage.clear(); editSessions.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -91,7 +106,7 @@ describe("The panel side panel", () => {
     // A project dashboard: its first source of each type that exists, then each linked source.
     const source = within(aside).getByRole("combobox", { name: "Source" });
     expect(within(source).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "First Prometheus-compatible source (s1 name)",
+      "Default: s1 name",
       "s1 name",
     ]);
     expect(within(aside).getByRole("textbox", { name: "Query A" })).toBeTruthy();
@@ -131,7 +146,7 @@ describe("The panel side panel", () => {
   it("the Query tab never offers an Alertmanager", () => {
     const project = { ...linkedProject("p1", "Shop", "s1"), links: [linkTo("s1"), linkTo("am", "alertmanager")] };
     const choices = sourceChoices({ kind: "project", project }, "project", { type: "prometheus", id: null });
-    expect(choices.map((c) => c.label)).toEqual(["First Prometheus-compatible source (s1 name)", "s1 name"]);
+    expect(choices.map((c) => c.label)).toEqual(["Default: s1 name", "s1 name"]);
   });
 
   it("group source choices are per project", async () => {
@@ -274,5 +289,100 @@ describe("The panel side panel", () => {
     expect(panel.textContent).toBe("This panel has no alert.Add an alert");
     expect(within(panel).getAllByRole("button").map((b) => b.textContent)).toEqual(["Add an alert"]);
     expect(document.activeElement).toBe(tabNamed("Alert"));
+  });
+});
+
+describe("A log query in a chart panel", () => {
+  const LOGS = "{job=\"omnikrux-live-check\"}";
+  const RATE = "sum(count_over_time({job=\"x\"}[5m]))";
+  const WARNING = "This is a log query: it lists lines, and a chart can't draw lines.";
+  const lines = { result_type: "streams" as const, streams: [{ labels: { job: "omnikrux-live-check" }, entries: [["1700000000000000000", "hello"]] as [string, string][] }] };
+  const lokiPanel = (id: string, title: string, expr: string, x: number) => {
+    const p = panel(id, title, expr, { x, y: 0, w: 12, h: 8 });
+    p.queries[0].source = { type: "loki", id: null };
+    return p;
+  };
+
+  function lokiShop(panels: PanelSpec[]): FakeMonitoringApi {
+    return installFakeMonitoringApi({
+      projects: [{ ...linkedProject("p1", "Shop"), links: [linkTo("l1", "loki")] }],
+      // A chart beside them, so the page has drawn something (a log panel in a chart says a note instead).
+      dashboards: { d1: seedDashboard("d1", SHOP, spec("Logs", [...panels, lokiPanel("p-9", "Rate", RATE, 12)])) },
+      queryAnswers: { [LOGS]: lines, [RATE]: ok },
+    }, async () => json([]));
+  }
+  const note = () => within(settings()).queryByRole("note");
+
+  it("a log query in a chart panel warns and offers a logs panel", async () => {
+    const { user } = await openSettings(lokiShop([lokiPanel("p-1", "Lines", LOGS, 0)]));
+    const warning = within(settings()).getByRole("note");
+    expect(warning.textContent).toContain(WARNING);
+    expect(within(warning).getByRole("button", { name: "Switch to a logs panel" })).toBeTruthy();
+    // Above the queries; a log query has no legend, but can still be hidden.
+    expect(warning.compareDocumentPosition(within(settings()).getByRole("textbox", { name: "Query A" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(settings()).queryByRole("textbox", { name: "Query A legend" })).toBeNull();
+    expect(within(settings()).getByRole("checkbox", { name: "Hide query A" })).toBeTruthy();
+    void user;
+  });
+
+  it("Switch to a logs panel keeps the query and moves the keyboard to it", async () => {
+    const { user } = await openSettings(lokiShop([lokiPanel("p-1", "Lines", LOGS, 0)]));
+    await user.click(within(settings()).getByRole("button", { name: "Switch to a logs panel" }));
+    expect(draftPanel("p-1").type).toBe("logs");
+    expect(draftPanel("p-1").queries.map((q) => q.expr)).toEqual([LOGS]);
+    expect(note()).toBeNull();
+    expect(document.activeElement).toBe(within(settings()).getByRole("textbox", { name: "Query A" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the switch keeps the log query when it is not the first", async () => {
+    const mixed = lokiPanel("p-1", "Mixed", "sum(count_over_time({job=\"x\"}[5m]))", 0);
+    mixed.queries.push({ ref: "B", source: { type: "loki", id: null }, expr: LOGS, legend: "", hidden: false });
+    const { user } = await openSettings(lokiShop([mixed]));
+    await user.click(within(settings()).getByRole("button", { name: "Switch to a logs panel" }));
+    expect(draftPanel("p-1").queries.map((q) => q.expr)).toEqual([LOGS]);
+    expect(document.activeElement).toBe(within(settings()).getByRole("textbox", { name: /^Query/ }));
+  });
+
+  it("the switch is refused while the JSON doesn't apply", async () => {
+    const { user } = await openSettings(lokiShop([lokiPanel("p-1", "Lines", LOGS, 0)]));
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const area = await screen.findByRole("textbox", { name: "Dashboard JSON" }) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: "{ nope" } });
+    await waitFor(() => expect(screen.getByTestId("json-state").textContent).toMatch(/^✗/));
+    // The settings close behind the JSON tab; back on the dashboard they open again, the JSON still unapplied.
+    await user.click(screen.getByRole("tab", { name: "Dashboard" }));
+    tile("Lines").focus();
+    await user.keyboard("{Enter}");
+    const button = within(settings()).getByRole("button", { name: "Switch to a logs panel" });
+    await user.click(button);
+    expect(within(settings()).getByRole("alert").textContent).toBe("Fix the JSON first, or discard it.");
+    expect(draftPanel("p-1").type).toBe("timeseries");
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("a LogQL metric query in a chart panel gets no warning", async () => {
+    await openSettings(lokiShop([lokiPanel("p-1", "Rate", "sum(count_over_time({job=\"x\"}[5m]))", 0)]));
+    expect(note()).toBeNull();
+    expect(within(settings()).getByRole("textbox", { name: "Query A legend" })).toBeTruthy();
+  });
+
+  it("the default source shows its own name", async () => {
+    const api = installFakeMonitoringApi({
+      projects: [{ ...linkedProject("p1", "Shop"), links: [{ ...linkTo("l1", "loki"), source_name: "Loki · kind-omnikrux-dev" }] }],
+      dashboards: { d1: seedDashboard("d1", SHOP, spec("Logs", [lokiPanel("p-1", "Lines", LOGS, 0), lokiPanel("p-9", "Rate", RATE, 12)])) },
+      queryAnswers: { [LOGS]: lines, [RATE]: ok },
+    }, async () => json([]));
+    await openSettings(api);
+    const options = within(within(settings()).getByRole("combobox", { name: "Source" })).getAllByRole("option").map((o) => o.textContent);
+    expect(options[0]).toBe("Default: Loki · kind-omnikrux-dev");
+  });
+
+  it("a project with no source of that type says none is linked", () => {
+    const project = linkedProject("p1", "Shop", "s1");
+    expect(sourceChoices({ kind: "project", project }, "project", { type: "loki", id: null }).map((c) => c.label))
+      .toEqual(["Default: s1 name", "s1 name", "Default Loki source (none linked)"]);
+    expect(sourceChoices({ kind: "project", project: { ...project, links: [] } }, "project", { type: "prometheus", id: null })[0].label)
+      .toBe("Default Prometheus-compatible source (none linked)");
   });
 });
