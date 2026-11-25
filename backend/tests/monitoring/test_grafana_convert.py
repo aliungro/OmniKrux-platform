@@ -485,3 +485,38 @@ def test_singlestat_shown_as_gauge_keeps_its_string_thresholds():
     assert ("Threshold 8", "Its colour blue isn't good, warning or bad.") in {
         (s.what, s.reason) for s in c.skipped
     }
+
+
+def test_rows_nested_too_deep_are_said():
+    deepest = {"type": "row", "panels": [stat_panel(2, gridPos={"x": 0, "y": 5, "w": 4, "h": 2})]}
+    row = deepest
+    for _ in range(51):
+        row = {"type": "row", "panels": [row]}
+    top = stat_panel(1, gridPos={"x": 0, "y": 0, "w": 4, "h": 2})
+    c = convert_grafana({"panels": [top, row]}, GrafanaContext(), key="d-1")
+    assert [p["title"] for p in c.doc["panels"]] == ["S1"]
+    assert {
+        "where": "Dashboard",
+        "what": "Panels in rows nested more than 50 deep",
+        "reason": "OmniKrux reads rows up to 50 deep, so they weren't copied.",
+    } in [vars(s) for s in c.skipped]
+    shallow = convert_grafana({"panels": [top, deepest]}, GrafanaContext(), key="d-1")
+    assert not any("nested" in s.what for s in shallow.skipped)
+
+
+def test_long_descriptions_are_cut_and_said():
+    panel = stat_panel(1, gridPos={"x": 0, "y": 0, "w": 4, "h": 2}) | {"description": "p" * 2500}
+    short = stat_panel(2, gridPos={"x": 4, "y": 0, "w": 4, "h": 2}) | {"description": "ok"}
+    c = convert_grafana(
+        {"title": "Long", "description": "d" * 2001, "panels": [panel, short]},
+        GrafanaContext(),
+        key="d-1",
+    )
+    assert len(c.doc["description"]) == 2000
+    assert [len(p["description"]) for p in c.doc["panels"]] == [2000, 2]
+    items = [(s.where, s.what, s.reason) for s in c.skipped]
+    assert ("Dashboard", "Description", "Cut to 2000 characters.") in items
+    assert ('Panel "S1"', "Description", "Cut to 2000 characters.") in items
+    assert not any(s.where == 'Panel "S2"' and s.what == "Description" for s in c.skipped)
+    exact = convert_grafana({"description": "d" * 2000}, GrafanaContext(), key="d-1")
+    assert not any(s.what == "Description" for s in exact.skipped)

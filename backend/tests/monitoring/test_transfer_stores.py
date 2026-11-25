@@ -455,3 +455,16 @@ async def test_migration_up_and_down(tmp_path):
     async with engine.connect() as conn:
         assert {"monitoring_grafana", "monitoring_dashboard_origins"} <= await conn.run_sync(tables)
     await engine.dispose()
+
+
+async def test_find_target_takes_only_a_connection_that_fits(stores):
+    first = await stores.grafana.create(new_grafana(url="http://grafana.example:3000"))
+    second = await stores.grafana.create(new_grafana(url="http://grafana.example:3000/"))
+    find = stores.grafana.find_target
+    url = "http://grafana.example:3000"
+    assert (await find(url, None)).id == first.id
+    assert (await find(url, None, fits=lambda g: g.id == second.id)).id == second.id
+    assert await find(url, None, fits=lambda g: False) is None
+    in_cluster = await stores.grafana.create(new_grafana(reach="cluster", cluster=CLUSTER))
+    assert (await find(None, CLUSTER, fits=lambda g: True)).id == in_cluster.id
+    assert await find(None, CLUSTER, fits=lambda g: False) is None

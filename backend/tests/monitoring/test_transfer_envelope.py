@@ -139,6 +139,16 @@ def test_newer_format_is_refused_in_words():
     assert "export format 2" in NEWER_FORMAT.format(n=2)
 
 
+TYPE_COPY = (
+    "The file's source \"{label}\" has a type OmniKrux doesn't know. "
+    'Use "prometheus", "loki" or "alertmanager".'
+)
+KEY_COPY = 'The file\'s source "{label}" needs a key of its own.'
+CLUSTER_COPY = (
+    "The file's source \"{label}\" needs its cluster's name, namespace, service, port and scheme."
+)
+
+
 def test_envelope_problems_in_words():
     value = project_file()
     value["kind"] = "team"
@@ -151,8 +161,8 @@ def test_envelope_problems_in_words():
     assert e.value.problems == (
         Problem("kind", 'Use "dashboard", "project" or "group".'),
         Problem("owner.kind", 'Use "project" or "group".'),
-        Problem("sources[0].type", 'Use "prometheus" or "loki".'),
-        Problem("sources[1].key", "Each source needs its own key."),
+        Problem("sources[0].type", TYPE_COPY.format(label="Prometheus")),
+        Problem("sources[1].key", KEY_COPY.format(label="Loki")),
         Problem("dashboards", DASHBOARDS_COPY),
     )
     value = project_file()
@@ -164,7 +174,23 @@ def test_envelope_problems_in_words():
     del value["sources"][0]["key"]
     with pytest.raises(TransferError) as e:
         read_envelope(value)
-    assert e.value.problems[0] == Problem("sources[0].key", "Each source needs its own key.")
+    assert e.value.problems[0] == Problem("sources[0].key", KEY_COPY.format(label="Prometheus"))
+    # A problem names the entry by its name, else its key, else its place, and says it is the
+    # file's.
+    value = project_file()
+    value["sources"][0]["name"] = ""
+    value["sources"][0]["type"] = "tempo"
+    value["sources"][1] = {"type": "loki", "cluster": {"name": 3}}
+    value["sources"].append("odd")
+    with pytest.raises(TransferError) as e:
+        read_envelope(value)
+    assert e.value.problems == (
+        Problem("sources[0].type", TYPE_COPY.format(label="src-1")),
+        Problem("sources[1].key", KEY_COPY.format(label="number 2")),
+        Problem("sources[1].cluster", CLUSTER_COPY.format(label="number 2")),
+        Problem("sources[2]", "The file's source number 3 isn't an object. Export the file again."),
+    )
+    assert e.value.message == TYPE_COPY.format(label="src-1")
 
 
 def test_a_broken_dashboard_does_not_break_the_others():
@@ -357,7 +383,33 @@ def test_odd_types_in_a_file_become_words_not_a_crash():
     value["sources"][0]["key"] = ["x"]
     with pytest.raises(TransferError) as e:
         read_envelope(value)
-    assert e.value.problems == (Problem("sources[0].key", "Each source needs its own key."),)
+    assert e.value.problems == (Problem("sources[0].key", KEY_COPY.format(label="Prometheus")),)
+
+
+def test_an_alertmanager_entry_is_read_but_no_query_reads_it():
+    """An export lists every source the project links, an Alertmanager too (never queryable):
+    it is read, and a query naming it is treated like one naming a source the file doesn't
+    list."""
+    value = project_file()
+    value["sources"].append(
+        {
+            "key": "src-3",
+            "type": "alertmanager",
+            "name": "Alertmanager",
+            "reach": "url",
+            "url": "http://alertmanager.example.invalid:9093",
+            "cluster": None,
+            "pathPrefix": "",
+            "auth": "none",
+            "headerNames": [],
+        }
+    )
+    value["dashboards"][0]["dashboard"]["panels"][0]["queries"][0]["source"]["id"] = "src-3"
+    read = read_envelope(value)
+    assert [(s.key, s.type) for s in read.sources][-1] == ("src-3", "alertmanager")
+    first = read.dashboards[0]
+    assert first.doc["panels"][0]["queries"][0]["source"]["id"] is None
+    assert [(s.where, s.what) for s in read.skipped_by_key["d-1"]] == [('Panel "Rate"', "Query A")]
 
 
 def test_no_auth_type_leaks_a_secret():

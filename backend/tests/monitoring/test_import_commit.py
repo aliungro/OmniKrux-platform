@@ -949,3 +949,141 @@ async def test_a_contact_point_added_since_the_preview_is_refused(
     r = await commit(http, text, chosen(p), target=to)
     assert refusal(r)[:2] == (409, "changed")
     assert (await http.get(DASHBOARDS)).json() == []
+
+
+# --- a project export holding an Alertmanager link (walkthrough W1) -------------------------------
+
+
+async def project_export_with_alertmanager(http, shop) -> dict:
+    """Shop's project export, with an Alertmanager source linked to Shop and one dashboard."""
+    am = await http.post(
+        "/api/monitoring/sources",
+        json={
+            "type": "alertmanager",
+            "reach": "url",
+            "url": "http://alertmanager.example.invalid:9093",
+            "name": "Shop alerts",
+        },
+    )
+    assert am.status_code == 201, am.text
+    link = await http.put(
+        f"/api/monitoring/projects/{shop.project_id}/sources/{am.json()['id']}",
+        json={"filter": 'cluster="a"'},
+    )
+    assert link.status_code == 200, link.text
+    r = await http.post(
+        DASHBOARDS,
+        json={
+            "owner_kind": "project",
+            "owner_id": shop.project_id,
+            "spec": board("Shop", shop.source_id),
+        },
+    )
+    assert r.status_code == 201, r.text
+    out = (await http.post(f"{API}/export", json={"kind": "project", "id": shop.project_id})).json()
+    types = [s["type"] for s in out["export"]["sources"]]
+    assert "alertmanager" in types  # the export carries the link
+    return out["export"]
+
+
+async def test_a_project_export_with_an_alertmanager_previews_and_imports(
+    monitoring_app, linked_project
+):
+    http, _ = monitoring_app
+    shop = linked_project
+    exported = await project_export_with_alertmanager(http, shop)
+    am_key = next(s["key"] for s in exported["sources"] if s["type"] == "alertmanager")
+    text = text_input(json.dumps(exported), "shop-project.omnikrux.json")
+    to = target("project", shop.project_id)
+    p = await preview(http, text, to)
+    # Listed with what the exported project used; no panel reads it, so nothing maps it.
+    assert ("Shop alerts", "alertmanager") in [
+        (s["name"], s["type"]) for s in p["bundle"]["sources"]
+    ]
+    assert all(s["key"] != am_key for s in p["sources"])
+    assert [s["type"] for s in p["sources"]] == ["prometheus"]
+    [d] = p["dashboards"]
+    assert d["importable"] and d["skipped"] == []
+    mapping = [{"key": s["key"], "source_id": s["suggestion"]} for s in p["sources"]]
+    result = await committed(http, text, chosen(p), target=to, mapping=mapping)
+    [made] = result["dashboards"]
+    spec = (await http.get(f"{DASHBOARDS}/{made['id']}")).json()["spec"]
+    assert spec["panels"][0]["queries"][0]["source"] == {"type": "prometheus", "id": shop.source_id}
+    [record] = await imports(http)
+    assert record["outcome"] == "succeeded"
+
+
+async def test_a_query_naming_an_alertmanager_entry_reads_no_source_of_it(
+    monitoring_app, linked_project
+):
+    """A hand-edited file whose query names the Alertmanager entry: the id is dropped in words,
+    like a source the file doesn't list, and the query reads the project's first Prometheus."""
+    http, _ = monitoring_app
+    shop = linked_project
+    exported = await project_export_with_alertmanager(http, shop)
+    am_key = next(s["key"] for s in exported["sources"] if s["type"] == "alertmanager")
+    exported["dashboards"][0]["dashboard"]["panels"][0]["queries"][0]["source"]["id"] = am_key
+    text = text_input(json.dumps(exported))
+    to = target("project", shop.project_id)
+    p = await preview(http, text, to)
+    assert p["sources"] == []
+    assert {
+        "where": 'Panel "Requests"',
+        "what": "Query A",
+        "reason": "It named a source the file doesn't list, so it uses the first "
+        "Prometheus-compatible source.",
+    } in p["dashboards"][0]["skipped"]
+    result = await committed(http, text, chosen(p), target=to)
+    spec = (await http.get(f"{DASHBOARDS}/{result['dashboards'][0]['id']}")).json()["spec"]
+    assert spec["panels"][0]["queries"][0]["source"] == {"type": "prometheus", "id": None}
+
+
+async def test_a_bad_source_entry_is_named_in_the_refusal(monitoring_app, linked_project):
+    http, _ = monitoring_app
+    exported = await project_export_with_alertmanager(http, linked_project)
+    exported["sources"][-1]["type"] = "tempo"
+    name = exported["sources"][-1]["name"]
+    r = await http.post(f"{API}/import/preview", json={"input": text_input(json.dumps(exported))})
+    status, code, message = refusal(r)
+    assert (status, code) == (422, "invalid_input")
+    assert message == (
+        f"The file's source \"{name}\" has a type OmniKrux doesn't know. "
+        'Use "prometheus", "loki" or "alertmanager".'
+    )
+
+
+# --- a Grafana connection is reused only with the same sign-in (review F3) -----------------------
+
+
+async def test_a_saved_connection_with_another_sign_in_is_not_reused(
+    monitoring_app, linked_project, fake_grafana_auth
+):
+    http, _ = monitoring_app
+    fake_grafana_auth.dashboards = {"api-lat": grafana_entry(load("gridpos_v22_inputs"))}
+    anonymous = await http.post(
+        f"{API}/grafana",
+        json={
+            "name": "Grafana · lab",
+            "reach": "url",
+            "url": fake_grafana_auth.url,
+            "auth": {"type": "none"},
+        },
+    )
+    assert anonymous.status_code == 201, anonymous.text
+    connection = {
+        "reach": "url",
+        "url": fake_grafana_auth.url,
+        "auth": {"type": "bearer", "token": GRAFANA_TOKEN},
+    }
+    input = grafana_input(["api-lat"], connection=connection)
+    to = target("project", linked_project.project_id)
+    p = await preview(http, input, to)
+    first = await committed(http, input, chosen(p), target=to)
+    # The token the preview read with is kept on a connection of its own.
+    assert first["grafana_id"] != anonymous.json()["id"]
+    saved = {g["id"]: g for g in (await http.get(f"{API}/grafana")).json()}
+    assert len(saved) == 2 and saved[first["grafana_id"]]["auth"]["has_token"] is True
+    # The same sign-in again reuses that connection.
+    again = await committed(http, input, [chosen(p)[0] | {"title": "Again"}], target=to)
+    assert again["grafana_id"] == first["grafana_id"]
+    assert len((await http.get(f"{API}/grafana")).json()) == 2

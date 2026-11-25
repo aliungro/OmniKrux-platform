@@ -101,9 +101,11 @@ def convert_variables(
         if kind == "datasource":
             continue
         if kind != "query":
+            shown = clean_text(kind) or "unknown"
+            article = "An" if shown[0].lower() in "aeiou" else "A"
             skip(
                 name,
-                f"A {clean_text(kind) or 'unknown'} variable",
+                f"{article} {shown} variable",
                 "Only label values variables are in OmniKrux.",
             )
             continue

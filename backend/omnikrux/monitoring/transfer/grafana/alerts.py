@@ -62,6 +62,19 @@ def _seconds(value: object) -> int | None:
     return min(total, _MAX_SECONDS)
 
 
+def _wait(raw: object, where: str, items: list[SkippedItem]) -> int:
+    """The alert's wait in seconds: 0 when the source sets none, and 0 with an item when the
+    source sets one that can't be read."""
+    seconds = _seconds(raw)
+    if seconds is not None:
+        return seconds
+    if raw is not None and raw != "":
+        shown = clean_text(raw if isinstance(raw, str) else str(raw))[:40]
+        reason = f'Its wait "{shown}" couldn\'t be read, so it waits 0s.'
+        items.append(SkippedItem(where, "The wait", reason))
+    return 0
+
+
 def _title(raw: object) -> str:
     return clean_text(raw)[:120].strip() or _DEFAULT_TITLE
 
@@ -168,7 +181,7 @@ def legacy_draft(
         reducer,  # type: ignore[arg-type]
         op,  # type: ignore[arg-type]
         threshold,
-        _seconds(alert.get("for")) or 0,
+        _wait(alert.get("for"), where, items),
         title,
         _note(alert.get("message")),
         None,
@@ -271,7 +284,7 @@ def _unified_draft(rule: dict, info: PanelInfo) -> tuple[AlertDraft | None, list
         reducer or "last",  # type: ignore[arg-type]
         op,  # type: ignore[arg-type]
         threshold,
-        _seconds(rule.get("for")) or 0,
+        _wait(rule.get("for"), where, items),
         title,
         _note(annotations.get("summary")) or _note(annotations.get("description")),
         severity.strip() if isinstance(severity, str) and severity.strip() else None,

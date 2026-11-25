@@ -35,21 +35,25 @@ from omnikrux.monitoring.transfer.types import (
 
 DEFAULT_TITLE = "Imported dashboard"
 MAX_ROW_DEPTH = 50
+MAX_DESCRIPTION = 2000
 _EPOCH_MS = re.compile(r"[0-9]{13}")
 _PANEL_PATH = re.compile(r"panels\[(\d+)\]")
 _VARIABLE_PATH = re.compile(r"variables\[(\d+)\]")
 _PROBLEM_COPY = "The dashboard couldn't be read."
+_CUT_DESCRIPTION = f"Cut to {MAX_DESCRIPTION} characters."
 
 
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _flatten(panels: list) -> tuple[list[tuple[dict, dict]], bool]:
+def _flatten(panels: list) -> tuple[list[tuple[dict, dict]], bool, bool]:
     """Grafana's gridPos panels in order: row panels dropped, a collapsed row's own panels put
-    where the row was. Also whether any row was seen."""
+    where the row was. Also whether any row was seen, and whether a row nested deeper than
+    `MAX_ROW_DEPTH` had panels that were left out."""
     out: list[tuple[dict, dict]] = []
     saw_row = False
+    too_deep = False
     stack = [(iter(panels), 0)]
     while stack:
         it, depth = stack[-1]
@@ -62,11 +66,14 @@ def _flatten(panels: list) -> tuple[list[tuple[dict, dict]], bool]:
         if p.get("type") == "row":
             saw_row = True
             inner = p.get("panels")
-            if isinstance(inner, list) and inner and depth < MAX_ROW_DEPTH:
-                stack.append((iter(inner), depth + 1))
+            if isinstance(inner, list) and inner:
+                if depth < MAX_ROW_DEPTH:
+                    stack.append((iter(inner), depth + 1))
+                else:
+                    too_deep = True
             continue
         out.append((p, grid_pos(p.get("gridPos"))))
-    return out, saw_row
+    return out, saw_row, too_deep
 
 
 def _time_text(value: object) -> object:
@@ -191,9 +198,9 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
     state = PanelState(ctx, inputs, ds_vars, frozenset(), exprs_by_key={})
 
     panels = d.get("panels")
-    saw_row = False
+    saw_row = too_deep = False
     if isinstance(panels, list) and panels:
-        flat, saw_row = _flatten(panels)
+        flat, saw_row, too_deep = _flatten(panels)
     else:
         rows = d.get("rows") if isinstance(d.get("rows"), list) else []
         flat = rows_layout(rows)
@@ -203,11 +210,21 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
         )
     if saw_row:
         dash_items.append(("Rows", "OmniKrux has no rows; their panels were kept in order."))
+    if too_deep:
+        dash_items.append(
+            (
+                f"Panels in rows nested more than {MAX_ROW_DEPTH} deep",
+                f"OmniKrux reads rows up to {MAX_ROW_DEPTH} deep, so they weren't copied.",
+            )
+        )
     _dashboard_items(d, dash_items)
     doc_time = _time(d.get("time"), dash_items)
     refresh = _refresh(d.get("refresh"), dash_items)
     description = d.get("description")
-    description = description[:2000] if isinstance(description, str) else ""
+    description = description if isinstance(description, str) else ""
+    if len(description) > MAX_DESCRIPTION:
+        dash_items.append(("Description", _CUT_DESCRIPTION))
+        description = description[:MAX_DESCRIPTION]
 
     for p, _ in flat:
         for ref, expr in prescan(p, state):
@@ -254,8 +271,11 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
         panel = r.panel
         panel["id"] = f"p-{n}"
         panel["layout"] = lay
-        panel["description"] = panel["description"][:2000]
-        entries.append({"panel": panel, "result": r})
+        entry = {"panel": panel, "result": r}
+        if len(panel["description"]) > MAX_DESCRIPTION:
+            panel["description"] = panel["description"][:MAX_DESCRIPTION]
+            skipped.append(SkippedItem(_where(entry), "Description", _CUT_DESCRIPTION))
+        entries.append(entry)
 
     variables = var_result.variables
 
@@ -363,6 +383,8 @@ def _validated(head: dict, variables: list[dict], entries: list[dict], skipped: 
             return validate_dashboard(raw, owner_kind="project"), ()
         except DashboardInvalid as err:
             bad: set[int] = set()
+            bad_variables: set[int] = set()
+            too_many_variables = False
             fixed = False
             for problem in err.problems:
                 m = _PANEL_PATH.match(problem.path)
@@ -380,10 +402,12 @@ def _validated(head: dict, variables: list[dict], entries: list[dict], skipped: 
                 elif first == "refresh":
                     head["refresh"], fixed = None, True
                 elif first == "variables":
+                    # Indexes are read against this pass's list; it is compacted once, after.
                     m = _VARIABLE_PATH.match(problem.path)
-                    if m and int(m.group(1)) < len(variables):
-                        dropped = variables[int(m.group(1))]
-                        if isinstance(dropped, dict):
+                    index = int(m.group(1)) if m else None
+                    if index is not None and index < len(variables):
+                        dropped = variables[index]
+                        if index not in bad_variables and isinstance(dropped, dict):
                             skipped.append(
                                 SkippedItem(
                                     f"Variable ${dropped.get('name')}",
@@ -391,10 +415,9 @@ def _validated(head: dict, variables: list[dict], entries: list[dict], skipped: 
                                     f"It couldn't be converted: {problem.path}: {problem.message}",
                                 )
                             )
-                        variables[int(m.group(1))] = None  # type: ignore[call-overload]
+                        bad_variables.add(index)
                     else:
-                        variables = variables[:MAX_VARIABLES]
-                    variables = [v for v in variables if v is not None]
+                        too_many_variables = True
                     fixed = True
                 elif problem.path == "" and "1 MB" in problem.message and entries:
                     bad.update(
@@ -403,6 +426,10 @@ def _validated(head: dict, variables: list[dict], entries: list[dict], skipped: 
                     fixed = True
             if not fixed:
                 return None, err.problems
+            if bad_variables:
+                variables = [v for i, v in enumerate(variables) if i not in bad_variables]
+            if too_many_variables:
+                variables = variables[:MAX_VARIABLES]
             first_problem: dict[int, Problem] = {}
             for problem in err.problems:
                 m = _PANEL_PATH.match(problem.path)

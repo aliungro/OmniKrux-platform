@@ -12,9 +12,11 @@ from omnikrux.monitoring.alerts.store import ToolObject
 from omnikrux.monitoring.transfer import update
 from omnikrux.monitoring.transfer.grafana.convert import convert_grafana
 from omnikrux.monitoring.transfer.grafana.datasources import GrafanaContext
+from omnikrux.monitoring.transfer.grafana_client import RULES_FAILED
 from omnikrux.monitoring.transfer.origins import MappingChoice
 from omnikrux.monitoring.transfer.types import SkippedItem, digest
 from tests.monitoring.conftest import GRAFANA_TOKEN
+from tests.monitoring.test_grafana_alerts import unified
 from tests.monitoring.test_import_commit import committed, create
 from tests.monitoring.test_import_preview import (
     API,
@@ -891,3 +893,107 @@ def test_runs_in_the_tool_items_are_matched_by_panel_id():
     assert out["panels"][0]["alert"]["engine"] == "tool"
     assert out["panels"][1]["alert"]["engine"] == "omnikrux"
     assert kept == [items[1]]
+
+
+# --- Grafana's alert rules not read on an update (review M1) -------------------------------------
+
+REQUESTS_EXPR = 'sum(rate(http_requests_total{job="$job"}[5m]))'
+KEPT = "Grafana's alert rules weren't read, so the alert here is kept as it is."
+
+
+def without_legacy_alert(raw: dict) -> dict:
+    out = copy.deepcopy(raw)
+    out["panels"][0].pop("alert", None)
+    return out
+
+
+async def from_grafana_with_a_rule(http, fake, project_id: str) -> tuple[str, dict, dict]:
+    """(dashboard id, the saved connection, the raw dashboard): the v22 fixture imported with one
+    Grafana-managed rule, "Too many requests", on its "Requests per second" panel."""
+    rule = unified(
+        "Too many requests", panel="3", expr=REQUESTS_EXPR, value=100.0, dashboard="api-lat"
+    )
+    fake.ruler = {"Folder": [{"name": "g", "rules": [rule]}]}
+    raw = without_legacy_alert(load("gridpos_v22_inputs"))
+    did, g = await from_grafana(http, fake, project_id, raw)
+    return did, g, raw
+
+
+def requests_alert(doc: dict) -> dict | None:
+    return next(p for p in doc["panels"] if p["title"] == "Requests per second")["alert"]
+
+
+async def test_an_update_from_the_file_keeps_alerts_from_rules_it_cant_see(
+    monitoring_app, linked_project, fake_grafana_auth
+):
+    """A dashboard imported from a Grafana, whose connection is gone, updated from its file: the
+    file holds no Grafana alert rules, so the panel keeps its alert and the review says so."""
+    http, _ = monitoring_app
+    did, g, raw = await from_grafana_with_a_rule(http, fake_grafana_auth, linked_project.project_id)
+    before = (await dashboard(http, did))["spec"]
+    alert = requests_alert(before)
+    assert alert is not None and alert["name"] == "Too many requests"
+    [rule] = (await http.get(RULES)).json()
+    assert (await http.delete(f"{API}/grafana/{g['id']}")).status_code == 204
+
+    text = text_input(json.dumps(upstream(raw, 4, panel_title="From the file")))
+    p = await update_preview(http, did, {"input": text})
+    assert requests_alert(p["incoming"]) == alert
+    assert {"where": 'Alert "Too many requests"', "what": "The rule", "reason": KEPT} in p[
+        "skipped"
+    ]
+    body = await applied(http, did, p, input=text)
+    assert body["version"] == 2 and body["alert_changes"] == []
+    assert body["spec"]["panels"][0]["title"] == "From the file"
+    assert requests_alert(body["spec"]) == alert
+    [kept] = (await http.get(RULES)).json()
+    assert (kept["id"], kept["origin"]) == (rule["id"], "panel")
+    [record] = await updates(http)
+    assert "alerts_removed" not in record["details"]
+
+
+async def test_an_update_whose_rules_read_failed_keeps_the_alerts(
+    monitoring_app, linked_project, fake_grafana_auth
+):
+    """Grafana answers the dashboard but not its alert rules: the panel keeps its alert, the
+    review says why, and once the rules are read again a rule gone upstream does go."""
+    http, _ = monitoring_app
+    did, _, raw = await from_grafana_with_a_rule(http, fake_grafana_auth, linked_project.project_id)
+    alert = requests_alert((await dashboard(http, did))["spec"])
+    fake_grafana_auth.dashboards["api-lat"] = grafana_entry(upstream(raw, 4, panel_title="New"))
+    fake_grafana_auth.ruler_status = 500
+    p = await update_preview(http, did)
+    assert requests_alert(p["incoming"]) == alert
+    reasons = [(s["where"], s["what"], s["reason"]) for s in p["skipped"]]
+    assert ('Alert "Too many requests"', "The rule", KEPT) in reasons
+    assert (
+        "Dashboard",
+        "Grafana alert rules",
+        RULES_FAILED.format(name="Grafana · lab"),
+    ) in reasons
+    body = await applied(http, did, p)
+    assert requests_alert(body["spec"]) == alert and body["alert_changes"] == []
+    assert len((await http.get(RULES)).json()) == 1
+
+    # Read again, with the rule gone upstream: now the source is known to have no alert.
+    fake_grafana_auth.ruler_status = 200
+    fake_grafana_auth.ruler = {}
+    p = await update_preview(http, did)
+    assert requests_alert(p["incoming"]) is None
+    assert not any(s["reason"] == KEPT for s in p["skipped"])
+
+
+def test_an_unread_alert_that_no_longer_fits_its_panel_is_said_to_go():
+    current = {"panels": [_alert_panel(INCOMING)]}
+    panel = _alert_panel(None)
+    panel["queries"][0]["ref"] = "B"
+    out, items = update._keep_unread_alerts({"panels": [panel]}, current)
+    assert out["panels"][0]["alert"] is None
+    assert items == [
+        SkippedItem('Alert "Requests high"', "The rule", update.RULES_NOT_READ_DROPPED)
+    ]
+    # A panel that comes in with its own alert keeps that one; a new panel takes nothing.
+    other = INCOMING | {"name": "From the source"}
+    doc = {"panels": [_alert_panel(other), _alert_panel(None, id="p-2", x=12)]}
+    out, items = update._keep_unread_alerts(doc, current)
+    assert [p["alert"] for p in out["panels"]] == [other, None] and items == []

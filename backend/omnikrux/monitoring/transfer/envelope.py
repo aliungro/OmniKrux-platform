@@ -14,7 +14,7 @@ from omnikrux.monitoring.dashboards.schema import (
     Problem,
     validate_dashboard,
 )
-from omnikrux.monitoring.sources.types import SourceConfig
+from omnikrux.monitoring.sources.types import QUERYABLE_TYPES, SourceConfig
 from omnikrux.monitoring.transfer.types import (
     NEWER_FORMAT,
     ExportedCluster,
@@ -31,11 +31,21 @@ ExportKind = Literal["dashboard", "project", "group"]
 _KINDS = ("dashboard", "project", "group")
 _OWNERS = ("project", "group")
 _TYPE_LABELS = {"prometheus": "Prometheus-compatible", "loki": "Loki"}
+# Every source type an export carries: an Alertmanager link is listed (never read by a panel).
+_SOURCE_TYPES = ("prometheus", "loki", "alertmanager")
 
 _KIND_COPY = 'Use "dashboard", "project" or "group".'
 _OWNER_COPY = 'Use "project" or "group".'
-_SOURCE_TYPE_COPY = 'Use "prometheus" or "loki".'
-_SOURCE_KEY_COPY = "Each source needs its own key."
+# A problem with one source entry names it (its name, else its key) and says it is in the file.
+_SOURCE_TYPE_COPY = (
+    "The file's source \"{label}\" has a type OmniKrux doesn't know. "
+    'Use "prometheus", "loki" or "alertmanager".'
+)
+_SOURCE_KEY_COPY = 'The file\'s source "{label}" needs a key of its own.'
+_SOURCE_OBJECT_COPY = "The file's source number {n} isn't an object. Export the file again."
+_SOURCE_CLUSTER_COPY = (
+    "The file's source \"{label}\" needs its cluster's name, namespace, service, port and scheme."
+)
 _DASHBOARDS_COPY = "An export holds 1 to 200 dashboards."
 _SOURCES_COPY = "Sources must be a list. Export the file again, or fix the sources section."
 _CLUSTER_COPY = "Give the cluster's name, namespace, service, port and scheme."
@@ -146,7 +156,9 @@ def _optional_text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _cluster(raw: object, path: str, problems: list[Problem]) -> ExportedCluster | None:
+def _cluster(
+    raw: object, path: str, problems: list[Problem], message: str = _CLUSTER_COPY
+) -> ExportedCluster | None:
     if raw is None:
         return None
     if isinstance(raw, dict):
@@ -160,7 +172,7 @@ def _cluster(raw: object, path: str, problems: list[Problem]) -> ExportedCluster
             and raw.get("scheme") in ("http", "https")
         ):
             return ExportedCluster(name, *fields, raw["scheme"])
-    problems.append(Problem(path, _CLUSTER_COPY))
+    problems.append(Problem(path, message))
     return None
 
 
@@ -172,6 +184,15 @@ def _links(raw: object) -> dict[str, str | None]:
             if isinstance(link, dict) and isinstance(link.get("source"), str):
                 out[link["source"]] = _optional_text(link.get("filter"))
     return out
+
+
+def _source_label(item: dict, i: int) -> str:
+    """How a problem names a source entry: its name, else its key, else its place."""
+    for field in ("name", "key"):
+        value = item.get(field)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())[:120]
+    return f"number {i + 1}"
 
 
 def _sources(
@@ -187,19 +208,25 @@ def _sources(
     for i, item in enumerate(raw):
         path = f"sources[{i}]"
         if not isinstance(item, dict):
-            problems.append(Problem(path, "Expected an object."))
+            problems.append(Problem(path, _SOURCE_OBJECT_COPY.format(n=i + 1)))
             continue
+        label = _source_label(item, i)
         key = item.get("key")
         if not isinstance(key, str) or not key or key in seen:
-            problems.append(Problem(f"{path}.key", _SOURCE_KEY_COPY))
+            problems.append(Problem(f"{path}.key", _SOURCE_KEY_COPY.format(label=label)))
             key = None
         else:
             seen.add(key)
         kind = item.get("type")
-        if not isinstance(kind, str) or kind not in _TYPE_LABELS:
-            problems.append(Problem(f"{path}.type", _SOURCE_TYPE_COPY))
+        if not isinstance(kind, str) or kind not in _SOURCE_TYPES:
+            problems.append(Problem(f"{path}.type", _SOURCE_TYPE_COPY.format(label=label)))
             continue
-        cluster = _cluster(item.get("cluster"), f"{path}.cluster", problems)
+        cluster = _cluster(
+            item.get("cluster"),
+            f"{path}.cluster",
+            problems,
+            _SOURCE_CLUSTER_COPY.format(label=label),
+        )
         if key is None:
             continue
         key_text = key
@@ -318,7 +345,9 @@ def read_envelope(value: dict) -> EnvelopeRead:
     group = value.get("group") if isinstance(value.get("group"), dict) else None
     links = _links(project.get("links")) if project else {}
     sources = _sources(value.get("sources"), links, problems)
-    listed = {s.key for s in sources}
+    # A query can only read a listed source it can query: one naming an Alertmanager entry is
+    # treated like one naming an unlisted source.
+    listed = {s.key for s in sources if s.type in QUERYABLE_TYPES}
     dashboards, skipped_by_key = _dashboards(
         value.get("dashboards"),
         owner_kind if owner_kind in _OWNERS else "project",

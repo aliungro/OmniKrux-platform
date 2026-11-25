@@ -16,7 +16,10 @@ and the origin's update commit together, and the replaced content stays in Versi
 
 Each panel alert keeps who it tells, where it runs and how often it is checked (the user's
 decision); its definition comes from the source (`merge_alert`). An alert the source dropped
-goes: a tool-run one through M4's removal review, which the answer's `alert_changes` carries."""
+goes: a tool-run one through M4's removal review, which the answer's `alert_changes` carries.
+When Grafana's alert rules weren't read this time (a dashboard imported from a Grafana updated
+from its file, or rules Grafana didn't send), whether the source still has an alert is unknown,
+so each surviving panel keeps its alert as it is, in words."""
 
 import copy
 import hashlib
@@ -122,6 +125,12 @@ ROUTING_FROM_FILE = (
     "Where it runs and who it tells here don't fit the source's new alert, so it runs on "
     "OmniKrux's engine and tells the contact points the file names. Check them in the panel's "
     "Alert tab."
+)
+# Not in the plan's list: whether the source still has the alert is unknown (review M1).
+RULES_NOT_READ = "Grafana's alert rules weren't read, so the alert here is kept as it is."
+RULES_NOT_READ_DROPPED = (
+    "Grafana's alert rules weren't read, and the alert here no longer fits the source's panel, "
+    "so the update removes it."
 )
 _RUNS_IN_THE_TOOL = "Runs in the tool"
 
@@ -233,6 +242,9 @@ class _Source:
     converted: ConvertedDashboard
     label: str
     identity_warning: str | None
+    # Whether every alert the source has was read: False for a dashboard imported from a Grafana
+    # when its rules weren't read this time (its file holds none; Grafana didn't send them).
+    rules_read: bool = True
 
 
 def _pick(
@@ -270,7 +282,8 @@ async def _read_source(
     if input is not None:
         read = await read_input(services, registry, input)
         c, warning = _pick(origin, read.converted, read.format, title)
-        return _Source(c, read.label, warning)
+        # A dashboard's JSON never holds Grafana's alert rules.
+        return _Source(c, read.label, warning, rules_read=origin.via != "grafana")
     if origin.via != "grafana":
         raise TransferError(422, "invalid_input", PICK_FILE)
     cfg = await _connection(services, origin)
@@ -284,7 +297,12 @@ async def _read_source(
         raise TransferError(exc.status, "grafana", exc.message) from None
     c = convert_grafana(got.raw, context, key=uid)
     version = got.version if got.version is not None else c.identity.version
-    return _Source(replace(c, identity=Identity("grafana", uid, version)), cfg.name, None)
+    return _Source(
+        replace(c, identity=Identity("grafana", uid, version)),
+        cfg.name,
+        None,
+        rules_read=context.alert_rules is not None,
+    )
 
 
 # --- the incoming document -------------------------------------------------------------------
@@ -406,6 +424,30 @@ def _merge_alerts(
     return out, kept + more
 
 
+def _keep_unread_alerts(doc: dict, current: dict) -> tuple[dict, list[SkippedItem]]:
+    """When the source's alert rules weren't read: each panel that is here now with an alert and
+    comes in without one keeps its alert as it is (checked again by M4's rules), in words."""
+    out = copy.deepcopy(doc)
+    before = {
+        p["id"]: p["alert"] for p in current.get("panels", []) if isinstance(p.get("alert"), dict)
+    }
+    variables = out.get("variables", [])
+    items: list[SkippedItem] = []
+    for panel in out["panels"]:
+        alert = before.get(panel["id"])
+        if alert is None or isinstance(panel.get("alert"), dict):
+            continue
+        where = f'Alert "{alert.get("name", "")}"'
+        try:
+            validate_panel_alert(copy.deepcopy(alert), panel, variables=variables)
+        except DashboardInvalid:
+            items.append(SkippedItem(where, "The rule", RULES_NOT_READ_DROPPED))
+            continue
+        panel["alert"] = copy.deepcopy(alert)
+        items.append(SkippedItem(where, "The rule", RULES_NOT_READ))
+    return out, items
+
+
 def _gone_panels(current: dict, incoming: dict, from_source: set[str]) -> list[SkippedItem]:
     """The current panels the update leaves out, in words: a source panel the source no longer
     has, with its alert (M4 keeps its rule on the Alerts page), and every panel added here after
@@ -496,6 +538,9 @@ async def _prepare(
         if isinstance(p.get("alert"), dict) and p["alert"].get("engine") == "tool"
     ]
     merged, alert_items = _merge_alerts(rekeyed, current, drafts, alert_items, tool_items)
+    if not source.rules_read:
+        merged, unread_items = _keep_unread_alerts(merged, current)
+        alert_items = [*alert_items, *unread_items]
     merged["title"] = current["title"]
     try:
         doc = validate_dashboard(merged, owner_kind=target.kind)

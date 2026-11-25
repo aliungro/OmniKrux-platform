@@ -123,7 +123,7 @@ def test_variables_from_the_modern_fixture():
     ]
     assert {
         ("Variable $env", "A custom variable"),
-        ("Variable $window", "A interval variable"),
+        ("Variable $window", "An interval variable"),
         ('Panel "Env pods"', "Query A"),
         ('Panel "Env pods"', "The whole panel"),
         ('Panel "Mixed"', "Query C"),
@@ -292,3 +292,45 @@ def test_a_variable_the_validator_refuses_is_listed():
     assert doc["variables"] == []
     assert [(s.where, s.what) for s in skipped] == [("Variable $job", "The whole variable")]
     assert skipped[0].reason.startswith("It couldn't be converted: variables[0].match: ")
+
+
+def test_two_variables_the_validator_refuses_drop_only_those_two():
+    """Both refused in one pass: each refused variable goes with its own words, and the good ones
+    between and after them stay (the list is compacted once, after the pass)."""
+    from omnikrux.monitoring.transfer.grafana.convert import _validated
+
+    def variable(name: str, match: str = "") -> dict:
+        return {
+            "name": name,
+            "label": name,
+            "type": "labelValues",
+            "source": {"type": "prometheus", "id": None},
+            "labelName": name,
+            "match": match,
+            "multi": False,
+            "includeAll": False,
+            "default": [],
+        }
+
+    variables = [
+        variable("a"),
+        variable("bad1", "x" * 1100),
+        variable("b"),
+        variable("bad2", "y" * 1100),
+        variable("c"),
+    ]
+    skipped = []
+    head = {
+        "title": "T",
+        "description": "",
+        "time": {"from": "now-6h", "to": "now"},
+        "refresh": None,
+    }
+    doc, _ = _validated(head, variables, [], skipped)
+    assert [v["name"] for v in doc["variables"]] == ["a", "b", "c"]
+    assert [(s.where, s.what) for s in skipped] == [
+        ("Variable $bad1", "The whole variable"),
+        ("Variable $bad2", "The whole variable"),
+    ]
+    assert skipped[0].reason.startswith("It couldn't be converted: variables[1].match")
+    assert skipped[1].reason.startswith("It couldn't be converted: variables[3].match")

@@ -42,7 +42,12 @@ from omnikrux.monitoring.models import GrafanaRow, lock_first, now
 from omnikrux.monitoring.projects.api import CHOSEN_PROJECT_GONE, new_group_checked
 from omnikrux.monitoring.projects.types import UnknownGroup, UnknownProject
 from omnikrux.monitoring.services import MonitoringServices
-from omnikrux.monitoring.sources.types import NameTaken, ProjectKind, SourceConfig
+from omnikrux.monitoring.sources.types import (
+    QUERYABLE_TYPES,
+    NameTaken,
+    ProjectKind,
+    SourceConfig,
+)
 from omnikrux.monitoring.transfer.alerts import alert_from_draft, import_alert
 from omnikrux.monitoring.transfer.api import (
     GRAFANA_GONE,
@@ -155,15 +160,18 @@ class NewGroupIn(_Body):
     project_ids: list[Annotated[str, Field(max_length=200)]] = Field(max_length=500)
 
 
-class ImportPreviewIn(_Body):
-    input: ImportInput
-    target: TargetIn | None = None
-
-
 class MappingIn(_Body):
     key: str = Field(max_length=300)
     source_id: str | None = Field(None, max_length=200)
     leave_out: bool = False
+
+
+class ImportPreviewIn(_Body):
+    input: ImportInput
+    target: TargetIn | None = None
+    # The review's mapping so far: only "Leave its panels out" changes what the preview shows (the
+    # panels, alerts and skipped list of each dashboard); a source picked is checked at commit.
+    mapping: list[MappingIn] = Field(default_factory=list, max_length=500)
 
 
 class CommitDashboardIn(_Body):
@@ -194,7 +202,7 @@ class ProblemOut(BaseModel):
 class BundleSourceOut(BaseModel):
     key: str
     name: str
-    type: Literal["prometheus", "loki"]
+    type: Literal["prometheus", "loki", "alertmanager"]
     where: str
     filter: str | None
     auth: str
@@ -302,6 +310,9 @@ def _panel_ids(doc: dict | None) -> tuple[tuple[str, str], ...]:
 
 
 def _from_envelope(read: EnvelopeRead) -> list[ConvertedDashboard]:
+    # An Alertmanager entry is never read by a panel, so it never needs a mapping; it is only
+    # listed with what the exported project used.
+    queryable = [s for s in read.sources if s.type in QUERYABLE_TYPES]
     out = []
     for d in read.dashboards:
         out.append(
@@ -309,7 +320,7 @@ def _from_envelope(read: EnvelopeRead) -> list[ConvertedDashboard]:
                 key=d.key,
                 title=d.title,
                 doc=d.doc,
-                refs=_used_refs(d.doc, read.sources),
+                refs=_used_refs(d.doc, queryable),
                 skipped=read.skipped_by_key.get(d.key, ()),
                 alerts=(),
                 problems=d.problems,
@@ -688,6 +699,8 @@ async def preview(
         target = found if found.kind in read.target_kinds else None
     taken = await _owner_titles(services, target)
     contact_points = await contact_points_by_name(services)
+    left_out = {m.key for m in body.mapping if m.leave_out}
+    owner_kind: OwnerKind = target.kind if target is not None else "project"
     dashboards: list[PreviewDashboardOut] = []
     for c in read.converted:
         skipped = list(c.skipped)
@@ -695,9 +708,13 @@ async def preview(
         shown = digest(c)
         if c.doc is not None:
             doc, items = attach_alerts(c, c.doc, contact_points)
+            # The digest is of the dashboard as converted (the commit checks that one); what the
+            # review lists is the dashboard once its left-out sources' panels are gone.
+            shown = review_digest(c, doc, items)
+            if any(ref.key in left_out for ref in c.refs):
+                doc, items = _left_out_view(c, left_out, owner_kind, contact_points)
             skipped.extend(items)
             panels, alerts = panel_count(doc), _alert_count(doc)
-            shown = review_digest(c, doc, items)
         suggested = unique_title(c.title, taken) if c.title.strip() else c.title
         if c.doc is not None:
             taken.add(suggested)
@@ -727,6 +744,23 @@ async def preview(
         dashboards=dashboards,
         skipped_total=sum(len(d.skipped) for d in dashboards),
     )
+
+
+def _left_out_view(
+    c: ConvertedDashboard,
+    left_out: set[str],
+    owner_kind: OwnerKind,
+    contact_points: Mapping[str, str],
+) -> tuple[dict, list[SkippedItem]]:
+    """The dashboard as the commit makes it with those sources left out (each other source as
+    it is): its document, and what the mapping and the alerts leave out on the way."""
+    assert c.doc is not None
+    mine = {ref.key: MappingChoice(None, ref.key in left_out) for ref in c.refs}
+    names = {ref.key: ref.name for ref in c.refs}
+    mapped, items = apply_mapping(c.doc, mine, owner_kind=owner_kind, titles=names)
+    gone = _panels_gone(c.doc, mapped, items)
+    doc, alert_items = attach_alerts(c, mapped, contact_points, panels_gone=gone)
+    return doc, [*items, *alert_items]
 
 
 # --- commit ------------------------------------------------------------------------------------
@@ -844,16 +878,30 @@ async def _place(
     return Target("group", "", name), (name, details, list(new.project_ids))
 
 
+def _same_sign_in(saved: GrafanaConfig, entered: GrafanaConfig) -> bool:
+    """A saved connection signs in as the one entered: the same kind of sign-in, user name and
+    secret (compared here, never shown). One whose secret can't be read doesn't."""
+    return (
+        not saved.secrets_unreadable
+        and saved.auth_type == entered.auth_type
+        and (saved.username or None) == (entered.username or None)
+        and saved.secrets == entered.secrets
+    )
+
+
 async def _grafana_to_save(
     services: MonitoringServices, read: ReadResult, input: GrafanaInput
 ) -> tuple[str | None, _NewGrafana | None, str]:
     """(the saved connection's id, the connection to save, the origin label). A connection as
-    entered reuses the saved one reaching the same Grafana; otherwise it is saved with the
-    import, under its name or an automatic one."""
+    entered reuses the saved one reaching the same Grafana and signing in the same way (so later
+    updates read what the preview read); otherwise it is saved with the import, under its name
+    or an automatic one."""
     cfg = cast(GrafanaConfig, read.grafana)
     if input.grafana_id is not None:
         return cfg.id, None, cfg.name
-    existing = await services.grafana.find_target(cfg.url, cfg.cluster)
+    existing = await services.grafana.find_target(
+        cfg.url, cfg.cluster, fits=lambda saved: _same_sign_in(saved, cfg)
+    )
     if existing is not None:
         return existing.id, None, existing.name
     named = input.connection is not None and input.connection.name is not None

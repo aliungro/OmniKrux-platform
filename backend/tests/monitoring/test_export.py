@@ -437,6 +437,11 @@ def test_export_file_names():
     assert export_file_name("dashboard", "API latency (p95)") == "api-latency-p95.omnikrux.json"
     assert export_file_name("project", "prod-east") == "prod-east-project.omnikrux.json"
     assert export_file_name("group", "!!!") == "dashboard-group.omnikrux.json"
+    # A name that already ends with its kind doesn't take it twice.
+    assert export_file_name("group", "Fleet group") == "fleet-group.omnikrux.json"
+    assert export_file_name("project", "Shop Project") == "shop-project.omnikrux.json"
+    assert export_file_name("group", "Group") == "group.omnikrux.json"
+    assert export_file_name("project", "Groupies") == "groupies-project.omnikrux.json"
     assert export_file_name("dashboard", "a" * 59 + " b") == "a" * 59 + ".omnikrux.json"
     assert export_file_name("dashboard", "Ünïcode Board") == "n-code-board.omnikrux.json"
 

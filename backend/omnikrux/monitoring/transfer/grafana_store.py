@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, get_args
@@ -156,13 +156,18 @@ class GrafanaStore:
             return self._config(await _row(session, id))
 
     async def find_target(
-        self, url: str | None, cluster: ClusterTarget | None
+        self,
+        url: str | None,
+        cluster: ClusterTarget | None,
+        *,
+        fits: Callable[[GrafanaConfig], bool] | None = None,
     ) -> GrafanaConfig | None:
         """The connection already reaching that address (a trailing "/" aside), or that service
-        port in that cluster; the oldest when there are several."""
+        port in that cluster; the oldest when there are several. With `fits`, only a connection
+        it accepts (say, one that signs in the same way)."""
         async with self._sessionmaker() as session:
             if cluster is not None:
-                row = await session.scalar(
+                rows = await session.scalars(
                     select(GrafanaRow)
                     .where(
                         GrafanaRow.reach == "cluster",
@@ -172,20 +177,18 @@ class GrafanaStore:
                         GrafanaRow.port == cluster.port,
                     )
                     .order_by(GrafanaRow.created_at)
-                    .limit(1)
                 )
-                return self._config(row) if row is not None else None
-            if url is None:
+                found = (self._config(row) for row in rows)
+            elif url is None:
                 return None
-            rows = await session.scalars(
-                select(GrafanaRow)
-                .where(GrafanaRow.reach == "url", GrafanaRow.url.is_not(None))
-                .order_by(GrafanaRow.created_at)
-            )
-            for row in rows:
-                if _same_url(row.url, url):
-                    return self._config(row)
-            return None
+            else:
+                rows = await session.scalars(
+                    select(GrafanaRow)
+                    .where(GrafanaRow.reach == "url", GrafanaRow.url.is_not(None))
+                    .order_by(GrafanaRow.created_at)
+                )
+                found = (self._config(row) for row in rows if _same_url(row.url, url))
+            return next((cfg for cfg in found if fits is None or fits(cfg)), None)
 
     async def unique_name(self, base: str, *, also_taken: Iterable[str] = ()) -> str:
         """`base`, or `base (2)`, `base (3)`… whichever is free (kept within the name limit) and

@@ -60,9 +60,13 @@ class ExportCounts:
 
 def export_file_name(kind: ExportKind, name: str) -> str:
     """The file's name: the name in lower case with every run of other characters than a-z and
-    0-9 as one `-`, trimmed of `-`, at most 60 characters (`dashboard` when nothing is left)."""
+    0-9 as one `-`, trimmed of `-`, at most 60 characters (`dashboard` when nothing is left),
+    then the kind; a name that already ends with the kind doesn't take it twice."""
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:_SLUG_LENGTH].strip("-")
-    return f"{slug or 'dashboard'}{_SUFFIX[kind]}"
+    slug = slug or "dashboard"
+    if kind != "dashboard" and (slug == kind or slug.endswith(f"-{kind}")):
+        return f"{slug}{_SUFFIX['dashboard']}"
+    return f"{slug}{_SUFFIX[kind]}"
 
 
 def _gone() -> TransferError:

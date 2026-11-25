@@ -75,7 +75,8 @@ class ExportedCluster:
 @dataclass(frozen=True)
 class SourceRefFound:
     key: str
-    type: Literal["prometheus", "loki"]
+    # "alertmanager" only for an export file's Alertmanager entry, which no panel reads.
+    type: Literal["prometheus", "loki", "alertmanager"]
     type_guessed: bool
     name: str
     url: str | None

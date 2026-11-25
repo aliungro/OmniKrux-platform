@@ -281,3 +281,27 @@ def test_legacy_alert_on_a_query_that_was_not_kept():
     draft, items = legacy_draft(legacy(), {"B": "A"})
     assert draft is None
     assert items[0].reason == "Its query isn't one of the panel's queries."
+
+
+@pytest.mark.parametrize("raw", ["500ms", "5m30", "soon", -5, True])
+def test_a_wait_that_cant_be_read_waits_0s_and_says_so(raw):
+    c = conv("gridpos_v39_objects", rules_ctx(unified("High CPU", expr=CPU, for_=raw)))
+    [(_, draft)] = c.alerts
+    assert draft.for_seconds == 0
+    shown = raw if isinstance(raw, str) else str(raw)
+    assert (
+        'Alert "High CPU"',
+        "The wait",
+        f'Its wait "{shown}" couldn\'t be read, so it waits 0s.',
+    ) in [(s.where, s.what, s.reason) for s in c.skipped]
+
+
+def test_a_missing_or_readable_wait_says_nothing():
+    for raw in (None, "", "0s", "1h30m", 90):
+        c = conv("gridpos_v39_objects", rules_ctx(unified("High CPU", expr=CPU, for_=raw)))
+        assert not any(s.what == "The wait" for s in c.skipped), raw
+    legacy = load("gridpos_v22_inputs")
+    legacy["panels"][0]["alert"]["for"] = "5m30"
+    draft, items = legacy_draft(legacy["panels"][0]["alert"], {"A": "A"})
+    assert draft is not None and draft.for_seconds == 0
+    assert ('Alert "p95 too slow"', "The wait") in [(s.where, s.what) for s in items]

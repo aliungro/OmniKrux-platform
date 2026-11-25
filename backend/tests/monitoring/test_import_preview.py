@@ -12,6 +12,7 @@ from omnikrux.monitoring.transfer.grafana_client import NO_DASHBOARD
 from omnikrux.monitoring.transfer.mapping import (
     FIRST_OF_TYPE,
     GROUP_TARGET,
+    LEFT_OUT,
     NO_TARGET,
     NONE_OF_TYPE,
     SAME_ADDRESS,
@@ -454,3 +455,35 @@ def test_suggestions_follow_their_order():
     # A source the project doesn't link is never suggested, even the same one.
     not_linked = Target("project", "p", "Shop", ("s-3",))
     assert suggest(ref("id:s-2", "x"), not_linked, sources, clusters).suggestion is None
+
+
+async def test_a_left_out_source_shows_in_the_preview(monitoring_app, linked_project_with_loki):
+    """The review's "Leave its panels out" is previewed: the panel count and the skipped list say
+    what the import will now do (naming each panel it drops), and the digest stays the one of
+    the dashboard as converted, which the commit checks."""
+    http, _ = monitoring_app
+    to = target("project", linked_project_with_loki.project_id)
+    text = text_input(fixture_text("gridpos_v39_objects"))
+    before = await preview(http, text, to)
+    [loki] = [s for s in before["sources"] if s["type"] == "loki"]
+    after = (
+        await http.post(
+            PREVIEW,
+            json={
+                "input": text,
+                "target": to,
+                "mapping": [
+                    {"key": loki["key"], "leave_out": True},
+                    {"key": "not-in-the-file", "source_id": "anything"},
+                ],
+            },
+        )
+    ).json()
+    was, now = before["dashboards"][0], after["dashboards"][0]
+    assert now["panels"] < was["panels"]
+    gone = [s for s in now["skipped"] if s not in was["skipped"]]
+    assert gone and all(s["reason"] == LEFT_OUT.format(name=loki["name"]) for s in gone)
+    assert any(s["what"] == "The whole panel" and s["where"].startswith("Panel ") for s in gone)
+    assert after["skipped_total"] == before["skipped_total"] + len(gone)
+    assert now["digest"] == was["digest"]
+    assert after["sources"] == before["sources"]

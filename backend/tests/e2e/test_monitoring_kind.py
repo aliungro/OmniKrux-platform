@@ -1012,8 +1012,10 @@ def commit_body(preview: dict, project: dict, input: dict) -> dict:
     }
 
 
-def import_live(client, project: dict, target: dict) -> tuple[dict, dict]:
-    """Preview then commit the live check dashboard; (the saved dashboard, the commit answer)."""
+def import_live(client, project: dict, target: dict, connections: list[str]) -> dict:
+    """Preview then commit the live check dashboard; the saved dashboard.
+    The Grafana connection the commit saved goes into `connections` as soon as it exists, so the
+    cleanup removes it even when a later step fails."""
     input = grafana_input(target)
     body = {"input": input, "target": {"kind": "project", "id": project["id"]}}
     preview = client.post(f"{API}/import/preview", json=body)
@@ -1023,10 +1025,12 @@ def import_live(client, project: dict, target: dict) -> tuple[dict, dict]:
     committed = client.post(f"{API}/import/commit", json=commit_body(shown, project, input))
     assert committed.status_code == 201, committed.text
     result = committed.json()
+    if result.get("grafana_id"):
+        connections.append(result["grafana_id"])
     [made] = result["dashboards"]
     saved = client.get(f"{API}/dashboards/{made['id']}")
     assert saved.status_code == 200, saved.text
-    return saved.json(), result
+    return saved.json()
 
 
 def test_grafana_is_found_and_lists_dashboards(client, cluster, grafana_target):
@@ -1040,8 +1044,7 @@ def test_import_from_the_cluster_grafana(client, cluster, tools, grafana_target)
     with project_cleanup(client) as made, grafana_cleanup(client) as connections:
         project = live_project(client, cluster, tools, "Kind Grafana import")
         made.append(project["id"])
-        dashboard, result = import_live(client, project, grafana_target)
-        connections.append(result["grafana_id"])
+        dashboard = import_live(client, project, grafana_target, connections)
 
         spec = dashboard["spec"]
         assert spec["title"] == LIVE_TITLE
@@ -1084,8 +1087,7 @@ def test_export_and_import_round_trip(client, cluster, tools, grafana_target):
     with project_cleanup(client) as made, grafana_cleanup(client) as connections:
         first = live_project(client, cluster, tools, "Kind export first")
         made.append(first["id"])
-        dashboard, result = import_live(client, first, grafana_target)
-        connections.append(result["grafana_id"])
+        dashboard = import_live(client, first, grafana_target, connections)
 
         exported = client.post(f"{API}/export", json={"kind": "project", "id": first["id"]})
         assert exported.status_code == 200, exported.text
@@ -1122,8 +1124,7 @@ def test_update_from_source_with_no_change(client, cluster, tools, grafana_targe
     with project_cleanup(client) as made, grafana_cleanup(client) as connections:
         project = live_project(client, cluster, tools, "Kind Grafana update")
         made.append(project["id"])
-        dashboard, result = import_live(client, project, grafana_target)
-        connections.append(result["grafana_id"])
+        dashboard = import_live(client, project, grafana_target, connections)
 
         shown = client.post(
             f"{API}/import/preview", json={"input": grafana_input(grafana_target)}
