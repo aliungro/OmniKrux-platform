@@ -266,13 +266,40 @@ describe("Project page", () => {
     await user.click(screen.getByRole("button", { name: "Save source" }));
     const status = await screen.findByText(/^Linked .+\. It adds the ready-made view Logs overview\.$/);
     expect(status.getAttribute("role")).toBe("status");
-    // A second Loki adds nothing: the status has no second sentence.
+    // A second Loki adds nothing: the note has no second sentence.
     await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
     await user.type(screen.getByLabelText("Address"), "http://loki2.example:3100");
     await user.type(screen.getByLabelText("Name"), "Second logs");
     await user.selectOptions(screen.getByLabelText("Type"), "loki");
     await user.click(screen.getByRole("button", { name: "Save source" }));
-    await waitFor(() => expect(screen.getAllByRole("status").some((n) => /^Linked .+\.$/.test(n.textContent ?? "") && !(n.textContent ?? "").includes("It adds"))).toBe(true));
+    await waitFor(() => expect(status.textContent).toBe("Linked Second logs."));
+  });
+
+  it("the linked note belongs to its project and its source", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: [project("p1", "Dev"), project("p2", "Stage")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    const status = await screen.findByText(/^Linked .+\. It adds/);
+    await user.click(await screen.findByRole("button", { name: /^Unlink/ }));
+    await waitFor(() => expect(status.textContent).toBe(""));
+  });
+
+  it("the linked note does not follow the tab to another project", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: [project("p1", "Dev"), project("p2", "Stage")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await screen.findByText(/^Linked .+\. It adds/);
+    await user.click(await screen.findByRole("treeitem", { name: "Stage" }));
+    await screen.findByRole("heading", { name: "Stage" });
+    expect(screen.queryByText(/^Linked /)).toBeNull();
   });
 
   it("New dashboard on the project page goes to the project", async () => {

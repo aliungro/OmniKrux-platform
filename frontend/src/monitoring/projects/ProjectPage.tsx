@@ -261,7 +261,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
   const backTo = useRef<"existing" | "hand" | null>(null);
   const [adding, setAdding] = useState<"existing" | "hand" | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
-  const [linkedNote, setLinkedNote] = useState<string | null>(null);
+  const [linkedNote, setLinkedNote] = useState<{ projectId: string; sourceId: string; text: string } | null>(null);
   const [review, setReview] = useState<ProjectDeleteReviewOut | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -373,13 +373,16 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
     try {
       await linkSource(project.id, sourceId, filter, originOf(filter, origin));
       await invalidateMonitoring(client);
-      setLinkedNote(`Linked ${saved.name}.${adds ? ` It ${adds}` : ""}`);
+      setLinkedNote({ projectId: project.id, sourceId, text: `Linked ${saved.name}.${adds ? ` It ${adds}` : ""}` });
     } catch (err) {
       setPageError(`The source was saved but could not be linked to this project: ${failure(err)} Use an existing source to link it.`);
       void invalidateMonitoring(client);
     }
     closePanel();
   };
+
+  const linkedText = linkedNote && linkedNote.projectId === project.id && project.links.some((l) => l.source_id === linkedNote.sourceId)
+    ? linkedNote.text : "";
 
   const open = (target: MonitoringView, e: { ctrlKey: boolean; metaKey: boolean }) =>
     e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push");
@@ -393,7 +396,8 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
       </header>
 
       {pageError && <p className={s.bad} role="alert">{pageError}</p>}
-      {linkedNote && <p className={s.muted} role="status">{linkedNote}</p>}
+      {/* Always mounted, so filling it is announced; shown only for this project while its source is still linked. */}
+      <p className={s.live} role="status">{linkedText}</p>
       {importFailed.id === project.id && importFailed.message !== null && (
         <div className={s.importFailed} role="alert">
           <p>{importFailedWords(importFailed.message)}</p>
@@ -410,7 +414,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
           <ul className={s.list}>
             {project.links.map((l) => (
               <LinkRow key={l.source_id} project={project} link={l} health={health[l.source_id] ?? UNKNOWN}
-                onUnlinked={() => sourcesHeading.current?.focus()} />
+                onUnlinked={() => { setLinkedNote(null); sourcesHeading.current?.focus(); }} />
             ))}
           </ul>
         )}
