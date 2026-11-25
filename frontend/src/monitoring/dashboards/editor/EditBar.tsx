@@ -10,7 +10,7 @@ export function EditingPill() {
   return <span className={s.pill}>Editing</span>;
 }
 
-export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, suggestions, suggestionsRef, undo }: {
+export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, suggestions, suggestionsRef, undo, variables }: {
   saving: boolean;
   onDiscard(): void;
   onSave(): void;
@@ -21,6 +21,8 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, s
   suggestionsRef?: RefObject<HTMLButtonElement | null>;
   /** Undo: `can` is false when nothing in the session is left to undo (it says so, and stays). */
   undo?: { can: boolean; onUndo(): void };
+  /** Opens the variables editor. */
+  variables?: { onOpen(): void; buttonRef: RefObject<HTMLButtonElement | null> };
 }) {
   return (
     <>
@@ -28,6 +30,11 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, s
         <button ref={suggestionsRef} type="button" className={s.toggle} aria-pressed={suggestions.open}
           aria-keyshortcuts="s" onClick={suggestions.onToggle}>
           Suggestions
+        </button>
+      )}
+      {variables && (
+        <button ref={variables.buttonRef} type="button" className={s.toggle} aria-haspopup="dialog" onClick={variables.onOpen}>
+          Variables
         </button>
       )}
       {undo && (

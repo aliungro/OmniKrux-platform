@@ -145,3 +145,18 @@ export function interpolate(
   if (loneReturn && placed !== null) throw new VariableError(placed, loneReturnWords(placed));
   return out;
 }
+
+/**
+ * A panel's title for display: `$name` and `${name}` become the chosen values joined with `, `
+ * (All reads `All`). A name that isn't a variable here (`$__interval`, a typo) stays as written, and
+ * so does the stored title: this is only what the tile shows.
+ */
+export function interpolateTitle(title: string, values: Record<string, VarValue>): string {
+  return title.replace(/\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g, (token, braced?: string, bare?: string) => {
+    const name = (braced ?? bare) as string;
+    if (!Object.hasOwn(values, name)) return token;
+    const v = values[name];
+    if (v === "all") return "All";
+    return v.length === 0 ? "None" : v.join(", ");
+  });
+}

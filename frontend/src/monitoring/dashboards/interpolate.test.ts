@@ -4,6 +4,7 @@ import {
   escapeQueryString,
   escapeRegex,
   interpolate,
+  interpolateTitle,
   loneReturnWords,
   VariableError,
 } from "./interpolate";
@@ -162,5 +163,12 @@ describe("interpolate", () => {
   it("comments are copied as they are and end at the line break", () => {
     expect(interpolate("up # $v $__range\r\n$v", one(["5"]), B)).toBe("up # $v $__range\r\n5");
     expect(interpolate('"a # $v"', one(["q"]), B)).toBe('"a # q"');
+  });
+});
+
+describe("interpolateTitle", () => {
+  it("shows the chosen values, All, and leaves other names alone", () => {
+    expect(interpolateTitle("CPU in $ns and ${pod}", { ns: ["a", "b"], pod: "all" })).toBe("CPU in a, b and All");
+    expect(interpolateTitle("$__interval $other $ns", { ns: [] })).toBe("$__interval $other None");
   });
 });

@@ -8,7 +8,7 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { usePanelStates } from "../../alerts/api";
 import { notRefreshedWords, STATE_LABEL, STATE_READING, STATE_UNKNOWN, stateTone } from "../../alerts/format";
-import type { ResolvedVars } from "../interpolate";
+import { interpolateTitle, type ResolvedVars } from "../interpolate";
 import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun } from "../runPanel";
 import { sameJson } from "../sameJson";
 import type { Layout, PanelAlert, PanelSpec } from "../schema";
@@ -137,6 +137,11 @@ export const PanelFrame = memo(function PanelFrame({
   openRule, spotlight = 0,
 }: Props) {
   const titleId = useId();
+  // The tile shows the chosen values in place of `$name`; the stored title stays as written.
+  const shownTitle = useMemo(
+    () => interpolateTitle(panel.title, Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, v.value]))),
+    [panel.title, vars],
+  );
   const tipId = useId();
   const problemsId = useId();
   const frame = useRef<HTMLElement>(null);
@@ -229,10 +234,10 @@ export const PanelFrame = memo(function PanelFrame({
         if (e.relatedTarget !== null || e.target.isConnected) hadFocus.current = e.relatedTarget instanceof Node && !!frame.current?.contains(e.relatedTarget);
       }}>
       <header className={s.panelHead}>
-        <h2 id={titleId} ref={heading} tabIndex={-1} className={s.panelTitle}>{panel.title}</h2>
+        <h2 id={titleId} ref={heading} tabIndex={-1} className={s.panelTitle}>{shownTitle}</h2>
         {panel.description.trim() !== "" && (
           <span className={s.about}>
-            <button type="button" className={s.aboutButton} aria-label={`About ${panel.title}`} aria-describedby={tipId}>ⓘ</button>
+            <button type="button" className={s.aboutButton} aria-label={`About ${shownTitle}`} aria-describedby={tipId}>ⓘ</button>
             <span id={tipId} role="tooltip" className={s.tip}>{panel.description}</span>
           </span>
         )}

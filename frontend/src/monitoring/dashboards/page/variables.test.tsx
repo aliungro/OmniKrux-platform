@@ -244,4 +244,51 @@ describe("Dashboard variables", () => {
     expect(batches(api).length).toBe(sent);
     focusManager.setFocused(undefined);
   });
+
+  it("a long value menu has a filter", async () => {
+    const user = userEvent.setup();
+    const many = Array.from({ length: 12 }, (_, i) => `ns-${String(i).padStart(2, "0")}`);
+    const doc = spec("Pods", [panel("p-1", "Restarts", "up")], [variable("namespace", "Namespace")]);
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, doc) },
+      labelValues: { "p1|namespace": many },
+      queryAnswers: {},
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard" as const, id: "d1" }) });
+    await user.click(await screen.findByRole("button", { name: "Namespace: ns-00" }));
+    const list = screen.getByRole("group", { name: "Namespace" });
+    const filter = within(list).getByRole("textbox", { name: "Filter values" });
+    expect(document.activeElement).toBe(filter);
+    await user.type(filter, "ns-1");
+    expect(within(list).getAllByRole("radio").map((r) => (r as HTMLInputElement).value === "on" ? r.parentElement!.textContent : "")).toEqual(["ns-10", "ns-11"]);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(within(list).getByRole("radio", { name: "ns-10" }));
+  });
+
+  it("opening a menu doesn't scroll the page", async () => {
+    const user = userEvent.setup();
+    const { answer, view } = seed(undefined);
+    answer['kube_pod_restarts{namespace=~"api", pod=~".+"}'] = ok;
+    renderMonitoringApp({ tabs: tabsWith(view) });
+    const button = await screen.findByRole("button", { name: "Namespace: api" });
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    await user.click(button);
+    const asked = focus.mock.calls.filter(([o]) => o !== undefined);
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every(([o]) => (o as FocusOptions).preventScroll === true)).toBe(true);
+    focus.mockRestore();
+  });
+
+  it("panel titles show the chosen values", async () => {
+    const doc = spec("Pods", [panel("p-1", "CPU in $namespace", "up")], [variable("namespace", "Namespace")]);
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, doc) },
+      labelValues: { "p1|namespace": ["api", "web"] },
+      queryAnswers: {},
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard" as const, id: "d1" }) });
+    expect(await screen.findByRole("heading", { level: 2, name: "CPU in api" })).toBeTruthy();
+  });
 });

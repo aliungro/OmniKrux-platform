@@ -27,7 +27,8 @@ import { CopyDashboardDialog } from "../create/CopyDashboardDialog";
 import { DeleteDashboardDialog } from "../create/DeleteDashboardDialog";
 import type { VarValue } from "../interpolate";
 import type { NewPanel } from "../layout";
-import type { DashboardSpec, RefreshSpec, TimeSpec } from "../schema";
+import type { DashboardSpec, RefreshSpec, TimeSpec, VariableSpec } from "../schema";
+import { VariablesDialog } from "../editor/VariablesDialog";
 import { DashboardGrid, type GridControls } from "../grid/DashboardGrid";
 import { usePrefersReducedMotion } from "../motion";
 import { DiscardDialog, EditControls, EditingPill, EditNotice, RemovedNote } from "../editor/EditBar";
@@ -138,6 +139,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const page = useRef<HTMLElement>(null);
   const [timeOpen, setTimeOpen] = useState(false);
   /** Asking before Discard drops changes; the keyboard goes back to the Discard it came from. */
+  const variablesButton = useRef<HTMLButtonElement>(null);
+  const [askVariables, setAskVariables] = useState(false);
   const [askDiscard, setAskDiscard] = useState<RefObject<HTMLButtonElement | null> | null>(null);
   /** The JSON tab's typing that hasn't paused yet: Save and Discard apply it first. */
   const flushJson = useRef<(() => EditorState | null) | null>(null);
@@ -338,6 +341,14 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     const action: EditorAction = { type: "setDashboard", key: "title", update: (d) => ({ ...d, title: text }) };
     setTitleRefused(jsonBlocks(action));
     editor.dispatch(action);
+  };
+  // The variables dialog: Apply is one edit (one undo step), refused while the JSON text doesn't apply.
+  const applyVariables = (variables: VariableSpec[]): string | null => {
+    const st = flushJson.current?.() ?? editor.state;
+    if (st.mode === "edit" && st.jsonText !== null) return JSON_FIRST;
+    editor.dispatch({ type: "setDashboard", update: (d) => ({ ...d, variables }) });
+    setAskVariables(false);
+    return null;
   };
   /** Undo was refused while the JSON text doesn't apply: said on screen until the JSON applies again. */
   const [undoRefused, setUndoRefused] = useState(false);
@@ -726,7 +737,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         editControls={editing
           ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton}
               suggestions={tab === "dashboard" && !ctx.ownerFailure ? { open: railShown, onToggle: toggleSuggestions } : undefined} suggestionsRef={suggestionsButton}
-              undo={{ can: canUndo(editing), onUndo: undo }} />
+              undo={{ can: canUndo(editing), onUndo: undo }}
+              variables={{ onOpen: () => setAskVariables(true), buttonRef: variablesButton }} />
           : undefined} />
       {reread && <RereadNotice failed={reread} buttonRef={rereadRetry} />}
       {editing && !editor.draftsWork && <DraftsOffNotice />}
@@ -763,6 +775,10 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         <AddPanelSearch suggestions={suggestions} owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name} ownerKind={dashboard.owner_kind}
           vars={ctx.vars} range={ctx.range} draft={editing.draft} refused={refused}
           onAdd={addFromSearch} onEmpty={emptyFromSearch} onClose={() => setSearching(false)} restoreFocusTo={searchOpener} />
+      )}
+      {askVariables && editing && (
+        <VariablesDialog draft={editing.draft} ownerKind={dashboard.owner_kind} owner={ctx.owner} restoreFocusTo={variablesButton}
+          onCancel={() => setAskVariables(false)} onApply={applyVariables} />
       )}
       {askDiscard && editing && (
         <DiscardDialog title={editing.base.title || dashboard.title} restoreFocusTo={askDiscard}
