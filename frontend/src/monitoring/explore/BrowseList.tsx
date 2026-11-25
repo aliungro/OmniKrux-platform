@@ -8,6 +8,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { catalogAge, type OwnerStreamLabel } from "../catalog/merge";
 import type { BrowseMetric } from "../catalog/metrics";
 import type { Only } from "../build/writeQuery";
+import HelpTip from "../build/HelpTip";
 import s from "./BrowseList.module.css";
 
 const ROW = 30;
@@ -26,7 +27,11 @@ export interface BrowseListProps {
   /** The catalog could not be read at all. */
   error: string | null;
   /** Lines about what the sources couldn't list. */
+  problems: string[];
+  /** Technical notes about the list, kept in a help tip (only the list's own source type). */
   notes: string[];
+  /** In logs mode: how far back the streams were read (seconds); null when unknown. */
+  streamWindowSeconds?: number | null;
   builtAt: number | null;
   refreshing: boolean;
   refreshError: string | null;
@@ -39,6 +44,14 @@ type Row =
   | { kind: "metric"; key: string; metric: BrowseMetric }
   | { kind: "head"; key: string; label: string }
   | { kind: "stream"; key: string; label: string; value: string };
+
+/** `604800` → `7 days`, `3600` → `1 hour`. */
+export function windowWords(seconds: number): string {
+  for (const [size, one, many] of [[86400, "day", "days"], [3600, "hour", "hours"], [60, "minute", "minutes"]] as const) {
+    if (seconds >= size && seconds % size === 0) { const n = seconds / size; return `${n} ${n === 1 ? one : many}`; }
+  }
+  return `${seconds} seconds`;
+}
 
 const lower = (t: string) => t.toLocaleLowerCase();
 
@@ -60,7 +73,7 @@ function rowsOf(mode: "metrics" | "streams", metrics: BrowseMetric[], streams: O
 }
 
 export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function BrowseList(props, ref) {
-  const { mode, projectName, metrics, streams, selectedMetric, selectedStreams, loading, error, notes, builtAt, refreshing, refreshError } = props;
+  const { mode, projectName, metrics, streams, selectedMetric, selectedStreams, loading, error, problems, notes, streamWindowSeconds, builtAt, refreshing, refreshError } = props;
   const uid = useId();
   const scroller = useRef<HTMLDivElement>(null);
   const filter = useRef<HTMLInputElement>(null);
@@ -149,7 +162,10 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
   const none = !loading && !error && rows.length === 0;
   return (
     <div className={s.browse}>
-      <h2 className={s.heading}>{`${noun} in ${projectName} · ${total}`}</h2>
+      <div className={s.headRow}>
+        <h2 className={s.heading}>{`${noun} in ${projectName} · ${total}`}</h2>
+        {notes.length > 0 && <HelpTip label="About this list">{notes.join(" ")}</HelpTip>}
+      </div>
       <input ref={filter} className={s.filter} type="text" autoComplete="off" spellCheck={false}
         aria-label="Filter the list" placeholder="Filter" value={text}
         onChange={(e) => setText(e.target.value)} onKeyDown={onFilterKey} />
@@ -162,10 +178,10 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
           </button>
         </div>
       )}
-      {notes.map((n) => <p key={n} className={s.line}>{n}</p>)}
+      {problems.map((n) => <p key={n} className={s.line}>{n}</p>)}
       {none && (
         <p className={s.line}>
-          {applied.trim() !== "" ? "Nothing matches that." : mode === "metrics" ? "This source lists no metrics yet." : "This source lists no log streams yet."}
+          {applied.trim() !== "" ? "Nothing matches that." : mode === "metrics" ? "This source lists no metrics yet." : streamWindowSeconds ? `No log streams in the last ${windowWords(streamWindowSeconds)}.` : "This source lists no log streams yet."}
         </p>
       )}
       <div ref={scroller} className={s.list} role="listbox" tabIndex={0} aria-label={noun} aria-keyshortcuts="b"

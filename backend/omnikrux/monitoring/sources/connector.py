@@ -89,7 +89,7 @@ class CatalogLimits:
     max_stream_labels: int = 50
     max_stream_values: int = 200
     max_stream_series: int = 5000
-    stream_window: int = 3600
+    stream_window: int = LOKI_LABEL_WINDOW
 
 
 DEFAULT_LIMITS = CatalogLimits()

@@ -127,6 +127,12 @@ describe("Dashboard page", () => {
     expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
     const time = screen.getByRole("button", { name: "Last 6 hours" });
     expect(document.activeElement).toBe(time);
+    // A second click on the button closes the menu instead of reopening it.
+    await user.click(time);
+    expect(screen.getByRole("menu", { name: "Time range" })).toBeTruthy();
+    await user.click(time);
+    expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
+    expect(document.activeElement).toBe(time);
     expect(time.getAttribute("aria-keyshortcuts")).toBe("t");
 
     const before = batches(api).length;

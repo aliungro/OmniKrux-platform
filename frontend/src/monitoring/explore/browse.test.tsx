@@ -9,6 +9,7 @@ import { intercept, linkedProject, linkTo, serverFailure } from "../test/dashboa
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import type { ExploreView } from "../shell/tabState";
+import { windowWords } from "./BrowseList";
 
 vi.mock("../charts", async () => {
   const { createElement } = await import("react");
@@ -272,6 +273,38 @@ describe("Browse metrics and log streams", () => {
     expect(query().value).toBe('{app="api",level="error"}');
     // The label picked from the list is the stream: it isn't offered as a split.
     expect(screen.queryByRole("button", { name: "app" })).toBeNull();
+  });
+
+  it("an empty stream list names the window it checked", async () => {
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("l1", "loki")] }],
+      catalogs: { p1: catalogOf("p1", source("l1", { source_type: "loki", built_at: BUILT, stream_window_seconds: 604800 })) },
+    }, async () => json([]));
+    await openExplore();
+    expect(await screen.findByText("No log streams in the last 7 days.")).toBeTruthy();
+    expect(windowWords(604800)).toBe("7 days");
+    expect(windowWords(3600)).toBe("1 hour");
+  });
+
+  it("a logs list never shows Prometheus notes", async () => {
+    const note = "Labels per metric come from the first 50000 series.";
+    const loki = "Showing the first 50 log labels.";
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("s1"), linkTo("l1", "loki")] }],
+      catalogs: {
+        p1: catalogOf("p1",
+          source("s1", { built_at: BUILT, notes: [note], metrics: [metric("up", { labels: ["job"] })] }),
+          source("l1", { source_type: "loki", built_at: BUILT, notes: [loki], stream_window_seconds: 604800, streams: [stream("app", ["api"])] })),
+      },
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1" });
+    await screen.findByRole("heading", { name: "Log streams in prod-east · 1" });
+    expect(screen.queryByText(note)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "About this list" }));
+    const tip = screen.getByRole("tooltip");
+    expect(tip.textContent).toContain(loki);
+    expect(tip.textContent).not.toContain("50000");
   });
 
   it("log stream chips keep the chosen stream and read nothing twice", async () => {

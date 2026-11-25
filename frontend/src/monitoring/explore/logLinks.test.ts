@@ -16,6 +16,15 @@ describe("logLinks", () => {
     expect(LINES_LIMIT).toBe(1000);
   });
 
+  it("OTel labels link a metric's Pod to its logs", () => {
+    const otel = ["k8s_namespace_name", "k8s_pod_name", "k8s_container_name", "service_name"];
+    expect(linkedLogSelector({ namespace: "a", pod: "b" }, otel)).toBe('{k8s_namespace_name="a",k8s_pod_name="b"}');
+    expect(linkedLogSelector({ namespace: "a", container: "c", route: "/x" }, otel)).toBe('{k8s_container_name="c",k8s_namespace_name="a"}');
+    // Without both the namespace and Pod labels the names stay as they are.
+    expect(linkedLogSelector({ namespace: "a", pod: "b" }, ["k8s_namespace_name", "pod"])).toBe('{pod="b"}');
+    expect(linkedLogSelector({ namespace: "a", pod: "b" }, ["namespace", "pod"])).toBe('{namespace="a",pod="b"}');
+  });
+
   it("tones come from labels, then words", () => {
     expect(lineTone(line("all good", { level: "warn" }))).toBe("warn");
     expect(lineTone(line("500 POST: upstream timeout ERROR"))).toBe("error");

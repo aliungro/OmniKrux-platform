@@ -114,6 +114,18 @@ async def test_catalog_route_lists_each_linked_source(
     assert abs(_seconds(prometheus["built_at"]) - time.time()) < 60
 
 
+async def test_catalog_says_the_loki_window(
+    monitoring_app, fake_prometheus, fake_loki, linked_project_with_loki
+):
+    http, _ = monitoring_app
+    seed_shop(fake_prometheus)
+    fake_loki.series = [{"app": "shop", "cluster": "a"}]
+    body = (await http.get(catalog_url(linked_project_with_loki.project_id))).json()
+    prometheus, loki = body["sources"]
+    assert loki["stream_window_seconds"] == 604800
+    assert prometheus["stream_window_seconds"] is None
+
+
 def _seconds(text: str) -> float:
     from datetime import datetime
 

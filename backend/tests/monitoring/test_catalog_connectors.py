@@ -137,8 +137,18 @@ async def test_catalog_calls_carry_the_filter(fake_prometheus, fake_loki, direct
     [only] = loki_requests(fake_loki)
     assert only.path == "/loki/api/v1/series"
     assert only.params["match[]"] == ['{cluster="a"}']
-    assert int(only.params["start"][0]) == int((NOW - 3600) * 1_000_000_000)
+    assert int(only.params["start"][0]) == int((NOW - 604800) * 1_000_000_000)
     assert int(only.params["end"][0]) == int(NOW * 1_000_000_000)
+
+
+async def test_loki_catalog_reads_seven_days(fake_loki, direct):
+    fake_loki.labels = ["app"]
+    fake_loki.label_values = {"app": ["api"]}
+    await LokiConnector().catalog(direct(fake_loki.url, type="loki"), matchers=(), now=NOW)
+    sent = loki_requests(fake_loki)
+    assert sent and all(
+        int(r.params["start"][0]) == int((NOW - 604800) * 1_000_000_000) for r in sent
+    )
 
 
 async def test_prometheus_catalog_without_matchers_sends_no_filter(fake_prometheus, direct):
@@ -398,7 +408,7 @@ async def test_loki_catalog_lists_labels_and_values(fake_loki, direct):
         "/loki/api/v1/label/app/values",
         "/loki/api/v1/label/namespace/values",
     ]
-    start, end = str(int((NOW - 3600) * 1_000_000_000)), str(int(NOW * 1_000_000_000))
+    start, end = str(int((NOW - 604800) * 1_000_000_000)), str(int(NOW * 1_000_000_000))
     for r in sent:
         assert r.params["start"] == [start] and r.params["end"] == [end]
         assert "query" not in r.params and "match[]" not in r.params

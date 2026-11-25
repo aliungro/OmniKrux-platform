@@ -15,10 +15,21 @@ export const LINES_LIMIT = 1000;
 const ERROR_WORDS = /\b(?:error|err|fatal|panic|critical|crit|alert|emerg)\b/i;
 const WARN_WORDS = /\b(?:warn|warning)\b/i;
 
+// The names an OpenTelemetry log shipper gives a stream's namespace, Pod and container (the same
+// sets as the backend's `dashboards/loki_labels.py`). A metric's `namespace`, `pod` and `container`
+// become these when this Loki has both its namespace and Pod label, else they stay as they are.
+const OTEL_NAMES: Record<string, string> = {
+  namespace: "k8s_namespace_name",
+  pod: "k8s_pod_name",
+  container: "k8s_container_name",
+};
+
 /** `{a="x",b="y"}` from the Only labels Loki has (sorted by the writer); none, or none writable, → `null`. */
 export function linkedLogSelector(only: Only, lokiLabels: string[]): string | null {
   const have = new Set(lokiLabels);
-  const kept = Object.fromEntries(Object.entries(only).filter(([label, value]) => have.has(label) && value !== ""));
+  const otel = have.has(OTEL_NAMES.namespace) && have.has(OTEL_NAMES.pod);
+  const named = Object.entries(only).map(([label, value]) => [otel ? (OTEL_NAMES[label] ?? label) : label, value] as const);
+  const kept = Object.fromEntries(named.filter(([label, value]) => have.has(label) && value !== ""));
   if (Object.keys(kept).length === 0) return null;
   try {
     return writeLogQuery(kept, []);

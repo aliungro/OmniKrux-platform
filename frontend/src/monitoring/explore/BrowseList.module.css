@@ -11,6 +11,12 @@
   padding: 12px;
 }
 
+.headRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .heading {
   margin: 2px 0 2px;
   color: var(--ink-3);

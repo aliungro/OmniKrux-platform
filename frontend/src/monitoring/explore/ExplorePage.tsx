@@ -578,7 +578,9 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
               <BrowseList ref={listBox} mode={browseMode} projectName={projectName} metrics={metrics} streams={streams}
                 selectedMetric={builder.metric} selectedStreams={builder.stream ? builder.only : {}}
                 loading={catalogLoading && catalog === null} error={catalogError}
-                notes={catalog ? [...catalog.problems, ...catalog.notes] : []} builtAt={catalog?.builtAt ?? null}
+                problems={catalog?.problems ?? []}
+                notes={catalog ? (browseMode === "streams" ? catalog.notesBy.loki : catalog.notesBy.prometheus) : []}
+                streamWindowSeconds={catalog?.streamWindowSeconds ?? null} builtAt={catalog?.builtAt ?? null}
                 refreshing={refreshing} refreshError={refreshError} onRefresh={refreshList}
                 onPickMetric={(metric) => applyBuilder({ type: "pickMetric", metric })}
                 onPickStream={(label, value) => applyBuilder({ type: "pickStream", label, value })} />

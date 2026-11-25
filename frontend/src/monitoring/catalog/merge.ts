@@ -37,6 +37,8 @@ export type OwnerCatalog = {
   notes: string[];
   /** The same notes by the type of source that gave them (a Prometheus note is never for a logs list). */
   notesBy: { prometheus: string[]; loki: string[] };
+  /** The smallest window (seconds) the Loki sources read their streams over; `null` without a Loki. */
+  streamWindowSeconds: number | null;
 };
 
 export type CatalogPart = { project: ProjectOut; catalog: CatalogOut | null; error: string | null };
@@ -75,6 +77,7 @@ export function ownerCatalog(parts: CatalogPart[], ownerKind: OwnerKind): OwnerC
   const notesBy: OwnerCatalog["notesBy"] = { prometheus: [], loki: [] };
   let hasPrometheus = false;
   let hasLoki = false;
+  let streamWindowSeconds: number | null = null;
   let builtAt: number | null = null;
 
   for (const part of parts) {
@@ -82,7 +85,11 @@ export function ownerCatalog(parts: CatalogPart[], ownerKind: OwnerKind): OwnerC
     if (part.error !== null) problems.push(`${where}${part.error}`);
     for (const src of part.catalog?.sources ?? []) {
       if (src.source_type === "prometheus") hasPrometheus = true;
-      if (src.source_type === "loki") hasLoki = true;
+      if (src.source_type === "loki") {
+        hasLoki = true;
+        const w = src.stream_window_seconds;
+        if (w !== null && w !== undefined && (streamWindowSeconds === null || w < streamWindowSeconds)) streamWindowSeconds = w;
+      }
       if (src.state !== "ok" && src.message) problems.push(`${where}${src.source_name}: ${src.message}`);
       src.notes.forEach((n) => {
         add(notes, n);
@@ -120,7 +127,7 @@ export function ownerCatalog(parts: CatalogPart[], ownerKind: OwnerKind): OwnerC
     streams: [...streams.entries()]
       .sort(([a], [b]) => byText(a, b))
       .map(([name, s]) => ({ name, values: sorted(s.values), sourceId: s.sourceId, projectIds: s.projectIds })),
-    hasPrometheus, hasLoki, builtAt, problems, notes, notesBy,
+    hasPrometheus, hasLoki, builtAt, problems, notes, notesBy, streamWindowSeconds,
   };
 }
 

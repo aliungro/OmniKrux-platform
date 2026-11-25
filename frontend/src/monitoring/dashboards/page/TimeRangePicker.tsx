@@ -70,7 +70,7 @@ export function TimeRangePicker({ time, open, onOpen, onClose, onPick, buttonRef
         <span className={s.caret} aria-hidden="true">▾</span>
       </button>
       {open && (
-        <div {...POPUP} className={s.popup} onKeyDown={escapeCloses(() => onClose(true))} onBlur={closesOnLeave(close)}>
+        <div {...POPUP} className={s.popup} onKeyDown={escapeCloses(() => onClose(true))} onBlur={closesOnLeave(close, root)}>
           <div ref={menu} role="menu" aria-label="Time range" className={s.menu} onKeyDown={menuKeys}>
             {TIME_PRESETS.map((p) => {
               const on = time.to === "now" && time.from === p.from;

@@ -63,6 +63,27 @@ async function openExplore(view: ExploreView = { page: "explore", project: "p1",
 }
 
 describe("Explore", () => {
+  it("a second click on the time button closes the menu, and Esc and Tab away still do", async () => {
+    installFakeMonitoringApi({ projects: [linkedProject("p1", "Alpha", "s1")] }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1" });
+    const button = await screen.findByRole("button", { name: /Last 1 hour/ });
+    await user.click(button);
+    expect(screen.getByRole("menu", { name: "Time range" })).toBeTruthy();
+    await user.click(button);
+    expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
+    expect(document.activeElement).toBe(button);
+    await user.click(button);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
+    expect(document.activeElement).toBe(button);
+    await user.click(button);
+    await user.tab();
+    await user.tab();
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("opens on the most recent project with focus on the heading", async () => {
     installFakeMonitoringApi({ projects: [linkedProject("p1", "Alpha", "s1"), linkedProject("p2", "Zoo", "s2")] }, async () => json([]));
     recordRecent({ kind: "project", id: "p1" }, 1);
