@@ -555,23 +555,23 @@ Dashboards, projects and groups can leave OmniKrux as a JSON file and come back,
 ### Export
 
 - **Export as JSON** in a dashboard's **More actions** menu (**⋯**) saves that dashboard.
-- **Export project** on a project's page saves its dashboards together with the sources they use and each source's label filter.
+- **Export project** on a project's page saves its dashboards together with the project's sources and each source's label filter. An Alertmanager the project links is in the file too; no panel reads it, so an import only lists it under **What the exported project used**.
 - **Export group** on a group's page saves the group's dashboards and the names of its projects.
 
-The browser saves the file, named after what you exported (for example `node-overview.omnikrux.json`), and a line says what went in. A file holds the dashboards, their panel alerts (contact points by name only) and, for a project, the sources by type, name, address and kind of sign-in. **Passwords, tokens, API keys, certificates and header values are never in a file**, and neither are a source's user name or OmniKrux's internal ids. A source that needs a secret asks for it when you add it after an import.
+The browser saves the file, named after what you exported (for example `node-overview.omnikrux.json`), and a line says what went in. A file holds the dashboards, their panel alerts (contact points by name only) and, for a project, the sources by type, name, address and kind of sign-in. **Passwords, tokens, API keys, certificates and header values are never in a file**, and neither are a source's user name or a source or cluster id. A source that needs a secret asks for it when you add it after an import.
 
 ### Import
 
 Open **Import dashboards** with the **Import** button in the sidebar (or press `I`), with **Import dashboards…** on a project's or group's page, or with **Import into …** in a dashboard's **More actions** menu. Ctrl+click opens it in a new tab. The page asks what to **Import from**:
 
-- **A file**: an OmniKrux export or a Grafana dashboard as `.json`. Use **Choose a file** or drop the file on the page. Files over 10 MB are refused.
+- **A file**: an OmniKrux export or a Grafana dashboard as `.json`. Use **Choose a file** or drop the file on the page. Files over 10 MB are refused. Once a file is chosen, Ctrl+Enter checks it.
 - **Pasted JSON**: a Grafana dashboard's JSON model or an OmniKrux export. Ctrl+Enter checks it.
 - **A Grafana**: pick a saved connection (or **Connect a Grafana…**) and tick up to 100 dashboards.
 
 **Check what converts** reads the input and opens the **Review**. Nothing has been saved yet. The review shows:
 
 - **Goes to**: the project or group the dashboards are added to. An export is suggested the project or group with the name it was exported from, when there is one; a group export also offers **A new group…** with the projects it named. Without a project, the page says to set one up first.
-- **Data sources**: a table with **In the file** and **Uses here**. Each data source the dashboards read is matched to one of the target project's own sources of the same type, and you can change the match. **Leave its panels out** drops the panels that read it. OmniKrux never creates a source from a file, so no address or sign-in is ever invented. In a group dashboard each project uses its own source.
+- **Data sources**: a table with **In the file** and **Uses here**. Each data source the dashboards read is matched to one of the target project's own sources of the same type, and you can change the match. **Leave its panels out** drops the panels that read it. Changing a match checks the review again, so the panel counts, the summary and **Skipped** list what the import will now do (a panel left out is listed there). OmniKrux never creates a source from a file, so no address or sign-in is ever invented. In a group dashboard each project uses its own source.
 - Each dashboard, with a tick (**Import** and its title), an editable **Title** (unused by that owner), and **Skipped (n)**, which lists what won't be copied and why. A dashboard that can't be imported says why and can't be ticked.
 
 A summary line counts the dashboards chosen and the things not copied. **Import 1 dashboard** (or **Import n dashboards**; also Ctrl+Enter) saves all of them, or none if something fails. If something changed since the check, the review is checked again and says so, and you press Import once more. A single dashboard opens right away; several are listed under **Imported** with **Open** buttons and **Import more**. Imported alerts open their usual review (see [An alert on a panel](#an-alert-on-a-panel)); an imported alert notifies no one until you pick contact points.
@@ -599,7 +599,7 @@ A Grafana dashboard becomes an OmniKrux dashboard on a 24-column grid. Whatever 
 | Logs | Logs |
 | Text and any other type | Skipped; row headers only organise panels |
 
-- **Layout**: panel positions are kept. Overlapping panels are moved down and then up into free space, and an old dashboard made of rows gets a grid from them.
+- **Layout**: panel positions are kept. Overlapping panels are moved down and then up into free space, and an old dashboard made of rows gets a grid from them. A dashboard holds at most 100 panels: the panels after the 100th are listed as skipped.
 - **Units**: none, short, percent, percentunit, seconds, milliseconds, bytes, bytes per second and requests per second are kept; the duration and decimal or binary byte units map to the nearest one; rate-like units (ops, rps, wps, iops, cps) show as plain numbers; any other unit is dropped and listed.
 - **Thresholds and colours** become OmniKrux's good, warning and bad tones.
 - **Variables**: query variables built on `label_values(...)` become label-values variables. Other kinds (interval, custom, text, ad hoc and the like) are skipped, and a variable's regex is dropped; each is listed.
@@ -613,7 +613,7 @@ A dashboard that was imported says where it came from under its title ("Imported
 - For a dashboard imported through a saved Grafana connection, OmniKrux reads the Grafana again. For one imported from a file or pasted JSON, it asks you to **Pick the file again** or paste its JSON, then press **Check**.
 - The dialog shows the dashboard **Now (version n)** beside **From the source**, with any **New data sources** and **Skipped (n)**. When nothing differs it says **Nothing changed: the source matches this dashboard.**
 - When the dashboard was changed in OmniKrux after it was imported, the dialog warns that updating replaces those changes. They stay in **Versions**, where the update appears as a new version.
-- **Replace with the source** saves the source as the next version. The dashboard keeps its title, and each alert keeps its contact points, where it runs and how often it is checked; the rest of an alert comes from the source.
+- **Replace with the source** saves the source as the next version. The dashboard keeps its title, and each alert keeps its contact points, where it runs and how often it is checked; the rest of an alert comes from the source. When Grafana's alert rules weren't read this time (an update from the file of a dashboard that came from a Grafana, or a Grafana that didn't send its rules), each panel keeps its alert as it is, and **Skipped** says so.
 - An update is refused while a draft of the dashboard is open: save or discard the draft first.
 
 ### Audit
