@@ -945,10 +945,12 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
           {created && (
             <div className={s.created}>
               <h2 ref={heading} tabIndex={-1} className={s.stepTitle}>{created.project.name}</h2>
-              <p className={s.problem} role="alert">{importFailedWords(created.message)}</p>
+              {/* Checked again after a `changed` answer: the line says so, never the answer's "Check again". */}
+              <p className={s.problem} role="alert">
+                {importFailedWords(created.rechecked && draft.importFrom?.preview ? CHANGED : created.message)}
+              </p>
               {created.rechecked && draft.importFrom?.preview && (
                 <div className={s.createdLedger}>
-                  <p className={s.createdNotice}>{CHANGED}</p>
                   <PreviewLedger preview={draft.importFrom.preview} />
                 </div>
               )}

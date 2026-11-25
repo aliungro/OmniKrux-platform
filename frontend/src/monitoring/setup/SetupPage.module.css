@@ -645,12 +645,6 @@
   background: color-mix(in srgb, var(--focus) 6%, transparent);
 }
 
-.createdNotice {
-  margin: 0;
-  color: var(--warn);
-  font-size: 13px;
-}
-
 .createdActions {
   display: flex;
   flex-wrap: wrap;

@@ -434,6 +434,35 @@ describe("Grafana dashboard checklist", () => {
     expect(document.activeElement).toBe(within(again).getAllByRole("checkbox")[0]);
   });
 
+  it("a reload whose kept filter matches nothing keeps the keyboard on the filter", async () => {
+    const user = userEvent.setup();
+    let answer: (out: GrafanaDashboardsOut) => void = () => {};
+    const load = vi.fn<() => Promise<GrafanaDashboardsOut>>()
+      .mockResolvedValueOnce(boards(12))
+      .mockImplementationOnce(() => new Promise((r) => { answer = r; }))
+      .mockResolvedValueOnce(boards(4));
+    function Keyed({ k }: { k: string }) {
+      const [selected, setSelected] = useState<Set<string>>(new Set());
+      return <GrafanaDashboardList load={load} loadKey={k} selected={selected} onChange={setSelected} name="Main" />;
+    }
+    const view = render(<Keyed k="a" />);
+    await screen.findByRole("group", { name: "Dashboards in Main" });
+    await user.type(screen.getByLabelText("Filter dashboards"), "Board 0");
+    view.rerender(<Keyed k="b" />);
+    expect(document.activeElement).toBe(screen.getByText("Loading dashboards…"));
+    // The new list has twelve boards, none named "Board 0…" past the ninth: rename them all.
+    await act(async () => answer({ ...boards(12), items: boards(12).items.map((d) => ({ ...d, title: `Other ${d.uid}` })) }));
+    expect(await screen.findByText("No dashboard matches. Try other words.")).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByLabelText("Filter dashboards"));
+    expect(document.activeElement).not.toBe(document.body);
+    // A reload too short for a filter shows every dashboard: the kept filter no longer applies.
+    view.rerender(<Keyed k="c" />);
+    const group = await screen.findByRole("group", { name: "Dashboards in Main" });
+    expect(screen.queryByLabelText("Filter dashboards")).toBeNull();
+    expect(within(group).getAllByRole("checkbox")).toHaveLength(4);
+    expect(document.activeElement).toBe(within(group).getAllByRole("checkbox")[0]);
+  });
+
   it("a filter that matches nothing says so", async () => {
     const user = userEvent.setup();
     render(<Checklist load={async () => boards(12)} />);

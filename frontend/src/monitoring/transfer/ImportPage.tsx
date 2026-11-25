@@ -41,6 +41,10 @@ interface Reviewing {
 /** The target a preview is made for: a new group is previewed with none. */
 const sentOf = (t: ReviewTarget | null): TargetIn | null => (t && !isNewGroup(t) ? t : null);
 
+/** The sources the review leaves out, as a preview for `target` takes them (a group reads none of its own). */
+const leftOut = (state: ReviewState, target: ReviewTarget | null): MappingIn[] =>
+  targetKind(target) === "group" ? [] : Object.values(state.mapping).filter((m) => m.leave_out);
+
 const isAbort = (err: unknown) => err instanceof DOMException && err.name === "AbortError";
 
 function exists(tree: TreeOut | undefined, t: TargetIn | null): boolean {
@@ -127,12 +131,12 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
     setCheckError(null);
   };
 
-  async function previewFor(what: ImportInput, target: TargetIn | null): Promise<ImportPreviewOut | null> {
+  async function previewFor(what: ImportInput, target: TargetIn | null, mapping: MappingIn[] = []): Promise<ImportPreviewOut | null> {
     run.current?.abort();
     const ctl = new AbortController();
     run.current = ctl;
     try {
-      const p = await previewImport({ input: what, target }, ctl.signal);
+      const p = await previewImport({ input: what, target, ...(mapping.length > 0 ? { mapping } : {}) }, ctl.signal);
       return ctl.signal.aborted ? null : p;
     } catch (err) {
       if (isAbort(err) || ctl.signal.aborted) return null;
@@ -146,7 +150,9 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
     // choices made in it stay.
     if (review) {
       setNotice(null);
-      if (await recheck(review, review.state.target, true)) setFocus({ to: "review" });
+      // Sources picked by hand stay only when the review was made for the place it shows now.
+      const keepSources = sameTarget(review.sent, sentOf(review.state.target));
+      if (await recheck(review, review.state.target, keepSources)) setFocus({ to: "review" });
       return;
     }
     const what = input;
@@ -178,7 +184,7 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
     const sent = sentOf(target);
     setCheckingWhat("recheck");
     try {
-      const p = await previewFor(base.input, sent);
+      const p = await previewFor(base.input, sent, leftOut(base.state, target));
       if (!p) return false;
       setReview((r) => (r && r.input === base.input
         ? { input: r.input, sent, state: rebaseReview(r.state, p, r.state.target, sameTargetAsBefore) }
@@ -211,9 +217,14 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
     }
   };
 
+  // A changed match is checked again, like a changed place: the panel counts, the summary and the
+  // skipped list then say what the import does with it (a later change's check replaces this one).
   const onMapping = (key: string, m: MappingIn) => {
+    if (!review) return;
     setErrors((e) => ({ ...e, sources: { ...e.sources, [key]: "" } }));
-    setReview((r) => (r ? { ...r, state: { ...r.state, mapping: { ...r.state.mapping, [key]: m } } } : r));
+    const base = { ...review, state: { ...review.state, mapping: { ...review.state.mapping, [key]: m } } };
+    setReview(base);
+    void recheck(base, base.state.target, sameTarget(review.sent, sentOf(review.state.target)));
   };
   const onChoose = (key: string, patch: Partial<{ use: boolean; title: string }>) => {
     setErrors((e) => ({ ...e, rows: { ...e.rows, [key]: "" } }));
@@ -376,8 +387,16 @@ export default function ImportPage({ view, tabId, nav, openInNewTab }: Monitorin
 
   const onGrafana = useCallback((id: string) => { inputChanged(); setGrafanaId(id); }, []);
 
+  // A chosen file is checked with Ctrl+Enter from anywhere on the page (the pasted JSON's box and
+  // the review take it themselves).
+  const onPageKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented || done || mode !== "file") return;
+    e.preventDefault();
+    void check();
+  };
+
   return (
-    <div className={s.page}>
+    <div className={s.page} onKeyDown={onPageKey}>
       <header className={s.top}>
         <span className={s.mark} aria-hidden="true">⤓</span>
         <div>

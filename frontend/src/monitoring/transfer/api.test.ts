@@ -1,10 +1,10 @@
 import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
 import {
-  applyUpdate, commitImport, exportItem, newGrafanaDashboards, previewImport, TransferRequestError, useGrafanaConnections,
+  applyUpdate, commitImport, exportItem, newGrafanaDashboards, previewImport, TransferRequestError, useExportItem, useGrafanaConnections,
   useGrafanaDashboards, useOrigin, type GrafanaOut,
 } from "./api";
 
@@ -67,14 +67,21 @@ describe("transfer client", () => {
     };
     api.state.transfer.grafana = [saved];
     api.state.transfer.grafanaDashboards.gf9 = { items: [], truncated: false };
+    api.state.transfer.exports["project:p1"] = { file_name: "shop-project.omnikrux.json", export: { omnikrux: "monitoring-export" }, dashboards: 1, sources: 1, alerts: 0 };
     const connection = { reach: "url" as const, url: "http://grafana.example.invalid", auth: { type: "bearer" as const, token: "glsa_SECRET-13" } };
-    const hooks = renderHook(() => ({ list: useGrafanaConnections(), dashboards: useGrafanaDashboards("gf9"), origin: useOrigin("d1") }), { wrapper: wrapper(client) });
+    const hooks = renderHook(
+      () => ({ list: useGrafanaConnections(), dashboards: useGrafanaDashboards("gf9"), origin: useOrigin("d1"), exporting: useExportItem() }),
+      { wrapper: wrapper(client) },
+    );
     const found = await newGrafanaDashboards(connection);
     expect(found.items).toHaveLength(1);
     await previewImport({ input: { kind: "grafana", connection, uids: ["u1"] } }).catch(() => undefined);
     await commitImport({ input: { kind: "grafana", connection, uids: ["u1"] }, dashboards: [{ key: "u1", title: "Overview", digest: "x" }] }).catch(() => undefined);
     await waitFor(() => expect(hooks.result.current.list.data).toEqual([saved]));
     await waitFor(() => expect(hooks.result.current.origin.isSuccess).toBe(true));
+    // The one transfer mutation runs too, so the mutation cache is really looked at.
+    await act(async () => { await hooks.result.current.exporting.mutateAsync({ kind: "project", id: "p1" }); });
+    expect(client.getMutationCache().getAll()).toHaveLength(1);
     const cached = JSON.stringify(client.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]));
     const mutations = JSON.stringify(client.getMutationCache().getAll().map((m) => [m.options.mutationKey, m.state.variables, m.state.data]));
     expect(cached).not.toContain("glsa_SECRET-13");

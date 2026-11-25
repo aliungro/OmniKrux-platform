@@ -302,7 +302,10 @@ describe("Setup step 3: import from Grafana", () => {
     const before = previewsSent(api).length;
     await user.click(button("Try the import again"));
     expect(await screen.findByText("2 dashboards to copy · 4 things won't be copied")).toBeTruthy();
-    expect(screen.getByText("Something changed since you checked. Here is the new result.")).toBeTruthy();
+    // The failure line says the import was checked again, not the answer's "Check again".
+    const line = screen.getByText("The project was created, but its dashboards weren't imported: Something changed since you checked. Here is the new result.");
+    expect(line.getAttribute("role")).toBe("alert");
+    expect(screen.queryByText(/Check again\./)).toBeNull();
     expect(screen.getByText("This dashboard can't be imported: Grafana couldn't send it.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Skipped (3)" })).toBeTruthy();
     const rechecks = previewsSent(api).slice(before);

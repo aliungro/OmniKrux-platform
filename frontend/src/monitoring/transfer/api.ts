@@ -155,6 +155,8 @@ export interface NewGroupIn {
 export interface ImportPreviewIn {
   input: ImportInput;
   target?: TargetIn | null;
+  /** The review's mapping so far: its "Leave its panels out" choices change what the preview lists. */
+  mapping?: MappingIn[];
 }
 
 export interface SkippedOut {
@@ -177,7 +179,8 @@ export interface SourceRefOut {
 export interface BundleSourceOut {
   key: string;
   name: string;
-  type: "prometheus" | "loki";
+  /** An Alertmanager the exported project linked is listed; no panel reads it. */
+  type: "prometheus" | "loki" | "alertmanager";
   where: string;
   filter: string | null;
   auth: string;

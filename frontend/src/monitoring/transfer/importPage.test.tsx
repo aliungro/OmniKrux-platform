@@ -3,7 +3,7 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFakeMonitoringApi, type FakeMonitoringSeed } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
-import { intercept, seedDashboard, serverFailure, spec } from "../test/dashboardSeeds";
+import { gate, intercept, seedDashboard, serverFailure, spec } from "../test/dashboardSeeds";
 import { alertFormMarks, clearAlertForms } from "../alerts/rules/formSessions";
 import type { AlertChangeOut } from "../alerts/api";
 import type { GroupOut, LinkOut, ProjectOut } from "../api/types";
@@ -292,7 +292,8 @@ describe("the Import page", () => {
       bundle: {
         kind: "project", name: "shop", project_kind: "kubernetes", cluster: "prod", projects: [],
         sources: [{ key: "x1", name: "prom-main", type: "prometheus", where: "prod/monitoring/prometheus:9090", filter: 'namespace="shop"', auth: "bearer" },
-          { key: "x2", name: "logs", type: "loki", where: "http://loki.example.invalid:3100", filter: null, auth: "none" }],
+          { key: "x2", name: "logs", type: "loki", where: "http://loki.example.invalid:3100", filter: null, auth: "none" },
+          { key: "x3", name: "alerts", type: "alertmanager", where: "prod/monitoring/alertmanager:9093", filter: 'namespace="shop"', auth: "none" }],
       },
     });
     const { app } = setUp({ projects: [], transfer: { previews: { [GRAFANA]: exported } } }, { page: "import" });
@@ -305,6 +306,7 @@ describe("the Import page", () => {
       "A Kubernetes cluster", "Cluster prod",
       'prom-main · Prometheus-compatible · prod/monitoring/prometheus:9090 · Filter: namespace="shop"',
       "logs · Loki · http://loki.example.invalid:3100 · Filter: none",
+      'alerts · Alertmanager · prod/monitoring/alertmanager:9093 · Filter: namespace="shop"',
     ]);
     expect(within(used).getByText("Passwords and tokens aren't in exports. A source that needs them asks for them when you add it.")).toBeTruthy();
     // The review lives on this tab's page only: opening another tab asks first.
@@ -402,8 +404,8 @@ describe("the Import page", () => {
     expect(document.activeElement).toBe(importButton());
     expect(importButton().getAttribute("aria-keyshortcuts")).toBe("Control+Enter");
     // Back to the title: Ctrl+Enter anywhere in the review imports.
-    await user.tab({ shift: true });
-    await user.tab({ shift: true });
+    await press("{Shift>}{Tab}{/Shift}");
+    await press("{Shift>}{Tab}{/Shift}");
     expect(document.activeElement).toBe(title);
     await press("{Control>}{Enter}{/Control}");
     const imported = await screen.findByRole("heading", { name: "Imported" });
@@ -471,6 +473,87 @@ describe("the Import page", () => {
     await user.click(importButton());
     expect(await within(review).findByText(unlinked)).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(within(review).getByRole("combobox", { name: "Source for Prometheus" })));
+  });
+
+  it("a changed match checks the review again and a late answer is dropped", async () => {
+    const user = userEvent.setup();
+    const DROPPED = { where: 'Panel "API logs"', what: "The whole panel", reason: "Left out on import: its data source \"Prometheus\" wasn't mapped." };
+    const LEFT = preview({ dashboards: [dash("a", "Node overview", { panels: 3, alerts: 1, skipped: [...SKIPPED, DROPPED] })], skipped_total: 4 });
+    const { api } = setUp();
+    const review = await pasteAndCheck(user);
+    expect(within(review).getByText("4 panels")).toBeTruthy();
+    const select = within(review).getByRole("combobox", { name: "Source for Prometheus" }) as HTMLSelectElement;
+    api.state.transfer.previews = { [GRAFANA]: LEFT };
+    await user.selectOptions(select, "Leave its panels out");
+    // The preview says what the import does now: fewer panels, one more thing not copied, named.
+    expect(await within(review).findByText("1 of 1 dashboards chosen · 4 things won't be copied")).toBeTruthy();
+    expect(within(review).getByText("3 panels")).toBeTruthy();
+    expect(previews(api).at(-1)?.body).toEqual({
+      input: { kind: "text", text: GRAFANA, via: "paste" }, target: { kind: "project", id: "p1" }, mapping: [{ key: "prom", leave_out: true }],
+    });
+    expect(document.activeElement).toBe(select);
+    expect(select.value).toBe("leave");
+    await user.click(within(review).getByRole("button", { name: "Skipped (4)" }));
+    expect(within(review).getByText('Panel "API logs"')).toBeTruthy();
+    await waitFor(() => expect(importButton().getAttribute("aria-disabled")).toBeNull());
+
+    // A slow answer for an earlier choice never lands over a later one.
+    const held = gate();
+    const before = previews(api).length;
+    let n = 0;
+    intercept((url) => (url === "/api/monitoring/import/preview" && ++n === 1 ? held.opened.then(() => json(LEFT)) : null));
+    api.state.transfer.previews = { [GRAFANA]: preview() };
+    select.focus();
+    await user.selectOptions(select, "prom-edge");
+    await user.selectOptions(select, "First Prometheus-compatible source (prom-main)");
+    expect(await within(review).findByText("1 of 1 dashboards chosen · 3 things won't be copied")).toBeTruthy();
+    await act(async () => { held.open(); await new Promise((r) => setTimeout(r, 20)); });
+    expect(within(review).getByText("1 of 1 dashboards chosen · 3 things won't be copied")).toBeTruthy();
+    expect(within(review).getByText("4 panels")).toBeTruthy();
+    expect(previews(api).length - before).toBe(1); // the held one never reached the fake
+    expect(previews(api).at(-1)?.body).toEqual({ input: { kind: "text", text: GRAFANA, via: "paste" }, target: { kind: "project", id: "p1" } });
+    expect(document.activeElement).toBe(select);
+    expect(select.value).toBe("first");
+  });
+
+  it("Check again after a failed Goes to change starts the sources over", async () => {
+    const user = userEvent.setup();
+    const words = "OmniKrux couldn't check that just now. Try again.";
+    const API_PROJECT: ProjectOut = { ...API, links: [link("s9", "api-prom")] };
+    const { api } = setUp({ projects: [SHOP, API_PROJECT], transfer: { commits: [result(["d1", "A"], ["d2", "B"])] } });
+    const review = await pasteAndCheck(user);
+    // Picked by hand for shop.
+    await user.selectOptions(within(review).getByRole("combobox", { name: "Source for Prometheus" }), "prom-edge");
+    await waitFor(() => expect(importButton().getAttribute("aria-disabled")).toBeNull());
+    let n = 0;
+    intercept((url) => (url === "/api/monitoring/import/preview" && ++n === 1 ? serverFailure(500, "invalid_input", words) : null));
+    await user.selectOptions(within(review).getByLabelText("Goes to"), "api");
+    expect(await within(review).findByText(words)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Check what converts" }));
+    await waitFor(() => expect(importButton().getAttribute("aria-disabled")).toBeNull());
+    await user.click(importButton());
+    await screen.findByRole("heading", { name: "Imported" });
+    // shop's prom-edge isn't api's: the suggestion is used again.
+    expect(commits(api)[0]).toMatchObject({ target: { kind: "project", id: "p2" }, mapping: [{ key: "prom", source_id: "s1" }] });
+  });
+
+  it("Ctrl+Enter checks a chosen file from anywhere on the page", async () => {
+    const user = userEvent.setup();
+    const { api, app } = setUp();
+    const heading = await screen.findByRole("heading", { name: "Import dashboards" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    // Nothing chosen yet: nothing is sent.
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(previews(api)).toHaveLength(0);
+    const input = app.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    await user.upload(input, new File([GRAFANA], "nodes.json", { type: "application/json" }));
+    await screen.findByText(`nodes.json · ${GRAFANA.length} bytes`);
+    act(() => screen.getByRole("button", { name: "Choose a file" }).focus());
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    const review = await screen.findByRole("heading", { name: "Review" });
+    await waitFor(() => expect(document.activeElement).toBe(review));
+    expect(previews(api)).toHaveLength(1);
+    expect(previews(api)[0].body).toMatchObject({ input: { kind: "text", text: GRAFANA, file_name: "nodes.json", via: "file" } });
   });
 
   it("unsaved work holds the tab by its title only", async () => {

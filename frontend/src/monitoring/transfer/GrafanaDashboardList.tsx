@@ -33,6 +33,8 @@ export function GrafanaDashboardList({ load, loadKey, selected, onChange, name, 
   const tryAgain = useRef<HTMLButtonElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const note = useRef<HTMLParagraphElement>(null);
+  const filterInput = useRef<HTMLInputElement>(null);
+  const selectAllButton = useRef<HTMLButtonElement>(null);
   /** The keyboard was in here when a load began (Try again, or a new `loadKey`): it stays in here. */
   const keep = useRef(false);
   // The latest of these without making the load run again when they change.
@@ -64,22 +66,25 @@ export function GrafanaDashboardList({ load, loadKey, selected, onChange, name, 
     return () => { current = false; };
   }, [loadKey, attempt]);
 
-  // A load the keyboard was in keeps it: on the loading note, then the first checkbox (or the
-  // empty note, or Try again), never on <body>.
+  // A load the keyboard was in keeps it: on the loading note, then the first checkbox shown (or,
+  // when a kept filter matches nothing, the filter; or the empty note, or Try again), never on
+  // <body>.
   useLayoutEffect(() => {
     if (!keep.current) return;
     if (loaded.state === "loading") return note.current?.focus();
     keep.current = false;
     if (loaded.state === "failed") tryAgain.current?.focus();
-    else (boxes.current.values().next().value ?? note.current)?.focus();
+    else (boxes.current.values().next().value ?? note.current ?? filterInput.current ?? selectAllButton.current)?.focus();
   }, [loaded.state]);
 
   const items = loaded.state === "ready" ? loaded.data.items : [];
+  // The filter only applies while it is shown (a reload can bring a list too short for one).
+  const filtering = items.length > SHOW_FILTER_ABOVE;
   const visible = useMemo(() => {
-    const words = filter.trim().toLowerCase();
+    const words = filtering ? filter.trim().toLowerCase() : "";
     if (!words) return items;
     return items.filter((d) => d.title.toLowerCase().includes(words) || (d.folder ?? "").toLowerCase().includes(words));
-  }, [items, filter]);
+  }, [items, filter, filtering]);
 
   // The checkbox that takes Tab: the last one moved to, else the first shown.
   const tabStop = active !== null && visible.some((d) => d.uid === active) ? active : (visible[0]?.uid ?? null);
@@ -142,10 +147,10 @@ export function GrafanaDashboardList({ load, loadKey, selected, onChange, name, 
     return (
       <div className={s.wrap}>
         <div className={s.tools}>
-          <button type="button" className={s.quiet} onClick={selectAll}>Select all</button>
+          <button ref={selectAllButton} type="button" className={s.quiet} onClick={selectAll}>Select all</button>
           <button type="button" className={s.quiet} onClick={selectNone}>Select none</button>
-          {items.length > SHOW_FILTER_ABOVE && (
-            <input className={s.filter} type="search" aria-label="Filter dashboards" placeholder="Filter dashboards" autoComplete="off"
+          {filtering && (
+            <input ref={filterInput} className={s.filter} type="search" aria-label="Filter dashboards" placeholder="Filter dashboards" autoComplete="off"
               spellCheck={false} value={filter} onChange={(e) => setFilter(e.target.value)} />
           )}
         </div>
