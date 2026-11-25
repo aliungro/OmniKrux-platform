@@ -59,6 +59,8 @@ export interface FrameSeries {
 
 /** One bar of the `bars` style: a sample's value as a block from `y0` to `y1` (pixels from the plot's top). */
 export interface FrameBar {
+  /** The series' key. */
+  key: string;
   /** A Territories token name. */
   color: string;
   /** The bar's left edge and width in pixels from the plot's left. */
@@ -102,6 +104,8 @@ export interface TimeSeriesFrame {
   baseline: number;
   /** The `bars` style only: one block per sample and series, stacked from the baseline. */
   bars?: FrameBar[];
+  /** The visible series drawn at full strength over the others (dimmed to `HIGHLIGHT_DIM`), or null. */
+  highlight: string | null;
 }
 
 const TOP = 8;
@@ -183,6 +187,7 @@ export function buildFrame(
   hidden: ReadonlySet<string>,
   alert: AlertBand | null = null,
   step?: number,
+  highlight: string | null = null,
 ): TimeSeriesFrame {
   // An alert's threshold is always on the chart: the y range (explicit bounds too) grows to hold it.
   const limit = alert && Number.isFinite(alert.threshold) ? alert.threshold : null;
@@ -336,7 +341,7 @@ export function buildFrame(
         const sums = v > 0 ? upTo : downTo;
         const from = sums.get(t) ?? 0;
         sums.set(t, from + v);
-        list.push({ color, x: ((t - range.start) / span) * plot.w - w / 2, w, y0: from === 0 ? zero : yOf(from), y1: yOf(from + v) });
+        list.push({ key: s.key, color, x: ((t - range.start) / span) * plot.w - w / 2, w, y0: from === 0 ? zero : yOf(from), y1: yOf(from + v) });
       }
     });
   }
@@ -357,11 +362,14 @@ export function buildFrame(
     alert: limit !== null && alert ? { op: alert.op, threshold: limit, y: yOf(limit), color: "--bad" } : null,
     baseline: yOf(Math.min(hi, Math.max(lo, 0))),
     ...(bars ? { bars } : {}),
+    highlight: highlight !== null && visible.some((s) => s.key === highlight) ? highlight : null,
   };
 }
 
 const AREA_ALPHA = 0.18;
 const BAR_ALPHA = 0.85;
+/** How strongly the other series draw while one is highlighted (their colours stay the same). */
+export const HIGHLIGHT_DIM = 0.25;
 
 /**
  * Paint a frame. `colorOf` turns a token name into the colour to paint with (read from the page at
@@ -404,10 +412,15 @@ export function drawTimeSeries(
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
+  // A highlighted series: the others draw dimmed, and it draws last, on top.
+  const lit = frame.highlight;
+  const strength = (key: string) => (lit === null || key === lit ? 1 : HIGHLIGHT_DIM);
+  const order = lit === null ? frame.series : [...frame.series.filter((s) => s.key !== lit), ...frame.series.filter((s) => s.key === lit)];
+
   // Bars: a block per sample, nothing for a null or a zero.
   if (frame.style === "bars" && frame.bars) {
-    ctx.globalAlpha = BAR_ALPHA;
     for (const b of frame.bars) {
+      ctx.globalAlpha = BAR_ALPHA * strength(b.key);
       ctx.fillStyle = colorOf(b.color);
       const top = Math.min(b.y0, b.y1);
       ctx.fillRect(plot.x + b.x, plot.y + top, b.w, Math.max(1, Math.abs(b.y0 - b.y1)));
@@ -417,8 +430,8 @@ export function drawTimeSeries(
 
   // Fills.
   if (frame.style === "area" || frame.style === "stacked") {
-    ctx.globalAlpha = AREA_ALPHA;
-    for (const s of frame.series) {
+    for (const s of order) {
+      ctx.globalAlpha = AREA_ALPHA * strength(s.key);
       ctx.fillStyle = colorOf(s.color);
       let c = 0;
       while (c < columns) {
@@ -460,7 +473,8 @@ export function drawTimeSeries(
   // Lines: gaps break the path; a lone point is a dot.
   ctx.lineWidth = 1.5;
   ctx.lineJoin = "round";
-  for (const s of frame.style === "bars" ? [] : frame.series) {
+  for (const s of frame.style === "bars" ? [] : order) {
+    ctx.globalAlpha = strength(s.key);
     const color = colorOf(s.color);
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
@@ -479,6 +493,7 @@ export function drawTimeSeries(
     }
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
   ctx.restore();
 
   if (marks.length > 0) drawMarks(ctx, frame, colorOf, marks);

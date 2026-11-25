@@ -1,6 +1,8 @@
 // The time series panel: a canvas sized to its box at the device pixel ratio, a crosshair with a
 // tooltip (mouse, or the arrow keys on the focused chart), and the legend. Option and query edits
-// morph the lines; refreshes, resizes and reduced motion jump.
+// morph the lines; refreshes, resizes and reduced motion jump. The tooltip lists the ten biggest
+// values and counts the rest, and is placed inside the window; hovering or focusing a legend item
+// highlights its series (the others dim, no colour changes).
 //
 // With `onSelect` (Explore only) a window can be chosen: drag across the plot, or Shift+arrows from
 // the crosshair; the band stays drawn over the full range, and log line `marks` tick the bottom.
@@ -15,6 +17,7 @@ import type { PanelSpec } from "../dashboards/schema";
 import { buildFrame, drawTimeSeries, type AlertBand, type ChartMark, type ChartRange, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
 import { resolveToken, seriesColors } from "./colors";
 import Legend from "./Legend";
+import { placeTip, tipRows } from "./tooltip";
 import { easeOutCubic, MORPH_MS, mixColumns, tween, usePrefersReducedMotion } from "./motion";
 import { formatTooltipTime } from "./scale";
 import { formatValue } from "./units";
@@ -133,6 +136,9 @@ export default function TimeSeriesChart({
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [hidden, setHidden] = useState<ReadonlySet<string>>(NO_HIDDEN);
   const [cursor, setCursor] = useState<number | null>(null);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const tipRef = useRef<HTMLDivElement>(null);
   const reduced = usePrefersReducedMotion();
   const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
 
@@ -162,9 +168,9 @@ export default function TimeSeriesChart({
   const colors = useMemo(() => seriesColors(series), [series]);
   const frame = useMemo(
     () => (size.width > 0 && size.height > 0
-      ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden, alert, runStep)
+      ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden, alert, runStep, highlighted)
       : null),
-    [series, opts, size, dpr, range.start, range.end, hidden, alert, runStep],
+    [series, opts, size, dpr, range.start, range.end, hidden, alert, runStep, highlighted],
   );
 
   // Paint. An edit morphs from what is on the canvas; anything else jumps.
@@ -383,17 +389,35 @@ export default function TimeSeriesChart({
     }
   };
 
-  let tip: { x: number; time: string; rows: { key: string; name: string; color: string; value: number | null; text: string }[] } | null = null;
+  type TipRow = { key: string; name: string; color: string; value: number | null; text: string };
+  let tip: { x: number; time: string; rows: TipRow[]; more: number } | null = null;
   if (at !== null && frame) {
     const t = samples[at];
     const tolerance = barStyle ? step / 2 : samples.length > 1 ? ((samples[samples.length - 1] - samples[0]) / (samples.length - 1)) * 1.5 : Infinity;
-    const rows = visible.map((s) => {
-      const v = valueAt(s.points, t, tolerance);
-      return { key: s.key, name: s.name, color: colors.get(s.key) as string, value: v, text: formatValue(v, opts.unit, opts.decimals) };
-    });
-    rows.sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
-    tip = { x: frame.plot.x + ((t - range.start) / span) * frame.plot.w, time: formatTooltipTime(t), rows };
+    const { shown, more } = tipRows(visible.map((s) => ({ s, value: valueAt(s.points, t, tolerance) })));
+    const rows = shown.map(({ s, value }): TipRow => ({
+      key: s.key, name: s.name, color: colors.get(s.key) as string, value, text: formatValue(value, opts.unit, opts.decimals),
+    }));
+    tip = { x: frame.plot.x + ((t - range.start) / span) * frame.plot.w, time: formatTooltipTime(t), rows, more };
   }
+
+  // Placed after it is measured, before the browser paints (no frame in the wrong place): right of
+  // the crosshair unless the window ends there, and never past the window's top or bottom.
+  const tipX = tip?.x ?? null;
+  const tipTop = frame?.plot.y ?? 0;
+  useLayoutEffect(() => {
+    const el = tipRef.current;
+    const wrap = wrapRef.current;
+    if (!el || !wrap || tipX === null) return;
+    const place = placeTip(
+      { x: tipX, y: tipTop + 4 },
+      { width: el.offsetWidth, height: el.offsetHeight },
+      wrap.getBoundingClientRect(),
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    el.style.left = `${place.left}px`;
+    el.style.top = `${place.top}px`;
+  });
 
   const solo = (key: string) => setHidden(() => {
     const onlyThis = visible.length === 1 && visible[0].key === key;
@@ -404,6 +428,9 @@ export default function TimeSeriesChart({
     if (!next.delete(key)) next.add(key);
     return next;
   });
+
+  // Only a series on the chart can be highlighted (one that went away with a refresh can't).
+  const lit = highlighted !== null && series.some((s) => s.key === highlighted) ? highlighted : null;
 
   const latest = series.slice(0, 3).map((s) => `${s.name} ${formatValue(lastValue(s), opts.unit, opts.decimals)}`);
   const chosenText = selection ? ` Window ${clockTime(selection.start)} – ${clockTime(selection.end)} selected.` : "";
@@ -425,7 +452,7 @@ export default function TimeSeriesChart({
 
   return (
     <div className={styles.chart}>
-      <div className={styles.plotWrap}>
+      <div ref={wrapRef} className={styles.plotWrap}>
         <div
           ref={plotRef}
           className={styles.plot}
@@ -459,23 +486,20 @@ export default function TimeSeriesChart({
             <div className={styles.crosshair} style={{ left: tip.x, top: frame.plot.y, height: frame.plot.h }} aria-hidden="true" />
           ) : null}
         </div>
-        <div
-          role="status"
-          className={tip && frame && tip.x > frame.size.width * 0.6 ? `${styles.tip} ${styles.tipLeft}` : `${styles.tip} ${styles.tipRight}`}
-          style={tip && frame ? { left: tip.x, top: frame.plot.y + 4 } : undefined}
-        >
+        <div ref={tipRef} role="status" className={styles.tip}>
           {tip ? (
             <>
               <p className={styles.tipTime}>{tip.time}</p>
               <ul className={styles.tipList}>
                 {tip.rows.map((r) => (
-                  <li key={r.key} className={styles.tipRow}>
+                  <li key={r.key} className={r.key === lit ? `${styles.tipRow} ${styles.tipLit}` : styles.tipRow}>
                     <span className={styles.swatch} style={{ background: `var(${r.color})` }} aria-hidden="true" />
-                    <span className={styles.tipName}>{r.name}</span>
+                    <span className={styles.tipName} title={r.name}>{r.name}</span>
                     <span className={styles.tipValue}>{r.text}</span>
                   </li>
                 ))}
               </ul>
+              {tip.more > 0 ? <p className={styles.tipMore}>and {tip.more} more</p> : null}
             </>
           ) : null}
         </div>
@@ -486,6 +510,8 @@ export default function TimeSeriesChart({
           hidden={hidden}
           onSolo={solo}
           onToggle={toggle}
+          highlighted={lit}
+          onHighlight={setHighlighted}
         />
       ) : null}
     </div>

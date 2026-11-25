@@ -72,14 +72,6 @@
   display: none;
 }
 
-.tipLeft {
-  transform: translateX(calc(-100% - 12px));
-}
-
-.tipRight {
-  transform: translateX(12px);
-}
-
 .tipTime {
   margin: 0 0 6px;
   color: var(--ink-3);
@@ -93,14 +85,15 @@
   list-style: none;
 }
 
+/* One line per series: swatch, name (cut to fit), value (never cut, right-aligned). */
 .tipRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
 }
 
 .tipName {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--ink-2);
@@ -109,8 +102,20 @@
 }
 
 .tipValue {
-  flex: none;
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The series highlighted from the legend. */
+.tipLit .tipName {
+  color: var(--ink);
+}
+
+.tipMore {
+  margin: 6px 0 0;
+  color: var(--ink-3);
 }
 
 .swatch {
@@ -120,22 +125,28 @@
   border-radius: 2px;
 }
 
+/* At most two rows (22 px items, 2 px apart); more scrolls. */
 .legend {
   display: flex;
   flex: none;
   flex-wrap: wrap;
   gap: 2px 4px;
-  max-height: 76px;
+  max-height: 46px;
   margin: 6px 0 0;
   padding: 0;
   overflow-y: auto;
   list-style: none;
 }
 
+.legendEntry {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .legendItem {
   display: inline-flex;
   align-items: center;
-  max-width: 100%;
+  max-width: min(100%, 24ch);
   gap: 6px;
   padding: 2px 8px;
   border: 1px solid transparent;
@@ -145,9 +156,11 @@
   cursor: pointer;
   font: inherit;
   font-size: 12px;
+  line-height: 16px;
 }
 
-.legendItem:hover {
+.legendItem:hover,
+.legendLit {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
   color: var(--ink);
 }
@@ -166,9 +179,68 @@
 }
 
 .legendName {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Past twelve series: one "{n} series" button that opens the full list under it. */
+.legendFold {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  margin: 6px 0 0;
+}
+
+.legendFold .legend {
+  align-self: stretch;
+  margin-top: 4px;
+}
+
+.legendToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.legendToggle:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.legendToggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* A small caret: points right while folded, down while open. */
+.legendChevron {
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.legendToggle[aria-expanded="true"] .legendChevron {
+  transform: translateY(-2px) rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .legendChevron { transition: none; }
 }
 
 /* Stat and gauge tiles */

@@ -3,11 +3,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChartSeries, PanelData } from "../dashboards/runPanel";
 import { newAlert, newPanel, type PanelSpec, type TimeseriesOptions } from "../dashboards/schema";
 import ChartView, { type ChartViewProps } from "./index";
-import { buildFrame, drawTimeSeries, type CanvasLike } from "./drawTimeSeries";
+import userEvent from "@testing-library/user-event";
+import { buildFrame, drawTimeSeries, HIGHLIGHT_DIM, type CanvasLike } from "./drawTimeSeries";
 import { formatTooltipTime } from "./scale";
 
 const tweenMock = vi.hoisted(() => vi.fn((_ms: number, _on: (k: number) => void) => () => {}));
 vi.mock("./motion", async (importOriginal) => ({ ...(await importOriginal<typeof import("./motion")>()), tween: tweenMock }));
+// Every frame painted, in order (the real drawing still runs).
+const painted = vi.hoisted(() => [] as import("./drawTimeSeries").TimeSeriesFrame[]);
+vi.mock("./drawTimeSeries", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./drawTimeSeries")>();
+  return {
+    ...real,
+    drawTimeSeries: (...args: Parameters<typeof real.drawTimeSeries>) => {
+      painted.push(args[1]);
+      return real.drawTimeSeries(...args);
+    },
+  };
+});
 
 // --- fixtures ---------------------------------------------------------------------------------
 
@@ -111,6 +124,38 @@ describe("buildFrame and drawTimeSeries", () => {
     expect(high.yTicks[high.yTicks.length - 1]).toBeGreaterThanOrEqual(40);
     expect(high.alert!.y).toBeGreaterThanOrEqual(0);
     expect(plain.alert).toBeNull();
+  });
+
+  it("a highlighted series draws at full strength over the dimmed others", () => {
+    const strokes = (frame: ReturnType<typeof buildFrame>) => {
+      const out: { color: unknown; alpha: unknown }[] = [];
+      const state: Record<string, unknown> = { globalAlpha: 1, strokeStyle: "", lineWidth: 1 };
+      const ctx = new Proxy(state, {
+        get: (t, prop: string) => (prop in t ? t[prop] : (..._args: unknown[]) => {
+          if (prop === "stroke" && t.lineWidth === 1.5) out.push({ color: t.strokeStyle, alpha: t.globalAlpha });
+        }),
+        set: (t, prop: string, value) => { t[prop] = value; return true; },
+      }) as unknown as CanvasLike;
+      drawTimeSeries(ctx, frame, (token) => token);
+      return out;
+    };
+    const lines = { ...options, thresholds: [], style: "lines" as const };
+    const plain = buildFrame(three, lines, SIZE, RANGE, new Set());
+    expect(plain.highlight).toBeNull();
+    expect(strokes(plain).every((s) => s.alpha === 1)).toBe(true);
+    const lit = buildFrame(three, lines, SIZE, RANGE, new Set(), null, undefined, "k-b");
+    expect(lit.highlight).toBe("k-b");
+    const drawn = strokes(lit);
+    const colourOfB = lit.series.find((s) => s.key === "k-b")!.color;
+    // Drawn last, so it sits on top; the others at a quarter.
+    expect(drawn[drawn.length - 1]).toEqual({ color: colourOfB, alpha: 1 });
+    expect(drawn.slice(0, -1).map((s) => s.alpha)).toEqual([HIGHLIGHT_DIM, HIGHLIGHT_DIM]);
+    expect(HIGHLIGHT_DIM).toBe(0.25);
+    // The colours are the same as without the highlight.
+    expect(lit.series.map((s) => s.color)).toEqual(plain.series.map((s) => s.color));
+    // A hidden or unknown key highlights nothing.
+    expect(buildFrame(three, lines, SIZE, RANGE, new Set(["k-b"]), null, undefined, "k-b").highlight).toBeNull();
+    expect(buildFrame(three, lines, SIZE, RANGE, new Set(), null, undefined, "nope").highlight).toBeNull();
   });
 
   it("has one y value per pixel column", () => {
@@ -221,7 +266,10 @@ function stubBrowser(reduced = false) {
   return ctx;
 }
 
-beforeEach(() => tweenMock.mockClear());
+beforeEach(() => {
+  tweenMock.mockClear();
+  painted.length = 0;
+});
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -402,6 +450,44 @@ describe("ChartView time series", () => {
       expect(rows).toEqual(["b3", "a1"]);
     });
 
+    it("tooltip caps at ten rows and counts the rest", () => {
+      stubBrowser();
+      const many = Array.from({ length: 40 }, (_, i) => series(`pod-${String(i).padStart(2, "0")}`, [i, i, i]));
+      render(<ChartView {...base({ panel: panelOf({ unit: "short" }), data: dataOf(many) })} />);
+      const chart = screen.getByRole("img");
+      fireEvent.keyDown(chart, { key: "ArrowRight" });
+      const tip = screen.getByRole("status");
+      const rows = tip.querySelectorAll("li");
+      expect(rows).toHaveLength(10);
+      // The biggest values lead.
+      expect(rows[0].textContent).toBe("pod-3939");
+      expect(rows[9].textContent).toBe("pod-3030");
+      expect(tip.textContent).toContain("and 30 more");
+      // Ten series: no count line.
+      cleanup();
+      stubBrowser();
+      render(<ChartView {...base({ data: dataOf(many.slice(0, 10)) })} />);
+      fireEvent.keyDown(screen.getByRole("img"), { key: "ArrowRight" });
+      expect(screen.getByRole("status").querySelectorAll("li")).toHaveLength(10);
+      expect(screen.getByRole("status").textContent).not.toMatch(/more/);
+    });
+
+    it("each tooltip row shows its value", () => {
+      stubBrowser();
+      const long = "x".repeat(300);
+      const data = dataOf([series(long, [1, 2, 3]), series("b", [null, null, null]), series("c", [4, 5, 6])]);
+      render(<ChartView {...base({ panel: panelOf({ unit: "short" }), data })} />);
+      fireEvent.keyDown(screen.getByRole("img"), { key: "ArrowRight" });
+      const rows = Array.from(screen.getByRole("status").querySelectorAll("li"));
+      expect(rows).toHaveLength(3);
+      // Swatch, name and value: the name may be cut, the value never is.
+      for (const row of rows) expect(row.children).toHaveLength(3);
+      expect(rows.map((r) => r.children[2].textContent)).toEqual(["5", "2", "–"]);
+      // The full name is in the title.
+      expect(rows[1].children[1].getAttribute("title")).toBe(long);
+      expect(rows[1].children[1].textContent).toBe(long);
+    });
+
     it("stops at the ends and lets Esc through when nothing is shown", () => {
       stubBrowser();
       const outer = vi.fn();
@@ -431,6 +517,84 @@ describe("ChartView time series", () => {
       calls.length = 0;
       fireEvent.click(b, { ctrlKey: true });
       expect(calls.filter((c) => c.name === "stroke" && c.lineWidth === 1.5)).toHaveLength(0);
+    });
+
+    it("a long legend folds into N series", async () => {
+      stubBrowser();
+      const user = userEvent.setup();
+      const many = Array.from({ length: 13 }, (_, i) => series(`s${i}`, [i, i + 1]));
+      render(<ChartView {...base({ data: dataOf(many) })} />);
+      const fold = screen.getByRole("button", { name: "13 series" });
+      expect(fold.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("button", { name: /^s0$/ })).toBeNull();
+      act(() => fold.focus());
+      await user.keyboard("{Enter}");
+      expect(fold.getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(fold);
+      expect(document.activeElement).not.toBe(document.body);
+      const list = document.getElementById(fold.getAttribute("aria-controls") as string) as HTMLElement;
+      expect(list.querySelectorAll("button")).toHaveLength(13);
+      expect(screen.getByRole("button", { name: /^s12$/ })).toBeTruthy();
+      // Esc in the list folds it again and hands the keyboard back to the button.
+      await user.tab();
+      expect(document.activeElement?.textContent).toBe("s0");
+      await user.keyboard("{Escape}");
+      expect(fold.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(fold);
+      // Twelve series: no fold.
+      cleanup();
+      stubBrowser();
+      render(<ChartView {...base({ data: dataOf(many.slice(0, 12)) })} />);
+      expect(screen.queryByRole("button", { name: /series$/ })).toBeNull();
+      expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(12);
+    });
+
+    it("a legend name is cut with its full name in the title", () => {
+      stubBrowser();
+      const long = `pod="${"checkout-worker-".repeat(18)}"`;
+      render(<ChartView {...base({ data: dataOf([series(long, [1, 2, 3]), series("b", [3, 2, 1])]) })} />);
+      const item = screen.getByRole("button", { name: long });
+      expect(item.getAttribute("title")).toBe(long);
+      expect(item.getAttribute("aria-description")).toBe("Click to show only this series; Ctrl+click to show or hide it.");
+      expect(item.querySelector("span:last-child")?.className).toMatch(/legendName/);
+    });
+
+    it("hovering a legend item highlights its series", () => {
+      stubBrowser();
+      render(<ChartView {...base()} />);
+      const last = () => painted[painted.length - 1];
+      expect(last().highlight).toBeNull();
+      const b = screen.getByRole("button", { name: /^b$/ });
+      fireEvent.mouseEnter(b);
+      expect(last().highlight).toBe("k-b");
+      fireEvent.mouseLeave(b);
+      expect(last().highlight).toBeNull();
+      // Keyboard focus does the same.
+      act(() => b.focus());
+      expect(last().highlight).toBe("k-b");
+      expect(document.activeElement).toBe(b);
+      act(() => b.blur());
+      expect(last().highlight).toBeNull();
+      // A hidden series is never highlighted.
+      const a = screen.getByRole("button", { name: /^a$/ });
+      fireEvent.click(a);
+      fireEvent.mouseEnter(b);
+      expect(last().highlight).toBeNull();
+    });
+
+    it("highlighting never recolours", () => {
+      stubBrowser();
+      const many = Array.from({ length: 5 }, (_, i) => series(`s${i}`, [i, i + 1]));
+      render(<ChartView {...base({ data: dataOf(many) })} />);
+      const colours = () => painted[painted.length - 1].series.map((s) => `${s.key}=${s.color}`);
+      const swatches = () => screen.getAllByRole("button", { pressed: true }).map((b) => (b.querySelector("span") as HTMLElement).style.background);
+      const before = { frame: colours(), legend: swatches() };
+      fireEvent.mouseEnter(screen.getByRole("button", { name: /^s3$/ }));
+      expect(painted[painted.length - 1].highlight).toBe("k-s3");
+      expect(colours()).toEqual(before.frame);
+      expect(swatches()).toEqual(before.legend);
+      fireEvent.mouseLeave(screen.getByRole("button", { name: /^s3$/ }));
+      expect(colours()).toEqual(before.frame);
     });
 
     it("is hidden when the options say so", () => {
