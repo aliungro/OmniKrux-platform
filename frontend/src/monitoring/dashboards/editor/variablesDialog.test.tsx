@@ -63,19 +63,25 @@ describe("Variables dialog", () => {
   it("adds a variable that the bar then offers", async () => {
     const { user } = await editing();
     await user.click(screen.getByRole("button", { name: "Variables" }));
+    notBody();
     await user.click(within(dialog()).getByRole("button", { name: "Add variable" }));
     const added = row(2);
     await waitFor(() => expect(document.activeElement).toBe(within(added).getByLabelText("Name")));
     await user.type(within(added).getByLabelText("Name"), "container");
+    notBody();
     await user.type(within(added).getByLabelText("Label name"), "container");
+    notBody();
     await user.type(within(added).getByLabelText("Match"), "kube_pod_container_info");
+    notBody();
     await user.click(within(dialog()).getByRole("button", { name: "Apply" }));
+    notBody();
     expect(screen.queryByRole("dialog", { name: "Variables" })).toBeNull();
     expect(await screen.findByRole("button", { name: "container: All" })).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Variables" }));
     notBody();
     // One undo step.
     await user.keyboard("{Control>}z{/Control}");
+    notBody();
     await waitFor(() => expect(screen.queryByRole("button", { name: "container: All" })).toBeNull());
     expect(screen.getByRole("button", { name: "Namespace: api" })).toBeTruthy();
     notBody();
@@ -84,13 +90,17 @@ describe("Variables dialog", () => {
   it("a name that breaks the rules is said at its field", async () => {
     const { user } = await editing();
     await user.click(screen.getByRole("button", { name: "Variables" }));
+    notBody();
     const name = within(row(1)).getByLabelText("Name");
     await user.clear(name);
+    notBody();
     await user.type(name, "bad name");
+    notBody();
     expect(name.getAttribute("aria-invalid")).toBe("true");
     const said = document.getElementById(name.getAttribute("aria-describedby")!)!;
     expect(said.textContent).toMatch(/letters|digits|name/i);
     await user.click(within(dialog()).getByRole("button", { name: "Apply" }));
+    notBody();
     // Refused: still open, the keyboard on the field.
     expect(dialog()).toBeTruthy();
     expect(document.activeElement).toBe(name);
@@ -100,13 +110,16 @@ describe("Variables dialog", () => {
   it("removing a variable that panels use is refused with the panel words", async () => {
     const { user } = await editing();
     await user.click(screen.getByRole("button", { name: "Variables" }));
+    notBody();
     await user.click(within(row(1)).getByRole("button", { name: "Remove" }));
+    notBody();
     expect(await within(dialog()).findByText(PANELS_USE("namespace"))).toBeTruthy();
     expect(PANELS_USE("namespace")).toBe("Panels use $namespace: change their queries before removing it.");
     expect(within(dialog()).queryByText(/renaming/)).toBeNull();
     expect(within(dialog()).getByText(VARIABLES_EMPTY)).toBeTruthy();
     notBody();
     await user.click(within(dialog()).getByRole("button", { name: "Apply" }));
+    notBody();
     expect(dialog()).toBeTruthy();
     // The dashboard still has it.
     expect(screen.getByRole("button", { name: "Namespace: api" })).toBeTruthy();
@@ -115,16 +128,22 @@ describe("Variables dialog", () => {
   it("apply is refused while the JSON doesn't apply", async () => {
     const { user } = await editing();
     await user.click(screen.getByRole("tab", { name: "JSON" }));
+    notBody();
     const area = await screen.findByRole("textbox", { name: "Dashboard JSON" });
     fireEvent.input(area, { target: { value: "{ nope" } });
     await waitFor(() => expect(screen.getByTestId("json-state").textContent).toMatch(/^✗/));
     await user.click(screen.getByRole("tab", { name: "Dashboard" }));
+    notBody();
     await user.click(screen.getByRole("button", { name: "Variables" }));
+    notBody();
     await user.click(within(dialog()).getByRole("button", { name: "Add variable" }));
     const added = row(2);
     await user.type(within(added).getByLabelText("Name"), "pod");
+    notBody();
     await user.type(within(added).getByLabelText("Label name"), "pod");
+    notBody();
     await user.click(within(dialog()).getByRole("button", { name: "Apply" }));
+    notBody();
     expect((await within(dialog()).findByRole("alert")).textContent).toBe("Fix the JSON first, or discard it.");
     expect(dialog()).toBeTruthy();
   });
@@ -134,6 +153,7 @@ describe("Variables dialog", () => {
     await user.click(screen.getByRole("button", { name: "Variables" }));
     notBody();
     await user.keyboard("{Escape}");
+    notBody();
     expect(screen.queryByRole("dialog", { name: "Variables" })).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Variables" }));
   });
@@ -145,6 +165,7 @@ describe("Variables dialog", () => {
     await user.click(within(dialog()).getByRole("button", { name: "Add variable" }));
     notBody();
     await user.type(within(row(2)).getByLabelText("Name"), "pod");
+    notBody();
     await user.type(within(row(2)).getByLabelText("Label name"), "pod");
     notBody();
     await user.click(within(row(2)).getByRole("button", { name: "Move up" }));
@@ -173,11 +194,15 @@ describe("Variables dialog: what blocks Apply", () => {
   it("changing a single-value variable that an alert panel uses applies", async () => {
     const { user } = await editing(alertDoc());
     await user.click(screen.getByRole("button", { name: "Variables" }));
+    notBody();
     const label = within(row(1)).getByLabelText("Label name");
     await user.clear(label);
+    notBody();
     await user.type(label, "ns");
+    notBody();
     expect(within(dialog()).queryByText(/Panels use/)).toBeNull();
     await user.click(within(dialog()).getByRole("button", { name: "Apply" }));
+    notBody();
     expect(screen.queryByRole("dialog", { name: "Variables" })).toBeNull();
     notBody();
   });
@@ -186,11 +211,15 @@ describe("Variables dialog: what blocks Apply", () => {
     const stale = spec("Pods", [panel("p-1", "Old", 'up{x="$ghost"}')], []);
     const { user } = await editing(stale);
     await user.click(screen.getByRole("button", { name: "Variables" }));
+    notBody();
     await user.click(within(dialog()).getByRole("button", { name: "Add variable" }));
     await user.type(within(row(1)).getByLabelText("Name"), "pod");
+    notBody();
     await user.type(within(row(1)).getByLabelText("Label name"), "pod");
+    notBody();
     expect(within(dialog()).queryByText(/Panels use/)).toBeNull();
     await user.click(within(dialog()).getByRole("button", { name: "Apply" }));
+    notBody();
     expect(screen.queryByRole("dialog", { name: "Variables" })).toBeNull();
     notBody();
   });
@@ -198,13 +227,17 @@ describe("Variables dialog: what blocks Apply", () => {
   it("renaming a variable panels use says renaming, not removing", async () => {
     const { user } = await editing();
     await user.click(screen.getByRole("button", { name: "Variables" }));
+    notBody();
     const name = within(row(1)).getByLabelText("Name");
     await user.clear(name);
+    notBody();
     await user.type(name, "ns");
+    notBody();
     expect(await within(dialog()).findByText(PANELS_RENAME("namespace"))).toBeTruthy();
     expect(PANELS_RENAME("namespace")).toBe("Panels use $namespace: change their queries before renaming it.");
     expect(within(dialog()).queryByText(PANELS_USE("namespace"))).toBeNull();
     await user.click(within(dialog()).getByRole("button", { name: "Apply" }));
+    notBody();
     expect(dialog()).toBeTruthy();
     notBody();
   });

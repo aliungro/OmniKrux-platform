@@ -1,8 +1,10 @@
 // The variables editor: one row per variable (name, label, where its values come from, which label,
 // an optional selector, several values, All), then Add variable. Apply is one edit to the draft (one
-// undo step); it is refused while a field is wrong, while a panel still uses a variable being
-// removed or renamed, and while the JSON text doesn't apply. A new or changed variable starts at All
-// when it offers All, else empty: its starting value isn't edited here.
+// undo step); it is refused while a field is wrong, while a panel uses a variable this change removed or
+// renamed (or breaks in some other way this change caused: problems the draft already had don't count),
+// and while the JSON text doesn't apply. A changed variable keeps its starting value while its Several
+// values and Offer All settings still allow it; a new one (or one that no longer allows it) starts at All
+// when it offers All, else empty: starting values aren't edited here.
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { DialogShell } from "../../../features/dock/ConfirmDialog";
 import type { DashboardOwner } from "../runPanel";
@@ -74,7 +76,7 @@ function sameSource(a: VariableSpec["source"], b: VariableSpec["source"]) {
   return a.type === b.type && a.id === b.id;
 }
 
-/** The rows as variables: a blank label reads as the name; a changed or new variable starts at All (if it offers it) or empty. */
+/** The rows as variables: a blank label reads as the name; a variable keeps its starting value while its settings allow it, else (and when new) it starts at All or empty. */
 function toVariables(rows: Row[]): VariableSpec[] {
   return rows.map((r) => {
     const w = r.was;
