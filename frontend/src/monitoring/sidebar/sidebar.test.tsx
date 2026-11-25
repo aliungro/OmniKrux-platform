@@ -222,12 +222,13 @@ describe("Monitoring sidebar", () => {
     await screen.findByRole("treeitem", { name: "Overview" });
     expect(rowTexts()).toEqual([
       "section:Groups", "group:Both", "shortcut:A", "shortcut:B", "dashboard:Overview",
-      "section:Projects", "project:A", "dashboard:Alpha", "dashboard:Zeta", "dashboard:Node health",
+      "section:Projects", "project:A", "dashboard:Alpha", "dashboard:Zeta", "subheading:Ready-made", "dashboard:Node health",
       "project:B", "empty:No dashboards yet",
     ]);
     const ready = screen.getByRole("treeitem", { name: "Node health, ready-made" });
-    expect(within(ready).getByText("ready-made")).toBeTruthy();
-    expect(within(screen.getByRole("treeitem", { name: "Alpha" })).queryByText("ready-made")).toBeNull();
+    expect(ready.querySelector("svg[aria-hidden='true']")).not.toBeNull();
+    expect(screen.getByRole("treeitem", { name: "Alpha" }).querySelector("svg")).toBeNull();
+    expect(within(ready).queryByText("ready-made")).toBeNull();
     // Enter opens the dashboard in this tab; its row is the current page.
     const alpha = screen.getByRole("treeitem", { name: "Alpha" });
     alpha.focus();
@@ -327,5 +328,63 @@ describe("Monitoring sidebar", () => {
     expect(await screen.findByText("Set up a project first.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
     await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "import" }));
+  });
+
+  it("ready-made views sit under a Ready-made heading", () => {
+    const out = treeRows({
+      projects: [{ id: "p1", name: "A", kind: "custom", cluster_id: null, color: "custom", dashboards: [
+        { id: "ready:p1:logs", title: "Logs overview", ready_made: true }, { id: "d1", title: "Mine", ready_made: false },
+      ] }],
+      groups: [], source_count: 0,
+    }, new Set(["project:p1"]));
+    expect(out.filter((r) => r.level === 1).map((r) => [r.kind, r.label])).toEqual([
+      ["dashboard", "Mine"], ["subheading", "Ready-made"], ["dashboard", "Logs overview"],
+    ]);
+    const none = treeRows({
+      projects: [{ id: "p1", name: "A", kind: "custom", cluster_id: null, color: "custom", dashboards: [{ id: "d1", title: "Mine", ready_made: false }] }],
+      groups: [], source_count: 0,
+    }, new Set(["project:p1"]));
+    expect(none.some((r) => r.kind === "subheading")).toBe(false);
+  });
+
+  it("arrow keys skip the Ready-made heading", async () => {
+    const A = { kind: "project" as const, id: "p1", name: "A" };
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "A")],
+      dashboards: { "ready:p1:nodes": seedDashboard("ready:p1:nodes", A, spec("Node health", []), true) },
+      readyMade: { p1: [{ key: "nodes", id: "ready:p1:nodes", title: "Node health", description: "", missing: [], notes: [], checked: true, check_message: null }] },
+    });
+    localStorage.setItem("omnikrux.monitoring.sidebar", JSON.stringify(["project:p1"]));
+    renderMonitoringApp();
+    const project = await screen.findByRole("treeitem", { name: "A" });
+    await screen.findByRole("treeitem", { name: "Node health, ready-made" });
+    expect(tree().querySelector("[data-row-kind='subheading']")?.getAttribute("role")).toBe("none");
+    project.focus();
+    fireEvent.keyDown(project, { key: "ArrowRight" });
+    const ready = screen.getByRole("treeitem", { name: "Node health, ready-made" });
+    expect(document.activeElement).toBe(ready);
+    fireEvent.keyDown(ready, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(project);
+    fireEvent.keyDown(project, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(ready);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a saved dashboard and a ready-made view with one name are told apart", async () => {
+    const A = { kind: "project" as const, id: "p1", name: "A" };
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "A")],
+      dashboards: {
+        d1: seedDashboard("d1", A, spec("Cluster health", [])),
+        "ready:p1:cluster": seedDashboard("ready:p1:cluster", A, spec("Cluster health", []), true),
+      },
+      readyMade: { p1: [{ key: "cluster", id: "ready:p1:cluster", title: "Cluster health", description: "", missing: [], notes: [], checked: true, check_message: null }] },
+    });
+    localStorage.setItem("omnikrux.monitoring.sidebar", JSON.stringify(["project:p1"]));
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Cluster health, ready-made" });
+    expect(screen.getAllByText("Cluster health")).toHaveLength(2);
+    expect(screen.getByRole("treeitem", { name: "Cluster health" })).toBeTruthy();
+    expect(rowTexts().slice(-3)).toEqual(["dashboard:Cluster health", "subheading:Ready-made", "dashboard:Cluster health"]);
   });
 });

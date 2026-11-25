@@ -132,10 +132,13 @@ export const Dock = memo(function Dock({
   dock,
   onFocusWorkspace,
   zoneActive = false,
+  emptyHint = EMPTY_DOCK,
   ref,
 }: {
   dock: DockApi;
   zoneActive?: boolean;
+  /** What the empty dock says (Monitoring has its own words). */
+  emptyHint?: string;
   /** Back to the table; `now` focuses it in this tick (a key press), else after the next frame (a removal). */
   onFocusWorkspace: (opts?: { now?: boolean }) => void;
   ref?: Ref<DockHandle>;
@@ -330,7 +333,7 @@ export const Dock = memo(function Dock({
       <section ref={sectionRef} className={`${s.dock} ${s.empty}`} aria-label="Logs and shells" data-dock data-keyboard-zone={zoneActive ? "logs" : undefined} data-page-keys="off" {...tracking}>
         {dialog}
         {/* Always there, so a notice is announced when the text changes. */}
-        <p className={s.hint} role="status">{notice?.text ?? EMPTY_DOCK}</p>
+        <p className={s.hint} role="status">{notice?.text ?? emptyHint}</p>
       </section>
     );
   }

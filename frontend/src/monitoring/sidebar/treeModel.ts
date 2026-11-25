@@ -4,7 +4,7 @@ import type { MonitoringView } from "../shell/tabState";
 export type TreeRow = {
   key: string;
   level: 0 | 1;
-  kind: "section" | "project" | "group" | "shortcut" | "dashboard" | "empty";
+  kind: "section" | "project" | "group" | "shortcut" | "dashboard" | "subheading" | "empty";
   label: string;
   view?: MonitoringView;
   expanded?: boolean;
@@ -52,7 +52,9 @@ export function treeRows(tree: TreeOut, expanded: ReadonlySet<string>): TreeRow[
     if (!open) continue;
     if (!p.dashboards.length) rows.push({ key: `${key}/empty`, level: 1, kind: "empty", label: "No dashboards yet" });
     for (const d of p.dashboards) if (!d.ready_made) rows.push(dashboardRow(key, d));
-    for (const d of p.dashboards) if (d.ready_made) rows.push(dashboardRow(key, d));
+    const ready = p.dashboards.filter((d) => d.ready_made);
+    if (ready.length) rows.push({ key: `${key}/ready`, level: 1, kind: "subheading", label: "Ready-made" });
+    for (const d of ready) rows.push(dashboardRow(key, d));
   }
   return rows;
 }

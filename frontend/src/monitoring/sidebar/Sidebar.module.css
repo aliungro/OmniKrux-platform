@@ -374,12 +374,29 @@
   color: var(--ink);
 }
 
-/* A ready-made view: generated from the project's Prometheus, not saved. */
-.readyTag {
-  flex: none;
-  margin-left: auto;
+/* The heading that sets generated views apart from saved dashboards. */
+.subheading {
+  min-height: 24px;
   color: var(--ink-3);
-  font: 10.5px "Geist Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: default;
+}
+
+.subheading:hover {
+  background: transparent;
+}
+
+/* A ready-made view: generated from the project's data, not saved. */
+.readyIcon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  order: -1;
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
 }
 
 /* New dashboard in the current project or group, at the end of its row. */

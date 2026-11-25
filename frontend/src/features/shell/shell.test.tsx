@@ -135,6 +135,18 @@ it("Alt+2 opens Monitoring and Alt+1 returns to the same Kubernetes tab", async 
   await waitFor(() => expect(document.activeElement).not.toBe(document.body));
   expect(document.activeElement).not.toBeNull();
 });
+it("the empty dock keeps the Kubernetes hint outside Monitoring", async () => {
+  renderShell();
+  expect(await screen.findByText("Open logs (l) or a shell (s) from a pod")).toBeTruthy();
+  expect(screen.queryByText("Press ? to see all keys.")).toBeNull();
+});
+it("Monitoring shows its own dock hint", async () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  expect(screen.getByText("Press ? to see all keys.")).toBeTruthy();
+  expect(screen.queryByText("Open logs (l) or a shell (s) from a pod")).toBeNull();
+});
 it("Alt+T and Alt+W manage Monitoring tabs while Monitoring is shown", async () => {
   renderShell();
   fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });

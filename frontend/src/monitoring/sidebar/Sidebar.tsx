@@ -124,8 +124,9 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
         if (!expandable) return;
         if (!row.expanded) toggle(row.key, true);
         else {
-          const child = rows[rows.findIndex((r) => r.key === row.key) + 1];
-          if (child && child.level === 1 && FOCUSABLE.has(child.kind)) moveTo(child.key);
+          const at = rows.findIndex((r) => r.key === row.key);
+          const child = rows.slice(at + 1).find((r) => r.level === 1 && FOCUSABLE.has(r.kind) || r.level === 0);
+          if (child && child.level === 1) moveTo(child.key);
         }
         break;
       case "ArrowLeft":
@@ -181,6 +182,9 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
     if (row.kind === "empty") {
       return <div key={row.key} role="none" className={`${s.row} ${s.child} ${s.muted}`} data-row-kind="empty" data-row-label={row.label}>{row.label}</div>;
     }
+    if (row.kind === "subheading") {
+      return <div key={row.key} role="none" className={`${s.row} ${s.child} ${s.subheading}`} data-row-kind="subheading" data-row-label={row.label}>{row.label}</div>;
+    }
     const expandable = row.kind === "group" || row.kind === "project";
     const label = row.kind === "shortcut" ? `Go to project ${row.label}` : row.readyMade ? `${row.label}, ready-made` : row.label;
     const plusFor = owner && row.key === ownerKey ? owner : null;
@@ -211,7 +215,9 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
         {row.kind === "group" && <i className={`${s.folder} ${row.expanded ? s.folderOpen : ""}`} aria-hidden="true" />}
         {row.color && <i className={s.dot} data-dot={row.color} style={{ background: DOT[row.color] }} aria-hidden="true" />}
         <span className={s.label}>{row.label}</span>
-        {row.readyMade && <span className={s.readyTag} aria-hidden="true">ready-made</span>}
+        {row.readyMade && (
+          <svg className={s.readyIcon} viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5 7.4 4.6 10.5 6 7.4 7.4 6 10.5 4.6 7.4 1.5 6 4.6 4.6Z" /></svg>
+        )}
         {row.kind === "shortcut" && <span className={s.arrow} aria-hidden="true">↗</span>}
         {plusFor && (
           // Pointer only (tabIndex -1): from the keyboard, N does the same from anywhere.

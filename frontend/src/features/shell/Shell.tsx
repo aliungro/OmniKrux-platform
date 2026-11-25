@@ -71,6 +71,8 @@ function KubePane({ tab, title, history, active, split, zoneActive, onFocusPane,
 
 const AuditView = lazy(() => import("../audit/AuditView").then(m => ({ default: m.AuditView })));
 const SettingsView = lazy(() => import("../settings/SettingsView").then(m => ({ default: m.SettingsView })));
+/** Monitoring's empty-dock words (a literal here: no Monitoring module joins the initial graph). */
+export const MONITORING_DOCK_HINT = "Press ? to see all keys.";
 const MonitoringApp = lazy(() => import("../../monitoring/MonitoringApp"));
 
 export function Shell() {
@@ -294,7 +296,7 @@ export function Shell() {
             )}
           </main>
           {/* A shell is in the dock: the dock keeps its outline, the bar says how to leave the terminal. */}
-          <Dock ref={dockRef} dock={dock} zoneActive={zone === "logs" || zone === "shell"} onFocusWorkspace={focusWorkspaceFromDock} />
+          <Dock ref={dockRef} dock={dock} zoneActive={zone === "logs" || zone === "shell"} emptyHint={monitoring ? MONITORING_DOCK_HINT : undefined} onFocusWorkspace={focusWorkspaceFromDock} />
           {(kind || zone === "logs" || zone === "shell") && <ShortcutBar kind={kind} zone={zone ?? "table"} onOpen={() => setHelp(true)} />}
         </div>
       </div>
