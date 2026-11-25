@@ -327,12 +327,16 @@
 }
 
 /* Why there is no data: a sentence to read, a step darker than the generic words. Long metric
-   names wrap anywhere; a short tile scrolls the sentence rather than cutting it. */
+   names wrap anywhere; past four lines it is clamped (the full sentence is in its title), so the
+   tile never holds a scroll area the keyboard can't reach. */
 .noteReason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
   max-inline-size: 46ch;
-  max-block-size: 100%;
   padding-inline: 14px;
-  overflow-y: auto;
+  overflow: hidden;
   color: var(--ink-2);
   line-height: 1.45;
   text-wrap: pretty;

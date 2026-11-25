@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { QueryRequest } from "../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
-import { linkedProject, panel, seedDashboard, spec } from "../test/dashboardSeeds";
+import { gate, intercept, linkedProject, linkTo, panel, seedDashboard, spec, watchCalls } from "../test/dashboardSeeds";
+import { seedProject } from "../test/renderMonitoringApp";
 import { renderMonitoringApp, tabsWith } from "../test/renderMonitoringApp";
 import { editSessions } from "./editor/useDashboardEditor";
-import { emptyCheck } from "./emptyReason";
+import { emptyCheck, useEmptyReason, type EmptyAsk } from "./emptyReason";
 
 vi.mock("../charts", async () => {
   const { createElement } = await import("react");
@@ -99,5 +102,84 @@ describe("The Query tab", () => {
       source_id: "s1", project_id: "p1", query: "rate(container_cpu_cfs_throttled_periods_total[5m])",
       metrics: ["container_cpu_cfs_throttled_periods_total"],
     });
+  });
+});
+
+describe("A newer window of the same query", () => {
+  const OLDER = "No lines in this time range. The newest matching line is 3 days old: try a longer range.";
+  const FILTERED = 'Streams match {app="shop"}, but no line in this time range passes the rest of the query.';
+  const NO_LABELS = 'This Loki has no streams with the label "app" for this project in the last 30 days, so nothing sends these logs to it now.';
+  const HOUR = { start: 1_000_000, end: 1_003_600 };
+  const WEEK = { start: 1_003_600 - 7 * 86_400, end: 1_003_600 };
+  const LATER = { start: 1_007_200, end: 1_010_800 };
+  const ask = (sourceType: EmptyAsk["sourceType"], query: string, range: { start: number; end: number }): EmptyAsk =>
+    ({ sourceType, request: { source_id: sourceType === "loki" ? "l1" : "s1", project_id: "p1", kind: "range", query, ...range, step: 15 }, range });
+
+  /** The fake with Shop's Prometheus s1 and Loki l1; checks after `hold.on` wait for `hold.release()`. */
+  function setup() {
+    const api = installFakeMonitoringApi({ projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("s1"), linkTo("l1", "loki")] }] });
+    const held = gate();
+    const hold = { on: false, release: () => held.open() };
+    intercept((url, pass) => (hold.on && url.endsWith("/query/why-empty") ? held.opened.then(pass) : null));
+    const calls = watchCalls("/query/why-empty");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children);
+    const hook = (first: EmptyAsk) =>
+      renderHook(({ input }: { input: EmptyAsk | null }) => useEmptyReason(input), { wrapper, initialProps: { input: first } });
+    return { api, hold, calls, hook };
+  }
+
+  it("a reason about the old window never shows on the new one", async () => {
+    const { api, hold, calls, hook } = setup();
+    api.state.whyEmpty = { reason: "older_lines", message: OLDER };
+    const view = hook(ask("loki", '{app="shop"} |= "timeout"', HOUR));
+    await waitFor(() => expect(view.result.current).toBe(OLDER));
+
+    // The user follows the advice and picks a longer range: until its own check answers, no reason.
+    api.state.whyEmpty = { reason: "filtered_out", message: FILTERED };
+    hold.on = true;
+    view.rerender({ input: ask("loki", '{app="shop"} |= "timeout"', WEEK) });
+    expect(view.result.current).toBeNull();
+    await waitFor(() => expect(calls.count).toBe(2));
+    expect(view.result.current).toBeNull();
+    hold.release();
+    await waitFor(() => expect(view.result.current).toBe(FILTERED));
+  });
+
+  it("a reason that holds for any window stays while the new window is checked", async () => {
+    const { api, hold, calls, hook } = setup();
+    api.state.whyEmpty = { reason: "missing_metric", message: MISSING };
+    const query = "rate(container_cpu_cfs_throttled_periods_total[5m])";
+    const view = hook(ask("prometheus", query, HOUR));
+    await waitFor(() => expect(view.result.current).toBe(MISSING));
+    hold.on = true;
+    view.rerender({ input: ask("prometheus", query, LATER) });
+    expect(view.result.current).toBe(MISSING);
+    await waitFor(() => expect(calls.count).toBe(2));
+    expect(view.result.current).toBe(MISSING);
+    // Another query never inherits it.
+    view.rerender({ input: ask("prometheus", "up", LATER) });
+    expect(view.result.current).toBeNull();
+    hold.release();
+    await calls.settled();
+  });
+
+  it("a failed check clears what was held", async () => {
+    const { api, hold, calls, hook } = setup();
+    api.state.whyEmpty = { reason: "missing_labels", message: NO_LABELS };
+    const view = hook(ask("loki", '{app="shop"}', HOUR));
+    await waitFor(() => expect(view.result.current).toBe(NO_LABELS));
+    api.state.whyEmpty = { error: { code: "unreachable", message: "The source didn't answer." }, status: 502 };
+    view.rerender({ input: ask("loki", '{app="shop"}', LATER) });
+    await waitFor(() => expect(calls.count).toBe(2));
+    await calls.settled();
+    expect(view.result.current).toBeNull();
+    // A third window, still being checked: the withdrawn words don't come back.
+    hold.on = true;
+    view.rerender({ input: ask("loki", '{app="shop"}', { start: LATER.start + 3600, end: LATER.end + 3600 }) });
+    await waitFor(() => expect(calls.count).toBe(3));
+    expect(view.result.current).toBeNull();
+    hold.release();
+    await calls.settled();
   });
 });

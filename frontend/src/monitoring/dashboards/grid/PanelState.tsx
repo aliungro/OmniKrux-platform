@@ -13,7 +13,10 @@ export const PANEL_COPY = {
 export function PanelNote({ text, busy = false, reason = false }: { text: string; busy?: boolean; reason?: boolean }) {
   return (
     <div className={s.note} aria-busy={busy || undefined}>
-      <p className={reason ? `${s.noteText} ${s.noteReason}` : s.noteText} data-empty-reason={reason || undefined}>{text}</p>
+      {/* A long reason is clamped, never scrolled (nothing to reach by keyboard); the whole sentence
+          stays in the text for screen readers and in the title on hover. */}
+      <p className={reason ? `${s.noteText} ${s.noteReason}` : s.noteText} data-empty-reason={reason || undefined}
+        title={reason ? text : undefined}>{text}</p>
     </div>
   );
 }

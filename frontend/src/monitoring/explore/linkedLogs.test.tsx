@@ -6,7 +6,7 @@ import type { CatalogOut } from "../catalog/api";
 import { catalogOf, metric, source, stream } from "../catalog/fixtures";
 import { fakeBox } from "../charts/panelFixtures";
 import type { BatchItemOut } from "../dashboards/api";
-import { linkTo } from "../test/dashboardSeeds";
+import { linkTo, watchCalls } from "../test/dashboardSeeds";
 import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeQueryAnswer } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import type { ExploreView } from "../shell/tabState";
@@ -446,10 +446,12 @@ describe("Metrics and logs on one timeline", () => {
   it("an unknown reason keeps the plain empty lines note", async () => {
     const api = shop();
     batchItems((q) => (q.limit != null ? noLines(q) : null));
+    const calls = watchCalls("/query/why-empty");
     await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
     expect(await within(await screen.findByRole("region", { name: "Log lines" })).findByText("No log lines in this time range.")).toBeTruthy();
-    await waitFor(() => expect(api.requests.some((r) => r.url === "/api/monitoring/query/why-empty")).toBe(true));
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() => expect(calls.count).toBe(1));
+    expect(api.requests.some((r) => r.url === "/api/monitoring/query/why-empty")).toBe(true);
+    await calls.settled();
     expect(within(section()).getByText("No log lines in this time range.")).toBeTruthy();
     expect(section().querySelector("[data-empty-reason]")).toBeNull();
   });

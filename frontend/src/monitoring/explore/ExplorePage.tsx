@@ -419,8 +419,9 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   // An empty metric answer: why, about the request whose answer is shown, once the check proves it.
   // Logs mode says it under the lines instead (the volume chart and the lines ask the same thing).
   const emptyShown = state.shown === "done" && state.data?.state === "empty" && state.kind === "metrics";
-  const emptyReason = useEmptyReason(emptyShown && state.request && state.panel
-    ? { sourceType: state.panel.queries[0]?.source.type ?? "prometheus", request: state.request, range: state.range ?? undefined }
+  const emptyType = state.panel?.queries[0]?.source.type;
+  const emptyReason = useEmptyReason(emptyShown && state.request && (emptyType === "prometheus" || emptyType === "loki")
+    ? { sourceType: emptyType, request: state.request, range: state.range ?? undefined }
     : null);
   let result: ReactNode = null;
   if (state.shown === "done" && state.data && state.range) {

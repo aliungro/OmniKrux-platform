@@ -19,6 +19,10 @@ const MAX_QUERY_CHARS = 10_000;
 const MAX_SELECTOR_CHARS = 2000;
 const METRIC_NAME = /^[A-Za-z_:][A-Za-z0-9_:]*$/;
 const STALE_MS = 5 * 60_000;
+/** Reasons judged without the query's window (a metric over all its retention, Loki labels and
+ * streams over the last 30 days): still true for a newer window of the same query, so a refresh may
+ * keep them while its own check runs. Every other reason is about one window and is never kept. */
+const ANY_WINDOW: ReadonlySet<WhyEmptyOut["reason"]> = new Set(["missing_metric", "missing_labels", "no_streams"]);
 
 /**
  * The check for one request: the query's metric names (unique, the first 5) for Prometheus, its
@@ -65,8 +69,9 @@ function wordsOf(out: WhyEmptyOut, kind: QueryRequest["kind"]): string | null {
 /**
  * Why `input`'s empty answer was empty, or null: while the check runs (the generic words stay, so
  * nothing flashes), when it fails, and when it can't tell. One check per request and minute-rounded
- * window, kept 5 minutes. A newer window of the same query keeps the last reason until its own
- * arrives, so a refresh never blinks back to the generic words.
+ * window, kept 5 minutes. A newer window of the same query keeps the last reason only when that
+ * reason holds for any window (`ANY_WINDOW`), so a refresh never blinks it away; a reason about the
+ * old window gives way to the generic words until the new check answers, and a failed check clears it.
  */
 export function useEmptyReason(input: EmptyAsk | null): string | null {
   const body = input ? emptyCheck(input.sourceType, input.request, input.range) : null;
@@ -83,18 +88,17 @@ export function useEmptyReason(input: EmptyAsk | null): string | null {
     refetchOnReconnect: false,
   });
   const identity = body ? JSON.stringify([body.source_id, body.project_id, body.query, kind]) : null;
-  const held = useRef<{ identity: string; words: string | null } | null>(null);
-  if (identity === null) {
+  const held = useRef<{ identity: string; words: string } | null>(null);
+  if (identity === null || query.status === "error") {
     held.current = null;
     return null;
   }
   if (query.status === "success") {
     const words = wordsOf(query.data, kind);
-    held.current = { identity, words };
+    held.current = words !== null && ANY_WINDOW.has(query.data.reason) ? { identity, words } : null;
     return words;
   }
-  if (query.status === "pending" && held.current?.identity === identity) return held.current.words;
-  return null;
+  return held.current?.identity === identity ? held.current.words : null;
 }
 
 /** An empty panel's question: its first request, with the run's range; on a group dashboard the

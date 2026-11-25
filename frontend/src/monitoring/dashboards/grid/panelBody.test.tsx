@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import type { GroupOut } from "../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
-import { gate, intercept, linkedProject, panel, seedDashboard, serverFailure, spec } from "../../test/dashboardSeeds";
+import { gate, intercept, linkedProject, panel, seedDashboard, serverFailure, spec, watchCalls } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import { editSessions } from "../editor/useDashboardEditor";
 import type { DashboardSpec } from "../schema";
@@ -75,11 +75,13 @@ describe("Empty panels say why", () => {
 
   it("an unknown reason keeps the generic words", async () => {
     const api = shop({ whyEmpty: { reason: "unknown", message: null } });
+    const calls = watchCalls("/query/why-empty");
     await open();
     expect(await within(frame("p-1")).findByText(GENERIC)).toBeTruthy();
-    await waitFor(() => expect(asked(api)).toHaveLength(1));
+    await waitFor(() => expect(calls.count).toBe(1));
+    expect(asked(api)).toHaveLength(1);
     // The answer is in; still the generic words, nothing invented.
-    await new Promise((r) => setTimeout(r, 30));
+    await calls.settled();
     expect(within(frame("p-1")).getByText(GENERIC)).toBeTruthy();
     expect(frame("p-1").querySelector("[data-empty-reason]")).toBeNull();
     cleanup();
@@ -88,19 +90,23 @@ describe("Empty panels say why", () => {
     shop();
     let failed = 0;
     intercept((url) => (url.endsWith("/query/why-empty") ? (failed++, serverFailure(502, "unreachable", "The source didn't answer.")) : null));
+    const failing = watchCalls("/query/why-empty");
     await open();
     expect(await within(frame("p-1")).findByText(GENERIC)).toBeTruthy();
-    await waitFor(() => expect(failed).toBe(1));
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() => expect(failing.count).toBe(1));
+    expect(failed).toBe(1);
+    await failing.settled();
     expect(within(frame("p-1")).getByText(GENERIC)).toBeTruthy();
     expect(screen.queryByText("The source didn't answer.")).toBeNull();
   });
 
   it("no reason is asked for a panel that has data", async () => {
     const api = shop({ queryAnswers: { [THROTTLE]: ok, up: ok } });
+    const batch = watchCalls("/query/batch");
     await open();
     await waitFor(() => expect(screen.getAllByText("chart 1")).toHaveLength(2));
-    await new Promise((r) => setTimeout(r, 30));
+    // Every run has answered and been drawn: nothing asked why.
+    await batch.settled();
     expect(asked(api)).toHaveLength(0);
   });
 
@@ -126,6 +132,7 @@ describe("Empty panels say why", () => {
       queryAnswers: { "kube_pod_status_ready == 0": noRows },
       whyEmpty: { reason: "nothing_matched", message: NOTHING },
     });
+    const calls = watchCalls("/query/why-empty");
     await open();
     expect(await within(frame("p-1")).findByText(GENERIC)).toBeTruthy();
     await waitFor(() => expect(asked(api)).toHaveLength(1));
@@ -133,7 +140,7 @@ describe("Empty panels say why", () => {
     const body = asked(api)[0].body as Record<string, unknown>;
     expect(body).toMatchObject({ metrics: ["kube_pod_status_ready"] });
     expect(body.end as number).toBeGreaterThan(body.start as number);
-    await new Promise((r) => setTimeout(r, 30));
+    await calls.settled();
     expect(within(frame("p-1")).queryByText(NOTHING)).toBeNull();
     cleanup();
 

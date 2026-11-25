@@ -1,6 +1,7 @@
 // Seeds for dashboard page tests: dashboards as the fake API holds them, panels and links; and a
 // way to hold or fail chosen requests in front of the fake.
 import { vi } from "vitest";
+import { act } from "@testing-library/react";
 import type { LinkOut, ProjectOut } from "../api/types";
 import { emptyDashboard, newPanel, type DashboardSpec, type Layout, type OwnerKind, type PanelSpec, type PanelType, type VariableSpec } from "../dashboards/schema";
 import type { FakeDashboard } from "./fakeMonitoringApi";
@@ -63,6 +64,29 @@ export function intercept(rule: (url: string, pass: () => Promise<Response>) => 
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     return rule(url, () => inner(input, init)) ?? inner(input, init);
   }));
+}
+
+/**
+ * Watches the requests to one route (put it in front of the fake and any other rule): how many went
+ * out, and `settled()`, which waits until each has answered and React has taken the answers in. For
+ * "nothing changed after the answer" checks, without a guessed sleep.
+ */
+export function watchCalls(path: string) {
+  const answers: Promise<unknown>[] = [];
+  intercept((url, pass) => {
+    if (!url.includes(path)) return null;
+    const res = pass();
+    answers.push(res.then((r) => r.clone().text()).catch(() => undefined));
+    return res;
+  });
+  return {
+    get count() { return answers.length; },
+    async settled() {
+      await Promise.all(answers);
+      // One task after the last answer: the query has stored it and React has rendered it.
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    },
+  };
 }
 
 /** A server failure in the dashboard routes' shape. */
