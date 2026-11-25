@@ -570,6 +570,35 @@ describe("Update from source", () => {
     expect(document.activeElement).toBe(more());
   });
 
+  it("a source choice that finds nothing changed puts the keyboard on Close", async () => {
+    const api = seed({ updatePreviews: { d1: preview({ new_sources: [lokiRef] }) } });
+    const { user } = await open();
+    const box = await openUpdate(user);
+    await reviewShown();
+    api.state.transfer.updatePreviews.d1 = preview({ new_sources: [lokiRef], same: true });
+    await user.selectOptions(within(box).getByRole("combobox", { name: "Source for Logs" }), "Leave its panels out");
+    expect(await within(box).findByText("Nothing changed: the source matches this dashboard.")).toBeTruthy();
+    expect(within(box).queryByRole("combobox")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(within(box).getByRole("button", { name: "Close" })));
+    notBody();
+  });
+
+  it("an old refusal doesn't come back with a later edit", async () => {
+    seed();
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 3, savedAt: Date.now(), draft: now(), jsonText: null, writer: "w-other" });
+    const { user } = await open();
+    await screen.findByText(/^Imported from /);
+    await user.click((await menuItems(user)).find((i) => i.textContent === "Update from source…")!);
+    expect(screen.getByText(REFUSED)).toBeTruthy();
+    // The draft goes: so does the refusal.
+    await user.click(screen.getByRole("button", { name: "Discard draft" }));
+    await waitFor(() => expect(screen.queryByText(REFUSED)).toBeNull());
+    // Editing later starts an edit session, but nothing was refused this time.
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await screen.findByRole("button", { name: "Save dashboard" });
+    expect(screen.queryByText(REFUSED)).toBeNull();
+  });
+
   it("Cancel never says the update was refused", async () => {
     seed();
     const { user } = await open();

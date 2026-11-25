@@ -498,6 +498,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
    */
   const [refusedUpdate, setRefusedUpdate] = useState(false);
   const showRefusal = refusedUpdate && restoreBlocked();
+  // Once the draft or edit session is gone the refusal is over: a later one doesn't bring it back.
+  useEffect(() => { if (refusedUpdate && !showRefusal) setRefusedUpdate(false); }, [refusedUpdate, showRefusal]);
   const askUpdate = () => {
     if (restoreBlocked()) {
       setUpdatedText(null);

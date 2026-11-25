@@ -79,8 +79,6 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
   const [mapping, setMapping] = useState<Record<string, MappingIn>>({});
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
-  /** Counts failed checks: each one makes sure the keyboard is still in the dialog. */
-  const [failures, setFailures] = useState(0);
   /** Why the review ran again (the source or the dashboard changed since it was shown). */
   const [notice, setNotice] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
@@ -124,7 +122,6 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
       // Never a review of something else as if it were this one.
       setPreview(null);
       setCheckError(failure(err, "check again"));
-      setFailures((n) => n + 1);
     } finally {
       if (inflight.current === ctl) {
         inflight.current = null;
@@ -147,13 +144,16 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
     (preview.same ? closeRef : replaceRef).current?.focus();
   }, [preview]);
 
-  // A failed check removed the review, and with it what had the keyboard (a source's select): the
-  // keyboard goes to Try again, Check or Cancel, never <body>.
+  // Whatever had the keyboard went away with what it was part of (a source's select when a check
+  // answers "nothing changed" or fails, a Try again replaced by the review): after every render the
+  // keyboard is put back inside the dialog, never left on <body>. Close when nothing changed, else
+  // Try again, Check, Replace with the source or Cancel. Not while a replace runs (the dialog holds it).
   useLayoutEffect(() => {
-    if (failures === 0) return;
+    if (applying) return;
     const a = document.activeElement;
-    if (a === null || a === document.body || !a.isConnected) (tryAgainRef.current ?? checkRef.current ?? cancelRef.current)?.focus();
-  }, [failures]);
+    if (a !== null && a !== document.body && a.isConnected) return;
+    (closeRef.current ?? tryAgainRef.current ?? checkRef.current ?? replaceRef.current ?? cancelRef.current)?.focus();
+  });
 
   // A new source makes the review out of date: it goes until Check runs again.
   const sourceChanged = () => {
