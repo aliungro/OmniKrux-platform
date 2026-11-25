@@ -22,6 +22,9 @@ export function TimeRangePicker({ time, open, onOpen, onClose, onPick, buttonRef
   const root = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const fromField = useRef<HTMLInputElement>(null);
+  // A press on the trigger moves the focus there before its click: that blur must not close the menu
+  // (the click does), while the keyboard (Shift+Tab) back to it still closes.
+  const pressing = useRef(false);
   const id = useId();
   const [custom, setCustom] = useState(false);
   const [from, setFrom] = useState(time.from);
@@ -64,13 +67,14 @@ export function TimeRangePicker({ time, open, onOpen, onClose, onPick, buttonRef
   return (
     <div ref={root} className={s.popAnchor}>
       <button ref={buttonRef} type="button" className={s.chip} aria-haspopup="menu" aria-expanded={open} aria-keyshortcuts="t"
-        onClick={() => (open ? onClose(true) : onOpen())}>
+        onPointerDown={() => { pressing.current = true; setTimeout(() => { pressing.current = false; }, 500); }}
+        onClick={() => { pressing.current = false; if (open) onClose(true); else onOpen(); }}>
         <svg className={s.chipIcon} viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.3" /></svg>
         {label}
         <span className={s.caret} aria-hidden="true">▾</span>
       </button>
       {open && (
-        <div {...POPUP} className={s.popup} onKeyDown={escapeCloses(() => onClose(true))} onBlur={closesOnLeave(close, root)}>
+        <div {...POPUP} className={s.popup} onKeyDown={escapeCloses(() => onClose(true))} onBlur={(e) => closesOnLeave(close, pressing.current ? root : undefined)(e)}>
           <div ref={menu} role="menu" aria-label="Time range" className={s.menu} onKeyDown={menuKeys}>
             {TIME_PRESETS.map((p) => {
               const on = time.to === "now" && time.from === p.from;

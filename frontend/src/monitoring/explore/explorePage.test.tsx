@@ -78,6 +78,10 @@ describe("Explore", () => {
     expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
     expect(document.activeElement).toBe(button);
     await user.click(button);
+    // Shift+Tab back to the button closes the menu as before.
+    await user.tab({ shift: true });
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull());
+    await user.click(button);
     await user.tab();
     await user.tab();
     await waitFor(() => expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull());

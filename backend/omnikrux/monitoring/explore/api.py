@@ -100,7 +100,11 @@ def _source_out(entry: CatalogEntry) -> SourceCatalogOut:
             for s in (catalog.streams if catalog else ())
         ],
         notes=list(catalog.notes) if catalog else [],
-        stream_window_seconds=DEFAULT_LIMITS.stream_window if entry.source_type == "loki" else None,
+        stream_window_seconds=(
+            DEFAULT_LIMITS.stream_window
+            if entry.source_type == "loki" and entry.state == "ok"
+            else None
+        ),
     )
 
 

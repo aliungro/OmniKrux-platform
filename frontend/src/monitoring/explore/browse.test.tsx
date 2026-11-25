@@ -286,6 +286,17 @@ describe("Browse metrics and log streams", () => {
     expect(windowWords(3600)).toBe("1 hour");
   });
 
+  it("a Loki that failed doesn't claim there are no streams", async () => {
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("l1", "loki")] }],
+      catalogs: { p1: catalogOf("p1", source("l1", { source_type: "loki", built_at: BUILT, state: "error", message: "The source answered HTTP 500.", stream_window_seconds: null })) },
+    }, async () => json([]));
+    await openExplore();
+    expect(await screen.findByText(/The source answered HTTP 500\./)).toBeTruthy();
+    expect(screen.queryByText(/No log streams in the last/)).toBeNull();
+    expect(screen.queryByText("This source lists no log streams yet.")).toBeNull();
+  });
+
   it("a logs list never shows Prometheus notes", async () => {
     const note = "Labels per metric come from the first 50000 series.";
     const loki = "Showing the first 50 log labels.";

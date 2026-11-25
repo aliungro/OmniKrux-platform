@@ -159,7 +159,8 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
 
   const noun = mode === "metrics" ? "Metrics" : "Log streams";
   const age = catalogAge(builtAt, Date.now());
-  const none = !loading && !error && rows.length === 0;
+  // A source that failed proved nothing: its own words (the problem lines) stand, not "none".
+  const none = !loading && !error && rows.length === 0 && !(mode === "streams" && !streamWindowSeconds && problems.length > 0 && applied.trim() === "");
   return (
     <div className={s.browse}>
       <div className={s.headRow}>

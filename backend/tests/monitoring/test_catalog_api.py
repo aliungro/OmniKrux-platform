@@ -126,6 +126,18 @@ async def test_catalog_says_the_loki_window(
     assert prometheus["stream_window_seconds"] is None
 
 
+async def test_a_failing_loki_says_no_window(
+    monitoring_app, fake_prometheus, fake_loki, linked_project_with_loki
+):
+    http, _ = monitoring_app
+    seed_shop(fake_prometheus)
+    fake_loki.mode = "error500"
+    body = (await http.get(catalog_url(linked_project_with_loki.project_id))).json()
+    loki = body["sources"][1]
+    assert loki["state"] == "error"
+    assert loki["stream_window_seconds"] is None
+
+
 def _seconds(text: str) -> float:
     from datetime import datetime
 
