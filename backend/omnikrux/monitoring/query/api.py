@@ -5,7 +5,9 @@
 - `POST /query/batch` runs a panel's queries as one request, each item through its own
   project's filter, each succeeding or failing on its own;
 - `GET /label-values` reads one label's values for a dashboard variable, through a project's
-  filter.
+  filter;
+- `POST /query/why-empty` says why a query came back empty, when a check proves it
+  (`why_empty.py`).
 
 The pipeline itself (filters, checks, the connector call) is in `run.py`; this module reads the
 request and answers. Every refusal answers `detail = {"code": QueryErrorCode, "message": plain
@@ -15,6 +17,7 @@ list of errors)."""
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -49,6 +52,12 @@ from omnikrux.monitoring.query.run import (
     transport_error,
 )
 from omnikrux.monitoring.query.series import QueryRequest, QueryResponse
+from omnikrux.monitoring.query.why_empty import (
+    WhyEmptyIn,
+    WhyEmptyOut,
+    explain_empty,
+    why_empty_request,
+)
 from omnikrux.monitoring.sources.transport import SourceUnreachable
 
 __all__ = [
@@ -94,6 +103,7 @@ __all__ = [
     "router",
     "run_query",
     "unreachable_error",
+    "why_empty_route",
 ]
 
 MAX_BATCH = 64
@@ -164,6 +174,13 @@ _BATCH_SCHEMA = {
                 }
             }
         },
+    }
+}
+
+_WHY_EMPTY_SCHEMA = {
+    "requestBody": {
+        "required": True,
+        "content": {"application/json": {"schema": WhyEmptyIn.model_json_schema()}},
     }
 }
 
@@ -281,3 +298,15 @@ async def label_values_route(
     except QueryError as exc:
         raise http_error(exc) from None
     return LabelValuesOut(values=values, truncated=truncated)
+
+
+@router.post("/query/why-empty", openapi_extra=_WHY_EMPTY_SCHEMA)
+async def why_empty_route(request: Request) -> WhyEmptyOut:
+    """Why a query came back empty, judged under the project's filter. Refusals are a query's
+    (`{code, message}`); a check that fails or runs out of time answers 200 `unknown`."""
+    data = await _json_body(request)
+    try:
+        body = why_empty_request(data)
+        return await explain_empty(request.app.state.monitoring, body, time.time())
+    except QueryError as exc:
+        raise http_error(exc) from None

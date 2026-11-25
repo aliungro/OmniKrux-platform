@@ -147,6 +147,71 @@ class LokiConnector:
         # Only names Loki would accept in a selector: they are written into queries as they are.
         return sorted(n for n in names if LABEL_NAME.fullmatch(n) and not n.startswith("__"))
 
+    async def stream_count(
+        self,
+        t: SourceTransport,
+        selector: str,
+        *,
+        matchers: Sequence[Matcher],
+        start: float,
+        end: float,
+    ) -> int:
+        """How many streams `selector`, with `matchers` added (`FilterError` when they can't
+        be), selects between `start` and `end` (seconds): one `/series` call."""
+        got = await t.request(
+            "GET",
+            "/loki/api/v1/series",
+            params=[
+                ("match[]", inject_logql(selector, matchers)),
+                ("start", _nanoseconds(start)),
+                ("end", _nanoseconds(end)),
+            ],
+            timeout=PROBE_SECONDS,
+        )
+        data = checked_json(got, "The source", WHAT).get("data")
+        return sum(1 for e in data if isinstance(e, dict)) if isinstance(data, list) else 0
+
+    async def newest_line(
+        self,
+        t: SourceTransport,
+        selector: str,
+        *,
+        matchers: Sequence[Matcher],
+        start: float,
+        end: float,
+    ) -> float | None:
+        """When (seconds) the newest line of the streams `selector` selects, with `matchers`
+        added, was written between `start` and `end`; None when there is no line. One
+        `query_range` call, read backward, for one line."""
+        got = await t.request(
+            "GET",
+            "/loki/api/v1/query_range",
+            params=[
+                ("query", inject_logql(selector, matchers)),
+                ("start", _nanoseconds(start)),
+                ("end", _nanoseconds(end)),
+                ("limit", "1"),
+                ("direction", "backward"),
+            ],
+            timeout=PROBE_SECONDS,
+        )
+        body = checked_json(got, "The source", WHAT)
+        data = body.get("data")
+        if (
+            body.get("status") != "success"
+            or not isinstance(data, dict)
+            or data.get("resultType") != "streams"
+        ):
+            raise QueryRejected("tool_error", NOT_LIKE.format(name="The source", what=WHAT), 502)
+        try:
+            found = streams_result(data, [])
+            times = [int(at) for stream in found.streams for at, _ in stream.entries]
+        except (ValueError, TypeError):
+            raise QueryRejected(
+                "tool_error", NOT_LIKE.format(name="The source", what=WHAT), 502
+            ) from None
+        return max(times) / 1_000_000_000 if times else None
+
     async def catalog(
         self,
         t: SourceTransport,
