@@ -10,7 +10,9 @@ from omnikrux.monitoring.query import api as query_api
 from omnikrux.monitoring.query import why_empty
 from omnikrux.monitoring.query.filters import UNREADABLE
 from omnikrux.monitoring.query.why_empty import age_words, labels_words, missing_metric_words
+from omnikrux.monitoring.sources.connector import QueryRejected
 from omnikrux.monitoring.sources.loki import LokiConnector
+from tests.monitoring.fakes import Canned
 
 WHY = "/api/monitoring/query/why-empty"
 HOUR = 3600
@@ -239,6 +241,30 @@ async def test_labels_seen_only_long_ago_say_thirty_days(
     assert "for this project in the last 30 days" in message
 
 
+async def test_lokis_own_labels_are_never_called_missing(
+    monitoring_app, fake_loki, linked_project_with_loki
+):
+    """Loki never lists `__…` labels with a stream's labels, so the check can't tell: it is
+    skipped, never reported missing."""
+    http, _ = monitoring_app
+    shop = linked_project_with_loki
+    fake_loki.stream_lines = [classic_stream(time.time() - 600, __stream_shard__="1")]
+    selector = '{__stream_shard__="1", namespace="shop"}'
+    r = await http.post(WHY, json=loki_body(shop, selector, f'{selector} |= "panic"'))
+    assert answer(r)[0] == "filtered_out"
+
+
+async def test_a_malformed_stream_count_is_refused_not_zero():
+    loki = LokiConnector()
+    for body in (b'{"status":"success","data":{"a":1}}', b'{"status":"error","data":[]}'):
+        with pytest.raises(QueryRejected):
+            await loki.stream_count(Canned(200, body), '{a="b"}', matchers=(), start=0, end=1)
+    null = Canned(200, b'{"status":"success","data":null}')
+    assert await loki.stream_count(null, '{a="b"}', matchers=(), start=0, end=1) == 0
+    listed = Canned(200, b'{"status":"success","data":[{"a":"b"},{"a":"c"}]}')
+    assert await loki.stream_count(listed, '{a="b"}', matchers=(), start=0, end=1) == 2
+
+
 def test_labels_words():
     assert labels_words(["k8s_pod_name"]) == 'the label "k8s_pod_name"'
     assert labels_words(["namespace", "pod"]) == 'the labels "namespace" and "pod"'
@@ -268,22 +294,19 @@ async def test_no_streams_in_thirty_days(monitoring_app, fake_loki, linked_proje
 
 
 async def test_streams_without_lines_say_no_streams(
-    monitoring_app, fake_loki, linked_project_with_loki, monkeypatch
+    monitoring_app, fake_loki, linked_project_with_loki
 ):
+    """Loki lists the stream, but reading its lines finds none: no log streams to show."""
     http, _ = monitoring_app
     shop = linked_project_with_loki
     fake_loki.stream_lines = [classic_stream(time.time() - HOUR)]
-
-    async def no_line(self, t, selector, *, matchers, start, end):
-        return None
-
-    monkeypatch.setattr(LokiConnector, "newest_line", no_line)
+    fake_loki.results['{namespace="shop",cluster="a"}'] = {"resultType": "streams", "result": []}
     r = await http.post(WHY, json=loki_body(shop, '{namespace="shop"}'))
     assert answer(r)[0] == "no_streams"
-    # A range that ended a day ago: the streams' lines may all be newer, so nothing is claimed.
+    # The same for a range in the past: the newest line is read up to now, not to the range's end.
     now = time.time()
     body = loki_body(shop, '{namespace="shop"}', start=now - 2 * DAY, end=now - DAY)
-    assert answer(await http.post(WHY, json=body)) == ("unknown", None)
+    assert answer(await http.post(WHY, json=body))[0] == "no_streams"
 
 
 async def test_older_lines_say_how_old(monitoring_app, fake_loki, linked_project_with_loki):
@@ -304,8 +327,45 @@ async def test_older_lines_say_how_old(monitoring_app, fake_loki, linked_project
     [asked] = [q for q in fake_loki.requests if q.path == "/loki/api/v1/query_range"]
     assert asked.params["query"] == ['{namespace="shop",cluster="a"}']
     assert asked.params["limit"] == ["1"] and asked.params["direction"] == ["backward"]
-    assert abs(int(asked.params["end"][0]) - ns(end)) < NS
+    # Up to now, not to the range's end: the newest line's age is true for any range.
+    assert abs(int(asked.params["end"][0]) - ns(now)) < 60 * NS
     assert abs(int(asked.params["start"][0]) - ns(now - 30 * DAY)) < 60 * NS
+
+
+async def test_a_past_range_is_judged_by_the_newest_line_up_to_now(
+    monitoring_app, fake_loki, linked_project_with_loki
+):
+    """Yesterday 10:00-11:00 with a line before it and one five minutes ago: the range is quiet,
+    and the newest line is five minutes old, not a day."""
+    http, _ = monitoring_app
+    shop = linked_project_with_loki
+    now = time.time()
+    start, end = now - DAY - HOUR, now - DAY
+    fake_loki.stream_lines = [
+        classic_stream(start - HOUR),
+        classic_stream(now - 300, pod="web-2"),
+    ]
+    body = loki_body(shop, '{namespace="shop"}', start=start, end=end)
+    r = await http.post(WHY, json=body)
+    assert answer(r) == (
+        "older_lines",
+        "No lines in this time range. The newest matching line is 5 minutes old: try a longer range.",
+    )
+    reads = [q for q in fake_loki.requests if q.path == "/loki/api/v1/query_range"]
+    assert len(reads) == 2
+    # The second read covers the range itself.
+    assert abs(int(reads[1].params["start"][0]) - ns(start)) < NS
+    assert abs(int(reads[1].params["end"][0]) - ns(end)) < NS
+
+    # A line inside the past range as well: the rest of the query dropped it.
+    fake_loki.stream_lines.append(classic_stream(start + 600, pod="web-3"))
+    r = await http.post(
+        WHY,
+        json=loki_body(
+            shop, '{namespace="shop"}', '{namespace="shop"} |= "x"', start=start, end=end
+        ),
+    )
+    assert answer(r)[0] == "filtered_out"
 
 
 async def test_lines_in_range_were_filtered_out(

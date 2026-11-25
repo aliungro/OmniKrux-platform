@@ -7,8 +7,10 @@ project's filter, the same way the query did, so each reason is about this proje
   with no series is `missing_metric`; when all have series, `nothing_matched`.
 - Loki: the stream labels of the last 30 days are read; a label the selector needs that no stream
   has is `missing_labels`. Then the selector's streams are counted (none: `no_streams`), and
-  its newest line is read: none (`no_streams`), older than the range (`older_lines`) or inside it
-  (`filtered_out`, so the rest of the query dropped every line).
+  its newest line up to now is read: none (`no_streams`), older than the range (`older_lines`),
+  inside it (`filtered_out`, so the rest of the query dropped every line) or newer than it. Then
+  the range itself is read for a line: one (`filtered_out`) or none (`older_lines`: the range is
+  quiet, and the words give the newest line's true age).
 
 A check that fails, times out (the whole explanation is bounded by `WHY_EMPTY_SECONDS`) or can't
 read the source's secrets answers `unknown` with no words: nothing new is claimed. The words are
@@ -48,9 +50,6 @@ from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreach
 
 WHY_EMPTY_SECONDS = 10.0
 LOKI_LOOKBACK = 30 * 86400
-# A range ending this close to now (seconds) reads up to now: the gap is the time between the
-# query and this check.
-RECENT_SECONDS = 60
 MAX_METRICS = 5
 MAX_SELECTOR_CHARS = 2000
 METRIC_PATTERN = r"^[A-Za-z_:][A-Za-z0-9_:]*$"
@@ -248,6 +247,9 @@ def _needed_labels(selector: str) -> list[str] | None:
         return None
     needed: list[str] = []
     for m in parsed:
+        # Loki's own `__…` labels are never listed with a stream's labels: no claim about them.
+        if m.label.startswith("__"):
+            continue
         if _needs_label(m) and m.label not in needed:
             needed.append(m.label)
     return needed
@@ -289,16 +291,19 @@ async def _loki(
     streams = await connector.stream_count(t, selector, matchers=matchers, start=since, end=now)
     if streams == 0:
         return WhyEmptyOut(reason="no_streams", message=NO_STREAMS.format(selector=selector))
-    if body.end <= since:  # a range from before the 30 days checked: nothing to say about it
-        return UNKNOWN
-    newest = await connector.newest_line(t, selector, matchers=matchers, start=since, end=body.end)
-    if newest is None and body.end < now - RECENT_SECONDS:
-        # The streams' lines may all be newer than the range: that isn't "no streams".
-        return UNKNOWN
+    # The newest line up to now, over the same 30 days the streams were counted in: its age is
+    # true whatever range the query covered.
+    newest = await connector.newest_line(t, selector, matchers=matchers, start=since, end=now)
     if newest is None:
         return WhyEmptyOut(reason="no_streams", message=NO_STREAMS.format(selector=selector))
+    older = OLDER_LINES.format(age=age_words(now - newest))
     if newest < body.start:
-        return WhyEmptyOut(
-            reason="older_lines", message=OLDER_LINES.format(age=age_words(now - newest))
+        return WhyEmptyOut(reason="older_lines", message=older)
+    if newest > body.end:
+        # Lines came after the range: whether the range itself holds one decides the reason.
+        inside = await connector.newest_line(
+            t, selector, matchers=matchers, start=body.start, end=body.end
         )
+        if inside is None:
+            return WhyEmptyOut(reason="older_lines", message=older)
     return WhyEmptyOut(reason="filtered_out", message=FILTERED_OUT.format(selector=selector))

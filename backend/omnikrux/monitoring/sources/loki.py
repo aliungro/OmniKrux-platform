@@ -168,8 +168,13 @@ class LokiConnector:
             ],
             timeout=PROBE_SECONDS,
         )
-        data = checked_json(got, "The source", WHAT).get("data")
-        return sum(1 for e in data if isinstance(e, dict)) if isinstance(data, list) else 0
+        body = checked_json(got, "The source", WHAT)
+        data = body.get("data")
+        if data is None and body.get("status") == "success":
+            return 0  # Loki answers `null` for no streams
+        if body.get("status") != "success" or not isinstance(data, list):
+            raise QueryRejected("tool_error", NOT_LIKE.format(name="The source", what=WHAT), 502)
+        return sum(1 for e in data if isinstance(e, dict))
 
     async def newest_line(
         self,
