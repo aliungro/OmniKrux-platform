@@ -341,10 +341,8 @@ export function useEditableGrid(
   useLayoutEffect(() => {
     const id = scrollTo.current;
     if (id === null) return;
-    const el = findTile(id);
-    if (!el) return;
     scrollTo.current = null;
-    el.scrollIntoView?.({ block: "nearest" });
+    findTile(id)?.scrollIntoView?.({ block: "nearest" });
   });
 
   useEffect(() => () => {

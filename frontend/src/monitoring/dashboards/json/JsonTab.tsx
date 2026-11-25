@@ -44,9 +44,9 @@ export function jsonWords(raw: string, text?: string): string {
     at = { line: lines.length, column: lines[lines.length - 1].length + 1 };
   }
   const atEnd = position !== null && text !== undefined && Number(position[1]) >= text.trimEnd().length;
-  const plain = /Expected (double-quoted )?property name/.test(said) ? "a property name needs double quotes"
-    : /Unexpected end of JSON input|Unterminated/.test(said) || atEnd ? "the text ends too early"
-    : /Unexpected token/.test(said) ? "a character doesn't belong there"
+  const plain = /expected (double-quoted )?property name/i.test(said) ? "a property name needs double quotes"
+    : /unexpected end of (JSON input|data)|unterminated/i.test(said) || atEnd ? "the text ends too early"
+    : /unexpected (token|character)/i.test(said) ? "a character doesn't belong there"
     : "it doesn't read as JSON";
   return at ? `Not valid JSON at line ${at.line}, column ${at.column}: ${plain}.` : `Not valid JSON: ${plain}.`;
 }

@@ -154,7 +154,7 @@ export interface DashboardContext {
   now: number;
   refresh: RefreshSpec;
   refreshMs: number | null;
-  /** The range doesn't end at now: it doesn't change, so there is nothing to refresh on a timer. */
+  /** The range ends at an absolute time: it doesn't change, so there is nothing to refresh on a timer. */
   fixedRange: boolean;
   /** Counts refreshes (Refresh now and ticks): a panel whose window didn't move reads it again. */
   refreshSeq: number;
@@ -241,7 +241,8 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     setClock((c) => ({ ...c, now: Math.max(Date.now(), c.now + 1), seq: c.seq + 1 }));
   }, []);
   const refresh: RefreshSpec = view.refresh !== undefined && VALID_REFRESH.has(view.refresh) ? (view.refresh as RefreshSpec) : spec.refresh;
-  const fixedRange = time.to !== "now";
+  // Only an absolute end (a UTC time) is fixed; "now-1h" still moves, so it keeps refreshing.
+  const fixedRange = !time.to.startsWith("now");
   const refreshMs = fixedRange ? null : refreshMsOf(refresh);
   const lastTick = useRef(clock.now);
   lastTick.current = clock.now;

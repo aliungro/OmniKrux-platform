@@ -881,7 +881,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         )}
         {tab === "json" && (ready
           ? <ReadyMadeJson spec={dashboard.spec} onCopy={copyToEdit.busy ? undefined : edit} />
-          : <JsonTab dashboard={dashboard} editing={editing} dispatch={editor.dispatch} onStartEditing={() => startEditing(null)}
+          : <JsonTab dashboard={dashboard} editing={editing} dispatch={editor.dispatch} onStartEditing={() => !askForDraft() && startEditing(null)}
               onSave={save} lastSaved={editor.lastSaved} discardRef={discardButton} problemFocus={editor.jsonRefusals}
               saving={editor.saving} flushRef={flushJson} />)}
         {tab === "versions" && !ready && (

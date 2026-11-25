@@ -10,6 +10,7 @@ import { gate, intercept, linkedProject, panel, seedDashboard, spec, variable } 
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { ReadyMadeOut } from "../api";
 import { editSessions } from "../editor/useDashboardEditor";
+import { writeDraft } from "../drafts/draftStore";
 
 // The chart chunk as a stub: it prints how many series it was given.
 vi.mock("../../charts", async () => {
@@ -19,7 +20,7 @@ vi.mock("../../charts", async () => {
 });
 
 beforeEach(() => { localStorage.clear(); editSessions.clear(); });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 const fallback = async () => json([]);
@@ -632,14 +633,13 @@ describe("Updated, refreshing and saving", () => {
     await user.click(screen.getByRole("button", { name: "Namespace: api" }));
     await user.click(within(screen.getByRole("group", { name: "Namespace" })).getByRole("radio", { name: "web" }));
     expect(await screen.findByText(`Updated ${clock(now)}`)).toBeTruthy();
-    vi.restoreAllMocks();
   });
 
   it("a fixed range can't auto refresh", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       const api = shop();
-      renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s", time: { from: "now-2h", to: "now-1h" } }) });
+      renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s", time: { from: "2026-11-19T09:00:00Z", to: "2026-11-19T10:00:00Z" } }) });
       expect(await screen.findByText("chart 1")).toBeTruthy();
       const select = screen.getByRole("combobox", { name: "Auto-refresh" }) as HTMLSelectElement;
       expect(select.disabled).toBe(true);
@@ -654,9 +654,9 @@ describe("Updated, refreshing and saving", () => {
     }
   });
 
-  it("a range that ends now keeps its refresh select", async () => {
+  it("a range that ends now, or at a relative time, keeps its refresh select", async () => {
     shop();
-    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s" }) });
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s", time: { from: "now-2h", to: "now-1h" } }) });
     expect(await screen.findByText("chart 1")).toBeTruthy();
     const select = screen.getByRole("combobox", { name: "Auto-refresh" }) as HTMLSelectElement;
     expect(select.disabled).toBe(false);
@@ -680,6 +680,32 @@ describe("Updated, refreshing and saving", () => {
     // It goes after 4 seconds.
     await waitFor(() => expect(screen.queryByText('Saved "API latency".')).toBeNull(), { timeout: 6000 });
   }, 10_000);
+});
+
+describe("The header's structure", () => {
+  it("always wraps, and an offered draft's banner is its own row under the heading", async () => {
+    const { readFileSync } = await import("node:fs");
+    const read = (file: string) => readFileSync(`src/monitoring/dashboards/${file}`, "utf8");
+    const css = read("page/DashboardPage.module.css");
+    const drafts = read("drafts/Drafts.module.css");
+    // No rule sets the header to nowrap (a full-row child would be squeezed into the title row).
+    expect(css).not.toMatch(/\.header\s*\{[^}]*nowrap/);
+    expect(css).not.toMatch(/\.controls\s*\{[^}]*nowrap/);
+    expect(css).toMatch(/\.header\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/\.titleProblem\s*\{[^}]*flex-basis:\s*100%/);
+    expect(drafts).toMatch(/\.banner\s*\{[^}]*flex:\s*1 1 100%/);
+    // The banner is a child of the header, after the heading and before the views.
+    shop();
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 1, savedAt: 1, draft: spec("API latency", []), jsonText: null, writer: "w-other" });
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const banner = await screen.findByRole("region", { name: "Unsaved draft" });
+    const header = banner.parentElement!;
+    expect(header.tagName).toBe("HEADER");
+    const kids = [...header.children];
+    expect(kids[0].contains(screen.getByRole("heading", { level: 1 }))).toBe(true);
+    expect(kids.indexOf(banner)).toBe(1);
+    expect(kids[2].getAttribute("role")).toBe("tablist");
+  });
 });
 
 describe("Copy to edit", () => {

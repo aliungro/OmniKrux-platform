@@ -569,8 +569,15 @@ describe("The JSON tab's words and buttons", () => {
   it("jsonWords reads either position style and falls back to plain words", () => {
     expect(jsonWords("Not valid JSON: Expected double-quoted property name in JSON at position 16 (line 1 column 17)"))
       .toBe("Not valid JSON at line 1, column 17: a property name needs double quotes.");
+    // Firefox's wording, any case.
     expect(jsonWords("Not valid JSON: JSON.parse: unexpected end of data at line 3 column 9 of the JSON data"))
-      .toBe("Not valid JSON at line 3, column 9: it doesn't read as JSON.");
+      .toBe("Not valid JSON at line 3, column 9: the text ends too early.");
+    expect(jsonWords("Not valid JSON: JSON.parse: expected double-quoted property name at line 1 column 3 of the JSON data"))
+      .toBe("Not valid JSON at line 1, column 3: a property name needs double quotes.");
+    expect(jsonWords("Not valid JSON: JSON.parse: unexpected character at line 2 column 1 of the JSON data"))
+      .toBe("Not valid JSON at line 2, column 1: a character doesn't belong there.");
+    expect(jsonWords("Not valid JSON: JSON.parse: something odd at line 2 column 1 of the JSON data"))
+      .toBe("Not valid JSON at line 2, column 1: it doesn't read as JSON.");
     expect(jsonWords("Not valid JSON: Unexpected end of JSON input")).toBe("Not valid JSON: the text ends too early.");
     expect(jsonWords("Not valid JSON: Unexpected token } in JSON at position 4", "{\n  }"))
       .toBe("Not valid JSON at line 2, column 3: a character doesn't belong there.");
@@ -604,6 +611,25 @@ describe("The JSON tab's words and buttons", () => {
     await user.click(screen.getByRole("button", { name: "Save dashboard" }));
     expect(await screen.findByText(JSON_SAVE_REFUSED)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Show in JSON" })).toBeTruthy();
+  });
+
+  it("typing on the view-mode JSON tab while a draft is offered asks for a choice", async () => {
+    const draft = doc();
+    draft.panels[0].title = "Requests per second";
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 1, savedAt: 1, draft, jsonText: null, writer: "w-other" });
+    const { user } = await opened();
+    await user.keyboard("2");
+    const area = await editorField();
+    type(area, changed((d) => { d.title = "Typed over a draft"; }));
+    const banner = screen.getByRole("region", { name: "Unsaved draft" });
+    await waitFor(() => expect(within(banner).getByText("Restore the draft or discard it before editing.")).toBeTruthy());
+    expect(document.activeElement).toBe(within(banner).getByRole("button", { name: "Restore draft" }));
+    expect(screen.queryByText("Editing")).toBeNull();
+    expect(session()).toBeNull();
+    // The typed text is not kept as an edit, and the stored draft is still the other one.
+    await pause(250);
+    expect(JSON.parse(localStorage.getItem("omnikrux.monitoring.draft.d1") ?? "null")?.writer).toBe("w-other");
+    notBody();
   });
 
   it("view mode's JSON tab has no Discard", async () => {

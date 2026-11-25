@@ -140,16 +140,14 @@
   font-weight: 500;
 }
 
-/* From 1100 px the header is one row, in edit mode too (Editing pill, Undo, Variables, Suggestions,
-   Discard, Save dashboard, with the time range and refresh): only the title gives way, cut with
-   an ellipsis (or, in edit mode, shortened in its field). Below 1100 px it wraps. */
+/* The header always wraps, so a full-row child (an offered draft's banner, the title's problem)
+   keeps its own row and nothing leaves the right edge. From 1100 px the heading asks for at least
+   14rem and takes what is left, so the title, tabs and controls (Editing pill, Undo, Variables,
+   Suggestions, Discard, Save dashboard, time range, refresh) share one row when they fit; when
+   they don't, the controls drop to the next row (and wrap inside it) instead. */
 @media (min-width: 1100px) {
-  .header {
-    flex-wrap: nowrap;
-  }
-
   .heading {
-    flex: 1 1 0;
+    flex: 1 1 14rem;
     min-width: 0;
   }
 
@@ -157,13 +155,13 @@
     flex: 0 1 auto;
   }
 
-  .tabs,
-  .controls {
+  .tabs {
     flex: none;
   }
 
   .controls {
-    flex-wrap: nowrap;
+    flex: 0 1 auto;
+    max-width: 100%;
     gap: 6px;
   }
 }
