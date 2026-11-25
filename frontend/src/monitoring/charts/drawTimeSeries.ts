@@ -182,6 +182,7 @@ export function buildFrame(
   range: { start: number; end: number },
   hidden: ReadonlySet<string>,
   alert: AlertBand | null = null,
+  step?: number,
 ): TimeSeriesFrame {
   // An alert's threshold is always on the chart: the y range (explicit bounds too) grows to hold it.
   const limit = alert && Number.isFinite(alert.threshold) ? alert.threshold : null;
@@ -314,11 +315,16 @@ export function buildFrame(
     const list: FrameBar[] = [];
     bars = list;
     const span = range.end - range.start;
-    const times = new Set<number>();
-    for (const s of visible) for (const p of s.points) if (p[1] !== null && p[0] >= range.start && p[0] <= range.end) times.add(p[0]);
-    const sorted = [...times].sort((a, b) => a - b);
-    const gaps = sorted.slice(1).map((t, i) => t - sorted[i]).sort((a, b) => a - b);
-    const gap = gaps.length > 0 ? gaps[gaps.length >> 1] : span;
+    // A bar is 0.7 of the query step wide. Series may hold only the steps with a value (a restart),
+    // so the gaps between samples say nothing about the step: they are used only when none is known.
+    let gap = step !== undefined && step > 0 ? step : 0;
+    if (gap === 0) {
+      const times = new Set<number>();
+      for (const s of visible) for (const p of s.points) if (p[1] !== null && p[0] >= range.start && p[0] <= range.end) times.add(p[0]);
+      const sorted = [...times].sort((a, b) => a - b);
+      const gaps = sorted.slice(1).map((t, i) => t - sorted[i]).sort((a, b) => a - b);
+      gap = gaps.length > 0 ? gaps[gaps.length >> 1] : span;
+    }
     const w = Math.max(1, 0.7 * (span > 0 ? (gap / span) * plot.w : plot.w));
     const zero = yOf(Math.min(hi, Math.max(lo, 0)));
     const upTo = new Map<number, number>();

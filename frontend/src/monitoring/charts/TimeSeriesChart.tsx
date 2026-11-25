@@ -162,9 +162,9 @@ export default function TimeSeriesChart({
   const colors = useMemo(() => seriesColors(series), [series]);
   const frame = useMemo(
     () => (size.width > 0 && size.height > 0
-      ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden, alert)
+      ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden, alert, runStep)
       : null),
-    [series, opts, size, dpr, range.start, range.end, hidden, alert],
+    [series, opts, size, dpr, range.start, range.end, hidden, alert, runStep],
   );
 
   // Paint. An edit morphs from what is on the canvas; anything else jumps.
@@ -190,7 +190,7 @@ export default function TimeSeriesChart({
     const colorOf = (token: string) => resolveToken(style, token);
 
     const edited = prev !== null && prev.target !== frame && (changeId > prev.changeId || editId > prev.editId);
-    if (!(animate && !reduced && edited && sameShape(prev.shown, frame))) {
+    if (!(animate && !reduced && edited && frame.style !== "bars" && sameShape(prev.shown, frame))) {
       drawTimeSeries(ctx, frame, colorOf, marks);
       return;
     }
@@ -223,13 +223,20 @@ export default function TimeSeriesChart({
 
   const visible = useMemo(() => series.filter((s) => !hidden.has(s.key)), [series, hidden]);
 
-  // The crosshair moves between the longest visible series' own samples.
+  // The crosshair moves between the longest visible series' own samples; for bars, between every
+  // visible series' sample times, since each series holds only the steps where it has a bar.
+  const barStyle = opts.style === "bars";
   const samples = useMemo(() => {
+    if (barStyle) {
+      const times = new Set<number>();
+      for (const s of visible) for (const p of s.points) if (p[0] >= range.start && p[0] <= range.end) times.add(p[0]);
+      return [...times].sort((a, b) => a - b);
+    }
     let best: ChartSeries | null = null;
     for (const s of visible) if (!best || s.points.length > best.points.length) best = s;
     if (!best) return [];
     return best.points.map((p) => p[0]).filter((t) => t >= range.start && t <= range.end);
-  }, [visible, range.start, range.end]);
+  }, [visible, barStyle, range.start, range.end]);
   const at = cursor !== null && samples.length > 0 ? Math.min(cursor, samples.length - 1) : null;
   const span = range.end - range.start;
 
@@ -379,7 +386,7 @@ export default function TimeSeriesChart({
   let tip: { x: number; time: string; rows: { key: string; name: string; color: string; value: number | null; text: string }[] } | null = null;
   if (at !== null && frame) {
     const t = samples[at];
-    const tolerance = samples.length > 1 ? ((samples[samples.length - 1] - samples[0]) / (samples.length - 1)) * 1.5 : Infinity;
+    const tolerance = barStyle ? step / 2 : samples.length > 1 ? ((samples[samples.length - 1] - samples[0]) / (samples.length - 1)) * 1.5 : Infinity;
     const rows = visible.map((s) => {
       const v = valueAt(s.points, t, tolerance);
       return { key: s.key, name: s.name, color: colors.get(s.key) as string, value: v, text: formatValue(v, opts.unit, opts.decimals) };

@@ -144,6 +144,22 @@ describe("buildFrame and drawTimeSeries", () => {
     expect(frame.series[0].values.length).toBe(frame.columns);
   });
 
+  it("sparse bars are a step wide, not as wide as the gap between restarts", () => {
+    const o = { ...options, style: "bars" as const, thresholds: [], min: null, max: null };
+    const hours = { start: START, end: START + 6 * 3600 };
+    const one: ChartSeries = { ...series("a", []), points: [[START + 3600, 2]] };
+    const frame = buildFrame([one], o, SIZE, hours, new Set(), null, 60);
+    expect(frame.bars).toHaveLength(1);
+    const stepPx = (60 / (6 * 3600)) * frame.plot.w;
+    expect(frame.bars![0].w).toBeCloseTo(Math.max(1, 0.7 * stepPx));
+    expect(frame.bars![0].w).toBeLessThan(frame.plot.w / 20);
+    // Two far-apart restarts: still a step wide.
+    const two2: ChartSeries = { ...series("b", []), points: [[START + 600, 1], [START + 18000, 1]] };
+    const f2 = buildFrame([two2], o, SIZE, hours, new Set(), null, 60);
+    expect(f2.bars!.map((b) => b.w)).toEqual([f2.bars![0].w, f2.bars![0].w]);
+    expect(f2.bars![0].w).toBeLessThan(frame.plot.w / 20);
+  });
+
   it("breaks the line at a gap", () => {
     const frame = buildFrame([series("a", [1, null, 3])], options, SIZE, RANGE, new Set());
     const ys = frame.series[0].ys;
@@ -360,6 +376,20 @@ describe("ChartView time series", () => {
       fireEvent.keyDown(chart, { key: "Escape" });
       expect(screen.getByRole("status").textContent).toBe("");
       expect(document.activeElement).toBe(chart);
+    });
+
+    it("bars of a series that is not the longest can be hovered", () => {
+      stubBrowser();
+      const long: ChartSeries = { ...series("long", []), points: [[START, 1], [START + 60, 1], [START + 120, 1]] };
+      const sparse: ChartSeries = { ...series("sparse", []), points: [[START + 90, 4]] };
+      render(<ChartView {...base({ panel: panelOf({ style: "bars" }), data: dataOf([long, sparse]), step: 60 })} />);
+      const chart = screen.getByRole("img");
+      for (let i = 0; i < 2; i++) fireEvent.keyDown(chart, { key: "ArrowRight" });
+      const tip = screen.getByRole("status");
+      expect(tip.textContent).toContain(formatTooltipTime(START + 90));
+      const rows = Array.from(tip.querySelectorAll("li")).map((li) => li.textContent);
+      expect(rows[0]).toContain("sparse");
+      expect(rows[0]).toContain("4");
     });
 
     it("lists each series' value, biggest first", () => {

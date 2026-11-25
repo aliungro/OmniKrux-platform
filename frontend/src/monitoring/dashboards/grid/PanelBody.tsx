@@ -38,7 +38,7 @@ export function PanelBody({ panel, run, result, waiting, changeId, animate }: Pr
       return (
         <Suspense fallback={<PanelNote text={PANEL_COPY.loading} busy />}>
           {/* Refreshes and time changes never animate: only a newer edit count morphs (F28). */}
-          <ChartView panel={panel} data={data} range={run.range} animate={animate} changeId={changeId} />
+          <ChartView panel={panel} data={data} range={run.range} animate={animate} changeId={changeId} step={run.step} />
         </Suspense>
       );
   }
