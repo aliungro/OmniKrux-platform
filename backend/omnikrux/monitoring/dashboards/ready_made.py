@@ -1,24 +1,38 @@
 """Ready-made views: read-only dashboards OmniKrux generates for a project.
 
-They are data, built on request from small helpers; nothing here calls Prometheus. Each view is
+They are data, built on request from small helpers; nothing here calls Prometheus or Loki (the
+Loki labels the log panels use are read by `loki_labels` and handed in). Each view is
 a normalised, valid dashboard document whose sources are `{"type": …, "id": None}` (the project's
 first source of that type). Their ids are `ready:<project id>:<key>`; they are never stored, so
 they have no versions and can't be saved, restored or deleted (only copied).
 
 `NEEDS` says which exporters a view reads; `NEED_METRIC` is one metric that proves each is
-reporting, and `NEED_NOTE` is what the project page says when it isn't."""
+reporting, and `NEED_NOTE` is what the project page says when it isn't. The Logs overview reads
+only Loki; `loki_notes` says what its labels (and Pod health's Logs panel's) lack."""
 
 from collections.abc import Mapping
 from typing import Literal
 
+from omnikrux.monitoring.dashboards.loki_labels import (
+    CLASSIC,
+    LokiFacts,
+    LokiLabelSet,
+    group_label,
+    level_label,
+    pick_label_set,
+)
 from omnikrux.monitoring.dashboards.schema import validate_dashboard
 from omnikrux.monitoring.projects.types import Project
 from omnikrux.monitoring.sources.types import ProjectKind
 
-ReadyKey = Literal["cluster", "nodes", "namespaces", "workloads", "pods"]
+ReadyKey = Literal["cluster", "nodes", "namespaces", "workloads", "pods", "logs"]
 Need = Literal["kube_state", "cadvisor", "node_exporter"]
 
-READY_ORDER: tuple[ReadyKey, ...] = ("cluster", "nodes", "namespaces", "workloads", "pods")
+READY_ORDER: tuple[ReadyKey, ...] = ("cluster", "nodes", "namespaces", "workloads", "pods", "logs")
+# The views that read Prometheus; the Logs overview reads only Loki.
+PROMETHEUS_VIEWS: tuple[ReadyKey, ...] = ("cluster", "nodes", "namespaces", "workloads", "pods")
+# The views whose panels follow the Loki's labels.
+LOKI_VIEWS: tuple[ReadyKey, ...] = ("pods", "logs")
 
 TITLES: dict[ReadyKey, str] = {
     "cluster": "Cluster health",
@@ -26,6 +40,7 @@ TITLES: dict[ReadyKey, str] = {
     "namespaces": "Namespace health",
     "workloads": "Workload health",
     "pods": "Pod health",
+    "logs": "Logs overview",
 }
 DESCRIPTIONS: dict[ReadyKey, str] = {
     "cluster": "Nodes, Pods and resource use across the cluster.",
@@ -33,6 +48,7 @@ DESCRIPTIONS: dict[ReadyKey, str] = {
     "namespaces": "Pods and resource use per namespace.",
     "workloads": "Replicas and resource use per Deployment, StatefulSet and DaemonSet.",
     "pods": "Readiness, restarts, waiting reasons and resource use per Pod.",
+    "logs": "Log lines per second, errors and warnings, the noisiest streams and recent error lines.",
 }
 NEEDS: dict[ReadyKey, tuple[Need, ...]] = {
     "cluster": ("kube_state", "cadvisor"),
@@ -40,6 +56,7 @@ NEEDS: dict[ReadyKey, tuple[Need, ...]] = {
     "namespaces": ("kube_state", "cadvisor"),
     "workloads": ("kube_state", "cadvisor"),
     "pods": ("kube_state", "cadvisor"),
+    "logs": (),
 }
 NEED_METRIC: dict[Need, str] = {
     "kube_state": "kube_pod_info",
@@ -53,6 +70,19 @@ NEED_NOTE: dict[Need, str] = {
     "stay empty.",
     "node_exporter": "node-exporter isn't reporting to this Prometheus, so node panels stay empty.",
 }
+
+LOKI_UNREAD = (
+    "OmniKrux couldn't read this Loki's labels ({reason}), so its log panels assume namespace "
+    "and pod labels and may stay empty."
+)
+LOKI_EMPTY = (
+    "This Loki holds no log streams from the last 7 days, so this view stays empty until logs "
+    "arrive."
+)
+POD_LOGS_NO_LABELS = (
+    "This Loki has no Pod labels (k8s_namespace_name and k8s_pod_name, or namespace and pod), "
+    "so the Logs panel stays empty."
+)
 
 PREFIX = "ready"
 
@@ -70,11 +100,26 @@ def parse_ready_id(id: str) -> tuple[str, ReadyKey] | None:
 
 
 def ready_keys(kind: ProjectKind, has_prometheus: bool, has_loki: bool) -> tuple[ReadyKey, ...]:
-    """The views a project gets: all five for Kubernetes with Prometheus, Node health for any
-    other kind with Prometheus, none without it. (`has_loki` only changes a view's panels.)"""
-    if not has_prometheus:
-        return ()
-    return READY_ORDER if kind == "kubernetes" else ("nodes",)
+    """The views a project gets: with Prometheus, all five Prometheus views for Kubernetes and
+    Node health for any other kind; then, with Loki, the Logs overview (also without
+    Prometheus)."""
+    keys: tuple[ReadyKey, ...] = ()
+    if has_prometheus:
+        keys = PROMETHEUS_VIEWS if kind == "kubernetes" else ("nodes",)
+    return (*keys, "logs") if has_loki else keys
+
+
+def loki_notes(key: ReadyKey, loki: LokiFacts | None) -> list[str]:
+    """What a view's log panels lack, from its project's Loki facts (None: no Loki, nothing to
+    say). Labels that couldn't be read are said in both views that use them; no streams at all,
+    in the Logs overview; no Pod label set, in Pod health (for its Logs panel)."""
+    if loki is None or key not in LOKI_VIEWS:
+        return []
+    if loki.labels is None:
+        return [LOKI_UNREAD.format(reason=loki.message)]
+    if key == "logs":
+        return [] if loki.labels else [LOKI_EMPTY]
+    return [] if pick_label_set(loki.labels) is not None else [POD_LOGS_NO_LABELS]
 
 
 def project_ready_keys(project: Project, source_types: Mapping[str, str]) -> tuple[ReadyKey, ...]:
@@ -95,8 +140,9 @@ def _pq(ref: str, expr: str, legend: str = "") -> dict:
     return {"ref": ref, "source": dict(_PROM), "expr": expr, "legend": legend}
 
 
-def _lq(ref: str, expr: str) -> dict:
-    return {"ref": ref, "source": dict(_LOKI), "expr": expr}
+def _lq(ref: str, expr: str, legend: str | None = None) -> dict:
+    query = {"ref": ref, "source": dict(_LOKI), "expr": expr}
+    return query if legend is None else query | {"legend": legend}
 
 
 class _Panels:
@@ -513,7 +559,15 @@ def _workloads() -> dict:
     return _document("workloads", p, [_namespace_variable()])
 
 
-def _pods(has_loki: bool) -> dict:
+def _pod_label_set(loki: LokiFacts | None) -> LokiLabelSet:
+    """The label set Pod health's Logs panel selects with: the Loki's own, else the classic set
+    (`loki_notes` then says the labels were unread or missing)."""
+    labels = loki.labels if loki is not None else None
+    found = pick_label_set(labels) if labels is not None else None
+    return found or CLASSIC
+
+
+def _pods(has_loki: bool, loki: LokiFacts | None) -> dict:
     p = _Panels()
     sel = 'namespace=~"$namespace",pod=~"$pod"'
     legend = "{{namespace}}/{{pod}}"
@@ -600,19 +654,91 @@ def _pods(has_loki: bool) -> dict:
         max=1,
     )
     if has_loki:
+        s = _pod_label_set(loki)
         p.add(
             "logs",
             "Logs",
             (0, 24, 24, 10),
-            [_lq("A", '{namespace=~"$namespace", pod=~"$pod"}')],
+            [_lq("A", f'{{{s.namespace}=~"$namespace", {s.pod}=~"$pod"}}')],
             limit=200,
         )
     pod = _variable("pod", "Pod", "pod", 'kube_pod_info{namespace=~"$namespace"}')
     return _document("pods", p, [_namespace_variable(), pod])
 
 
-def build_ready_made(key: ReadyKey, *, kind: ProjectKind, has_loki: bool) -> dict:
-    """The view as a normalised, valid document; no Prometheus call is made."""
+def _log_labels(loki: LokiFacts | None) -> tuple[str, str | None]:
+    """(the label the Logs overview groups streams by, the label a line's level is in or None).
+    Grouped by the Pod label set's namespace label when there is one, else by the first group
+    label the streams carry, else (no labels at all) by `job`. Labels unread (or not read): the
+    classic set's `namespace`, and line filters instead of a level label."""
+    labels = loki.labels if loki is not None else None
+    if labels is None:
+        return CLASSIC.namespace, None
+    found = pick_label_set(labels)
+    group = found.namespace if found is not None else group_label(labels) or "job"
+    return group, level_label(labels)
+
+
+def _logs(loki: LokiFacts | None) -> dict:
+    p = _Panels()
+    g, level = _log_labels(loki)
+    sel = f'{{{g}=~".+"}}'
+    by_group = "{{" + g + "}}"
+    p.add(
+        "timeseries",
+        "Log lines per second",
+        (0, 0, 24, 8),
+        [_lq("A", f"sum by ({g}) (rate({sel}[$__rate_interval]))", by_group)],
+        unit="short",
+    )
+    if level is not None:
+        levels = "(?i)(error|err|fatal|critical|crit|warn|warning)"
+        errors_and_warnings = [
+            _lq(
+                "A",
+                f'sum by ({level}) (count_over_time({{{g}=~".+", {level}=~"{levels}"}}'
+                "[$__interval]))",
+                "{{" + level + "}}",
+            )
+        ]
+        error_lines = f'{{{g}=~".+", {level}=~"(?i)(error|err|fatal|critical|crit)"}}'
+    else:
+        errors_and_warnings = [
+            _lq(
+                "A",
+                f'sum(count_over_time({sel} |~ "(?i)(error|fatal|panic)" [$__interval]))',
+                "Errors",
+            ),
+            _lq("B", f'sum(count_over_time({sel} |~ "(?i)warn" [$__interval]))', "Warnings"),
+        ]
+        error_lines = f'{sel} |~ "(?i)(error|fatal|panic)"'
+    p.add(
+        "timeseries",
+        "Errors and warnings",
+        (0, 8, 12, 8),
+        errors_and_warnings,
+        # Task 2 of M7 switches this to bars (a count per step).
+        style="stacked",
+        decimals=0,
+    )
+    p.add(
+        "bar",
+        "Noisiest streams",
+        (12, 8, 12, 8),
+        [_lq("A", f"topk(10, sum by ({g}) (count_over_time({sel}[$__range])))", by_group)],
+        decimals=0,
+    )
+    p.add("logs", "Recent error lines", (0, 16, 24, 10), [_lq("A", error_lines)], limit=100)
+    return _document("logs", p, [])
+
+
+def build_ready_made(
+    key: ReadyKey, *, kind: ProjectKind, has_loki: bool, loki: LokiFacts | None = None
+) -> dict:
+    """The view as a normalised, valid document; no Prometheus or Loki call is made. `loki` is
+    what the project's Loki holds (`read_loki_facts`); None or unread labels: the classic set."""
+    if key == "logs":
+        return _logs(loki)
     if key == "cluster":
         return _cluster()
     if key == "nodes":
@@ -621,4 +747,4 @@ def build_ready_made(key: ReadyKey, *, kind: ProjectKind, has_loki: bool) -> dic
         return _namespaces()
     if key == "workloads":
         return _workloads()
-    return _pods(has_loki)
+    return _pods(has_loki, loki)

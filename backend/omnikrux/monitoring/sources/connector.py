@@ -73,6 +73,8 @@ NOTE_STREAM_LABELS_TRUNCATED = "Showing the first 50 log labels."
 NOTE_STREAM_VALUES_TRUNCATED = (
     "Some log labels have more than 200 values; only the first 200 are listed."
 )
+# How far back a Loki's labels are read (seconds): its streams from the last 7 days.
+LOKI_LABEL_WINDOW = 7 * 86400
 
 
 @dataclass(frozen=True)

@@ -115,6 +115,34 @@ class LokiConnector:
             labels = await self._list(t, "/loki/api/v1/labels", [])
         return FieldCatalog((), tuple(labels[:limit]), len(labels) > limit)
 
+    async def label_names(
+        self,
+        t: SourceTransport,
+        *,
+        matchers: Sequence[Matcher],
+        start: float,
+        end: float,
+    ) -> list[str]:
+        """The label names of the streams between `start` and `end` (seconds), sorted, without
+        Loki's own (`__…`). With `matchers`, only the streams they select count (one `/series`
+        call, so nothing outside the filter is asked for); without, every stream's."""
+        window = [("start", _nanoseconds(start)), ("end", _nanoseconds(end))]
+        if matchers:
+            got = await t.request(
+                "GET",
+                "/loki/api/v1/series",
+                params=[("match[]", _selector(matchers)), *window],
+                timeout=PROBE_SECONDS,
+            )
+            data = checked_json(got, "The source", WHAT).get("data")
+            names: set[str] = set()
+            for entry in data if isinstance(data, list) else []:
+                if isinstance(entry, dict):
+                    names.update(str(k) for k in entry)
+        else:
+            names = set(await self._list(t, "/loki/api/v1/labels", window))
+        return sorted(n for n in names if not n.startswith("__"))
+
     async def catalog(
         self,
         t: SourceTransport,

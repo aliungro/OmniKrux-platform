@@ -12,9 +12,11 @@ rules of the dashboard's panels are brought in line with what was saved (`AlertS
 answer says what that did in the tools (`alert_changes`); a delete leaves its panels' rules as
 page rules; a copy never copies an alert."""
 
+import asyncio
 import copy
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Literal
@@ -26,15 +28,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnikrux.monitoring.alerts.sync import AlertChangeOut
 from omnikrux.monitoring.audit import begin_change, finish_change
+from omnikrux.monitoring.dashboards.loki_labels import LokiFacts, read_loki_facts
 from omnikrux.monitoring.dashboards.ready_made import (
     DESCRIPTIONS,
+    LOKI_VIEWS,
     NEED_METRIC,
     NEED_NOTE,
     NEEDS,
+    PROMETHEUS_VIEWS,
     TITLES,
     Need,
     ReadyKey,
     build_ready_made,
+    loki_notes,
     parse_ready_id,
     project_ready_keys,
     ready_id,
@@ -155,9 +161,12 @@ class VersionDetailOut(BaseModel):
 
 
 class ReadyMadeOut(BaseModel):
-    """A ready-made view of a project and what its data lacks. `checked` is False when the
-    metric names couldn't be read (`check_message` says why); `missing` and `notes` are then
-    empty, never guessed."""
+    """A ready-made view of a project and what its data lacks. For a Prometheus view, `checked`
+    is False when the metric names couldn't be read (`check_message` says why); `missing` and
+    the notes about exporters are then empty, never guessed. For the Logs overview, `checked` is
+    False when the Loki's labels couldn't be read, and its note says why (`check_message` stays
+    None, so the reason isn't said twice). Pod health's notes also say what its Logs panel's
+    labels lack (`loki_notes`)."""
 
     key: ReadyKey
     id: str
@@ -298,7 +307,11 @@ async def _ready_document(services: MonitoringServices, id: str) -> tuple[Projec
     types = {c.id: c.type for c in configs}
     if key not in project_ready_keys(project, types):
         raise dashboard_gone()
-    doc = build_ready_made(key, kind=project.kind, has_loki="loki" in types.values())
+    has_loki = "loki" in types.values()
+    loki = None
+    if has_loki and key in LOKI_VIEWS:
+        loki = await read_loki_facts(services, project, configs, time.time())
+    doc = build_ready_made(key, kind=project.kind, has_loki=has_loki, loki=loki)
     return project, key, doc
 
 
@@ -673,16 +686,43 @@ async def restore_version(id: str, v: str, request: Request) -> DashboardOut:
 @router.get("/projects/{id}/ready-made")
 async def ready_made_views(id: str, request: Request) -> list[ReadyMadeOut]:
     """The project's ready-made views, each with what its data lacks. The metric names are read
-    once, from the project's first Prometheus source with that link's filter."""
+    once, from the project's first Prometheus source with that link's filter, and only when a
+    Prometheus view is listed; the Loki labels likewise, from its first Loki link, when a view
+    that uses them is listed. Both are read at once."""
     services = _services(request)
     project = await _ready_project(services, id)
     configs = await _source_configs(services, project)
     keys = project_ready_keys(project, {c.id: c.type for c in configs})
     if not keys:
         return []
-    names, message = await _metric_names(services, project, configs)
+
+    async def metric_names() -> tuple[set[str] | None, str | None]:
+        if not any(key in PROMETHEUS_VIEWS for key in keys):
+            return None, None
+        return await _metric_names(services, project, configs)
+
+    async def loki_facts() -> LokiFacts | None:
+        if not any(key in LOKI_VIEWS for key in keys):
+            return None
+        return await read_loki_facts(services, project, configs, time.time())
+
+    (names, message), loki = await asyncio.gather(metric_names(), loki_facts())
     views = []
     for key in keys:
+        if key == "logs":
+            views.append(
+                ReadyMadeOut(
+                    key=key,
+                    id=ready_id(project.id, key),
+                    title=TITLES[key],
+                    description=DESCRIPTIONS[key],
+                    missing=[],
+                    notes=loki_notes(key, loki),
+                    checked=loki is not None and loki.labels is not None,
+                    check_message=None,
+                )
+            )
+            continue
         missing: list[Need] = []
         if names is not None:
             missing = [n for n in NEEDS[key] if NEED_METRIC[n] not in names]
@@ -693,7 +733,7 @@ async def ready_made_views(id: str, request: Request) -> list[ReadyMadeOut]:
                 title=TITLES[key],
                 description=DESCRIPTIONS[key],
                 missing=missing,
-                notes=[NEED_NOTE[n] for n in missing],
+                notes=[NEED_NOTE[n] for n in missing] + loki_notes(key, loki),
                 checked=names is not None,
                 check_message=message,
             )
