@@ -4,7 +4,7 @@ import type { LinkOut, ProjectOut, QueryRequest, QueryResponse } from "../api/ty
 import { ONE_QUERY, UNREADABLE } from "../build/promql";
 import { DashboardRequestError, type BatchItemOut } from "../dashboards/api";
 import { stepFor } from "../dashboards/time";
-import { EXPLORE_DEBOUNCE_MS, useExploreRun, useLinesRun } from "./useExploreRun";
+import { EXPLORE_DEBOUNCE_MS, FIX_QUERY, useExploreRun, useLinesRun } from "./useExploreRun";
 
 const runBatch = vi.fn<(q: QueryRequest[], s?: AbortSignal) => Promise<BatchItemOut[]>>();
 vi.mock("../dashboards/api", async (orig) => ({
@@ -173,6 +173,24 @@ describe("useExploreRun", () => {
     await flush();
     expect(result.current.state).toMatchObject({ status: "invalid", shown: "invalid", message: "The query isn't valid LogQL.", failure: null });
     expect(result.current.state.lastGood?.expr).toBe("up");
+  });
+
+  it("a refusal without words says to fix the query, never to try again", async () => {
+    const silent = (code: "bad_query" | "bad_request"): BatchItemOut => ({ ok: false, response: null, error: { code, message: "", status: 400 } });
+    runBatch.mockResolvedValueOnce([silent("bad_query")]);
+    runBatch.mockRejectedValueOnce(new DashboardRequestError(400, "bad_request", ""));
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "up" } });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "invalid", message: "The source couldn't read this query. Fix the query to run it again." });
+    rerender({ expr: "up2" });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "invalid", message: "The source couldn't read this query. Fix the query to run it again." });
+    // The lines' note adds the fix words itself, so their message is the refusal alone.
+    runBatch.mockResolvedValueOnce([silent("bad_query")]);
+    const lines = renderHook(() => useLinesRun({ project, source: project.links[1], query: '{a="b"}', range, window: null }));
+    await flush();
+    expect(lines.result.current.state).toMatchObject({ status: "invalid", message: "The source couldn't read this query." });
+    expect(FIX_QUERY).toBe("Fix the query to run it again.");
   });
 
   it("a run that is off sends nothing and stays idle", async () => {

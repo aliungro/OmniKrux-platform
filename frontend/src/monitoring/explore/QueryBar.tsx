@@ -105,7 +105,7 @@ export function MetaLine({ state, expr, lines }: { state: ExploreRunState; expr:
     // Nothing ran, or an emptied field ended its run: the hint. Before the first end, the field says.
     body = (state.expr ?? expr).trim() === "" ? NO_QUERY : null;
   } else if (state.shown === "done" && state.data) {
-    // Logs mode charts the volume (its lines are listed under the chart): both count series.
+    // A chart counts its series (a log query's line is `linesBody`).
     const n = `${state.data.series.length} series`;
     body = (
       <>

@@ -105,6 +105,22 @@ describe("promql", () => {
     ["up", false],
     ["", false],
     ['up{job="a\nb"}', false],
+    // A vector-matching list at the end of a line is part of the operator, never an end.
+    ["a\n* on (job)\nb", false],
+    ["x / ignoring(code) group_left(node)\ny", false],
+    ["a * on (namespace, pod) group_left(node)\nkube_pod_info", false],
+    ["a\n+ ignoring (instance)\nb", false],
+    ["a / on (job) group_right (team)\nb", false],
+    ["a == bool on (job)\nb", false],
+    ["sum by (job) (rate(x[5m]))\n/ on (job) group_left\nsum by (job) (up)", false],
+    // A postfix `by (…)` does end an aggregation: a query after it is another one.
+    ["sum(x) by (job)\nup", true],
+    ["up\nsum(x)\nrate(y[5m])", true],
+    // LogQL stages chained across lines are one query; a new selector is another.
+    ['{a="b"}\n| json\n| level="error"', false],
+    ['{a="b"} |= "x"\n  != "y"', false],
+    ['{a="b"} | logfmt | status >= 500\nmethod="GET"', false],
+    ['{a="b"} | logfmt\n{c="d"}', true],
   ])("severalQueries %j is %s", (q, out) => expect(severalQueries(q)).toBe(out));
 
   it("one query at a time is said plainly", () => {

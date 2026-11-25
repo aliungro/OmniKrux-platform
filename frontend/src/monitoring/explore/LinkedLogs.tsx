@@ -9,15 +9,14 @@ import { useEmptyReason } from "../dashboards/emptyReason";
 import type { PanelData } from "../dashboards/runPanel";
 import { newPanel, type PanelSpec } from "../dashboards/schema";
 import { LINES_LIMIT, lineCount, lineTone, windowLabel } from "./logLinks";
-import type { LinesRunState } from "./useExploreRun";
+// After a text that can't run: `✗ {message} Fix the query to run it again.`
+import { FIX_QUERY, type LinesRunState } from "./useExploreRun";
 import s from "./LinkedLogs.module.css";
 
 const ChartView = lazy(() => import("../charts"));
 
 export const LINKED_HINT = "Pick values under Only, or write a LogQL selector, to see matching log lines here.";
 export const METRIC_QUERY = "This is a metric query, so there are no lines to list.";
-/** After a text that can't run: `✗ {message} Fix the query to run it again.` */
-export const FIX_QUERY = "Fix the query to run it again.";
 const ROW = 22;
 const MAX_LIST = 320;
 

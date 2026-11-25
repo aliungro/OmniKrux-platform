@@ -14,7 +14,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { failure } from "../../api/http";
 import type { LinkOut, ProjectOut, QueryErrorCode, QueryRequest } from "../api/types";
 import { ONE_QUERY, quickCheck, severalQueries } from "../build/promql";
-import { UnwritableQuery, writeVolumeQuery } from "../build/writeQuery";
 import { DashboardRequestError } from "../dashboards/api";
 import { interpolate, VariableError } from "../dashboards/interpolate";
 import { buildPanelRun, mergePanelResults, runRequests, type ChartLogLine, type PanelData, type PanelRun } from "../dashboards/runPanel";
@@ -38,7 +37,7 @@ export interface ExploreLastGood {
   step: number;
   /** Logs or a chart: how it is drawn. */
   kind: ExploreKind;
-  /** The panel the run drew (in logs mode, the volume chart). */
+  /** The panel the run drew. */
   panel: PanelSpec;
 }
 
@@ -58,9 +57,9 @@ export type ExploreRunState = {
   /** The last answered run's aligned range and step (the chart's axis; the recommendations' step). */
   range: Range | null;
   step: number | null;
-  /** What the last run asked for: a chart or log lines (charted as their volume). */
+  /** What the last run asked for (always a chart: a log query's run is off). */
   kind: ExploreKind | null;
-  /** The panel the last run drew: a time series (the volume in logs mode) or the query's own. */
+  /** The panel the last run drew. */
   panel: PanelSpec | null;
   /** When the last run ended (ms since the epoch). */
   at: number | null;
@@ -83,8 +82,6 @@ export interface ExploreRunInput {
   panelId?: string;
   /** The range in words, kept with the run that read it. */
   timeText?: string;
-  /** Logs mode: the Split chip's label for the volume chart. */
-  split?: string | null;
   /** False for a log query (its lines are the result): nothing runs and the state stays idle. */
   enabled?: boolean;
 }
@@ -102,6 +99,11 @@ const INVALID = new Set<string>(["bad_query", "bad_request"]);
 /** What a text says before anything is sent: unreadable, or several queries; `null` when it can run. */
 const refuseText = (expr: string): string | null => quickCheck(expr) ?? (severalQueries(expr) ? ONE_QUERY : null);
 const NO_ANSWER = "This query didn't answer. Try again.";
+/** After a text that can't run: the way on is fixing it, never trying it again. */
+export const FIX_QUERY = "Fix the query to run it again.";
+/** A refusal that came without words of its own. The lines' note adds `FIX_QUERY` itself. */
+const REFUSED = "The source couldn't read this query.";
+const REFUSED_RUN = `${REFUSED} ${FIX_QUERY}`;
 
 /** The panel Explore runs and draws: full width, one query on the chosen source. */
 export function explorePanel(id: string, expr: string, source: Pick<LinkOut, "source_id" | "source_type"> | null, kind: ExploreKind): PanelSpec {
@@ -112,19 +114,6 @@ export function explorePanel(id: string, expr: string, source: Pick<LinkOut, "so
     expr,
     source: { type: source && isQueryable(source.source_type) ? source.source_type : (kind === "logs" ? "loki" : "prometheus"), id: source?.source_id ?? null },
   };
-  return panel;
-}
-
-/**
- * The panel a run draws. Logs mode charts the log volume (`sum(count_over_time(…))`, split by the
- * Split chip) and lists the lines under it; it throws `UnwritableQuery` for text it can't wrap.
- */
-export function chartPanel(
-  id: string, expr: string, source: Pick<LinkOut, "source_id" | "source_type"> | null, kind: ExploreKind, split: string | null = null,
-): PanelSpec {
-  if (kind !== "logs") return explorePanel(id, expr, source, kind);
-  const panel = explorePanel(id, writeVolumeQuery(expr, split), source, "metrics");
-  panel.title = "Log volume";
   return panel;
 }
 
@@ -142,7 +131,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
   const immediate = useRef(-1);
 
   const fire = useCallback(async () => {
-    const { project, source, expr, range, kind, panelId = "explore", timeText = null, split = null, enabled = true } = latest.current;
+    const { project, source, expr, range, kind, panelId = "explore", timeText = null, enabled = true } = latest.current;
     if (!enabled) return;
     controller.current?.abort();
     controller.current = null;
@@ -162,13 +151,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
     const refused = refuseText(expr);
     if (refused) { invalid(refused); return; }
 
-    let panel: PanelSpec;
-    try {
-      panel = chartPanel(panelId, expr, source, kind, split);
-    } catch (err) {
-      if (err instanceof UnwritableQuery) { invalid(err.message); return; }
-      throw err;
-    }
+    const panel = explorePanel(panelId, expr, source, kind);
     const run = buildPanelRun({ panel, owner: { kind: "project", project }, vars: {}, range, ownerName: project.name });
     // Without variables nothing is skipped; if something is, it is the text's fault.
     if (run.skipped.length > 0) { invalid(run.skipped[0].message); return; }
@@ -188,7 +171,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
       if (!first?.ok || !first.response) {
         const code = first?.error?.code ?? "unreachable";
         const message = first?.error?.message || NO_ANSWER;
-        if (INVALID.has(code)) invalid(message);
+        if (INVALID.has(code)) invalid(first?.error?.message || REFUSED_RUN);
         // A failure replaces the chart for good: a later typo never brings back what came before it.
         else end({ status: "failed", shown: "failed", data: null, lastGood: null, message, failure: UNREACHABLE.has(code) ? "unreachable" : "error", tookMs: null, request: null });
         return;
@@ -201,7 +184,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
     } catch (err) {
       if (isAbort(err) || ctl.signal.aborted || runId !== runIds.current) return;
       const code = err instanceof DashboardRequestError ? err.code : "network";
-      if (INVALID.has(code)) { invalid((err as Error).message || NO_ANSWER); return; }
+      if (INVALID.has(code)) { invalid((err as Error).message || REFUSED_RUN); return; }
       end({
         status: "failed", shown: "failed", data: null, lastGood: null, message: failure(err, "try again") || NO_ANSWER,
         failure: UNREACHABLE.has(code as QueryErrorCode) ? "unreachable" : "error", tookMs: null, request: null,
@@ -227,7 +210,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
   const key = JSON.stringify([
     input.project?.id ?? null, input.source?.source_id ?? null, input.source?.source_type ?? null,
     input.expr, input.range.start, input.range.end, input.kind, input.panelId ?? null,
-    input.kind === "logs" ? (input.split ?? null) : null, enabled,
+    enabled,
   ]);
   // The input and request an immediate run already went out for (StrictMode runs effects twice).
   const firedFor = useRef<string | null>(null);
@@ -383,7 +366,7 @@ export function useLinesRun(input: LinesRunInput): { state: LinesRunState; retry
       const first = results[0];
       if (!first?.ok || !first.response) {
         // A text the tool refused is the text's to fix; anything else can be tried again.
-        if (INVALID.has(first?.error?.code ?? "")) invalid(first?.error?.message || NO_LINES);
+        if (INVALID.has(first?.error?.code ?? "")) invalid(first?.error?.message || REFUSED);
         else failed(first?.error?.message || NO_LINES);
         return;
       }
@@ -395,7 +378,7 @@ export function useLinesRun(input: LinesRunInput): { state: LinesRunState; retry
       }));
     } catch (err) {
       if (isAbort(err) || ctl.signal.aborted || runId !== runIds.current) return;
-      if (err instanceof DashboardRequestError && INVALID.has(err.code)) invalid(err.message || NO_LINES);
+      if (err instanceof DashboardRequestError && INVALID.has(err.code)) invalid(err.message || REFUSED);
       else failed(failure(err, "try again") || NO_LINES);
     } finally {
       if (controller.current === ctl) controller.current = null;

@@ -139,7 +139,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const panelId = `explore:${tabId}`;
   // A log query has no chart: only its lines run (below), and this run stays idle.
   const { run, state } = useExploreRun({
-    project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time), split: builder.split, enabled: kind !== "logs",
+    project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time), enabled: kind !== "logs",
   });
   const runNow = useCallback(() => { setTick((n) => n + 1); run(true); }, [run]);
 
@@ -312,7 +312,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
       record({ expr, sourceId: source.source_id });
     }
     setBuilder(next);
-    // The same text again (a Split chip in logs) has nothing to run.
+    // The same text again has nothing to run.
     if (text === expr) return;
     setExpr(text);
     runNow();
@@ -436,7 +436,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   );
   const lastGoodPanel = state.lastGood?.panel ?? null;
   // An empty metric answer: why, about the request whose answer is shown, once the check proves it.
-  // Logs mode says it under the lines instead (the volume chart and the lines ask the same thing).
+  // A log query says it under its lines instead.
   const emptyShown = state.shown === "done" && state.data?.state === "empty" && state.kind === "metrics";
   const emptyType = state.panel?.queries[0]?.source.type;
   const emptyReason = useEmptyReason(emptyShown && state.request && (emptyType === "prometheus" || emptyType === "loki")

@@ -643,6 +643,7 @@ describe("Explore with Loki: one query, one result", () => {
     await user.keyboard("q");
     expect(document.activeElement).toBe(query());
     await user.paste('{app="shop"}');
+    notBody();
     await user.keyboard("{Control>}{Enter}{/Control}");
     notBody();
     const list = await within(section()).findByRole("list", { name: "Log lines" });
@@ -656,7 +657,9 @@ describe("Explore with Loki: one query, one result", () => {
     await user.keyboard("q");
     expect(document.activeElement).toBe(query());
     await user.keyboard("{Control>}a{/Control}");
+    notBody();
     await user.paste('{app="shop"}\n{app="web"}');
+    notBody();
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${ONE} ${FIX}`));
     expect(document.activeElement).toBe(query());

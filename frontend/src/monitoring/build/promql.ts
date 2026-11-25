@@ -269,41 +269,59 @@ export function logSelector(expr: string): string | null {
 
 /** Words that join two expressions or qualify one: a line that starts or ends with one never stands alone. */
 const JOINING_WORDS = new Set(["and", "or", "unless", "by", "without", "on", "ignoring", "group_left", "group_right", "bool", "offset", "atan2"]);
+/** Vector matching: the label list after one of these is part of a binary operator, never an end. */
+const MATCHING_WORDS = new Set(["on", "ignoring", "group_left", "group_right"]);
 
 /**
  * Two or more queries on separate lines: a non-blank, non-comment line starts a new expression (a
  * `{`, or a name or function, outside any bracket) right after a line that ended a complete one (not
- * after an operator, `(`, `,`, `|` or a joining word). A line that starts with an operator or a
- * joining word continues the one before it, so "up" then "or vector(0)" is one query. Text that
- * doesn't tokenize is left to `quickCheck`.
+ * after an operator, `(`, `,`, `|`, a joining word, or a matching list such as `on (job)`). A line
+ * that starts with an operator or a joining word continues the one before it, so "up" then
+ * "or vector(0)" is one query. Inside a LogQL pipeline (after a `|` stage) a line that starts with
+ * a name is a label filter chained by a space, not a new query; only a new `{` starts one there.
+ * Text that doesn't tokenize is left to `quickCheck`.
  */
 export function severalQueries(expr: string): boolean {
   const toks = tokenize(expr);
   if (toks === null) return false;
-  let depth = 0;
+  // One entry per open bracket: whether it is a matching list (`on (…)`, `group_left (…)`).
+  const open: boolean[] = [];
   let line = 0;
   let scanned = 0;
-  let last: Tok | null = null;
+  let prev: Tok | null = null;
   let lastLine = -1;
+  // Whether the token before the line break ended a complete expression.
+  let ended = false;
+  let pipeline = false;
   for (const t of toks) {
     for (; scanned < t.a; scanned++) if (expr[scanned] === "\n") line++;
-    if (last !== null && line !== lastLine && depth === 0 && startsExpression(t) && endsExpression(last)) return true;
-    if (t.k === "p" && (t.s === "(" || t.s === "[" || t.s === "{")) depth++;
-    else if (t.k === "p" && CLOSER[t.s] !== undefined) depth = Math.max(0, depth - 1);
-    last = t;
+    if (prev !== null && line !== lastLine && open.length === 0 && ended && startsExpression(t, pipeline)) return true;
+    if (t.k === "p" && (t.s === "(" || t.s === "[" || t.s === "{")) {
+      open.push(t.s === "(" && prev?.k === "id" && MATCHING_WORDS.has(prev.s.toLowerCase()));
+      ended = false;
+    } else if (t.k === "p" && CLOSER[t.s] !== undefined) {
+      const matching = open.pop() ?? false;
+      ended = !matching;
+    } else {
+      if (t.k === "p" && t.s === "|" && open.length === 0) pipeline = true;
+      ended = endsExpression(t);
+    }
+    prev = t;
     lastLine = line;
   }
   return false;
 }
 
-function startsExpression(t: Tok): boolean {
+function startsExpression(t: Tok, pipeline: boolean): boolean {
   if (t.k === "p") return t.s === "{";
+  // In a LogQL pipeline a name continues it (`| logfmt | status >= 500` then `method="GET"`).
+  if (pipeline) return false;
   if (t.k === "var") return true;
   return t.k === "id" && !KEYWORDS.has(t.s.toLowerCase());
 }
 
 function endsExpression(t: Tok): boolean {
-  if (t.k === "p") return t.s === ")" || t.s === "]" || t.s === "}";
+  if (t.k === "p") return false;
   if (t.k === "id") return !JOINING_WORDS.has(t.s.toLowerCase());
   return true;
 }
