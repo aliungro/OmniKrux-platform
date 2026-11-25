@@ -141,3 +141,20 @@ async def test_label_names_drop_lokis_own_labels(fake_loki, direct):
         end=NOW,
     )
     assert found == ["a", "b"]
+
+
+async def test_label_names_ignore_names_a_query_cant_use(fake_loki, direct):
+    # Written into LogQL as they are: only `[a-zA-Z_][a-zA-Z0-9_]*` names are kept.
+    fake_loki.series = [
+        {"ok_name": "1", "_x9": "1", "bad-name": "1", "9lives": "1", "naïve": "1"},
+        {'a"}': "1", "sp ace": "1", "": "1", "Level": "1"},
+    ]
+    t = direct(fake_loki.url, type="loki")
+    found = await LokiConnector().label_names(
+        t, matchers=(Matcher("cluster", "=", "a"),), start=NOW - 60, end=NOW
+    )
+    assert found == ["Level", "_x9", "ok_name"]
+    fake_loki.labels = ["k8s_pod_name", "k8s.pod.name", "pod{"]
+    assert await LokiConnector().label_names(t, matchers=(), start=NOW - 60, end=NOW) == [
+        "k8s_pod_name"
+    ]

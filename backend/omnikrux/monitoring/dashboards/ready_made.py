@@ -75,13 +75,14 @@ LOKI_UNREAD = (
     "OmniKrux couldn't read this Loki's labels ({reason}), so its log panels assume namespace "
     "and pod labels and may stay empty."
 )
+# Both are checked under the project's filter, so they speak of this project's streams only.
 LOKI_EMPTY = (
-    "This Loki holds no log streams from the last 7 days, so this view stays empty until logs "
-    "arrive."
+    "This Loki holds no log streams for this project from the last 7 days, so this view stays "
+    "empty until logs arrive."
 )
 POD_LOGS_NO_LABELS = (
-    "This Loki has no Pod labels (k8s_namespace_name and k8s_pod_name, or namespace and pod), "
-    "so the Logs panel stays empty."
+    "This project's log streams from the last 7 days have no Pod labels (k8s_namespace_name and "
+    "k8s_pod_name, or namespace and pod), so the Logs panel stays empty."
 )
 
 PREFIX = "ready"

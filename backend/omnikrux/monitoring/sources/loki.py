@@ -1,6 +1,7 @@
 """The connector for Loki."""
 
 import asyncio
+import re
 from collections.abc import Sequence
 from decimal import Decimal
 from urllib.parse import quote
@@ -38,6 +39,8 @@ EMPTY_RULER = b"no rule groups found"
 QUERY_SECONDS = 30.0
 WHAT = "a Loki server"
 VALUE_CALLS_AT_ONCE = 6
+# A label name as LogQL reads it in a stream selector.
+LABEL_NAME = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 
 class LokiConnector:
@@ -141,7 +144,8 @@ class LokiConnector:
                     names.update(str(k) for k in entry)
         else:
             names = set(await self._list(t, "/loki/api/v1/labels", window))
-        return sorted(n for n in names if not n.startswith("__"))
+        # Only names Loki would accept in a selector: they are written into queries as they are.
+        return sorted(n for n in names if LABEL_NAME.fullmatch(n) and not n.startswith("__"))
 
     async def catalog(
         self,

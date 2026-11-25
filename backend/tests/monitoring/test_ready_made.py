@@ -365,12 +365,12 @@ def test_ready_made_copy():
         "namespace and pod labels and may stay empty."
     )
     assert LOKI_EMPTY == (
-        "This Loki holds no log streams from the last 7 days, so this view stays empty until "
-        "logs arrive."
+        "This Loki holds no log streams for this project from the last 7 days, so this view "
+        "stays empty until logs arrive."
     )
     assert POD_LOGS_NO_LABELS == (
-        "This Loki has no Pod labels (k8s_namespace_name and k8s_pod_name, or namespace and "
-        "pod), so the Logs panel stays empty."
+        "This project's log streams from the last 7 days have no Pod labels (k8s_namespace_name "
+        "and k8s_pod_name, or namespace and pod), so the Logs panel stays empty."
     )
 
 
