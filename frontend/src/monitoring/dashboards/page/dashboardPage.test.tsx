@@ -381,7 +381,7 @@ describe("Dashboard page", () => {
     expect(within(screen.getByRole("tablist", { name: "Dashboard views" })).getAllByRole("tab").map((t) => t.textContent))
       .toEqual(["Dashboard", "JSON"]);
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Copy dashboard…"]);
+    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Copy dashboard…", "Export as JSON"]);
     await user.keyboard("{Escape}");
     notBody();
     expect(api.requests.some((r) => r.url.includes("/versions"))).toBe(false);

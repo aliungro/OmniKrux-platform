@@ -467,6 +467,15 @@
   background: none;
 }
 
+/* Export and Update from source: what they said, under the header. */
+.transferLines {
+  margin: 0 16px;
+}
+
+.transferDone {
+  composes: arrived;
+}
+
 .copyProblem {
   margin: 8px 16px 0;
   color: var(--bad);

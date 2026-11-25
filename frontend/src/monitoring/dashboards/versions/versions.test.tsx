@@ -124,6 +124,18 @@ describe("The Versions tab", () => {
     expect((await row(1)).textContent).toContain(`${at(T1)} · 1 panel · Copied from Old API`);
   });
 
+  it("imported and updated versions say where from", async () => {
+    const d = history();
+    d.versions[0].out = { ...d.versions[0].out, origin: "imported", copied_from: "Node overview.json" };
+    d.versions[2].out = { ...d.versions[2].out, origin: "updated", restored_from: null, copied_from: "Team Grafana" };
+    await versionsTab(installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")], dashboards: { d1: d }, queryAnswers: { up: ok, errors: ok },
+    }, async () => json([])));
+    expect((await row(1)).textContent).toContain(`${at(T1)} · 1 panel · Imported from Node overview.json`);
+    expect((await row(3)).textContent).toContain(`${at(T3)} · 1 panel · Updated from Team Grafana`);
+    expect((await row(2)).textContent).toContain(`${at(T2)} · 2 panels · Saved`);
+  });
+
   it("compare two versions shows the diff older on the left", async () => {
     const { user } = await versionsTab();
     const compare = screen.getByRole("button", { name: "Compare" });

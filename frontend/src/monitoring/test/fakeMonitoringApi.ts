@@ -287,6 +287,14 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
     });
   }
 
+  /** An update from source answered by the seed: the held dashboard takes its document as the next version. */
+  function applyUpdate(id: string, out: DashboardOut, from: string | null) {
+    const d = state.dashboards[id];
+    if (!d || out.version <= d.out.version) return;
+    d.out = { ...d.out, version: out.version - 1 };
+    addVersion(d, out.spec, "updated", { copied_from: from });
+  }
+
   function addDashboard(owner: Owner, spec: DashboardSpec, origin: "created" | "copied", copiedFrom: string | null): Response {
     if (titleTaken(owner.kind, owner.id, spec.title)) return takenTitle(spec.title);
     const id = nextId("d");
@@ -445,7 +453,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
       method === m && seg.length === pattern.length && pattern.every((p, i) => p === null || p === seg[i]);
 
     // --- export, Grafana connections, import, origins and update from source
-    const transferred = transferRoute({ state, nextId }, method, seg, body);
+    const transferred = transferRoute({ state, nextId, updated: applyUpdate }, method, seg, body);
     if (transferred) return transferred;
 
     // --- dashboards, ready-made views, batches and label values

@@ -13,6 +13,7 @@ import { escapeCloses } from "../focus";
 import { projectDot } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
+import { ExportButton, ImportButton } from "../transfer/ExportButton";
 import { ProjectPicker } from "./GroupForm";
 import s from "./GroupPage.module.css";
 
@@ -183,7 +184,11 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
       </section>
 
       <section aria-labelledby="monitoring-group-dashboards" className={s.section}>
-        <h2 id="monitoring-group-dashboards" className={s.heading}>Dashboards</h2>
+        <div className={s.headRow}>
+          <h2 id="monitoring-group-dashboards" className={s.heading}>Dashboards</h2>
+          <ExportButton kind="group" id={group.id} label="Export group" name={group.name} />
+          <ImportButton onOpen={(e) => open({ page: "import", target: { kind: "group", id: group.id } }, e)} />
+        </div>
         <OwnerDashboards owner={{ kind: "group", id: group.id, name: group.name }} tabId={tabId} nav={nav} openInNewTab={openInNewTab} />
       </section>
 

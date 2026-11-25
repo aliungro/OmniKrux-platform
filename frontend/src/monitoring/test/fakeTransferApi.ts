@@ -89,6 +89,8 @@ function grafanaOut(id: string, body: GrafanaIn | GrafanaPatch, old?: GrafanaOut
 export interface TransferRouteDeps {
   state: { transfer: FakeTransferState };
   nextId(prefix: string): string;
+  /** A seeded update answered: the dashboard the fake holds takes it as its next version (`from`: the origin's label). */
+  updated?(id: string, out: DashboardOut, from: string | null): void;
 }
 
 /** `seg` is the path after `/api/monitoring/`, split. Null when the route isn't a transfer one. */
@@ -136,7 +138,11 @@ export function transferRoute(deps: TransferRouteDeps, method: string, seg: stri
   if (a === "dashboards" && b) {
     if (method === "GET" && seg.length === 3 && c === "origin") return json(t.origins[b] ?? null);
     if (method === "POST" && seg.length === 4 && c === "update-from-source" && d === "preview") return seeded(t.updatePreviews[b]);
-    if (method === "POST" && seg.length === 3 && c === "update-from-source") return seeded(t.updates[b]);
+    if (method === "POST" && seg.length === 3 && c === "update-from-source") {
+      const answer = t.updates[b];
+      if (answer && !isFailure(answer)) deps.updated?.(b, answer, t.origins[b]?.label ?? null);
+      return seeded(answer);
+    }
   }
   return null;
 }

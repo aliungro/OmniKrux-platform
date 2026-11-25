@@ -429,8 +429,9 @@ export const useGrafanaDashboards = (id: string | null): UseQueryResult<GrafanaD
     retry: false,
   });
 
-export const useOrigin = (dashboardId: string): UseQueryResult<OriginOut | null, Error> =>
-  useQuery({ queryKey: ["monitoring", "dashboard", dashboardId, "origin"], queryFn: ({ signal }) => getOrigin(dashboardId, signal) });
+/** Where an imported dashboard came from (null: it wasn't imported). `enabled` false for a ready-made view. */
+export const useOrigin = (dashboardId: string, enabled = true): UseQueryResult<OriginOut | null, Error> =>
+  useQuery({ queryKey: ["monitoring", "dashboard", dashboardId, "origin"], queryFn: ({ signal }) => getOrigin(dashboardId, signal), enabled });
 
 /** Bodies without a secret or a file: removing a connection and exporting. */
 export const useDeleteGrafana = () => useMonitoringMutation(deleteGrafana);

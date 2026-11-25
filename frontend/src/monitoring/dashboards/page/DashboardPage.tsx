@@ -12,6 +12,7 @@ import { isEditable, pressed } from "../../../features/chrome/shortcuts";
 import { AddPanelSearch } from "../../build/AddPanelSearch";
 import { useFlyIn } from "../../build/flyIn";
 import { RailLayout, SuggestionsRail } from "../../build/SuggestionsRail";
+import { useToolReviews } from "../../alerts/reviews/useToolReviews";
 import { focusMainFrom } from "../../focus";
 import type { MonitoringPageProps } from "../../MonitoringApp";
 import { Gone, keyboardIsFree } from "../../pages/Gone";
@@ -34,6 +35,10 @@ import { forgetSession, useDraftOffer } from "../drafts/useDraft";
 import { readDraft, removeDraft, type StoredDraft } from "../drafts/draftStore";
 import { JsonTab, ReadyMadeJson } from "../json/JsonTab";
 import { VersionsTab } from "../versions/VersionsTab";
+import { useOrigin } from "../../transfer/api";
+import { ExportLine, useExport } from "../../transfer/ExportButton";
+import { OriginLine } from "../../transfer/OriginLine";
+import { UPDATE_REFUSED, UpdateFromSourceDialog, updatedWords } from "../../transfer/UpdateFromSourceDialog";
 import e from "../editor/EditBar.module.css";
 import { DashboardHeader, type DashboardTab, type MenuAction } from "./DashboardHeader";
 import { pageLetter } from "./keys";
@@ -480,9 +485,52 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   }, [alertRefused]);
   const ownerView = { page: dashboard.owner_kind, id: dashboard.owner_id } as const;
   const openOwner = (e: MouseEvent<HTMLAnchorElement>) => openPage(ownerView, e);
-  const [asking, setAsking] = useState<"copy" | "delete" | null>(null);
+  const [asking, setAsking] = useState<"copy" | "delete" | "update" | null>(null);
+  // Export, Import into its owner and Update from source (an imported dashboard only).
+  const exporter = useExport();
+  const origin = useOrigin(dashboard.id, !ready).data ?? null;
+  const ownerName = dashboard.owner_name || ctx.ownerName;
+  /** What Update from source said last on the page: refused (a draft or edit session), or done. */
+  const [updateWords, setUpdateWords] = useState<{ refused: boolean; text: string } | null>(null);
+  const askUpdate = () => {
+    if (restoreBlocked()) {
+      setUpdateWords({ refused: true, text: UPDATE_REFUSED });
+      return;
+    }
+    setUpdateWords(null);
+    updateReturn.current = moreButton.current;
+    setAsking("update");
+  };
+  // The refusal stands only while the draft or session does (checked whenever the page draws).
+  if (updateWords?.refused && !restoreBlocked()) setUpdateWords(null);
+  const reviews = useToolReviews();
+  const updateReturn = useRef<HTMLElement | null>(null);
+  const updateClosed = (updated: boolean, out?: DashboardOut) => {
+    if (!updated || !out) {
+      updateReturn.current = moreButton.current;
+      // Refused on confirm: a draft or edit session appeared meanwhile.
+      if (restoreBlocked()) setUpdateWords({ refused: true, text: UPDATE_REFUSED });
+      setAsking(null);
+      return;
+    }
+    // The page shows the new version on its Dashboard tab, with the keyboard there; a tool-run
+    // alert the source dropped (or changed) opens its review after.
+    const dashboardTab = tabRefs.current.dashboard ?? null;
+    updateReturn.current = dashboardTab;
+    setAsking(null);
+    replace({ tab: "dashboard" });
+    setUpdateWords({ refused: false, text: updatedWords(out.title) });
+    if (out.alert_changes.length > 0) reviews.enqueue(out.alert_changes, { focus: dashboardTab });
+  };
   const copyAction: MenuAction = { label: "Copy dashboard…", onSelect: () => setAsking("copy") };
-  const actions: MenuAction[] = ready ? [copyAction] : [copyAction, { label: "Delete dashboard…", danger: true, onSelect: () => setAsking("delete") }];
+  const exportAction: MenuAction = { label: "Export as JSON", onSelect: () => { setUpdateWords(null); exporter.run("dashboard", dashboard.id, spec.title || dashboard.title); } };
+  const actions: MenuAction[] = ready ? [copyAction, exportAction] : [
+    copyAction,
+    exportAction,
+    ...(ownerName ? [{ label: `Import into ${ownerName}…`, onSelect: () => openInNewTab({ page: "import", target: { kind: dashboard.owner_kind, id: dashboard.owner_id } }) }] : []),
+    ...(origin ? [{ label: "Update from source…", onSelect: askUpdate }] : []),
+    { label: "Delete dashboard…", danger: true, onSelect: () => setAsking("delete") },
+  ];
   const client = useQueryClient();
   // Gone: its draft (whoever wrote it: the reader asked for it to go) and every edit session on
   // it, then the tab shows its owner, with the keyboard on the owner's heading.
@@ -527,6 +575,9 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
       {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
       <p className={s.arrived} role="status">{editing ? arrivedWords : ""}</p>
       {copyToEdit.error && <p className={s.copyProblem} role="alert">{copyToEdit.error.text}</p>}
+      <div className={s.transferLines}><ExportLine result={exporter.result} /></div>
+      <p className={s.transferDone} role="status">{updateWords && !updateWords.refused ? updateWords.text : ""}</p>
+      {updateWords?.refused && <p className={s.copyProblem} role="alert">{updateWords.text}</p>}
       {editing && conflict !== null && (
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />
@@ -535,6 +586,9 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
       {asking === "copy" && (
         <CopyDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)}
           onCopied={(out) => { setAsking(null); openMade(out, { edit: false }, opener); }} />
+      )}
+      {asking === "update" && !ready && origin && (
+        <UpdateFromSourceDialog dashboard={dashboard} origin={origin} restoreFocusTo={updateReturn} refuse={restoreBlocked} onClose={updateClosed} />
       )}
       {asking === "delete" && !ready && (
         <DeleteDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)} onDeleted={deleted} />
@@ -549,6 +603,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
           onCancel={() => setAskDiscard(null)} onDiscard={() => editor.discard()} />
       )}
       <UpdatedLine status={ctx.status} />
+      {!ready && <OriginLine dashboardId={dashboard.id} />}
       {ready && <ReadyNote dashboard={dashboard} />}
       <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab} className={s.content}>
         {tab === "dashboard" && ctx.ownerFailure && (

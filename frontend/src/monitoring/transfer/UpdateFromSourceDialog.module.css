@@ -1,0 +1,272 @@
+/* Update from source: a wide review dialog whose head names where the dashboard came from (the
+   Import glyph in a lilac tile, then the source and, for a Grafana, which of its versions replaces
+   which), a body that scrolls under a head and actions that stay, and the imported dashboard's
+   origin line under the page's Updated line. Territories tokens only. */
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(1040px, 100%);
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.from {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-2);
+  font: 12px/1.5 "Geist Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.fromIcon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--focus) 40%, var(--rule));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--focus) 10%, var(--surf));
+  fill: none;
+  stroke: var(--focus);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 16px 22px;
+  overflow-y: auto;
+}
+
+/* --- The source, given again ------------------------------------------------------------------ */
+
+.collect {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--focus) 3%, transparent);
+}
+
+.collectRow,
+.checkRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.fileName {
+  color: var(--ink-2);
+  font: 12px/1.5 "Geist Mono", ui-monospace, monospace;
+}
+
+.pasteLabel {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.paste {
+  width: 100%;
+  min-height: 110px;
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 12px/1.55 "Geist Mono", ui-monospace, monospace;
+  resize: vertical;
+}
+
+.paste:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+/* --- The review ------------------------------------------------------------------------------- */
+
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: opacity 120ms ease;
+}
+
+/* A choice is being checked again: the review stays readable, dimmed, until the new one comes. */
+.review[data-stale] {
+  opacity: 0.6;
+}
+
+.warn,
+.notice {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 0 8px 8px 0;
+  box-shadow: inset 2px 0 var(--warn);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.notice {
+  box-shadow: inset 2px 0 var(--focus);
+  background: color-mix(in srgb, var(--focus) 9%, transparent);
+}
+
+.line,
+.note {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.same {
+  margin: 0;
+  padding: 18px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  color: var(--ink-2);
+  font-size: 13px;
+  text-align: center;
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.blockTitle {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.problemLine,
+.error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* --- Actions ---------------------------------------------------------------------------------- */
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 22px 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.primary,
+.secondary {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.primary[aria-disabled="true"],
+.secondary[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* --- On the dashboard page -------------------------------------------------------------------- */
+
+.originLine {
+  margin: 0;
+  padding: 2px 16px 0;
+  color: var(--ink-3);
+  font: 11px/1.5 "Geist Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .head,
+  .body,
+  .actions {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}

@@ -16,8 +16,8 @@ describe("Monitoring app shell", () => {
     expect(await screen.findByText("Set up a project first.")).toBeTruthy();
     expect(create.getAttribute("aria-disabled")).toBe("true");
     const importButton = screen.getByRole("button", { name: "Import" });
-    expect(importButton.getAttribute("aria-disabled")).toBe("true");
-    expect(importButton.getAttribute("aria-description")).toBe("Importing dashboards arrives in a later update.");
+    expect(importButton.hasAttribute("aria-disabled")).toBe(false);
+    expect(importButton.getAttribute("title")).toBe("Import dashboards (I)");
     fireEvent.click(create);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(tabs()).toHaveLength(1);

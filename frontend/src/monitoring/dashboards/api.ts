@@ -20,7 +20,7 @@ export type DashboardErrorCode =
   | "invalid_dashboard" | "version_conflict" | "name_taken" | "not_found" | "unknown_owner" | "read_only" | "bad_request";
 export type ReadyKey = "cluster" | "nodes" | "namespaces" | "workloads" | "pods";
 export type ReadyNeed = "kube_state" | "cadvisor" | "node_exporter";
-export type VersionOrigin = "created" | "copied" | "saved" | "restored";
+export type VersionOrigin = "created" | "copied" | "saved" | "restored" | "imported" | "updated";
 
 export interface DashboardOut {
   id: string;

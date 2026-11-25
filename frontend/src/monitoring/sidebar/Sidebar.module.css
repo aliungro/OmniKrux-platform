@@ -488,6 +488,16 @@
   color: var(--ink-2);
 }
 
+.importButton:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+.importButton:not([aria-disabled="true"]):hover {
+  border-color: color-mix(in srgb, var(--focus) 45%, var(--rule));
+  background: color-mix(in srgb, var(--focus) 8%, transparent);
+  color: var(--focus);
+}
+
 .importButton svg {
   width: 15px;
   height: 15px;

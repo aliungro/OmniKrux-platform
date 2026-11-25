@@ -37,6 +37,19 @@
   font-weight: 650;
 }
 
+/* A section heading with its own actions at the end of the row (Export, Import). */
+.headRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  margin: 0 0 10px;
+}
+
+.headRow .heading {
+  margin: 0 auto 0 0;
+}
+
 .heading:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 4px;

@@ -1,0 +1,78 @@
+/* Export: a quiet outlined button with an upward tray (the Import icon's arrow, turned out), and the
+   line that says what went into the file. Territories tokens only. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button:hover {
+  border-color: color-mix(in srgb, var(--focus) 45%, var(--rule));
+  color: var(--ink);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* What was exported: a rule at its start, like the page's other "just happened" lines, in --ok. */
+.done {
+  margin: 8px 0 0;
+  padding: 6px 12px;
+  border-radius: 0 8px 8px 0;
+  box-shadow: inset 2px 0 var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.done:empty {
+  margin: 0;
+  padding: 0;
+  box-shadow: none;
+  background: none;
+}
+
+.failed {
+  margin: 8px 0 0;
+  padding: 6px 12px;
+  border-radius: 0 8px 8px 0;
+  box-shadow: inset 2px 0 var(--bad);
+  background: color-mix(in srgb, var(--bad) 9%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* In a heading row: the line takes a row of its own under the heading and its buttons. */
+.done[data-wide],
+.failed[data-wide] {
+  flex-basis: 100%;
+  order: 99;
+}

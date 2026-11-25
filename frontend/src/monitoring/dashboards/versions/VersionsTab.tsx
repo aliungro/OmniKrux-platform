@@ -20,6 +20,8 @@ const origin = (v: VersionOut): string => {
     case "copied": return v.copied_from ? `Copied from ${v.copied_from}` : "Copied";
     case "saved": return "Saved";
     case "restored": return v.restored_from !== null ? `Restored from version ${v.restored_from}` : "Restored";
+    case "imported": return v.copied_from ? `Imported from ${v.copied_from}` : "Imported";
+    case "updated": return v.copied_from ? `Updated from ${v.copied_from}` : "Updated from its source";
   }
 };
 const panelsText = (n: number) => (n === 1 ? "1 panel" : `${n} panels`);

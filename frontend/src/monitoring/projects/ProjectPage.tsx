@@ -18,6 +18,7 @@ import { SourceForm } from "../sources/SourceForm";
 import { isQueryable, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
 import { FilterField, validFilter } from "./FilterField";
 import { ProjectDeleteReview } from "./ProjectDeleteReview";
+import { ExportButton, ImportButton } from "../transfer/ExportButton";
 import { ProjectGenerate, ProjectTools } from "./ProjectTools";
 import s from "./ProjectPage.module.css";
 
@@ -419,7 +420,11 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
       {(project.kind === "docker" || project.kind === "servers") && <ProjectGenerate project={project} />}
 
       <section aria-labelledby="monitoring-project-dashboards" className={s.section}>
-        <h2 id="monitoring-project-dashboards" className={s.heading}>Dashboards</h2>
+        <div className={s.headRow}>
+          <h2 id="monitoring-project-dashboards" className={s.heading}>Dashboards</h2>
+          <ExportButton kind="project" id={project.id} label="Export project" name={project.name} />
+          <ImportButton onOpen={(e) => open({ page: "import", target: { kind: "project", id: project.id } }, e)} />
+        </div>
         <ProjectDashboardsSlot project={project} tabId={tabId} nav={nav} openInNewTab={openInNewTab} />
       </section>
 

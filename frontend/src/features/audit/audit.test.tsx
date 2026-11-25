@@ -558,6 +558,29 @@ describe("monitoring entries", () => {
     expect(labels.slice(labels.indexOf("Created"), labels.indexOf("Created") + 4)).toEqual(["Created", "Installed", "Uninstalled", "Deleted"]);
   });
 
+  it("import and export entries read in words", async () => {
+    const rows: [string, string, string, string][] = [
+      ["dashboard_import", "dashboard", "Node overview", "Imported a dashboard"],
+      ["dashboard_update", "dashboard", "API latency", "Updated a dashboard from its source"],
+      ["monitoring_export", "project", "shop", "Exported from Monitoring"],
+      ["grafana_add", "grafana", "Team Grafana", "Connected a Grafana"],
+      ["grafana_change", "grafana", "Ops Grafana", "Changed a Grafana connection"],
+      ["grafana_remove", "grafana", "Old Grafana", "Removed a Grafana connection"],
+    ];
+    serve(() => ({ records: rows.map(([action, kind, name], i) => monitoring({ id: i + 1, action, kind, name })), next_before: null }));
+    show();
+    for (const [, kind, name, label] of rows) {
+      const row = await screen.findByRole("row", { name: new RegExp(label) });
+      expect(within(row).getByText(kind)).toBeTruthy();
+      expect(within(row).getByText(name)).toBeTruthy();
+    }
+    const exported = screen.getAllByRole("row").filter((r) => /Exported from Monitoring/.test(r.textContent ?? ""));
+    expect(exported).toHaveLength(1);
+    const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    for (const [, , , label] of rows) expect(labels).toContain(label);
+  });
+
   it("the action filter offers the monitoring actions", async () => {
     serve(() => ({ records: [record(1)], next_before: null }));
     show();

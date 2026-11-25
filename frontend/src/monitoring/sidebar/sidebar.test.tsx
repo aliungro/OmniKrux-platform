@@ -287,4 +287,34 @@ describe("Monitoring sidebar", () => {
     expect(screen.getByRole("button", { name: "Alerts" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /firing/ })).toBeNull();
   });
+
+  it("the Import icon opens Import for the current project", async () => {
+    seedTwo();
+    const app = renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p2" }) });
+    await screen.findByRole("treeitem", { name: "Both" });
+    const icon = screen.getByRole("button", { name: "Import" });
+    expect(icon.hasAttribute("aria-disabled")).toBe(false);
+    expect(icon.getAttribute("title")).toBe("Import dashboards (I)");
+    expect(icon.getAttribute("aria-keyshortcuts")).toBe("i");
+    // Ctrl+click: a new tab, for the open project; this one stays.
+    fireEvent.click(icon, { ctrlKey: true });
+    await waitFor(() => expect(app.current().tabs).toHaveLength(2));
+    expect(app.current().tabs[1].view).toEqual({ page: "import", target: { kind: "project", id: "p2" } });
+    fireEvent.click(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")[0]);
+    await waitFor(() => expect(app.current().active).toBe("start0"));
+    expect(app.current().tabs[0].view).toEqual({ page: "project", id: "p2" });
+    // A click: in the active tab.
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "import", target: { kind: "project", id: "p2" } }));
+    expect(app.current().tabs[0].back).toContainEqual({ page: "project", id: "p2" });
+    expect(app.current().tabs).toHaveLength(2);
+  });
+
+  it("the Import icon stays on with no project", async () => {
+    installFakeMonitoringApi({ projects: [] });
+    const app = renderMonitoringApp();
+    expect(await screen.findByText("Set up a project first.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "import" }));
+  });
 });

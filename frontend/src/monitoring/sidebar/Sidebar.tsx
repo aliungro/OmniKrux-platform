@@ -255,7 +255,8 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
         ) : <p className={s.emptyLine} role="status">Loading projects…</p>}
       </div>
       <NewDashboardBar owner={owner} loaded={tree !== undefined} hasProjects={(tree?.projects.length ?? 0) > 0}
-        onNew={(from) => onNewDashboard(owner, from)} />
+        onNew={(from) => onNewDashboard(owner, from)}
+        onImport={(newTab) => onOpen({ page: "import", ...(owner ? { target: { kind: owner.kind, id: owner.id } } : {}) }, newTab)} />
     </nav>
   );
 }

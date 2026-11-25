@@ -92,9 +92,8 @@ describe("New dashboard", () => {
     fireEvent.click(newButton());
     expect(screen.queryByRole("dialog")).toBeNull();
     const importButton = screen.getByRole("button", { name: "Import" });
-    expect(importButton.getAttribute("aria-disabled")).toBe("true");
-    expect(importButton.getAttribute("title")).toBe("Importing dashboards arrives in a later update.");
-    expect(importButton.getAttribute("aria-description")).toBe("Importing dashboards arrives in a later update.");
+    expect(importButton.hasAttribute("aria-disabled")).toBe(false);
+    expect(importButton.getAttribute("title")).toBe("Import dashboards (I)");
     cleanup();
 
     shop();
