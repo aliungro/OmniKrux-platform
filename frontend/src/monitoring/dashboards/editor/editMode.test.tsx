@@ -444,11 +444,12 @@ describe("Edit mode", () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit" })));
   });
 
-  it("Enter on a tile opens its settings with the keyboard on the Query tab", async () => {
+  it("Enter on a tile opens its settings on the Query tab with the keyboard in its first field", async () => {
     const { user } = await editing();
     await user.keyboard("{Enter}");
-    const query = within(screen.getByRole("complementary", { name: "Panel settings" })).getByRole("tab", { name: "Query" });
-    expect(document.activeElement).toBe(query);
+    const aside = screen.getByRole("complementary", { name: "Panel settings" });
+    const query = within(aside).getByRole("tab", { name: "Query" });
+    expect(document.activeElement).toBe(within(aside).getByRole("textbox", { name: "Query A" }));
     expect(query.getAttribute("aria-selected")).toBe("true");
   });
 

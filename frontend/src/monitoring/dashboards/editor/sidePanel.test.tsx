@@ -63,6 +63,7 @@ const draftPanel = (id: string): PanelSpec => {
   return s.draft.panels.find((p) => p.id === id)!;
 };
 const settings = () => screen.getByRole("complementary", { name: "Panel settings" });
+const notBody = () => expect(document.activeElement).not.toBe(document.body);
 const tabNamed = (name: string) => within(settings()).getByRole("tab", { name });
 
 async function editing(api = shop()) {
@@ -95,8 +96,10 @@ describe("The panel side panel", () => {
     const tablist = within(aside).getByRole("tablist", { name: "Panel settings" });
     expect(within(tablist).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Query", "Chart", "Options", "Alert"]);
     const query = tabNamed("Query");
-    expect(document.activeElement).toBe(query);
+    expect(document.activeElement).toBe(within(aside).getByRole("textbox", { name: "Query A" }));
     expect(query.getAttribute("aria-selected")).toBe("true");
+    // ←/→ move between tabs once the keyboard is on one.
+    query.focus();
     // ←/→ move between tabs; the keyboard stays on the tabs.
     await user.keyboard("{ArrowRight}");
     expect(document.activeElement).toBe(tabNamed("Chart"));
@@ -384,5 +387,48 @@ describe("A log query in a chart panel", () => {
       .toEqual(["Default: s1 name", "s1 name", "Default Loki source (none linked)"]);
     expect(sourceChoices({ kind: "project", project: { ...project, links: [] } }, "project", { type: "prometheus", id: null })[0].label)
       .toBe("Default Prometheus-compatible source (none linked)");
+  });
+});
+
+describe("Opening the settings", () => {
+  it("Enter on a tile moves into the settings", async () => {
+    const { user } = await editing();
+    await user.keyboard("{Enter}");
+    const aside = settings();
+    // The keyboard is in the settings' first text field, ready to type: not left on the tile or the tab.
+    const query = within(aside).getByRole("textbox", { name: "Query A" });
+    await waitFor(() => expect(document.activeElement).toBe(query));
+    expect(aside.contains(document.activeElement)).toBe(true);
+    notBody();
+    // The same from the tile's menu.
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(tile("Requests"));
+    await user.click(within(tile("Requests")).getByRole("button", { name: "Panel actions for Requests" }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    await waitFor(() => expect(document.activeElement).toBe(within(settings()).getByRole("textbox", { name: "Query A" })));
+  });
+
+  it("a new panel is scrolled into view", async () => {
+    const scrolled: Element[] = [];
+    const had = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    try {
+      const { user } = await editing();
+      await user.keyboard("a");
+      await screen.findByRole("combobox", { name: "What do you want to see" });
+      await user.keyboard("{Control>}{End}{/Control}{Enter}");
+      await screen.findByRole("textbox", { name: "Query A" });
+      await waitFor(() => expect(scrolled.includes(tile("New panel"))).toBe(true));
+      notBody();
+    } finally {
+      if (had) Object.defineProperty(Element.prototype, "scrollIntoView", had);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it("settings selects carry their text as a title", async () => {
+    await openSettings();
+    const source = within(settings()).getByRole("combobox", { name: "Source" }) as HTMLSelectElement;
+    expect(source.title).toBe(source.selectedOptions[0].textContent);
   });
 });

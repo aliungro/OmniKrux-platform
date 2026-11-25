@@ -381,7 +381,7 @@ function AlertForm({
       {panel.queries.length > 1 && (
         <div className={s.field}>
           <label htmlFor={`${id}-q`} className={s.fieldLabel}>Query</label>
-          <select ref={querySelectRef} id={`${id}-q`} className={s.select} value={alert.query}
+          <select ref={querySelectRef} id={`${id}-q`} className={s.select} value={alert.query} title={`Query ${alert.query}`}
             aria-invalid={queryProblems.length ? true : undefined} onChange={(e) => set({ query: e.target.value })}>
             {panel.queries.map((q) => <option key={q.ref} value={q.ref}>Query {q.ref}</option>)}
             {query === null && <option value={alert.query}>Query {alert.query}</option>}

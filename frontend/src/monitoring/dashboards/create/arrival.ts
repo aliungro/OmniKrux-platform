@@ -15,7 +15,10 @@ import type { OwnerKind } from "../schema";
 export interface Arrival {
   /** In edit mode, with the keyboard on + Add panel; otherwise as it is, with the keyboard on its title. */
   edit: boolean;
-  /** Said once it opens (a copy of a ready-made view). */
+  /**
+   * Said once it opens (a copy of a ready-made view). Its page opens at the top with the heading
+   * focused, so the words are in view; otherwise the keyboard goes to + Add panel.
+   */
   status?: string;
 }
 
@@ -51,14 +54,18 @@ export const copiedWords = (title: string) => `Copied "${title}". Changes go to 
  */
 export function useCopyToEdit(how: Opener) {
   const client = useQueryClient();
-  const mutation = useDashboardMutation((x: { from: string; projectId: string }) =>
-    copyDashboard({ from_id: x.from, owner_kind: "project", owner_id: x.projectId }));
+  const mutation = useDashboardMutation((x: { from: string; projectId: string; defaults?: Record<string, "all" | string[]> }) =>
+    copyDashboard({
+      from_id: x.from, owner_kind: "project", owner_id: x.projectId,
+      ...(x.defaults && Object.keys(x.defaults).length > 0 ? { defaults: x.defaults } : {}),
+    }));
   const [error, setError] = useState<{ from: string; text: string } | null>(null);
   const { tabId, nav, openInNewTab } = how;
-  const copy = useCallback((from: string, projectId: string) => {
+  /** `defaults`: the variable selections on the page, which the copy starts from. */
+  const copy = useCallback((from: string, projectId: string, defaults?: Record<string, "all" | string[]>) => {
     if (mutation.isPending) return;
     setError(null);
-    mutation.mutate({ from, projectId }, {
+    mutation.mutate({ from, projectId, defaults }, {
       onSuccess: (out) => {
         client.setQueryData(dashboardKey(out.id), out);
         openMade(out, { edit: true, status: copiedWords(out.title) }, { tabId, nav, openInNewTab });

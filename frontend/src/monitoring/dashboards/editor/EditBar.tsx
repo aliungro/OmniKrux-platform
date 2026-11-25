@@ -1,4 +1,4 @@
-// The header in edit mode: the Editing pill, Suggestions, Undo, Discard and Save dashboard; under it,
+// The header in edit mode: the Editing pill, Undo, Variables, Suggestions, Discard and Save dashboard; under it,
 // why a save didn't go through and what a removal took away; and the question before discarding changes.
 import { useId, useRef, type RefObject } from "react";
 import { failure } from "../../../api/http";
@@ -26,10 +26,10 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, s
 }) {
   return (
     <>
-      {suggestions && (
-        <button ref={suggestionsRef} type="button" className={s.toggle} aria-pressed={suggestions.open}
-          aria-keyshortcuts="s" onClick={suggestions.onToggle}>
-          Suggestions
+      {undo && (
+        <button type="button" className={s.undo} aria-keyshortcuts="Control+Z" aria-disabled={!undo.can || undefined}
+          onClick={undo.onUndo}>
+          Undo
         </button>
       )}
       {variables && (
@@ -37,10 +37,10 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, s
           Variables
         </button>
       )}
-      {undo && (
-        <button type="button" className={s.undo} aria-keyshortcuts="Control+Z" aria-disabled={!undo.can || undefined}
-          onClick={undo.onUndo}>
-          Undo
+      {suggestions && (
+        <button ref={suggestionsRef} type="button" className={s.toggle} aria-pressed={suggestions.open}
+          aria-keyshortcuts="s" onClick={suggestions.onToggle}>
+          Suggestions
         </button>
       )}
       <button ref={discardRef} type="button" className={s.discard} aria-disabled={saving || undefined}

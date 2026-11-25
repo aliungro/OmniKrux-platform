@@ -1,6 +1,6 @@
 // The draft a dashboard left behind, offered back when it opens; and, in edit mode, the line that
 // says this browser isn't keeping drafts.
-import type { RefObject } from "react";
+import { useId, type RefObject } from "react";
 import type { StoredDraft } from "./draftStore";
 import s from "./Drafts.module.css";
 
@@ -16,22 +16,29 @@ export function draftTime(ms: number, now = Date.now()): string {
   return sameDay ? time : `${d.getDate()} ${MONTHS[d.getMonth()]} ${time}`;
 }
 
-export function DraftBanner({ draft, version, onRestore, onDiscard, restoreRef }: {
+/** Said under the banner once Edit was pressed while the draft is still offered. */
+export const CHOOSE_DRAFT = "Restore the draft or discard it before editing.";
+
+export function DraftBanner({ draft, version, onRestore, onDiscard, restoreRef, asked = false }: {
   draft: StoredDraft;
   /** The dashboard's current saved version. */
   version: number;
   onRestore(): void;
   onDiscard(): void;
   restoreRef?: RefObject<HTMLButtonElement | null>;
+  /** Edit was pressed: the banner says a choice comes first. */
+  asked?: boolean;
 }) {
+  const askedId = useId();
   return (
     <div role="region" aria-label="Unsaved draft" className={s.banner}>
       <div className={s.bannerText}>
         <p className={s.line}>You have unsaved changes from {draftTime(draft.savedAt)}.</p>
         {draft.baseVersion < version && <p className={s.line}>The dashboard was saved again since then (version {version}).</p>}
+        {asked && <p id={askedId} className={s.line}>{CHOOSE_DRAFT}</p>}
       </div>
       <div className={s.bannerActions}>
-        <button ref={restoreRef} type="button" className={s.restore} onClick={onRestore}>Restore draft</button>
+        <button ref={restoreRef} type="button" className={s.restore} aria-describedby={asked ? askedId : undefined} onClick={onRestore}>Restore draft</button>
         <button type="button" className={s.quiet} onClick={onDiscard}>Discard draft</button>
       </div>
     </div>

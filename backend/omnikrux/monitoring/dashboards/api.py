@@ -50,11 +50,13 @@ from omnikrux.monitoring.dashboards.ready_made import (
     ready_id,
 )
 from omnikrux.monitoring.dashboards.schema import (
+    MAX_VARIABLE_VALUES,
     OwnerKind,
     adapt_sources,
     panel_count,
 )
 from omnikrux.monitoring.dashboards.store import (
+    MAX_TITLE,
     DashboardRecord,
     DashboardSummary,
     Origin,
@@ -206,6 +208,9 @@ class DashboardCopyIn(_Body):
     owner_kind: OwnerKind
     owner_id: str
     title: str | None = None
+    # The copy's variables start here (unknown names ignored; a value the variable can't take is
+    # ignored too, and the variable keeps its own default).
+    defaults: dict[str, Literal["all"] | list[str]] | None = None
 
 
 # --- Helpers -----------------------------------------------------------------------------------
@@ -510,6 +515,30 @@ async def add_dashboard(request: Request) -> DashboardOut:
     return _out(created, owner_name, changes)
 
 
+COPY_SUFFIX = " (copy)"
+
+
+def _apply_defaults(spec: dict, defaults: dict[str, str | list[str]] | None) -> None:
+    """Start the copy's variables at `defaults`, each only when the variable can take it."""
+    for variable in spec.get("variables", []):
+        if (
+            not isinstance(variable, dict)
+            or defaults is None
+            or variable.get("name") not in defaults
+        ):
+            continue
+        value = defaults[variable["name"]]
+        if value == "all":
+            if variable.get("includeAll") is True:
+                variable["default"] = "all"
+        elif (
+            isinstance(value, list)
+            and len(value) <= MAX_VARIABLE_VALUES
+            and (len(value) <= 1 or variable.get("multi") is True)
+        ):
+            variable["default"] = list(value)
+
+
 @router.post("/dashboards/copy", status_code=201, openapi_extra=_schema(DashboardCopyIn))
 async def copy_dashboard(request: Request) -> DashboardOut:
     """A copy of a dashboard for any owner, with the sources that owner can't use set to its own
@@ -521,7 +550,11 @@ async def copy_dashboard(request: Request) -> DashboardOut:
         source_title, base = spec["title"], spec["title"]  # a ready-made view isn't "a copy"
     else:
         source = await dashboard_record(services, body.from_id)
-        spec, source_title, base = source.spec, source.title, f"{source.title} (copy)"
+        spec, source_title, base = (
+            source.spec,
+            source.title,
+            f"{source.title[: MAX_TITLE - len(COPY_SUFFIX)].rstrip()}{COPY_SUFFIX}",
+        )
     owner = await owner_of(services, body.owner_kind, body.owner_id)
     if body.title is not None:
         title = body.title
@@ -531,6 +564,7 @@ async def copy_dashboard(request: Request) -> DashboardOut:
     for panel in adapted.get("panels", []):
         if isinstance(panel, dict):
             panel["alert"] = None  # an alert is its panel's alone: a copy starts without one
+    _apply_defaults(adapted, body.defaults)
     created, changes = await create_dashboard_audited(
         request,
         owner_kind=owner.kind,

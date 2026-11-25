@@ -49,10 +49,11 @@ export interface SidePanelProps {
   /** The panel's run besides its data: running, waiting for the typing to stop, Run now. */
   live?: Omit<PanelLive, "data"> | null;
   /**
-   * Where the keyboard goes when it opens: the active tab, the first query, the Alert tab's first
+   * Where the keyboard goes when it opens: the active tab, the first field (a text field, else any
+   * control, else the tab), the first query, the Alert tab's first
    * field with a problem (else Threshold, else Add an alert), or nowhere (a click).
    */
-  initialFocus?: "tab" | "query" | "alert" | "none";
+  initialFocus?: "tab" | "field" | "query" | "alert" | "none";
   /** Changes with each opening, so the keyboard goes there again. */
   seq?: number;
   onClose(): void;
@@ -101,7 +102,11 @@ export function SidePanel({
 
   useLayoutEffect(() => {
     if (initialFocus === "query") body.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-    else if (initialFocus === "alert") (alertFocus.current ?? (() => tabs.current[tab]?.focus()))();
+    else if (initialFocus === "field") {
+      const fields = (sel: string) => body.current?.querySelector<HTMLElement>(sel);
+      (fields("textarea, input:not([type=checkbox], [type=radio], [type=hidden]):not(:disabled)") ?? fields("select:not(:disabled)")
+        ?? tabs.current[tab])?.focus();
+    } else if (initialFocus === "alert") (alertFocus.current ?? (() => tabs.current[tab]?.focus()))();
     else if (initialFocus === "tab") tabs.current[tab]?.focus();
     // Only on opening (not on `tab`): a tab change moves the keyboard itself.
   }, [initialFocus, seq]);

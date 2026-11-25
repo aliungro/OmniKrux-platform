@@ -1,10 +1,14 @@
-/* The panel side panel (E2): a 360 px column at the right of the grid (the grid narrows), laid
-   over the grid's right side on a narrow window. Quiet rows and hairlines; the chart type tiles
-   and the run line carry the panel's state. Territories tokens only. */
+/* The panel side panel (E2): a 360 px column at the right of the grid. The grid never narrows
+   below 720 px for it: where the frame is under 720 + 14 + 360 px wide (a viewport under 960 px
+   always is) it is the "settings overlay" instead, laid over the grid's right side. That is one
+   state, one query. Quiet rows and hairlines; the chart type tiles and the run line carry the
+   panel's state. Territories tokens only. */
 
 .side {
   position: sticky;
+  /* Under the dashboard header, so its title and close button stay in view as the page scrolls. */
   top: 58px;
+  z-index: 3;
   flex: none;
   width: 360px;
   max-width: 100%;
@@ -17,11 +21,22 @@
   overflow: hidden;
 }
 
+@container (max-width: 1093px) {
+  .side {
+    /* Out of the flow: the grid keeps the whole width, and the settings cover its right side. */
+    margin-left: calc(-1 * (min(360px, 100%) + 14px));
+    z-index: 6;
+    box-shadow: 0 14px 40px color-mix(in srgb, var(--bg) 70%, transparent);
+  }
+}
+
 .head {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 12px 14px 0;
+  background: var(--surf);
 }
 
 .title {
@@ -176,6 +191,7 @@
 .select,
 .source {
   min-width: 0;
+  width: 100%;
   padding: 5px 8px;
   border: 1px solid var(--rule);
   border-radius: 7px;
@@ -206,9 +222,13 @@
   color: var(--ink-3);
 }
 
+/* A long source or option name is cut with an ellipsis (its text is the field's title). */
 .select,
 .source {
   cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .input[aria-invalid="true"] {

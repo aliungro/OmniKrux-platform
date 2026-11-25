@@ -92,7 +92,7 @@
 }
 
 .titleInput {
-  max-width: min(60vw, 640px);
+  max-width: min(100%, 640px);
   min-width: 0;
   margin: -2px -6px;
   padding: 1px 5px;
@@ -138,6 +138,34 @@
   color: var(--focus);
   font-size: 11px;
   font-weight: 500;
+}
+
+/* From 1100 px the header is one row, in edit mode too (Editing pill, Undo, Variables, Suggestions,
+   Discard, Save dashboard, with the time range and refresh): only the title gives way, cut with
+   an ellipsis (or, in edit mode, shortened in its field). Below 1100 px it wraps. */
+@media (min-width: 1100px) {
+  .header {
+    flex-wrap: nowrap;
+  }
+
+  .heading {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .heading > h1 {
+    flex: 0 1 auto;
+  }
+
+  .tabs,
+  .controls {
+    flex: none;
+  }
+
+  .controls {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
 }
 
 .tabs {
@@ -248,6 +276,11 @@
   color: var(--ink-2);
   font: 11.5px/1.4 "Geist Mono", ui-monospace, monospace;
   cursor: pointer;
+}
+
+.refreshEvery:disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
 }
 
 .refreshEvery option {
@@ -502,6 +535,25 @@
   color: var(--ink-2);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+/* "Saved …": a quiet word for four seconds after a save. */
+.saved {
+  margin: 8px 16px 0;
+  padding: 7px 12px;
+  border-radius: 0 8px 8px 0;
+  box-shadow: inset 2px 0 var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.saved:empty {
+  margin: 0;
+  padding: 0;
+  box-shadow: none;
+  background: none;
 }
 
 .arrived:empty {

@@ -90,8 +90,10 @@ export function OwnerDialog({ heading, action, busyAction, owner, titleFor, send
         onDone(out);
       },
       onError: (err) => {
-        if (err.code === "name_taken") {
-          setTitleError(err.message);
+        // A refused title (too long, line breaks) is said at the field, without the "title:" path.
+        const refused = err.code === "invalid_dashboard" ? err.problems.find((p) => p.path === "title") : undefined;
+        if (err.code === "name_taken" || refused) {
+          setTitleError(refused ? refused.message : err.message);
           titleRef.current?.focus();
         } else if (err.code === "unknown_owner") {
           setOwnerError(err.message);

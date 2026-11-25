@@ -34,7 +34,7 @@ import { usePrefersReducedMotion } from "../motion";
 import { DiscardDialog, EditControls, EditingPill, EditNotice, RemovedNote } from "../editor/EditBar";
 import { canUndo, changedPanelIds, hasUnsavedWork, isDraftEdit, JSON_FIRST, type EditorAction, type EditorState } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
-import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
+import { editSessions, JSON_SAVE_REFUSED, useDashboardEditor } from "../editor/useDashboardEditor";
 import { DraftBanner, DraftsOffNotice, EditedElsewhere } from "../drafts/DraftBanner";
 import { forgetSession, useDraftOffer } from "../drafts/useDraft";
 import { readDraft, removeDraft, type StoredDraft } from "../drafts/draftStore";
@@ -105,6 +105,8 @@ function RereadNotice({ failed, buttonRef }: { failed: RereadFailure; buttonRef:
 const TITLE_BLANK ="Give the dashboard a title.";
 /** How long the note about a removed panel stays (the next edit takes it away sooner). */
 const REMOVED_NOTE_MS = 10_000;
+/** How long "Saved …" stays. */
+const SAVED_NOTE_MS = 4000;
 
 function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, activateTab, setTabTitle }: MonitoringPageProps & {
   view: DashboardViewState;
@@ -177,6 +179,18 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   };
   useLayoutEffect(() => { if (elsewhere) goElsewhere.current?.focus(); }, [elsewhere]);
   const restoreDraft = () => startEditing(offer.draft);
+  // Edit while a draft is offered changes nothing but asks for a choice: the keyboard goes to
+  // Restore draft, and the banner says so (Restore draft or Discard draft come first).
+  const restoreButton = useRef<HTMLButtonElement>(null);
+  const [askedDraft, setAskedDraft] = useState(false);
+  const draftOffered = offer.draft !== null;
+  useEffect(() => { if (!draftOffered) setAskedDraft(false); }, [draftOffered]);
+  const askForDraft = (): boolean => {
+    if (!draftOffered || editor.state.mode === "edit") return false;
+    setAskedDraft(true);
+    restoreButton.current?.focus();
+    return true;
+  };
   // Asked again on the press: a tab that is gone or stopped editing leaves editing to this one.
   const goToEditingTab = () => {
     const other = editingTab();
@@ -196,11 +210,14 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const [arrival] = useState(() => peekArrival(dashboard.id));
   const [arrivedWords, setArrivedWords] = useState("");
   const toAddTile = useRef(false);
+  /** A copy of a ready-made view: the page opens at its top with the heading focused, so its note is in view. */
+  const toTop = useRef(false);
   useEffect(() => {
     if (!arrival) return;
     forgetArrival(dashboard.id);
     if (arrival.edit && !ready && editor.state.mode === "view" && startEditing(null)) {
-      toAddTile.current = true;
+      if (arrival.status !== undefined) toTop.current = true;
+      else toAddTile.current = true;
       setArrivedWords(arrival.status ?? "");
     } else {
       title.current?.focus({ preventScroll: true });
@@ -236,7 +253,16 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   // Copy to edit (a ready-made view): copied into its project as it is, then opened in edit mode.
   const opener = { tabId, nav, openInNewTab };
   const copyToEdit = useCopyToEdit(opener);
-  const edit = ready ? () => copyToEdit.copy(dashboard.id, dashboard.owner_id) : () => { startEditing(null); };
+  // The copy starts at the variable values chosen here ("all", or the values; nothing chosen is left to its default).
+  const selections = () => {
+    const chosen: Record<string, "all" | string[]> = {};
+    for (const v of ctx.variables) {
+      if (v.selected === "all") chosen[v.spec.name] = "all";
+      else if (v.selected.length > 0) chosen[v.spec.name] = [...v.selected];
+    }
+    return chosen;
+  };
+  const edit = ready ? () => copyToEdit.copy(dashboard.id, dashboard.owner_id, selections()) : () => { if (!askForDraft()) startEditing(null); };
   const save = () => {
     flushJson.current?.();
     return editor.save();
@@ -463,10 +489,27 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     wasEditing.current = isEditing;
   }, [isEditing]);
   useLayoutEffect(() => {
-    if (!isEditing || !toAddTile.current) return;
+    if (!isEditing) return;
+    if (toTop.current) {
+      toTop.current = false;
+      page.current?.scrollIntoView?.({ block: "start" });
+      title.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (!toAddTile.current) return;
     toAddTile.current = false;
     (page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current)?.focus();
   }, [isEditing]);
+
+  // A save says so for a few seconds.
+  const [saved, setSaved] = useState<string | null>(null);
+  const lastSaved = editor.lastSaved;
+  useEffect(() => {
+    if (lastSaved === null) return;
+    setSaved(lastSaved.title);
+    const timer = setTimeout(() => setSaved(null), SAVED_NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [lastSaved]);
 
   // The conflict review closed because the draft itself was refused (422): the keyboard goes to
   // Show in JSON, or Save dashboard.
@@ -543,7 +586,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   // Rename…: edit mode opens with the keyboard in the title field, its text selected. After the
   // grid's own landing (child effects run first), so this one wins.
   const renaming = useRef(false);
-  const rename = () => { if (startEditing(null)) renaming.current = true; };
+  const rename = () => { if (!askForDraft() && startEditing(null)) renaming.current = true; };
   useLayoutEffect(() => {
     const input = titleInput.current;
     if (!renaming.current || !input) return;
@@ -734,13 +777,14 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         ownerName={dashboard.owner_name || ctx.ownerName} onOwner={openOwner} readyMade={ready}
         tabs={tabs} tab={tab} tabIds={tabIds} onTab={selectTab} tabRefs={tabRefs}
         timeControl={<TimeRangePicker time={ctx.time} open={timeOpen} onOpen={() => setTimeOpen(true)} onClose={closeTime} onPick={pickTime} buttonRef={timeButton} />}
-        refreshControl={<RefreshControl value={ctx.refresh} onRefresh={refreshNow} buttonRef={refreshButton}
+        refreshControl={<RefreshControl value={ctx.refresh} fixed={ctx.fixedRange} onRefresh={refreshNow} buttonRef={refreshButton}
           onChange={(r: RefreshSpec) => replace({ refresh: r })} />}
         editRef={editButton} onEdit={copyToEdit.busy ? undefined : edit} moreRef={moreButton} actions={actions}
         badge={editing ? <EditingPill /> : undefined}
         titleField={editing ? { value: editing.draft.title, onChange: retitle, inputRef: titleInput, problem: titleProblem } : undefined}
         afterTitle={offer.draft && !editing
-          ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft} />
+          ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft}
+              restoreRef={restoreButton} asked={askedDraft} />
           : undefined}
         editControls={editing
           ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton}
@@ -752,6 +796,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
       {editing && !editor.draftsWork && <DraftsOffNotice />}
       {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
       <p className={s.arrived} role="status">{editing ? arrivedWords : ""}</p>
+      <p className={s.saved} role="status">{saved !== null ? `Saved "${saved}".` : ""}</p>
       {removedShown && removed && <RemovedNote title={removed.title} onUndo={undo} />}
       {/* Spoken by the status line below; shown here so the refusal is seen too. */}
       {jsonPending && undoRefused && (
@@ -768,7 +813,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />
       )}
-      {editing && conflict === null && otherError && <EditNotice error={otherError} onShowJson={() => selectTab("json")} actionRef={showInJson} />}
+      {editing && conflict === null && otherError && !(tab === "json" && otherError.message === JSON_SAVE_REFUSED) && <EditNotice error={otherError} onShowJson={() => selectTab("json")} actionRef={showInJson} />}
       {asking === "copy" && (
         <CopyDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)}
           onCopied={(out) => { setAsking(null); openMade(out, { edit: false }, opener); }} />
@@ -837,7 +882,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         {tab === "json" && (ready
           ? <ReadyMadeJson spec={dashboard.spec} onCopy={copyToEdit.busy ? undefined : edit} />
           : <JsonTab dashboard={dashboard} editing={editing} dispatch={editor.dispatch} onStartEditing={() => startEditing(null)}
-              onSave={save} lastSaved={editor.lastSaved} onDiscard={discard} saving={editor.saving} flushRef={flushJson} />)}
+              onSave={save} lastSaved={editor.lastSaved} discardRef={discardButton} problemFocus={editor.jsonRefusals}
+              saving={editor.saving} flushRef={flushJson} />)}
         {tab === "versions" && !ready && (
           <VersionsTab dashboard={dashboard} restoreBlocked={restoreBlocked} onRestored={() => selectTab("dashboard")} />
         )}

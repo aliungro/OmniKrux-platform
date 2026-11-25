@@ -38,7 +38,8 @@ export function SelectRow<T extends string>({ label, value, choices, onChange }:
   const id = useId();
   return (
     <Row label={label} htmlFor={id}>
-      <select id={id} className={s.select} value={value} onChange={(e) => onChange(e.target.value as T)}>
+      <select id={id} className={s.select} value={value} title={choices.find(([v]) => v === value)?.[1]}
+        onChange={(e) => onChange(e.target.value as T)}>
         {choices.map(([v, text]) => <option key={v} value={v}>{text}</option>)}
       </select>
     </Row>
@@ -228,6 +229,7 @@ function ThresholdRow({ n, threshold, onChange, onRemove }: {
         aria-label={`Threshold ${n} value`} value={field.text} aria-invalid={field.problem ? true : undefined}
         aria-describedby={field.problem ? `${id}-problem` : undefined} onChange={(e) => field.onText(e.target.value)} />
       <select className={s.select} aria-label={`Threshold ${n} colour`} value={threshold.color}
+        title={COLOR_LABELS.find(([v]) => v === threshold.color)?.[1]}
         onChange={(e) => onChange({ color: e.target.value as ThresholdColor })}>
         {COLOR_LABELS.map(([v, text]) => <option key={v} value={v}>{text}</option>)}
       </select>

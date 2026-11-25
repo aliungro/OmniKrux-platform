@@ -12,6 +12,8 @@
   display: flex;
   align-items: flex-start;
   gap: 14px;
+  /* The settings overlay's query (SidePanel.module.css) reads this frame's width. */
+  container-type: inline-size;
 }
 
 .frame > .grid {
@@ -397,12 +399,6 @@
 .retry:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-
-@media (max-width: 959px) {
-  .frame {
-    flex-wrap: wrap;
-  }
 }
 
 /* Narrow windows: every panel full width, in reading order, at its own height. */

@@ -17,7 +17,8 @@
 .undo,
 .discard,
 .save {
-  padding: 4px 12px;
+  padding: 4px 10px;
+  white-space: nowrap;
   border-radius: 7px;
   font: inherit;
   font-size: 12px;

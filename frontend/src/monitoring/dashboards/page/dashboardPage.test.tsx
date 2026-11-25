@@ -6,7 +6,7 @@ import type { QueryRequest } from "../../api/types";
 import type { GroupOut } from "../../api/types";
 import { readRecent, recordRecent } from "../../home/recent";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { gate, intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { gate, intercept, linkedProject, panel, seedDashboard, spec, variable } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { ReadyMadeOut } from "../api";
 import { editSessions } from "../editor/useDashboardEditor";
@@ -608,5 +608,124 @@ describe("Renaming in the header", () => {
     await waitFor(() => expect(workspaceTab().textContent).toContain("API latency"));
     expect(workspaceTab().textContent).not.toContain("Orders");
     notBody();
+  });
+});
+
+describe("Updated, refreshing and saving", () => {
+  const two = (n: number) => String(n).padStart(2, "0");
+  const clock = (ms: number) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`; };
+
+  it("Updated moves after a variable change", async () => {
+    const user = userEvent.setup();
+    let now = new Date(2026, 10, 25, 10, 0, 0).getTime();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const doc = spec("Pods", [panel("p-1", "Restarts", 'up{namespace="$namespace"}')], [variable("namespace", "Namespace")]);
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, doc) },
+      labelValues: { "p1|namespace": ["api", "web"] },
+      queryAnswers: { 'up{namespace="api"}': ok, 'up{namespace="web"}': ok },
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText(`Updated ${clock(now)}`)).toBeTruthy();
+    now += 5000;
+    await user.click(screen.getByRole("button", { name: "Namespace: api" }));
+    await user.click(within(screen.getByRole("group", { name: "Namespace" })).getByRole("radio", { name: "web" }));
+    expect(await screen.findByText(`Updated ${clock(now)}`)).toBeTruthy();
+    vi.restoreAllMocks();
+  });
+
+  it("a fixed range can't auto refresh", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const api = shop();
+      renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s", time: { from: "now-2h", to: "now-1h" } }) });
+      expect(await screen.findByText("chart 1")).toBeTruthy();
+      const select = screen.getByRole("combobox", { name: "Auto-refresh" }) as HTMLSelectElement;
+      expect(select.disabled).toBe(true);
+      expect(select.title).toBe("A fixed time range doesn't change. Pick a range that ends now to refresh it.");
+      expect(select.value).toBe("");
+      const first = batches(api).length;
+      act(() => { vi.advanceTimersByTime(60_000); });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(batches(api).length).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a range that ends now keeps its refresh select", async () => {
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Auto-refresh" }) as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    expect(select.title).toBe("");
+  });
+
+  it("save says Saved", async () => {
+    const user = userEvent.setup();
+    const api = shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    expect(screen.queryByText('Saved "API latency".')).toBeNull();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await user.keyboard("{Control>}s{/Control}");
+    await waitFor(() => expect(api.requests.some((r) => r.method === "PUT")).toBe(true));
+    const note = await screen.findByText('Saved "API latency".');
+    expect(note.closest('[role="status"]')).toBeTruthy();
+    notBody();
+    // It goes after 4 seconds.
+    await waitFor(() => expect(screen.queryByText('Saved "API latency".')).toBeNull(), { timeout: 6000 });
+  }, 10_000);
+});
+
+describe("Copy to edit", () => {
+  const ID = "ready:p1:pods";
+  const ready: ReadyMadeOut = { key: "pods", id: ID, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, source_name: null, notes: [] };
+  const seedReady = () => installFakeMonitoringApi({
+    projects: [linkedProject("p1", "Shop", "s1")],
+    dashboards: { [ID]: seedDashboard(ID, SHOP, spec("Pod health", [panel("p-1", "Pods", 'up{namespace="$namespace"}')], [variable("namespace", "Namespace", { default: ["api"] })]), true) },
+    readyMade: { p1: [ready] },
+    labelValues: { "p1|namespace": ["api", "demo"] },
+    queryAnswers: { 'up{namespace="api"}': ok, 'up{namespace="demo"}': ok },
+  }, fallback);
+
+  it("copy to edit opens at the top with the note in view", async () => {
+    const user = userEvent.setup();
+    const scrolled: unknown[] = [];
+    const had = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    try {
+      seedReady();
+      renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: ID }) });
+      await user.click(await screen.findByRole("button", { name: "Copy to edit" }));
+      const note = await screen.findByText('Copied "Pod health". Changes go to your copy.');
+      expect(note.closest('[role="status"]')).toBeTruthy();
+      const heading = screen.getByRole("heading", { level: 1 });
+      await waitFor(() => expect(document.activeElement).toBe(heading));
+      expect(scrolled.some((el) => el instanceof HTMLElement && el.tagName === "SECTION")).toBe(true);
+      expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+      notBody();
+    } finally {
+      if (had) Object.defineProperty(Element.prototype, "scrollIntoView", had);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it("copy to edit keeps the chosen namespace", async () => {
+    const user = userEvent.setup();
+    const api = seedReady();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: ID, vars: { namespace: ["demo"] } }) });
+    expect(await screen.findByRole("button", { name: "Namespace: demo" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Copy to edit" }));
+    await waitFor(() => expect(api.requests.some((r) => r.url === "/api/monitoring/dashboards/copy")).toBe(true));
+    expect(api.requests.find((r) => r.url === "/api/monitoring/dashboards/copy")?.body)
+      .toEqual({ from_id: ID, owner_kind: "project", owner_id: "p1", defaults: { namespace: ["demo"] } });
+    // The copy opens with demo chosen, not the document's own default.
+    expect(await screen.findByText('Copied "Pod health". Changes go to your copy.')).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Namespace: demo" })).toBeTruthy();
   });
 });

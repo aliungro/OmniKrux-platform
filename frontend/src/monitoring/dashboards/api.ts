@@ -239,7 +239,11 @@ export const restoreVersion = (id: string, v: number, baseVersion: number) =>
   request<DashboardOut>("POST", `/dashboards/${enc(id)}/versions/${enc(String(v))}/restore`, { base_version: baseVersion });
 
 /** `title` null or left out: the source's title, made unique for the owner. */
-export const copyDashboard = (body: { from_id: string; owner_kind: OwnerKind; owner_id: string; title?: string | null }) =>
+export const copyDashboard = (body: {
+  from_id: string; owner_kind: OwnerKind; owner_id: string; title?: string | null;
+  /** The copy's variables start at these values (by name; "all" or the values). */
+  defaults?: Record<string, "all" | string[]>;
+}) =>
   request<DashboardOut>("POST", "/dashboards/copy", body);
 
 export const readyMade = (projectId: string) => request<ReadyMadeOut[]>("GET", `/projects/${enc(projectId)}/ready-made`);

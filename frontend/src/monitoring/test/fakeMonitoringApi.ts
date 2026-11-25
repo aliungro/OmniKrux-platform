@@ -13,7 +13,7 @@ import { emptyTransferState, transferRoute, type FakeTransferState } from "./fak
 import { alertsRoute, emptyAlertsState, type FakeAlertsState, type FakeRefusal } from "./fakeAlertsApi";
 import type { Plan } from "../../api/types";
 import type { ContactsSyncOut, GeneratedOut, InstallPlanOut, InstallStatusOut, ProbeResultOut, ToolsOut } from "../install/api";
-import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem } from "../dashboards/schema";
+import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem, type VariableSpec } from "../dashboards/schema";
 import { autoTypeName } from "../sources/sourceLabels";
 
 /** A seeded answer to a query: a success (whatever is left out is filled in) or a refusal. */
@@ -367,7 +367,14 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
       // A ready-made view isn't "a copy": it keeps its own title.
       const base = from.out.ready_made ? from.out.title : `${from.out.title} (copy)`;
       const title = typeof body.title === "string" ? body.title : uniqueTitle(owner.kind, owner.id, base);
-      const spec = checked({ ...adapted(from.out.spec, owner), title }, owner);
+      const copied = adapted(from.out.spec, owner);
+      // The copy's variables start at the given values, each only when the variable can take it.
+      const given = (body.defaults ?? {}) as Record<string, "all" | string[]>;
+      for (const v of copied.variables) {
+        const value = given[v.name];
+        if (value === "all" ? v.includeAll : Array.isArray(value) && value.length <= (v.multi ? 100 : 1)) v.default = value as VariableSpec["default"];
+      }
+      const spec = checked({ ...copied, title }, owner);
       return spec instanceof Response ? spec : addDashboard(owner, spec, "copied", from.out.title);
     }
     const d = state.dashboards[id];

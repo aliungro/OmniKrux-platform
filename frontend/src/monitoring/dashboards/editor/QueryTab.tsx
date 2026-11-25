@@ -131,7 +131,8 @@ export function QueryTab({ panel, update, owner, ownerKind, data, live, jsonPend
     <div className={s.rows}>
       <div className={s.field}>
         <label className={s.fieldLabel} htmlFor={sourceId}>Source</label>
-        <select id={sourceId} className={s.source} value={valueOf(current)} onChange={(e) => setSource(e.target.value)}>
+        <select id={sourceId} className={s.source} value={valueOf(current)} title={choices.find((c) => c.value === valueOf(current))?.label}
+          onChange={(e) => setSource(e.target.value)}>
           {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
       </div>

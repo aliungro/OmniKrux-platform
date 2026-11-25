@@ -154,6 +154,8 @@ export interface DashboardContext {
   now: number;
   refresh: RefreshSpec;
   refreshMs: number | null;
+  /** The range doesn't end at now: it doesn't change, so there is nothing to refresh on a timer. */
+  fixedRange: boolean;
   /** Counts refreshes (Refresh now and ticks): a panel whose window didn't move reads it again. */
   refreshSeq: number;
   refreshNow(): void;
@@ -239,7 +241,8 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     setClock((c) => ({ ...c, now: Math.max(Date.now(), c.now + 1), seq: c.seq + 1 }));
   }, []);
   const refresh: RefreshSpec = view.refresh !== undefined && VALID_REFRESH.has(view.refresh) ? (view.refresh as RefreshSpec) : spec.refresh;
-  const refreshMs = refreshMsOf(refresh);
+  const fixedRange = time.to !== "now";
+  const refreshMs = fixedRange ? null : refreshMsOf(refresh);
   const lastTick = useRef(clock.now);
   lastTick.current = clock.now;
   useEffect(() => {
@@ -377,7 +380,7 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
   const status = useMemo(createStatusStore, []);
 
   return {
-    owner, ownerName, vars, variables, projects, range, time, now: clock.now, refresh, refreshMs,
+    owner, ownerName, vars, variables, projects, range, time, now: clock.now, refresh, refreshMs, fixedRange,
     refreshSeq: clock.seq, refreshNow, retryVariable, waiting, blocked, ownerFailure, status,
   };
 }

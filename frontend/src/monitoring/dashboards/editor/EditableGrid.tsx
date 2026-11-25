@@ -109,7 +109,7 @@ type Drag = {
   onEscape: (e: globalThis.KeyboardEvent) => void;
 };
 type Preview = { id: string; kind: "move" | "resize"; panels: PanelSpec[]; target: Layout; offset: { x: number; y: number } | null };
-type Settings = { open: boolean; focus: "tab" | "query" | "alert" | "none"; seq: number };
+type Settings = { open: boolean; focus: "tab" | "field" | "query" | "alert" | "none"; seq: number };
 /** The tile handlers, rebuilt each render; tiles call them through a ref so their props stay the same. */
 type Handlers = {
   key(id: string, e: KeyboardEvent<HTMLElement>): void;
@@ -221,7 +221,10 @@ export function useEditableGrid(
     return next;
   }, [jsonBlocks]);
 
+  /** A tile to scroll into view once it is drawn (a new panel whose settings just opened). */
+  const scrollTo = useRef<string | null>(null);
   const openSettings = useCallback((id: string, focus: Settings["focus"]) => {
+    scrollTo.current = id;
     setCurrent(id);
     setSettings((was) => ({ open: true, focus, seq: was.seq + 1 }));
   }, []);
@@ -334,6 +337,16 @@ export function useEditableGrid(
     if (!there) focusTile(want);
   });
 
+  // The panel whose settings opened is in view (a new one lands under the others, maybe far down).
+  useLayoutEffect(() => {
+    const id = scrollTo.current;
+    if (id === null) return;
+    const el = findTile(id);
+    if (!el) return;
+    scrollTo.current = null;
+    el.scrollIntoView?.({ block: "nearest" });
+  });
+
   useEffect(() => () => {
     const d = drag.current;
     if (d) window.removeEventListener("keydown", d.onEscape, true);
@@ -386,7 +399,7 @@ export function useEditableGrid(
         e.preventDefault();
         act({ type: "select", id });
         act({ type: "sideTab", tab: "query" });
-        openSettings(id, "tab");
+        openSettings(id, "field");
       } else if (isDeleteKey(e)) {
         e.preventDefault();
         remove(panel, panels);
@@ -454,7 +467,7 @@ export function useEditableGrid(
       else {
         act({ type: "select", id });
         act({ type: "sideTab", tab: "query" });
-        openSettings(id, "tab");
+        openSettings(id, "field");
       }
     },
   };
