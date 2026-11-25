@@ -242,13 +242,12 @@ describe("Suggestions rail", () => {
     expect(draft().suggestions).toBe("closed");
   });
 
-  it("the Suggestions button doesn't read pressed while no column shows", async () => {
+  it("the Suggestions button is only there while a column can show", async () => {
     const { user } = await loaded();
     expect(toggle().getAttribute("aria-pressed")).toBe("true");
     await user.click(screen.getByRole("tab", { name: "JSON" }));
     await screen.findByRole("textbox", { name: "Dashboard JSON" });
-    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
-    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByRole("button", { name: "Suggestions" })).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Dashboard" }));
     await within(rail()).findByText(HEADING);
     expect(toggle().getAttribute("aria-pressed")).toBe("true");

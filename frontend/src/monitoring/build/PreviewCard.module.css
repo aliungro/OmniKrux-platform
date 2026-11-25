@@ -50,6 +50,8 @@
 }
 
 .query {
+  flex: 1;
+  min-width: 0;
   color: var(--ink-3);
   font-family: "Geist Mono", ui-monospace, monospace;
   font-size: 11px;
@@ -73,18 +75,26 @@
   line-height: 1.35;
 }
 
-.badges {
-  flex: none;
+/* The query and the status badge share one row; the query gives way. */
+.meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
 }
 
-.badges:empty {
-  display: none;
+.hiddenText {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .badge {
+  flex: none;
   white-space: nowrap;
   color: var(--ink-2);
   font-size: 11px;
@@ -92,6 +102,7 @@
 
 /* Settled with nothing to draw: the card stays in its place, quieter. */
 .emptyBadge {
+  flex: none;
   padding: 0 6px;
   white-space: nowrap;
   border-radius: 999px;

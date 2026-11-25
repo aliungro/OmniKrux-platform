@@ -53,13 +53,15 @@ export default function PreviewCard({ candidate, preview, active, added = false,
   const content = (
     <>
       <span className={styles.head}>
-        <span className={styles.title} id={id ? `${id}-t` : undefined}>{candidate.title}</span>
-        <span className={styles.badges}>
-          {empty && <span className={styles.emptyBadge}>No data now</span>}
-          {added ? <span className={styles.badge}>Added</span> : active ? <span className={styles.badge}>Enter to add</span> : null}
-        </span>
+        <span className={styles.title} id={id ? `${id}-t` : undefined} title={candidate.title}>{candidate.title}</span>
+        {(added || active) && <span className={styles.badge}>{added ? "Added" : "Enter to add"}</span>}
       </span>
-      <span className={styles.query} id={id ? `${id}-q` : undefined} title={candidate.expr}>{shortQuery(candidate.expr)}</span>
+      {/* The status badge sits with the query, so the title keeps its width on the selected card. */}
+      <span className={styles.meta}>
+        <span className={styles.query} aria-hidden="true" title={candidate.expr}>{shortQuery(candidate.expr)}</span>
+        <span className={styles.hiddenText} id={id ? `${id}-q` : undefined}>{candidate.expr}</span>
+        {empty && <span className={styles.emptyBadge}>No data now</span>}
+      </span>
       <span className={styles.preview}>{body}</span>
     </>
   );

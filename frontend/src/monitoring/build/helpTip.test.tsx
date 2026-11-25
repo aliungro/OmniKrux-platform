@@ -34,4 +34,14 @@ describe("HelpTip", () => {
     fireEvent.click(button);
     expect(screen.getByRole("tooltip")).toBeTruthy();
   });
+
+  it("a second click on the button closes it", async () => {
+    const user = userEvent.setup();
+    render(<HelpTip label="About this list">Some note.</HelpTip>);
+    const button = screen.getByRole("button", { name: "About this list" });
+    await user.click(button);
+    expect(screen.getByRole("tooltip")).toBeTruthy();
+    await user.click(button);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
 });

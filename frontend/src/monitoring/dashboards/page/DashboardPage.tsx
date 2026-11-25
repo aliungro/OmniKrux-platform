@@ -270,6 +270,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   // The Suggestions button and `s` show the column and send the keyboard to its first unused card.
   const suggestionsButton = useRef<HTMLButtonElement>(null);
   const [railFocus, setRailFocus] = useState<RailFocusRequest | null>(null);
+  // Whatever takes the column away (tab, owner failure, Add panel, Hide) drops an ask for its cards.
+  useEffect(() => { if (!railShown) setRailFocus(null); }, [railShown]);
   const railAsks = useRef(0);
   const showSuggestions = (from: Element | null) => {
     if (editor.state.mode !== "edit") return;
@@ -612,7 +614,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
           : undefined}
         editControls={editing
           ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton}
-              suggestions={{ open: railShown, onToggle: toggleSuggestions }} suggestionsRef={suggestionsButton} />
+              suggestions={tab === "dashboard" && !ctx.ownerFailure ? { open: railShown, onToggle: toggleSuggestions } : undefined} suggestionsRef={suggestionsButton} />
           : undefined} />
       {reread && <RereadNotice failed={reread} buttonRef={rereadRetry} />}
       {editing && !editor.draftsWork && <DraftsOffNotice />}

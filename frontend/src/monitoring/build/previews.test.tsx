@@ -1,4 +1,4 @@
-import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkOut, ProjectOut, QueryRequest, QueryResponse } from "../api/types";
 import { DashboardRequestError, type BatchItemOut } from "../dashboards/api";
@@ -170,6 +170,26 @@ describe("preview card", () => {
     cleanup();
     card(undefined, { added: true });
     expect(screen.getByText("Added")).toBeTruthy();
+  });
+
+  it("a selected empty card keeps its title on a row of its own", () => {
+    const empty = { state: "empty" as const, series: [], logs: [], problems: [], summary: { series: 0, points: 0, tookMs: 0 }, editId: 0 };
+    card({ status: "done", data: empty }, { active: true });
+    const title = screen.getByText(cand("a").title);
+    const row = title.parentElement!;
+    // Only the key hint shares the title's row; the status badge sits with the query.
+    expect(within(row).getByText("Enter to add")).toBeTruthy();
+    expect(row.contains(screen.getByText("No data now"))).toBe(false);
+    expect(title.getAttribute("title")).toBe(cand("a").title);
+  });
+
+  it("a screen reader gets the whole query, the eye the short one", () => {
+    const long = { ...cand("a"), expr: `sum by (handler) (rate(prometheus_http_requests_total{code=~"5.."}[5m])) / ${"x".repeat(40)}` };
+    render(<PreviewCard candidate={long} preview={undefined} active={false} id="c" option onPick={() => {}} />);
+    const shown = document.querySelector<HTMLElement>("[aria-hidden='true'][title]")!;
+    expect(shown.textContent!.endsWith("…")).toBe(true);
+    expect(shown.title).toBe(long.expr);
+    expect(document.getElementById("c-q")!.textContent).toBe(long.expr);
   });
 
   it("a suggestion with no data is marked", () => {

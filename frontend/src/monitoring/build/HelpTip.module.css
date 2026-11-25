@@ -66,3 +66,13 @@
 @media (prefers-reduced-motion: reduce) {
   .bubble { animation: none; }
 }
+
+/* Bridges the gap to the button, so the pointer can move onto the bubble without closing it. */
+.bubble::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  right: 0;
+  left: 0;
+  height: 8px;
+}

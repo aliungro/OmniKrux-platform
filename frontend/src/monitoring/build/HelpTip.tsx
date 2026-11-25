@@ -36,7 +36,7 @@ export default function HelpTip({ label, children }: HelpTipProps) {
     <span className={s.wrap} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <button type="button" className={s.button} aria-label={label} aria-expanded={open}
         aria-describedby={tipId}
-        onClick={() => { setDismissed(false); setClicked(true); }}
+        onClick={() => { if (open && clicked) { setDismissed(true); setClicked(false); } else { setDismissed(false); setClicked(true); } }}
         onFocus={() => setFocus(true)} onBlur={() => { setFocus(false); setClicked(false); }}
         onKeyDown={onKeyDown}>
         <span aria-hidden="true">?</span>

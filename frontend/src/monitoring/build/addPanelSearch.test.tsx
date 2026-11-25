@@ -326,7 +326,7 @@ describe("Add panel search", () => {
 
   it("the card shows the short query and the full one in its title", async () => {
     await opened();
-    const long = options().slice(0, -1).map((o) => o.querySelector<HTMLElement>("[title]")!).find((q) => q.title.length > 60);
+    const long = options().slice(0, -1).map((o) => o.querySelector<HTMLElement>("[aria-hidden='true'][title]")!).find((q) => q.title.length > 60);
     expect(long).toBeTruthy();
     expect(long!.textContent!.length).toBeLessThanOrEqual(60);
     expect(long!.textContent!.endsWith("…")).toBe(true);
