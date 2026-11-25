@@ -107,6 +107,8 @@ export function clearAlertForms(tabId: string): void {
 }
 
 export const FORM_LEAVE_BODY = "Leaving loses what you entered in this form.";
+/** A tab's mark while its setup draft holds a choice (form id "setup"): only closing the tab loses it. */
+export const SETUP_MARK: AlertFormMark = { title: "New project", page: "setup", closeOnly: true };
 export const SETUP_LEAVE_BODY = "Closing this tab loses the project you started setting up.";
 
 /**

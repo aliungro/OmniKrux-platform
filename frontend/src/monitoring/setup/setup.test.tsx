@@ -9,7 +9,8 @@ import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonito
 import type { Plan } from "../../api/types";
 import type { InstallPlanOut } from "../install/api";
 import { SETTINGS, status, TOOLS } from "../install/toolsFixtures";
-import { SECRET_NOT_KEPT, SETUP_DRAFT_PREFIX } from "./setupDraftStore";
+import { readSetupDraft, SECRET_NOT_KEPT, SETUP_DRAFT_PREFIX, writeSetupDraft } from "./setupDraftStore";
+import { alertFormMarks, clearAlertForms } from "../alerts/rules/formSessions";
 import { picksFromDiscovery, setupBody, type SetupDraft } from "./setupModel";
 
 beforeEach(() => localStorage.clear());
@@ -613,6 +614,44 @@ describe("Setup installs what's missing", () => {
     await user.click(within(ask).getByRole("button", { name: "Discard changes" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Name and review" })).toBeNull());
     expect(screen.getAllByRole("tab")).toHaveLength(1);
+    await waitFor(() => expect(Object.keys(localStorage).filter((k) => k.startsWith(SETUP_DRAFT_PREFIX))).toEqual([]));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("after a reload, closing a background New project tab with a chosen draft asks first", async () => {
+    const user = userEvent.setup();
+    for (const id of [...alertFormMarks.keys()]) clearAlertForms(id);
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    // As a reload finds it: Home shown, the setup tab in the background with its draft kept.
+    const kept: SetupDraft = { step: 4, kind: "kubernetes", clusterId: "c1", picks: [], name: "Shop" };
+    writeSetupDraft("start1", "c1", kept, true, true);
+    writeSetupDraft("start2", "", { step: 1, kind: null, clusterId: null, picks: [], name: "" }, false, false);
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "home" }, { page: "setup", clusterId: "c1" }, { page: "setup" }) });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Close New project" })).toHaveLength(2));
+    // Home's search takes the keyboard as it appears.
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+
+    await user.click(screen.getAllByRole("button", { name: "Close New project" })[0]);
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "New project" with unsaved changes?' });
+    expect(within(ask).getByText("Closing this tab loses the project you started setting up.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(current().tabs).toHaveLength(3);
+    expect(readSetupDraft("start1", "c1")?.draft.name).toBe("Shop");
+    expect(document.activeElement).not.toBe(document.body);
+
+    // A kept draft with no choice in it closes without a question.
+    await user.click(screen.getAllByRole("button", { name: "Close New project" })[1]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(current().tabs).toHaveLength(2));
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Shown again, the restored setup still counts its choice; Discard on close removes the draft.
+    await user.click(screen.getAllByRole("tab")[1]);
+    expect(await screen.findByRole("heading", { name: "Name and review" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(current().tabs.map((t) => t.view.page)).toEqual(["home"]));
     await waitFor(() => expect(Object.keys(localStorage).filter((k) => k.startsWith(SETUP_DRAFT_PREFIX))).toEqual([]));
     expect(document.activeElement).not.toBe(document.body);
   });

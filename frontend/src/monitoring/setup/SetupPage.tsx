@@ -8,7 +8,7 @@ import { invalidateMonitoring, useDiscovery, useSources } from "../api/hooks";
 import type { FoundTool, ProjectKind, ProjectOut, SourceIn, SourceOut, SuggestIn } from "../api/types";
 import { readyViewTitles, readyViewsPhrase } from "../dashboards/readyViews";
 import { useToolReviews } from "../alerts/reviews/useToolReviews";
-import { markAlertForm } from "../alerts/rules/formSessions";
+import { markAlertForm, SETUP_MARK } from "../alerts/rules/formSessions";
 import { focusHeadingOnArrival, takeHeadingFocus } from "../dashboards/create/arrival";
 import { GenerateTools, type AnsweredTools } from "../install/GenerateTools";
 import { installKeys, installTools, type Component } from "../install/api";
@@ -71,8 +71,6 @@ const STEPS: { n: 1 | 2 | 3 | 4; title: string }[] = [
 ];
 
 const isHand = (p: SetupPick) => p.key.startsWith("hand:");
-/** The tab's mark while its setup draft holds a choice: only closing the tab loses it. */
-const SETUP_MARK = { title: "New project", page: "setup", closeOnly: true } as const;
 const sourcesInUse = (n: number) => `${n} ${n === 1 ? "source" : "sources"} in use`;
 const inUseAndInstalls = (n: number, m: number) => (m > 0 ? `${sourcesInUse(n)} · ${m} to install` : sourcesInUse(n));
 /** Where the keyboard goes once the install review over a new project closes: its name. */
@@ -537,7 +535,8 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     return { step: start ? 2 : 1, kind: start ? "kubernetes" : null, clusterId: start, picks: [], name: "", install: NO_INSTALL };
   });
   // Every choice made on the page goes through `setDraft`; what the page fills in itself doesn't.
-  const [touched, setTouched] = useState(false);
+  // A restored draft remembers whether a choice was made in it.
+  const [touched, setTouched] = useState(restored?.chosen ?? false);
   const setDraft = useCallback((update: (d: SetupDraft) => SetupDraft) => {
     setTouched(true);
     setDraftState(update);
@@ -588,10 +587,9 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
   // The draft is kept in this browser once typing settles, and as the page closes; never once the
   // project is created. What is kept holds no secret (setupDraftStore).
   const made = useRef(false);
-  const latest = useRef({ draft, named: nameTouched.current });
-  latest.current = { draft, named: nameTouched.current };
+  const latest = useRef({ draft, named: nameTouched.current, chosen: false });
   const keep = useCallback(() => {
-    if (!made.current) writeSetupDraft(tabId, start ?? "", latest.current.draft, latest.current.named);
+    if (!made.current) writeSetupDraft(tabId, start ?? "", latest.current.draft, latest.current.named, latest.current.chosen);
   }, [tabId, start]);
   useEffect(() => {
     const timer = window.setTimeout(keep, KEEP_AFTER_MS);
@@ -608,6 +606,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     || draft.name.trim() !== "" || draft.picks.some(isHand) || draft.importFrom != null;
   const chosenNow = useRef(chosen);
   chosenNow.current = chosen;
+  latest.current = { draft, named: nameTouched.current, chosen };
   useEffect(() => {
     markAlertForm(tabId, "setup", chosen ? SETUP_MARK : null);
   }, [tabId, chosen]);
