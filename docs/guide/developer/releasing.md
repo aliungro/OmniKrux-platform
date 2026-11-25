@@ -7,7 +7,7 @@ OmniKrux ships as one Docker image. Each app is versioned on its own, with a git
 | App | Tag pattern | Current |
 | --- | --- | --- |
 | Kubernetes | `kubernetes-v<version>` | `kubernetes-v0.1.0-alpha.1` |
-| Monitoring | `monitoring-v<version>` | `monitoring-v0.1.0-alpha.1` (to be tagged when the merge is approved) |
+| Monitoring | `monitoring-v<version>` | `monitoring-v0.1.0-alpha.1` |
 
 A tag marks the commit that is that app's release. The matching image is tagged the same way, for example `omnikrux:kubernetes-v0.1.0-alpha.1`. A change to one app does not move another app's tag. The version fields inside `backend/pyproject.toml` (`0.1.0`) and `frontend/package.json` (`0.0.0`) are not what the release is called; the git tag is.
 
@@ -39,7 +39,7 @@ git tag -a kubernetes-v0.1.0-alpha.2 -m "Kubernetes app 0.1.0-alpha.2"
 git push origin kubernetes-v0.1.0-alpha.2
 ```
 
-(`kubernetes-v0.1.0-alpha.2` is only an example of the next name.) Monitoring is tagged the same way, once the merge is approved:
+(`kubernetes-v0.1.0-alpha.2` is only an example of the next name.) Monitoring is tagged the same way:
 
 ```bash
 git tag -a monitoring-v0.1.0-alpha.1 -m "Monitoring app 0.1.0-alpha.1"
