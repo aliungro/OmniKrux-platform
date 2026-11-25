@@ -230,6 +230,50 @@ describe("Suggestions rail", () => {
     expect(document.activeElement).toBe(area);
   });
 
+  it("s never acts from a text field on the Dashboard tab", async () => {
+    const { user } = await editing(shop([panel("p-1", "Requests", "up", { x: 0, y: 0, w: 12, h: 8 })]));
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    await user.keyboard("{Enter}");
+    const field = await screen.findByRole("textbox", { name: "Query A" });
+    field.focus();
+    await user.keyboard("s");
+    expect(document.activeElement).toBe(field);
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    expect(draft().suggestions).toBe("closed");
+  });
+
+  it("the Suggestions button doesn't read pressed while no column shows", async () => {
+    const { user } = await loaded();
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    await screen.findByRole("textbox", { name: "Dashboard JSON" });
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    await user.click(screen.getByRole("tab", { name: "Dashboard" }));
+    await within(rail()).findByText(HEADING);
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a focus request waiting for the cards is dropped when Add panel opens", async () => {
+    const api = shop();
+    const held = gate();
+    intercept((url, pass) => (url.includes("/catalog") ? held.opened.then(pass) : null));
+    const { user } = await editing(api);
+    await within(rail()).findByText("Loading suggestions…");
+    addTile().focus();
+    await user.keyboard("s");
+    await user.keyboard("a");
+    await screen.findByRole("dialog", { name: "Add panel" });
+    // Back to the page while the suggestions are still being read, then they arrive.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull());
+    expect(document.activeElement).toBe(addTile());
+    held.open();
+    await within(rail()).findByText(HEADING);
+    await waitFor(() => expect(cards().length).toBeGreaterThan(1));
+    expect(document.activeElement).toBe(addTile());
+  });
+
   it("no suggestions says what to do instead", async () => {
     await editing(shop([], shopCatalog("p1", [], [])));
     expect(await within(rail()).findByText("No ready suggestions for what Shop's sources have. Use + Add panel to search, or write a query.")).toBeTruthy();
@@ -374,7 +418,7 @@ describe("One suggestion source for the column and Add panel", () => {
   }
   const dialog = () => screen.getByRole("dialog", { name: "Add panel" });
   const options = () => within(within(dialog()).getByRole("listbox", { name: "Results" })).getAllByRole("option");
-  const titleOf = (el: HTMLElement) => el.querySelector("span")?.textContent ?? "";
+  const titleOf = (el: HTMLElement) => el.querySelector("span > span")?.textContent ?? "";
   const byTitle = (els: HTMLElement[], title: string) => els.find((el) => titleOf(el) === title)!;
   const settled = (el: HTMLElement) => /mini chart|Nothing to show in this time range\.|Can't preview/.test(el.textContent ?? "");
   const batchCount = (api: FakeMonitoringApi) => api.requests.filter((r) => r.url === "/api/monitoring/query/batch").length;

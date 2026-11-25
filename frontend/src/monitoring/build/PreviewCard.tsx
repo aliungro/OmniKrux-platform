@@ -8,6 +8,7 @@
 import { lazy, Suspense, type MouseEvent } from "react";
 import { usePrefersReducedMotion } from "../dashboards/motion";
 import type { Candidate } from "./candidates";
+import { shortQuery } from "./shortQuery";
 import type { PreviewState } from "./usePreviews";
 import styles from "./PreviewCard.module.css";
 
@@ -51,13 +52,15 @@ export default function PreviewCard({ candidate, preview, active, added = false,
   }
   const content = (
     <>
-      <span className={styles.title} id={id ? `${id}-t` : undefined}>{candidate.title}</span>
-      <span className={styles.query} id={id ? `${id}-q` : undefined} title={candidate.expr}>{candidate.expr}</span>
-      <span className={styles.preview}>{body}</span>
-      <span className={styles.badges}>
-        {empty && <span className={styles.emptyBadge}>No data now</span>}
-        {added ? <span className={styles.badge}>Added</span> : active ? <span className={styles.badge}>Enter to add</span> : null}
+      <span className={styles.head}>
+        <span className={styles.title} id={id ? `${id}-t` : undefined}>{candidate.title}</span>
+        <span className={styles.badges}>
+          {empty && <span className={styles.emptyBadge}>No data now</span>}
+          {added ? <span className={styles.badge}>Added</span> : active ? <span className={styles.badge}>Enter to add</span> : null}
+        </span>
       </span>
+      <span className={styles.query} id={id ? `${id}-q` : undefined} title={candidate.expr}>{shortQuery(candidate.expr)}</span>
+      <span className={styles.preview}>{body}</span>
     </>
   );
   const pick = (e: MouseEvent<HTMLElement>) => onPick(e.currentTarget.getBoundingClientRect());

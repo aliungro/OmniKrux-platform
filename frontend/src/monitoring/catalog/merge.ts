@@ -35,6 +35,8 @@ export type OwnerCatalog = {
   builtAt: number | null;
   problems: string[];
   notes: string[];
+  /** The same notes by the type of source that gave them (a Prometheus note is never for a logs list). */
+  notesBy: { prometheus: string[]; loki: string[] };
 };
 
 export type CatalogPart = { project: ProjectOut; catalog: CatalogOut | null; error: string | null };
@@ -70,6 +72,7 @@ export function ownerCatalog(parts: CatalogPart[], ownerKind: OwnerKind): OwnerC
   const streams = new Map<string, { values: Set<string>; sourceId: string | null; projectIds: string[] }>();
   const problems: string[] = [];
   const notes: string[] = [];
+  const notesBy: OwnerCatalog["notesBy"] = { prometheus: [], loki: [] };
   let hasPrometheus = false;
   let hasLoki = false;
   let builtAt: number | null = null;
@@ -81,7 +84,10 @@ export function ownerCatalog(parts: CatalogPart[], ownerKind: OwnerKind): OwnerC
       if (src.source_type === "prometheus") hasPrometheus = true;
       if (src.source_type === "loki") hasLoki = true;
       if (src.state !== "ok" && src.message) problems.push(`${where}${src.source_name}: ${src.message}`);
-      src.notes.forEach((n) => add(notes, n));
+      src.notes.forEach((n) => {
+        add(notes, n);
+        if (src.source_type === "prometheus" || src.source_type === "loki") add(notesBy[src.source_type], n);
+      });
       const built = Date.parse(src.built_at);
       if (!Number.isNaN(built) && (builtAt === null || built < builtAt)) builtAt = built;
     }
@@ -114,7 +120,7 @@ export function ownerCatalog(parts: CatalogPart[], ownerKind: OwnerKind): OwnerC
     streams: [...streams.entries()]
       .sort(([a], [b]) => byText(a, b))
       .map(([name, s]) => ({ name, values: sorted(s.values), sourceId: s.sourceId, projectIds: s.projectIds })),
-    hasPrometheus, hasLoki, builtAt, problems, notes,
+    hasPrometheus, hasLoki, builtAt, problems, notes, notesBy,
   };
 }
 

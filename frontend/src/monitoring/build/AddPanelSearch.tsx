@@ -15,6 +15,7 @@ import type { DashboardOwner } from "../dashboards/runPanel";
 import { nextPanelId, type DashboardSpec, type OwnerKind } from "../dashboards/schema";
 import { candidatePanel, type Candidate } from "./candidates";
 import { buildFinderIndex, findPanels } from "./finder";
+import HelpTip from "./HelpTip";
 import PreviewCard from "./PreviewCard";
 import { usePreviews } from "./usePreviews";
 import type { Suggestions } from "./useSuggestions";
@@ -185,8 +186,17 @@ export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars,
             </button>
           )}
         </div>
-        {catalog && !searching && <h3 className={s.heading}>{suggestions.heading}</h3>}
-        {catalog && [...catalog.problems, ...catalog.notes].map((n) => <p key={n} className={s.muted}>{n}</p>)}
+        {catalog && (!searching || catalog.notes.length > 0) && (
+          <div className={s.headingRow}>
+            {!searching && <h3 className={s.heading}>{suggestions.heading}</h3>}
+            {catalog.notes.length > 0 && (
+              <HelpTip label="About this list">
+                {catalog.notes.map((n) => <span key={n} className={s.tipLine}>{n}</span>)}
+              </HelpTip>
+            )}
+          </div>
+        )}
+        {catalog && catalog.problems.map((n) => <p key={n} className={s.muted}>{n}</p>)}
 
         <div role="listbox" id={ids.list} aria-label="Results" className={s.results}>
           {candidates.map((c, i) => (
@@ -197,10 +207,12 @@ export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars,
             aria-labelledby={`${ids.option(empty)}-t`} aria-describedby={`${ids.option(empty)}-d`}
             className={s.empty} data-active={active === empty ? "true" : undefined}
             onMouseDown={(e) => e.preventDefault()} onClick={() => pick(empty)}>
-            <span className={s.emptyMark} aria-hidden="true">+</span>
-            <span className={s.emptyTitle} id={`${ids.option(empty)}-t`}>Empty panel</span>
+            <span className={s.emptyHead}>
+              <span className={s.emptyMark} aria-hidden="true">＋</span>
+              <span className={s.emptyTitle} id={`${ids.option(empty)}-t`}>Empty panel</span>
+              {active === empty && <span className={s.emptyKey}>Enter to add</span>}
+            </span>
             <span className={s.emptyLine} id={`${ids.option(empty)}-d`}>Write the query yourself.</span>
-            {active === empty && <span className={s.emptyKey}>Enter to add</span>}
           </div>
         </div>
       </div>

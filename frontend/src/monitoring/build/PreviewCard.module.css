@@ -4,6 +4,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   padding: 10px 12px;
@@ -23,18 +24,24 @@
 .card:focus-visible,
 .card[data-active="true"] {
   border-color: var(--focus);
-  outline: none;
-}
-
-.card:focus-visible {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 40%, transparent);
+  outline: 2px solid var(--focus);
+  outline-offset: -2px; /* inside the border, so a scrolling parent never clips it */
 }
 
 .card[data-added="true"] {
   opacity: 0.7;
 }
 
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
 .title {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
   overflow: hidden;
@@ -53,8 +60,9 @@
 
 .preview {
   display: block;
-  min-height: 56px;
-  margin-top: 4px;
+  height: 44px;
+  margin-top: 3px;
+  overflow: hidden;
 }
 
 .note {
@@ -62,13 +70,11 @@
   margin: 0;
   color: var(--ink-3);
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 .badges {
-  position: absolute;
-  top: 8px;
-  right: 10px;
+  flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -79,6 +85,7 @@
 }
 
 .badge {
+  white-space: nowrap;
   color: var(--ink-2);
   font-size: 11px;
 }
@@ -86,6 +93,7 @@
 /* Settled with nothing to draw: the card stays in its place, quieter. */
 .emptyBadge {
   padding: 0 6px;
+  white-space: nowrap;
   border-radius: 999px;
   background: var(--surf-2);
   color: var(--ink-3);
@@ -101,6 +109,7 @@
 }
 
 .card[data-active="true"] .badge {
+  white-space: nowrap;
   color: var(--focus);
 }
 
@@ -108,7 +117,7 @@
 .loadingStatic {
   display: flex;
   align-items: center;
-  height: 56px;
+  height: 44px;
   padding: 0 10px;
   border-radius: 8px;
   background: var(--surf-2);

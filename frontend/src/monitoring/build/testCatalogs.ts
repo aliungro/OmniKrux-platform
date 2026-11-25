@@ -16,7 +16,7 @@ export const catalog = (
   metrics: (OwnerMetric | OwnerMetric[])[], streams: OwnerStreamLabel[] = [], kind: "project" | "group" = "project",
 ): OwnerCatalog => ({
   ownerKind: kind, metrics: metrics.flat(), streams,
-  hasPrometheus: metrics.length > 0, hasLoki: streams.length > 0, builtAt: null, problems: [], notes: [],
+  hasPrometheus: metrics.length > 0, hasLoki: streams.length > 0, builtAt: null, problems: [], notes: [], notesBy: { prometheus: [], loki: [] },
 });
 
 export const CAT = catalog(

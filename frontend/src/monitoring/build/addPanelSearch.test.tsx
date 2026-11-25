@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GroupOut } from "../api/types";
 import { metric, source, catalogOf } from "../catalog/fixtures";
@@ -304,6 +304,41 @@ describe("Add panel search", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull());
     expect(draft().draft.panels.at(-1)!.queries[0].expr).toBe(ERRORS_BY_ROUTE.expr);
     await waitFor(() => expect(document.activeElement).toBe(tile(ERRORS_BY_ROUTE.title)));
+  });
+
+  it("the picker keeps technical notes in the help tip", async () => {
+    const note = "Labels per metric come from the first 50000 series.";
+    const base = shopCatalog("p1");
+    const api = shop();
+    api.state.catalogs.p1 = { ...base, sources: base.sources.map((x) => ({ ...x, notes: [note] })) };
+    const { user } = await opened(api);
+    await within(dialog()).findByText("Suggested for Shop · from what Prometheus has");
+    // Not a line of the list, but behind the ? beside the heading.
+    expect(within(dialog()).queryByRole("tooltip")).toBeNull();
+    const tip = within(dialog()).getByRole("button", { name: "About this list" });
+    act(() => tip.focus());
+    expect(within(dialog()).getByRole("tooltip").textContent).toBe(note);
+    await user.keyboard("{Escape}");
+    expect(within(dialog()).queryByRole("tooltip")).toBeNull();
+    expect(dialog()).toBeTruthy();
+    expect(document.activeElement).toBe(tip);
+  });
+
+  it("the card shows the short query and the full one in its title", async () => {
+    await opened();
+    const long = options().slice(0, -1).map((o) => o.querySelector<HTMLElement>("[title]")!).find((q) => q.title.length > 60);
+    expect(long).toBeTruthy();
+    expect(long!.textContent!.length).toBeLessThanOrEqual(60);
+    expect(long!.textContent!.endsWith("…")).toBe(true);
+    expect(long!.title.startsWith(long!.textContent!.slice(0, -1))).toBe(true);
+  });
+
+  it("Empty panel is a plain action tile with its own words", async () => {
+    await opened();
+    const empty = options().at(-1)!;
+    expect(empty.textContent).toContain("Empty panel");
+    expect(empty.textContent).toContain("Write the query yourself.");
+    expect(within(dialog()).queryByText("Known metrics from 5 min ago")).toBeTruthy();
   });
 
   it("says it is reading the catalog while it loads", async () => {

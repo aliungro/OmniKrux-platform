@@ -204,6 +204,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     nav.navigate((v) => (v.page === "dashboard" && v.id === view.id ? { ...v, vars: { ...v.vars, [name]: value } } : v), "replace");
   }, [nav, view.id]);
   const selectTab = useCallback((t: DashboardTab) => {
+    setRailFocus(null); // a pending ask for the column's cards must not outlive the tab it was made on
     replace({ tab: t });
     tabRefs.current[t]?.focus();
   }, [replace]);
@@ -254,6 +255,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     const inRail = opener?.closest("[data-suggestions-rail]") ?? null;
     searchOpener.current = inRail ? page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current : opener;
     setRefused(null);
+    setRailFocus(null); // the column unmounts: an ask still waiting for its cards would fire after Esc
     setSearching(true);
   }, []);
 
@@ -276,7 +278,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     if (tab === "dashboard" && !ctx.ownerFailure) setRailFocus({ seq: (railAsks.current += 1), from });
   };
   const toggleSuggestions = () => {
-    if (railOpen) editor.dispatch({ type: "suggestions", open: false });
+    if (railShown) editor.dispatch({ type: "suggestions", open: false });
     else showSuggestions(suggestionsButton.current);
   };
   /** While the JSON text doesn't apply, nothing is added (it would drop that text): the search stays open and says why. */
@@ -610,7 +612,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
           : undefined}
         editControls={editing
           ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton}
-              suggestions={{ open: railOpen, onToggle: toggleSuggestions }} suggestionsRef={suggestionsButton} />
+              suggestions={{ open: railShown, onToggle: toggleSuggestions }} suggestionsRef={suggestionsButton} />
           : undefined} />
       {reread && <RereadNotice failed={reread} buttonRef={rereadRetry} />}
       {editing && !editor.draftsWork && <DraftsOffNotice />}
