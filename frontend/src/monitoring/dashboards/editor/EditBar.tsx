@@ -51,7 +51,8 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, s
 /** Under the header after a removal: what went, and Undo (gone after the next edit or 10 s). */
 export function RemovedNote({ title, onUndo }: { title: string; onUndo(): void }) {
   return (
-    <div className={s.removed} role="status">
+    // Not spoken: the grid's live region already says it once ("… Ctrl+Z brings it back.").
+    <div className={s.removed} role="status" aria-live="off">
       <p className={s.removedLine}>Removed "{title}".</p>
       <button type="button" className={s.removedUndo} onClick={onUndo}>Undo</button>
     </div>

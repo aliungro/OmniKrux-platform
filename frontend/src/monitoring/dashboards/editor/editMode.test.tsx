@@ -452,7 +452,7 @@ describe("Edit mode", () => {
     expect(query.getAttribute("aria-selected")).toBe("true");
   });
 
-  it("entering edit mode by e keeps the keyboard on the heading", async () => {
+  it("entering edit mode by e keeps the heading, with the title field inside it, and landings on it still work", async () => {
     const user = userEvent.setup();
     shop();
     renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
@@ -499,6 +499,20 @@ describe("Edit mode", () => {
     notBody();
   });
 
+  it("Esc in a tile's menu puts the keyboard back on the tile", async () => {
+    const { user } = await editing();
+    await user.click(within(tile("Requests")).getByRole("button", { name: "Panel actions for Requests" }));
+    const menu = screen.getByRole("menu", { name: "Panel actions for Requests" });
+    expect(menu.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(tile("Requests"));
+    // The tile's keys work at once.
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(tile("Errors"));
+    notBody();
+  });
+
   it("Remove panel in the settings keeps the keyboard on a tile", async () => {
     const { user } = await editing();
     await user.keyboard("{Enter}");
@@ -531,6 +545,12 @@ describe("Edit mode", () => {
     expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
     expect(document.activeElement).toBe(tile("Requests"));
     expect(undo.getAttribute("aria-disabled")).toBe("true");
+    // A held Ctrl+Z undoes once: its repeats do nothing.
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    fireEvent.keyDown(tile("Requests"), { key: "z", ctrlKey: true, repeat: true });
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 2, row 1");
+    await user.keyboard("{Control>}z{/Control}");
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
     // Nothing left to undo: nothing changes, and the keyboard stays.
     await user.keyboard("{Control>}z{/Control}");
     expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
@@ -555,6 +575,9 @@ describe("Edit mode", () => {
     await user.keyboard("{Control>}{Delete}{/Control}");
     const note = () => screen.queryByText('Removed "Requests".')?.closest('[role="status"]') ?? null;
     expect(note()).not.toBeNull();
+    // Seen, not spoken twice: the grid's live region says it once.
+    expect(note()?.getAttribute("aria-live")).toBe("off");
+    expect(screen.getAllByText(/^Removed "Requests"/).map((x) => x.textContent)).toEqual(['Removed "Requests".', 'Removed "Requests". Ctrl+Z brings it back.']);
     await user.click(within(note() as HTMLElement).getByRole("button", { name: "Undo" }));
     expect(tile("Requests")).toBeTruthy();
     expect(note()).toBeNull();

@@ -512,4 +512,38 @@ describe("The JSON tab", () => {
     expect(session()?.baseVersion).toBe(1);
     notBody();
   });
+
+  it("undo and the title refused while the JSON doesn't apply say so on screen, and never come back stale", async () => {
+    const { user, area } = await editingJson();
+    const first = changed((d) => { d.panels[0].title = "One"; });
+    type(area, first);
+    await waitFor(() => expect(session()?.draft.panels[0].title).toBe("One"));
+    const bad = changed((d) => { d.panels[0].layout.w = 1; });
+    type(area, bad);
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗/));
+    const refusedNotice = () => document.querySelector("[data-undo-refused]");
+    // Undo is refused: the text is kept, and the refusal is shown, not only spoken.
+    expect(refusedNotice()).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(refusedNotice()?.textContent).toBe("Fix the JSON first, or discard it.");
+    expect(session()?.jsonText).toBe(bad);
+    expect(session()?.draft.panels[0].title).toBe("One");
+    // The title field refuses too, and says why under it.
+    const field = screen.getByRole("textbox", { name: "Dashboard title" });
+    await user.type(field, "X");
+    expect((field as HTMLInputElement).value).toBe("API latency");
+    expect(document.getElementById(field.getAttribute("aria-describedby") ?? "")?.textContent).toBe("Fix the JSON first, or discard it.");
+    // The JSON applies again: both refusals are over.
+    type(area, first);
+    await waitFor(() => expect(session()?.jsonText).toBeNull());
+    expect(refusedNotice()).toBeNull();
+    expect(field.getAttribute("aria-invalid")).toBeNull();
+    // Broken again: nothing was refused this time, so neither comes back.
+    type(area, bad);
+    await waitFor(() => expect(session()?.jsonText).toBe(bad));
+    expect(refusedNotice()).toBeNull();
+    expect(field.getAttribute("aria-invalid")).toBeNull();
+    expect(field.getAttribute("aria-describedby")).toBeNull();
+    notBody();
+  });
 });

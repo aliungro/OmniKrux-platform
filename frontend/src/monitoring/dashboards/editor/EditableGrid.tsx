@@ -498,7 +498,7 @@ export function useEditableGrid(
       grab: handle(id, name, "move"),
       corner: handle(id, name, "resize"),
       menu: (
-        <ActionsMenu label={`Panel actions for ${name}`} className={s.tileMenu} tabIndex={-1} actions={[
+        <ActionsMenu label={`Panel actions for ${name}`} className={s.tileMenu} tabIndex={-1} returnTo={() => focusTile(id)} actions={[
           { label: "Settings", onSelect: () => on().menu(id, "settings") },
           { label: "Duplicate", onSelect: () => on().menu(id, "duplicate") },
           { label: "Remove", danger: true, onSelect: () => on().menu(id, "remove") },

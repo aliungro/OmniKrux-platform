@@ -20,7 +20,7 @@ export interface MenuAction {
  * A ⋯ button and its menu (the header's More actions, a tile's Panel actions). Esc goes back to
  * the button; choosing an item closes the menu first, so the item may send the keyboard elsewhere.
  */
-export function ActionsMenu({ actions, buttonRef, label = "More actions", className, tabIndex }: {
+export function ActionsMenu({ actions, buttonRef, label = "More actions", className, tabIndex, returnTo }: {
   actions: MenuAction[];
   buttonRef?: RefObject<HTMLButtonElement | null>;
   label?: string;
@@ -28,6 +28,8 @@ export function ActionsMenu({ actions, buttonRef, label = "More actions", classN
   className?: string;
   /** -1 on a tile: the tile is the Tab stop, and its keys do the same. */
   tabIndex?: number;
+  /** Where the keyboard goes back to when the menu closes (a tile: its keys work at once); the button otherwise. */
+  returnTo?(): void;
 }) {
   const own = useRef<HTMLButtonElement>(null);
   const button = buttonRef ?? own;
@@ -36,8 +38,10 @@ export function ActionsMenu({ actions, buttonRef, label = "More actions", classN
   const [open, setOpen] = useState(false);
   const close = useCallback((restore: boolean) => {
     setOpen(false);
-    if (restore) button.current?.focus();
-  }, [button]);
+    if (!restore) return;
+    if (returnTo) returnTo();
+    else button.current?.focus();
+  }, [button, returnTo]);
   const closeQuietly = useCallback(() => close(false), [close]);
   useCloseOutside(open, root, closeQuietly);
   useLayoutEffect(() => {

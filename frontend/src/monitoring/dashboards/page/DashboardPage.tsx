@@ -339,8 +339,17 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     setTitleRefused(jsonBlocks(action));
     editor.dispatch(action);
   };
+  /** Undo was refused while the JSON text doesn't apply: said on screen until the JSON applies again. */
+  const [undoRefused, setUndoRefused] = useState(false);
+  // Once the JSON applies again (or editing ends) a refusal is over: a later broken text doesn't bring it back.
+  const jsonPending = editing !== null && editing.jsonText !== null;
+  useEffect(() => {
+    if (jsonPending) return;
+    setTitleRefused(false);
+    setUndoRefused(false);
+  }, [jsonPending]);
   const titleProblem = !editing ? null
-    : titleRefused && editing.jsonText !== null ? JSON_FIRST
+    : titleRefused && jsonPending ? JSON_FIRST
     : editing.draft.title.trim() === "" ? TITLE_BLANK : null;
   // The workspace tab shows the title being edited; the saved one again once editing ends.
   const draftTitle = editing ? editing.draft.title : null;
@@ -355,7 +364,10 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const undo = () => {
     const st = flushJson.current?.() ?? editor.state;
     if (st.mode !== "edit") return;
-    if (st.jsonText !== null) return say(JSON_FIRST);
+    if (st.jsonText !== null) {
+      setUndoRefused(true);
+      return say(JSON_FIRST);
+    }
     if (!canUndo(st)) return say("Nothing to undo.");
     const next = editor.dispatch({ type: "undo" });
     if (next.mode !== "edit") return;
@@ -497,7 +509,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   useEffect(() => {
     if (!isEditing) return;
     const onUndo = (e: KeyboardEvent) => {
-      if (!pressed("dashboardUndo", e) || e.shiftKey || e.defaultPrevented) return;
+      // A held key undoes once: with no redo, a repeat would run back through the whole session.
+      if (!pressed("dashboardUndo", e) || e.shiftKey || e.defaultPrevented || e.repeat) return;
       const t = e.target;
       if (!(t instanceof Node) || !page.current?.contains(t) || isEditable(t)) return;
       if (document.querySelector('[aria-modal="true"]') !== null) return;
@@ -720,6 +733,12 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
       {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
       <p className={s.arrived} role="status">{editing ? arrivedWords : ""}</p>
       {removedShown && removed && <RemovedNote title={removed.title} onUndo={undo} />}
+      {/* Spoken by the status line below; shown here so the refusal is seen too. */}
+      {jsonPending && undoRefused && (
+        <div className={e.notice} data-kind="json" data-undo-refused="">
+          <p className={e.noticeLine}>{JSON_FIRST}</p>
+        </div>
+      )}
       <p className={s.said} role="status" aria-live="polite"><span key={said.seq}>{editing ? said.text : ""}</span></p>
       {copyToEdit.error && <p className={s.copyProblem} role="alert">{copyToEdit.error.text}</p>}
       <div className={s.transferLines}><ExportLine result={exporter.result} /></div>
