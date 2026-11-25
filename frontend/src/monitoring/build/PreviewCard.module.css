@@ -65,12 +65,39 @@
   line-height: 1.4;
 }
 
-.badge {
+.badges {
   position: absolute;
   top: 8px;
   right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badges:empty {
+  display: none;
+}
+
+.badge {
   color: var(--ink-2);
   font-size: 11px;
+}
+
+/* Settled with nothing to draw: the card stays in its place, quieter. */
+.emptyBadge {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surf-2);
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.card[data-empty="true"] .title {
+  color: var(--ink-2);
+}
+
+.card[data-empty="true"] .preview {
+  color: var(--ink-3);
 }
 
 .card[data-active="true"] .badge {

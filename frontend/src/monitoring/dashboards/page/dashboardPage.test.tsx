@@ -71,6 +71,32 @@ describe("Dashboard page", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "API latency" })).toBeTruthy();
   });
 
+  it("suggestions are read only while editing with the column or Add panel open", async () => {
+    const user = userEvent.setup();
+    const api = shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const catalogReads = () => api.requests.filter((r) => r.url.includes("/catalog")).length;
+    const queries = () => batches(api).flat().map((q) => q.query);
+    // Viewing: no catalog read, no previews; only the dashboard's own panel runs.
+    expect(catalogReads()).toBe(0);
+    expect(queries().every((q) => q === "up")).toBe(true);
+    // Editing a dashboard with panels: the column starts closed, and still nothing is read.
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    const toggle = screen.getByRole("button", { name: "Suggestions" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(catalogReads()).toBe(0);
+    // The Suggestions button opens the column: now they are read.
+    await user.click(toggle);
+    expect(screen.getByRole("complementary", { name: "Suggestions" })).toBeTruthy();
+    await waitFor(() => expect(catalogReads()).toBe(1));
+    notBody();
+  });
+
   it("header tabs, time, refresh and edit by key", async () => {
     const user = userEvent.setup();
     const api = shop();

@@ -13,6 +13,7 @@
   font-weight: 500;
 }
 
+.toggle,
 .discard,
 .save {
   padding: 4px 12px;
@@ -50,6 +51,25 @@
   cursor: progress;
 }
 
+/* Suggestions: pressed while the column shows. */
+.toggle {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.toggle:hover {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+  color: var(--ink);
+}
+
+.toggle[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--focus) 40%, transparent);
+  background: color-mix(in srgb, var(--focus) 8%, transparent);
+  color: var(--focus);
+}
+
+.toggle:focus-visible,
 .discard:focus-visible,
 .save:focus-visible {
   outline: 2px solid var(--focus);

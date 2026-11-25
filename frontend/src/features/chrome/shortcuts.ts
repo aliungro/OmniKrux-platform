@@ -158,7 +158,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "panelSettings", scope: "dashboard", keys: ["Enter"], match: ["Enter"], label: "While editing: open the panel's settings" },
   { id: "panelAdd", scope: "dashboard", keys: ["a"], match: ["a"], label: "While editing: add a panel (type what you want to see)" },
   { id: "addPanelPick", scope: "dashboard", keys: ["↑ ↓", "Enter"], match: ["ArrowUp", "ArrowDown", "Enter"], label: "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)" },
-  { id: "suggestionsFocus", scope: "dashboard", keys: ["s"], match: ["s"], label: "While editing a new dashboard: go to the suggestions" },
+  { id: "suggestionsFocus", scope: "dashboard", keys: ["s"], match: ["s"], label: "While editing: show the suggestions and go to them" },
   // Matched with isDeleteKey, like deleteFocused.
   { id: "panelRemove", scope: "dashboard", keys: ["Ctrl Del"], macKeys: ["⌘ ⌫"], label: "While editing: remove the panel from the draft" },
   { id: "panelLeave", scope: "dashboard", keys: ["Esc"], match: ["Escape"], label: "Close the panel's settings, then go to Save dashboard" },

@@ -1,5 +1,6 @@
 // One candidate panel with a small live chart of what it would show. The chart is in the lazy
 // chart chunk; the words (loading, no data, why it failed) are here so they never wait for it.
+// A preview that settled with nothing to draw is marked No data now and dimmed, in its place.
 // A card is a button, or (`option`) an option of a listbox whose keyboard stays in its search
 // field. Its content is phrasing only, and it has no live region of its own: the list it is in
 // says what changed, once.
@@ -36,6 +37,7 @@ function Loading({ reduced }: { reduced: boolean }) {
 export default function PreviewCard({ candidate, preview, active, added = false, id, option = false, onPick }: PreviewCardProps) {
   const reduced = usePrefersReducedMotion();
   let body = null;
+  const empty = preview?.status === "done" && !hasData(preview);
   if (preview?.status === "loading") body = <Loading reduced={reduced} />;
   else if (preview?.status === "failed") body = <span className={styles.note}>Can't preview: {preview.message}</span>;
   else if (preview?.status === "done") {
@@ -44,7 +46,7 @@ export default function PreviewCard({ candidate, preview, active, added = false,
         <MiniChart data={preview.data} panelType={candidate.panelType} unit={candidate.unit} animate={!reduced} />
       </Suspense>
     ) : (
-      <span className={styles.note}>No data in this time range.</span>
+      <span className={styles.note}>Nothing to show in this time range.</span>
     );
   }
   const content = (
@@ -52,7 +54,10 @@ export default function PreviewCard({ candidate, preview, active, added = false,
       <span className={styles.title} id={id ? `${id}-t` : undefined}>{candidate.title}</span>
       <span className={styles.query} id={id ? `${id}-q` : undefined} title={candidate.expr}>{candidate.expr}</span>
       <span className={styles.preview}>{body}</span>
-      {added ? <span className={styles.badge}>Added</span> : active ? <span className={styles.badge}>Enter to add</span> : null}
+      <span className={styles.badges}>
+        {empty && <span className={styles.emptyBadge}>No data now</span>}
+        {added ? <span className={styles.badge}>Added</span> : active ? <span className={styles.badge}>Enter to add</span> : null}
+      </span>
     </>
   );
   const pick = (e: MouseEvent<HTMLElement>) => onPick(e.currentTarget.getBoundingClientRect());
@@ -61,6 +66,7 @@ export default function PreviewCard({ candidate, preview, active, added = false,
       <div role="option" id={id} aria-selected={active} aria-labelledby={id ? `${id}-t` : undefined}
         aria-describedby={id ? `${id}-q` : undefined} className={styles.card}
         data-active={active ? "true" : undefined} data-added={added ? "true" : undefined}
+        data-empty={empty ? "true" : undefined}
         // The keyboard stays in the search field; a click only picks.
         onMouseDown={(e) => e.preventDefault()} onClick={pick}>
         {content}
@@ -74,6 +80,7 @@ export default function PreviewCard({ candidate, preview, active, added = false,
       className={styles.card}
       data-active={active ? "true" : undefined}
       data-added={added ? "true" : undefined}
+      data-empty={empty ? "true" : undefined}
       aria-disabled={added || undefined}
       onClick={pick}
     >

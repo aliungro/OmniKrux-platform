@@ -12,7 +12,7 @@ import type { DashboardOwner, PanelData, PanelRun } from "../dashboards/runPanel
 import type { ResolvedVars } from "../dashboards/interpolate";
 import { candidatePanel, type Candidate } from "./candidates";
 
-export const MAX_PREVIEWS = 3;
+export const MAX_PREVIEWS = 8;
 export const PREVIEW_DEBOUNCE_MS = 250;
 /** Grid columns a preview is sized for; it sets the step. */
 export const PREVIEW_WIDTH = 4;

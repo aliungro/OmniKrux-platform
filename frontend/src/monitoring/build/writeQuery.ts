@@ -10,7 +10,8 @@ import { quickCheck } from "./promql";
 
 export const SPLIT_LABELS = ["route", "handler", "path", "endpoint", "uri", "method"];
 export const STATUS_LABELS = ["status", "code", "status_code", "http_status", "response_code"];
-export const STREAM_LABELS = ["namespace", "app", "service_name", "job", "container"];
+/** Stream labels to select logs by: the OpenTelemetry Collector's first, since a Loki it feeds may hold both styles. */
+export const STREAM_LABELS = ["k8s_namespace_name", "namespace", "service_name", "app", "job", "k8s_container_name", "container"];
 export const LEVEL_LABELS = ["level", "detected_level", "severity", "lvl"];
 
 export type Only = Record<string, string>;
@@ -88,17 +89,20 @@ export function writeMetricQuery(
   return split === null ? sel() : `sum by (${by[0]}) (${sel()})`;
 }
 
-/** A log matcher never has an empty value (it would match everything or be refused by Loki). */
-export function writeLogQuery(only: Only, streams: OwnerStreamLabel[]): string {
+/**
+ * A log matcher never has an empty value (it would match everything or be refused by Loki). `extra`
+ * narrows the selector (a level matcher, say); it never selects streams on its own.
+ */
+export function writeLogQuery(only: Only, streams: OwnerStreamLabel[], extra: Extra[] = []): string {
   if (Object.keys(only).length > 0) {
     const kept = Object.fromEntries(Object.entries(only).filter(([, v]) => v !== ""));
     if (Object.keys(kept).length === 0) throw new UnwritableQuery("A log query needs a label value to select by.");
-    return `{${matchers(kept, [])}}`;
+    return `{${matchers(kept, extra)}}`;
   }
   const names = streams.map((s) => s.name).filter((n) => LABEL_NAME.test(n));
   const label = STREAM_LABELS.find((l) => names.includes(l)) ?? names[0];
   if (label === undefined) throw new UnwritableQuery("There is no label to select log streams by.");
-  return `{${matchers({}, [{ label, op: "=~", value: ".+" }])}}`;
+  return `{${matchers({}, [{ label, op: "=~", value: ".+" }, ...extra])}}`;
 }
 
 /** Refuses a log query that doesn't balance; a trailing `#` comment ends on its own line. */

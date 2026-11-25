@@ -3,37 +3,37 @@
 // then reads Added. The keyboard stays in the rail on the next suggestion, so a dashboard can be
 // built with Enter alone. A card reads Added when the draft already holds that panel (same type,
 // same query), so the mark survives a tab switch, clears when the panel is removed and Discard
-// clears it with the draft.
+// clears it with the draft. Its suggestions and previews are the page's (`useSuggestions`), the
+// same ones Add panel lists, so a suggestion draws the same chart in both.
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { failure } from "../../api/http";
-import { isEditable, pressed } from "../../features/chrome/shortcuts";
-import { useOwnerCatalog } from "../catalog/merge";
 import { JSON_FIRST } from "../dashboards/editor/editorState";
-import type { ResolvedVars } from "../dashboards/interpolate";
 import type { NewPanel } from "../dashboards/layout";
-import { pageLetter } from "../dashboards/page/keys";
-import type { DashboardOwner } from "../dashboards/runPanel";
 import { nextPanelId, type DashboardSpec, type OwnerKind } from "../dashboards/schema";
 import { candidatePanel } from "./candidates";
 import PreviewCard from "./PreviewCard";
-import { MAX_SUGGESTIONS, suggestionsHeading, suggestPanels } from "./suggest";
-import { usePreviews } from "./usePreviews";
+import type { Suggestions } from "./useSuggestions";
 import s from "./SuggestionsRail.module.css";
 
+/** Go to the first suggestion not yet added, unless the keyboard moved on from `from` meanwhile. */
+export type RailFocusRequest = { seq: number; from: Element | null };
+
 export interface SuggestionsRailProps {
-  /** `null` while the dashboard's owner is still being read. */
-  owner: DashboardOwner | null;
+  /** The page's one suggestion source (`useSuggestions`), shared with Add panel. */
+  suggestions: Suggestions;
   ownerName: string;
   ownerKind: OwnerKind;
-  vars: ResolvedVars;
-  range: { start: number; end: number };
   draft: DashboardSpec;
   /** A card picked: the panel it becomes, where its card was and its key. False: refused (nothing was added). */
   onAdd(panel: NewPanel, from: DOMRect, key: string): boolean;
   onClose(): void;
   /** Esc on a suggestion: the keyboard goes back to "+ Add panel". */
   onEscape?(): void;
+  /** The Suggestions button or `s`: the keyboard goes to the first unused card once there are cards. */
+  focusRequest?: RailFocusRequest | null;
+  /** The request was settled (the keyboard went there, or had moved on). */
+  onFocused?(): void;
 }
 
 /** The rail beside the grid. The grid's own element stays where it is whether or not the rail shows. */
@@ -46,17 +46,16 @@ export function RailLayout({ rail, children }: { rail: ReactNode; children: Reac
   );
 }
 
-export function SuggestionsRail({ owner, ownerName, ownerKind, vars, range, draft, onAdd, onClose, onEscape }: SuggestionsRailProps) {
+export function SuggestionsRail({ suggestions, ownerName, ownerKind, draft, onAdd, onClose, onEscape, focusRequest = null, onFocused }: SuggestionsRailProps) {
   const list = useRef<HTMLUListElement>(null);
   const hide = useRef<HTMLButtonElement>(null);
+  const tryAgain = useRef<HTMLButtonElement>(null);
   // Each message is a new node, so the same words said twice are read again.
   const [message, setMessage] = useState<{ text: string; seq: number; refused: boolean }>({ text: "", seq: 0, refused: false });
   const say = (text: string, refused = false) => setMessage((m) => ({ text, seq: m.seq + 1, refused }));
 
-  const cat = useOwnerCatalog(owner);
+  const { catalog: cat, candidates, previews, heading } = suggestions;
   const catalog = cat.catalog;
-  const candidates = useMemo(() => (catalog ? suggestPanels(catalog).slice(0, MAX_SUGGESTIONS) : []), [catalog]);
-  const previews = usePreviews(candidates, { owner, ownerName, vars, range }, MAX_SUGGESTIONS);
 
   /** The candidates the draft already holds, by key. */
   const added = useMemo(() => {
@@ -87,23 +86,6 @@ export function SuggestionsRail({ owner, ownerName, ownerKind, vars, range, draf
     (next === -1 ? hide.current : cards()[next])?.focus();
   };
 
-  // `s` goes to the first suggestion not yet added (never from a field or a dialog).
-  const latest = useRef({ candidates, added });
-  latest.current = { candidates, added };
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!pageLetter(e) || !pressed("suggestionsFocus", e) || isEditable(e.target)) return;
-      const { candidates: shown, added: used } = latest.current;
-      const at = shown.findIndex((c) => !used.has(c.key));
-      const el = at === -1 ? hide.current : cards()[at];
-      if (!el) return;
-      e.preventDefault();
-      el.focus();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
-
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== "Escape" || e.defaultPrevented || !onEscape) return;
     e.preventDefault();
@@ -127,13 +109,32 @@ export function SuggestionsRail({ owner, ownerName, ownerKind, vars, range, draf
       (err: unknown) => { if (alive.current) { setRefreshing(false); setRefreshError(failure(err, "try again")); } },
     );
   };
-  const reading = !catalog && !cat.error && (owner === null || cat.loading);
+  const reading = !catalog && !cat.error;
   const readFailed = !catalog && !reading ? (refreshError ?? cat.error) : null;
 
+  // The Suggestions button or `s` asked for the cards: the first unused one (Hide suggestions when
+  // every card is added) as soon as there are cards; Try again or Hide suggestions when the read
+  // settles with none. Left alone if the keyboard moved on while the suggestions were read.
+  const asked = useRef(0);
+  useLayoutEffect(() => {
+    if (!focusRequest || asked.current === focusRequest.seq) return;
+    const a = document.activeElement;
+    const moved = a !== focusRequest.from && a !== null && a !== document.body && a.isConnected;
+    const at = candidates.findIndex((c) => !added.has(c.key));
+    const target = moved ? null
+      : candidates.length > 0 ? (at === -1 ? hide.current : cards()[at])
+        : reading ? undefined
+          : tryAgain.current ?? hide.current;
+    if (target === undefined) return;
+    asked.current = focusRequest.seq;
+    target?.focus();
+    onFocused?.();
+  });
+
   return (
-    <aside className={s.rail} aria-label="Suggestions" onKeyDown={onKeyDown}>
+    <aside className={s.rail} aria-label="Suggestions" data-suggestions-rail="" onKeyDown={onKeyDown}>
       <div className={s.head}>
-        <h2 className={s.heading}>{catalog ? suggestionsHeading(ownerName, catalog) : "Suggestions"}</h2>
+        <h2 className={s.heading}>{catalog ? heading : "Suggestions"}</h2>
         <button ref={hide} type="button" className={s.hide} onClick={onClose}>Hide suggestions</button>
       </div>
       <p role="status" aria-live="polite" className={message.refused ? s.refused : s.hidden}>
@@ -143,7 +144,7 @@ export function SuggestionsRail({ owner, ownerName, ownerKind, vars, range, draf
       {readFailed && (
         <div className={s.failed}>
           <p className={s.line}>Couldn't read the metrics: {readFailed}</p>
-          <button type="button" className={s.action} aria-disabled={refreshing || undefined} onClick={retry}>
+          <button ref={tryAgain} type="button" className={s.action} aria-disabled={refreshing || undefined} onClick={retry}>
             {refreshing ? "Trying again…" : "Try again"}
           </button>
         </div>

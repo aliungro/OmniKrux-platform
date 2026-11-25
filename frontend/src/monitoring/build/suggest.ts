@@ -15,6 +15,7 @@ export const MAX_SUGGESTIONS = 8;
 const REQUEST_NAME = /(^|_)requests?_total$/;
 const SPRING_REQUESTS = "http_server_requests_seconds_count";
 const ERROR_LINES = '|~ "(?i)(error|fatal|panic)"';
+const ERROR_LEVELS = "(?i)(error|err|fatal|critical|crit)";
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 function requestRank(name: string): number {
@@ -33,13 +34,12 @@ export function pickRequestCounter(metrics: BrowseMetric[]): BrowseMetric | null
   return found[0] ?? null;
 }
 
-export function suggestionsHeading(ownerName: string, catalog: OwnerCatalog): string {
-  const from =
-    catalog.hasPrometheus && catalog.hasLoki ? "Prometheus and Loki"
-    : catalog.hasPrometheus ? "Prometheus"
-    : catalog.hasLoki ? "Loki"
-    : "your sources";
-  return `Suggested for ${ownerName} · from what ${from} have`;
+/** Names only the tools the offered suggestions come from. */
+export function suggestionsHeading(ownerName: string, candidates: Candidate[]): string {
+  const prom = candidates.some((c) => c.sourceType === "prometheus");
+  const loki = candidates.some((c) => c.sourceType === "loki");
+  const from = prom && loki ? "Prometheus and Loki have" : prom ? "Prometheus has" : loki ? "Loki has" : null;
+  return from === null ? `Suggested for ${ownerName}` : `Suggested for ${ownerName} · from what ${from}`;
 }
 
 type Make = (metrics: Map<string, BrowseMetric>, all: BrowseMetric[], catalog: OwnerCatalog) => Candidate | null;
@@ -53,7 +53,7 @@ function lokiLabel(catalog: OwnerCatalog) {
   return writable.find((s) => s.name === label) ?? writable[0] ?? null;
 }
 
-const RULES: Make[] = [
+const PROMETHEUS_RULES: Make[] = [
   // requestRate
   (_by, all) => {
     const r = pickRequestCounter(all);
@@ -103,19 +103,6 @@ const RULES: Make[] = [
       ...prom, sourceId: m.sourceId, unit: "short", legend: "{{namespace}}/{{pod}}",
     });
   },
-  // logVolume
-  (_by, _all, catalog) => {
-    const l = lokiLabel(catalog);
-    if (!l) return null;
-    const level = LEVEL_LABELS.find((x) => catalog.streams.some((s) => s.name === x));
-    const v = level ?? l.name;
-    return named({
-      key: "logVolume", title: level ? "Log volume by level" : `Log volume by ${l.name}`,
-      subtitle: level ? `Loki · ${l.name} by level` : `Loki · by ${l.name}`, panelType: "timeseries",
-      expr: writeVolumeQuery(writeLogQuery({}, [l]), v), sourceType: "loki", sourceId: l.sourceId, unit: "short",
-      legend: "", options: { style: "stacked" },
-    });
-  },
   // cpuByPod
   (by) => {
     const m = by.get("container_cpu_usage_seconds_total");
@@ -159,24 +146,43 @@ const RULES: Make[] = [
       ...prom, sourceId: m.sourceId, unit: "none", legend: "", options: { thresholds: [{ value: 1, color: "bad" }] },
     });
   },
+];
+
+const LOKI_RULES: Make[] = [
+  // logVolume
+  (_by, _all, catalog) => {
+    const l = lokiLabel(catalog);
+    if (!l) return null;
+    const level = LEVEL_LABELS.find((x) => catalog.streams.some((s) => s.name === x));
+    const v = level ?? l.name;
+    return named({
+      key: "logVolume", title: level ? "Log volume by level" : `Log volume by ${l.name}`,
+      subtitle: level ? `Loki · ${l.name} by level` : `Loki · by ${l.name}`, panelType: "timeseries",
+      expr: writeVolumeQuery(writeLogQuery({}, [l]), v), sourceType: "loki", sourceId: l.sourceId, unit: "short",
+      legend: "", options: { style: "stacked" },
+    });
+  },
   // errorLogs
   (_by, _all, catalog) => {
     const l = lokiLabel(catalog);
     if (!l) return null;
+    // A level label says it best; without one, the lines are searched for the words.
+    const level = LEVEL_LABELS.find((x) => x !== l.name && catalog.streams.some((s) => s.name === x));
+    const expr = level
+      ? writeLogQuery({}, [l], [{ label: level, op: "=~", value: ERROR_LEVELS }])
+      : `${writeLogQuery({}, [l])} ${ERROR_LINES}`;
     return named({
-      key: "errorLogs", title: "Error log lines", subtitle: 'Loki · |~ "error"', panelType: "logs",
-      expr: `${writeLogQuery({}, [l])} ${ERROR_LINES}`, sourceType: "loki", sourceId: l.sourceId, unit: "none",
-      legend: "", options: { limit: 100 },
+      key: "errorLogs", title: "Error log lines", subtitle: level ? `Loki · ${level} is error, fatal or critical` : 'Loki · |~ "error"',
+      panelType: "logs", expr, sourceType: "loki", sourceId: l.sourceId, unit: "none", legend: "", options: { limit: 100 },
     });
   },
 ];
 
-export function suggestPanels(catalog: OwnerCatalog): Candidate[] {
-  const all = browseMetrics(catalog);
-  const byName = new Map(all.map((m) => [m.name, m]));
+/** Runs each rule; a rule whose query can't be written is left out. */
+function run(rules: Make[], byName: Map<string, BrowseMetric>, all: BrowseMetric[], catalog: OwnerCatalog, max: number): Candidate[] {
   const out: Candidate[] = [];
-  for (const rule of RULES) {
-    if (out.length >= MAX_SUGGESTIONS) break;
+  for (const rule of rules) {
+    if (out.length >= max) break;
     try {
       const c = rule(byName, all, catalog);
       if (c) out.push(c);
@@ -185,4 +191,15 @@ export function suggestPanels(catalog: OwnerCatalog): Candidate[] {
     }
   }
   return out;
+}
+
+/**
+ * Prometheus suggestions first, then the log ones. With a Loki stream label to select by, the log
+ * suggestions keep their places (at most six Prometheus ones, eight in all).
+ */
+export function suggestPanels(catalog: OwnerCatalog): Candidate[] {
+  const all = browseMetrics(catalog);
+  const byName = new Map(all.map((m) => [m.name, m]));
+  const logs = run(LOKI_RULES, byName, all, catalog, MAX_SUGGESTIONS);
+  return [...run(PROMETHEUS_RULES, byName, all, catalog, MAX_SUGGESTIONS - logs.length), ...logs];
 }

@@ -113,7 +113,7 @@ describe("Add panel search", () => {
     expect(input().getAttribute("placeholder")).toBe("Type what you want to see, like errors by route");
     expect(dialog().getAttribute("aria-modal")).toBe("true");
     // With no text: the suggestions under their heading, then Empty panel last.
-    expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus have")).toBeTruthy();
+    expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus has")).toBeTruthy();
     const list = options();
     expect(list.length).toBeGreaterThan(1);
     expect(list.at(-1)!.textContent).toContain("Empty panel");
@@ -287,7 +287,7 @@ describe("Add panel search", () => {
 
   it("only spaces count as no text, so Enter adds what is highlighted", async () => {
     const { user } = await opened();
-    await within(dialog()).findByText("Suggested for Shop · from what Prometheus have");
+    await within(dialog()).findByText("Suggested for Shop · from what Prometheus has");
     await user.keyboard("   ");
     await new Promise((r) => setTimeout(r, 200));
     await user.keyboard("{Control>}{End}{/Control}");
@@ -317,7 +317,7 @@ describe("Add panel search", () => {
     // Empty panel is there while it reads.
     expect(options()).toHaveLength(1);
     held.open();
-    expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus have")).toBeTruthy();
+    expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus has")).toBeTruthy();
     expect(within(dialog()).queryByText("Reading what Shop's sources have…")).toBeNull();
     expect(within(dialog()).getByRole("status")).toBe(status);
   });
@@ -332,7 +332,7 @@ describe("Add panel search", () => {
     expect(options()).toHaveLength(1);
     api.state.catalogs.p1 = shopCatalog("p1");
     await user.click(within(dialog()).getByRole("button", { name: "Try again" }));
-    expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus have")).toBeTruthy();
+    expect(await within(dialog()).findByText("Suggested for Shop · from what Prometheus has")).toBeTruthy();
     expect(api.requests.some((r) => r.url === "/api/monitoring/projects/p1/catalog?refresh=true")).toBe(true);
     // The keyboard stayed in the search.
     expect(document.activeElement).toBe(input());

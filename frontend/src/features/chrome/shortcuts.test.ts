@@ -158,7 +158,7 @@ describe("shortcut registry", () => {
       ["panelSettings", ["Enter"], "While editing: open the panel's settings"],
       ["panelAdd", ["a"], "While editing: add a panel (type what you want to see)"],
       ["addPanelPick", ["↑ ↓", "Enter"], "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)"],
-      ["suggestionsFocus", ["s"], "While editing a new dashboard: go to the suggestions"],
+      ["suggestionsFocus", ["s"], "While editing: show the suggestions and go to them"],
       ["panelRemove", ["Ctrl Del"], "While editing: remove the panel from the draft"],
       ["panelLeave", ["Esc"], "Close the panel's settings, then go to Save dashboard"],
       ["queryRun", ["Ctrl Enter"], "In a query: run it now; in the JSON: review the changes"],

@@ -1,13 +1,14 @@
 // "+ Add panel" as "type what you want to see" (D3). One field over the owner's catalog: with no
-// text it lists the suggestions, with text the finder's matches (150 ms after the last key). The
-// first few cards preview live; the keyboard stays in the field (↑ ↓ pick, Enter adds, Ctrl+End
-// goes to Empty panel, Esc clears and then closes). Empty panel, always last, is M2's blank time
-// series. Matching is fixed rules over names, help text and labels: no AI, no paid service.
+// text it lists the suggestions, with text the finder's matches (150 ms after the last key). Every
+// card previews live; the suggestions and their previews are the page's, shared with the
+// suggestions column. The keyboard stays in the field (↑ ↓ pick, Enter adds, Ctrl+End goes to
+// Empty panel, Esc clears and then closes). Empty panel, always last, is M2's blank time series.
+// Matching is fixed rules over names, help text and labels: no AI, no paid service.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { failure } from "../../api/http";
 import { DialogShell } from "../../features/dock/ConfirmDialog";
-import { catalogAge, useOwnerCatalog } from "../catalog/merge";
+import { catalogAge } from "../catalog/merge";
 import type { ResolvedVars } from "../dashboards/interpolate";
 import type { NewPanel } from "../dashboards/layout";
 import type { DashboardOwner } from "../dashboards/runPanel";
@@ -15,14 +16,16 @@ import { nextPanelId, type DashboardSpec, type OwnerKind } from "../dashboards/s
 import { candidatePanel, type Candidate } from "./candidates";
 import { buildFinderIndex, findPanels } from "./finder";
 import PreviewCard from "./PreviewCard";
-import { suggestionsHeading, suggestPanels } from "./suggest";
 import { usePreviews } from "./usePreviews";
+import type { Suggestions } from "./useSuggestions";
 import s from "./AddPanelSearch.module.css";
 
 export const SEARCH_DEBOUNCE_MS = 150;
 
 export interface AddPanelSearchProps {
-  /** `null` while the dashboard's owner is still being read. */
+  /** The page's one suggestion source (`useSuggestions`): its catalog, suggestions and their previews. */
+  suggestions: Suggestions;
+  /** `null` while the dashboard's owner is still being read. Typed text previews with it. */
   owner: DashboardOwner | null;
   ownerName: string;
   ownerKind: OwnerKind;
@@ -42,7 +45,7 @@ export interface AddPanelSearchProps {
   restoreFocusTo?: RefObject<HTMLElement | null>;
 }
 
-export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft, onAdd, onEmpty, onClose, refused = null, restoreFocusTo }: AddPanelSearchProps) {
+export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars, range, draft, onAdd, onEmpty, onClose, refused = null, restoreFocusTo }: AddPanelSearchProps) {
   const base = useId();
   const ids = { heading: `${base}-h`, list: `${base}-l`, hint: `${base}-k`, option: (i: number) => `${base}-o${i}` };
   const input = useRef<HTMLInputElement>(null);
@@ -56,16 +59,19 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     return () => clearTimeout(timer);
   }, [text]);
 
-  const cat = useOwnerCatalog(owner);
+  const cat = suggestions.catalog;
   const catalog = cat.catalog;
   const index = useMemo(() => (catalog ? buildFinderIndex(catalog) : null), [catalog]);
+  const suggested = suggestions.candidates;
   const listFor = useCallback((words: string): Candidate[] => {
     if (!catalog || !index) return [];
-    return words.trim() === "" ? suggestPanels(catalog) : findPanels(index, words);
-  }, [catalog, index]);
+    return words.trim() === "" ? suggested : findPanels(index, words);
+  }, [catalog, index, suggested]);
   const candidates = useMemo(() => listFor(query), [listFor, query]);
   const searching = query.trim() !== "";
-  const previews = usePreviews(candidates, { owner, ownerName, vars, range });
+  // Typed text previews its own matches; with no text the suggestions' previews are the page's.
+  const found = usePreviews(searching ? candidates : [], { owner, ownerName, vars, range });
+  const previews = searching ? found : suggestions.previews;
 
   // The active option: the first, until the arrows move it; a new list starts at its first again.
   const listKey = JSON.stringify([query, candidates.map((c) => c.key)]);
@@ -134,7 +140,7 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     );
   };
 
-  const reading = !catalog && !cat.error && (owner === null || cat.loading);
+  const reading = !catalog && !cat.error;
   const readFailed = !catalog && !reading ? (refreshError ?? cat.error) : null;
   // Try again worked: its button went with the failure, and the keyboard goes back to the field.
   const failedShown = readFailed !== null;
@@ -145,13 +151,13 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     hadFailed.current = failedShown;
   }, [failedShown]);
   const nothing = searching && catalog !== null && candidates.length === 0;
-  const found = searching && candidates.length > 0
+  const matches = searching && candidates.length > 0
     ? `${candidates.length} ${candidates.length === 1 ? "panel matches" : "panels match"}.`
     : "";
   const age = catalog ? catalogAge(catalog.builtAt, Date.now()) : "";
   const statusText = reading ? `Reading what ${ownerName}'s sources have…`
     : readFailed ? `Couldn't read the metrics: ${readFailed}`
-      : nothing ? "Nothing matches yet. Try another word." : found;
+      : nothing ? "Nothing matches yet. Try another word." : matches;
 
   return (
     <DialogShell provider="monitoring" role="dialog" busy={false} onCancel={onClose} first={input}
@@ -179,7 +185,7 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
             </button>
           )}
         </div>
-        {catalog && !searching && <h3 className={s.heading}>{suggestionsHeading(ownerName, catalog)}</h3>}
+        {catalog && !searching && <h3 className={s.heading}>{suggestions.heading}</h3>}
         {catalog && [...catalog.problems, ...catalog.notes].map((n) => <p key={n} className={s.muted}>{n}</p>)}
 
         <div role="listbox" id={ids.list} aria-label="Results" className={s.results}>

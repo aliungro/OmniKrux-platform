@@ -7,16 +7,16 @@ import { JSON_FIRST, type EditingState } from "../dashboards/editor/editorState"
 import { editSessions } from "../dashboards/editor/useDashboardEditor";
 import type { DashboardSpec } from "../dashboards/schema";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
-import { linkedProject, linkTo, panel, seedDashboard, spec } from "../test/dashboardSeeds";
+import { gate, intercept, linkedProject, linkTo, panel, seedDashboard, spec } from "../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../test/renderMonitoringApp";
-import { CAT } from "./testCatalogs";
+import { CAT, counter, family, gauge, streamOf } from "./testCatalogs";
 
 // The chart chunk as a stub (panels and previews).
 vi.mock("../charts", async () => {
   const { createElement } = await import("react");
   return {
     default: ({ data }: { data: { series: unknown[] } }) => createElement("span", null, `chart ${data.series.length}`),
-    MiniChart: () => createElement("span", null, "mini chart"),
+    MiniChart: ({ data }: { data: { series: unknown[] } }) => createElement("span", { "data-series": data.series.length }, "mini chart"),
   };
 });
 
@@ -69,6 +69,7 @@ const rail = () => screen.getByRole("complementary", { name: "Suggestions" });
 const cards = () => within(within(rail()).getByRole("list", { name: "Suggested panels" })).getAllByRole("button");
 const hide = () => within(rail()).getByRole("button", { name: "Hide suggestions" });
 const addTile = () => screen.getByRole("button", { name: "Add panel" });
+const toggle = () => screen.getByRole("button", { name: "Suggestions" });
 const live = () => within(rail()).getByRole("status");
 const draft = (): EditingState => {
   const s = [...editSessions.values()].find((x) => x.mode === "edit");
@@ -106,7 +107,7 @@ describe("Suggestions rail", () => {
     expect(addTile()).toBeTruthy();
     // Every card previews live, in one batch with each project.
     await waitFor(() => expect(within(rail()).queryAllByText("Loading…")).toHaveLength(0));
-    expect(within(rail()).getAllByText(/^(mini chart|No data in this time range\.)$/)).toHaveLength(7);
+    expect(within(rail()).getAllByText(/^(mini chart|Nothing to show in this time range\.)$/)).toHaveLength(7);
   });
 
   it("previews run as one batch with project ids", async () => {
@@ -197,11 +198,12 @@ describe("Suggestions rail", () => {
     notBody();
   });
 
-  it("Hide suggestions closes the rail and returns focus to Add panel", async () => {
+  it("Hide suggestions closes the rail and returns focus to the Suggestions button", async () => {
     const { user } = await loaded();
     await user.click(hide());
     expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
-    expect(document.activeElement).toBe(addTile());
+    expect(document.activeElement).toBe(toggle());
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
     expect(draft().suggestions).toBe("closed");
     expect(screen.queryByText("Your new dashboard")).toBeNull();
   });
@@ -237,7 +239,6 @@ describe("Suggestions rail", () => {
 
   it("says it is loading while the catalog loads", async () => {
     const api = shop();
-    const { intercept, gate } = await import("../test/dashboardSeeds");
     const held = gate();
     intercept((url, pass) => (url.includes("/catalog") ? held.opened.then(pass) : null));
     await editing(api);
@@ -341,6 +342,192 @@ describe("Suggestions rail", () => {
     expect(document.activeElement).toBe(input);
     // From the dialog's own list too.
     fireEvent.keyDown(within(screen.getByRole("dialog")).getAllByRole("option")[0], { key: "s" });
-    expect(cards().includes(document.activeElement as HTMLElement)).toBe(false);
+    // The rail is hidden while the dialog is open, and stays so.
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+  });
+});
+
+describe("One suggestion source for the column and Add panel", () => {
+  const two = { result_type: "matrix" as const, series: [ok.series[0], { labels: { job: "web" }, points: [[1, 2]] as [number, number][] }] };
+  const none = { result_type: "matrix" as const, series: [] };
+  /** p95 latency answers two series, Error rate none, everything else one. */
+  const answers = () => new Proxy({} as Record<string, typeof ok>, {
+    get: (_t, q) => (String(q).includes("histogram_quantile") ? two : String(q).includes('=~"5.."') ? none : ok),
+  });
+  const every = [
+    counter("http_requests_total", ["route", "status", "pod"], 40),
+    family("http_request_duration_seconds", "histogram", ["route"]),
+    counter("kube_pod_container_status_restarts_total", ["namespace", "pod"]),
+    counter("container_cpu_usage_seconds_total", ["namespace", "pod", "container"]),
+    gauge("container_memory_working_set_bytes", ["namespace", "pod", "container"]),
+    counter("node_cpu_seconds_total", ["instance", "mode"]),
+    gauge("up", ["job"]),
+  ].flat();
+  const otel = [streamOf("k8s_namespace_name", ["shop"]), streamOf("k8s_pod_name", ["api-1"]), streamOf("level", ["error", "info"])];
+  const ALL = ["Request rate", "Error rate", "p95 latency", "Pod restarts", "CPU by pod", "Memory by pod", "Log volume by level", "Error log lines"];
+
+  function fullShop() {
+    const api = shop([], shopCatalog("p1", every, otel));
+    api.state.queryAnswers = answers();
+    return api;
+  }
+  const dialog = () => screen.getByRole("dialog", { name: "Add panel" });
+  const options = () => within(within(dialog()).getByRole("listbox", { name: "Results" })).getAllByRole("option");
+  const titleOf = (el: HTMLElement) => el.querySelector("span")?.textContent ?? "";
+  const byTitle = (els: HTMLElement[], title: string) => els.find((el) => titleOf(el) === title)!;
+  const settled = (el: HTMLElement) => /mini chart|Nothing to show in this time range\.|Can't preview/.test(el.textContent ?? "");
+  const batchCount = (api: FakeMonitoringApi) => api.requests.filter((r) => r.url === "/api/monitoring/query/batch").length;
+
+  it("the picker and the rail show the same preview for the same suggestion", async () => {
+    const api = fullShop();
+    const { user } = await editing(api);
+    await within(rail()).findByText(HEADING);
+    await waitFor(() => expect(cards().every(settled)).toBe(true));
+    expect(cards().map(titleOf)).toEqual(ALL);
+    expect(byTitle(cards(), "p95 latency").querySelector("[data-series]")!.getAttribute("data-series")).toBe("2");
+    // An empty suggestion is marked, in its place.
+    const errorRate = byTitle(cards(), "Error rate");
+    expect(errorRate.getAttribute("data-empty")).toBe("true");
+    expect(within(errorRate).getByText("No data now")).toBeTruthy();
+    expect(within(errorRate).getByText("Nothing to show in this time range.")).toBeTruthy();
+    expect(cards().indexOf(errorRate)).toBe(1);
+    expect(batchCount(api)).toBe(1);
+
+    await user.click(addTile());
+    await waitFor(() => expect(options()).toHaveLength(ALL.length + 1));
+    expect(options().slice(0, -1).map(titleOf)).toEqual(ALL);
+    expect(byTitle(options(), "p95 latency").querySelector("[data-series]")!.getAttribute("data-series")).toBe("2");
+    expect(byTitle(options(), "Error rate").getAttribute("data-empty")).toBe("true");
+    expect(within(dialog()).getByText(HEADING)).toBeTruthy();
+    // One batch served both.
+    expect(batchCount(api)).toBe(1);
+  });
+
+  it("every suggestion card shows a chart, loading or no data", async () => {
+    const api = fullShop();
+    const held = gate();
+    intercept((url, pass) => (url.includes("/query/batch") ? held.opened.then(pass) : null));
+    const { user } = await editing(api);
+    await within(rail()).findByText(HEADING);
+    expect(cards()).toHaveLength(8);
+    // Waiting: every card says Loading…, none is blank.
+    await waitFor(() => expect(cards().every((c) => c.textContent?.includes("Loading…"))).toBe(true));
+    held.open();
+    await waitFor(() => expect(cards().every(settled)).toBe(true));
+    // In the picker every suggestion has its state too.
+    await user.click(addTile());
+    await waitFor(() => expect(options()).toHaveLength(9));
+    expect(options().slice(0, -1).every(settled)).toBe(true);
+  });
+
+  it("opening the picker hides the rail and closing brings it back", async () => {
+    const { user } = await loaded();
+    cards()[2].focus();
+    await user.keyboard("a");
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog()).getByRole("combobox")));
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    notBody();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull();
+    expect(rail()).toBeTruthy();
+    // The card that opened it went with the rail: the keyboard is on Add panel.
+    expect(document.activeElement).toBe(addTile());
+    notBody();
+    // From Add panel itself, Esc goes back to it, and the rail is back again.
+    await user.click(addTile());
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog()).getByRole("combobox")));
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(addTile());
+    expect(rail()).toBeTruthy();
+    expect(draft().suggestions).toBe("open");
+    // An add from the picker brings the rail back with that card marked Added.
+    await user.click(addTile());
+    await waitFor(() => expect(options().length).toBeGreaterThan(1));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull());
+    expect(draft().draft.panels).toHaveLength(1);
+    await waitFor(() => expect(cards()[0].textContent).toContain("Added"));
+    notBody();
+  });
+
+  it("a refused add from the picker keeps the rail hidden and the keyboard in the picker", async () => {
+    const { user } = await loaded();
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const area = await screen.findByRole("textbox", { name: "Dashboard JSON" }) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: "{ nope" } });
+    await waitFor(() => expect(screen.getByTestId("json-state").textContent).toMatch(/^✗/));
+    await user.click(screen.getByRole("tab", { name: "Dashboard" }));
+    await waitFor(() => expect(cards().length).toBeGreaterThan(1));
+    cards()[0].focus();
+    await user.keyboard("a");
+    const input = within(dialog()).getByRole("combobox");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    await waitFor(() => expect(options().length).toBeGreaterThan(1));
+    await user.keyboard("{Enter}");
+    expect(within(dialog()).getByRole("alert").textContent).toBe(JSON_FIRST);
+    expect(draft().draft.panels).toHaveLength(0);
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    expect(document.activeElement).toBe(input);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull();
+    expect(rail()).toBeTruthy();
+    expect(document.activeElement).toBe(addTile());
+    expect(draft().draft.panels).toHaveLength(0);
+  });
+
+  it("hidden suggestions come back with the Suggestions button", async () => {
+    const { user } = await loaded();
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    await user.click(cards()[0]);
+    await user.click(hide());
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    expect(document.activeElement).toBe(toggle());
+    await user.click(toggle());
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    expect(draft().suggestions).toBe("open");
+    // The first card not yet added has the keyboard.
+    await waitFor(() => expect(document.activeElement).toBe(cards()[1]));
+    // Pressed again, it hides them; the keyboard stays on it.
+    await user.click(toggle());
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    expect(document.activeElement).toBe(toggle());
+  });
+
+  it("the Suggestions button shows suggestions on a dashboard with panels", async () => {
+    const { user, api } = await editing(shop([panel("p-1", "Requests", "up", { x: 0, y: 0, w: 12, h: 8 })]));
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    // Nothing is read while the rail and the picker are closed.
+    expect(api.requests.some((r) => r.url.includes("/catalog"))).toBe(false);
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    await user.click(toggle());
+    await within(rail()).findByText(HEADING);
+    await waitFor(() => expect(document.activeElement).toBe(cards()[0]));
+    notBody();
+  });
+
+  it("s shows the rail and focuses the first card", async () => {
+    const { user } = await loaded();
+    await user.click(cards()[0]);
+    await user.click(hide());
+    addTile().focus();
+    await user.keyboard("s");
+    expect(rail()).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(cards()[1]));
+    notBody();
+    // Again, with the rail already open.
+    addTile().focus();
+    await user.keyboard("s");
+    expect(document.activeElement).toBe(cards()[1]);
+  });
+
+  it("s opens a closed rail once its cards are read", async () => {
+    const { user } = await editing(shop([panel("p-1", "Requests", "up", { x: 0, y: 0, w: 12, h: 8 })]));
+    expect(screen.queryByRole("complementary", { name: "Suggestions" })).toBeNull();
+    await user.keyboard("s");
+    expect(rail()).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(cards()[0]));
+    notBody();
   });
 });

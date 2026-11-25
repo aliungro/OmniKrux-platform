@@ -1,4 +1,4 @@
-// The header in edit mode: the Editing pill, Discard and Save dashboard; under it, why a save
+// The header in edit mode: the Editing pill, Suggestions, Discard and Save dashboard; under it, why a save
 // didn't go through; and the question before discarding changes.
 import { useId, useRef, type RefObject } from "react";
 import { failure } from "../../../api/http";
@@ -10,15 +10,24 @@ export function EditingPill() {
   return <span className={s.pill}>Editing</span>;
 }
 
-export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef }: {
+export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, suggestions, suggestionsRef }: {
   saving: boolean;
   onDiscard(): void;
   onSave(): void;
   discardRef: RefObject<HTMLButtonElement | null>;
   saveRef: RefObject<HTMLButtonElement | null>;
+  /** Shows or hides the suggestions column (not a draft edit, so it works while saving too). */
+  suggestions?: { open: boolean; onToggle(): void };
+  suggestionsRef?: RefObject<HTMLButtonElement | null>;
 }) {
   return (
     <>
+      {suggestions && (
+        <button ref={suggestionsRef} type="button" className={s.toggle} aria-pressed={suggestions.open}
+          aria-keyshortcuts="s" onClick={suggestions.onToggle}>
+          Suggestions
+        </button>
+      )}
       <button ref={discardRef} type="button" className={s.discard} aria-disabled={saving || undefined}
         onClick={() => { if (!saving) onDiscard(); }}>
         Discard

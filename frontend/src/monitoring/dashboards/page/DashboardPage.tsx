@@ -2,7 +2,8 @@
 // (the document, edited live) and, for a saved dashboard, the Versions tab. Edit turns the grid
 // into tiles and the header into Discard and Save dashboard (edit mode, kept per workspace tab).
 // Time, variables, auto-refresh and the view tab live in the tab's view (replace navigations).
-// "+ Add panel" (and `a`) open Add panel's search; what it adds goes into the edit draft.
+// "+ Add panel" (and `a`) open Add panel's search; what it adds goes into the edit draft. The
+// suggestions column and Add panel share one suggestion source, read only while either is open.
 // A link to a panel (`panel`) scrolls to it and flashes it; `editAlert` opens edit mode on that
 // panel's Alert tab. A panel's alert badge and its Alert tab open the rule on the Alerts page.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
@@ -11,7 +12,8 @@ import { failure } from "../../../api/http";
 import { isEditable, pressed } from "../../../features/chrome/shortcuts";
 import { AddPanelSearch } from "../../build/AddPanelSearch";
 import { useFlyIn } from "../../build/flyIn";
-import { RailLayout, SuggestionsRail } from "../../build/SuggestionsRail";
+import { RailLayout, SuggestionsRail, type RailFocusRequest } from "../../build/SuggestionsRail";
+import { useSuggestions } from "../../build/useSuggestions";
 import { useToolReviews } from "../../alerts/reviews/useToolReviews";
 import { focusMainFrom } from "../../focus";
 import type { MonitoringPageProps } from "../../MonitoringApp";
@@ -248,10 +250,35 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const [added, setAdded] = useState<{ kind: "panel"; id: string; title: string } | { kind: "empty" } | null>(null);
   const { launch, tileRef } = useFlyIn();
   const openSearch = useCallback((opener: HTMLElement | null) => {
-    searchOpener.current = opener;
+    // The suggestions column hides while the search is open, so a card can't take the keyboard back.
+    const inRail = opener?.closest("[data-suggestions-rail]") ?? null;
+    searchOpener.current = inRail ? page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current : opener;
     setRefused(null);
     setSearching(true);
   }, []);
+
+  // One suggestion source for the column and Add panel: read and previewed only while editing with
+  // either open (never for a dashboard that is only viewed).
+  const railOpen = editing !== null && editing.suggestions === "open";
+  const railShown = railOpen && tab === "dashboard" && !ctx.ownerFailure && !searching;
+  const suggestions = useSuggestions({
+    owner: editing !== null && (railShown || searching) ? ctx.owner : null,
+    ownerName: ctx.ownerName || dashboard.owner_name, vars: ctx.vars, range: ctx.range,
+  });
+  // The Suggestions button and `s` show the column and send the keyboard to its first unused card.
+  const suggestionsButton = useRef<HTMLButtonElement>(null);
+  const [railFocus, setRailFocus] = useState<RailFocusRequest | null>(null);
+  const railAsks = useRef(0);
+  const showSuggestions = (from: Element | null) => {
+    if (editor.state.mode !== "edit") return;
+    if (editor.state.suggestions !== "open") editor.dispatch({ type: "suggestions", open: true });
+    // Off the Dashboard tab the column opens there, without taking the keyboard later.
+    if (tab === "dashboard" && !ctx.ownerFailure) setRailFocus({ seq: (railAsks.current += 1), from });
+  };
+  const toggleSuggestions = () => {
+    if (railOpen) editor.dispatch({ type: "suggestions", open: false });
+    else showSuggestions(suggestionsButton.current);
+  };
   /** While the JSON text doesn't apply, nothing is added (it would drop that text): the search stays open and says why. */
   const jsonBlocks = (action: EditorAction) => {
     const st = editor.state;
@@ -290,8 +317,9 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     if (tile) tileRef(flying)(tile);
   }, [flying, tileRef]);
   const toAddPanel = () => (page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current)?.focus();
+  // Hide suggestions: the keyboard goes to the Suggestions button that brings them back.
   const hideSuggestions = () => {
-    toAddPanel();
+    (suggestionsButton.current ?? saveButton.current)?.focus();
     editor.dispatch({ type: "suggestions", open: false });
   };
   const emptyFromSearch = () => {
@@ -324,6 +352,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     if (wasEditing.current && !isEditing) {
       setAskDiscard(null);
       setSearching(false);
+      setRailFocus(null);
       editButton.current?.focus();
     } else if (!wasEditing.current && isEditing && focusLost()) {
       saveButton.current?.focus();
@@ -364,6 +393,9 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         e.preventDefault();
         editButton.current?.focus();
         edit?.();
+      } else if (pressed("suggestionsFocus", e) && editing && tab === "dashboard" && !ctx.ownerFailure && !isEditable(e.target)) {
+        e.preventDefault();
+        showSuggestions(document.activeElement);
       }
     };
     document.addEventListener("keydown", onKey);
@@ -577,7 +609,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
           ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft} />
           : undefined}
         editControls={editing
-          ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton} />
+          ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton}
+              suggestions={{ open: railOpen, onToggle: toggleSuggestions }} suggestionsRef={suggestionsButton} />
           : undefined} />
       {reread && <RereadNotice failed={reread} buttonRef={rereadRetry} />}
       {editing && !editor.draftsWork && <DraftsOffNotice />}
@@ -603,7 +636,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         <DeleteDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)} onDeleted={deleted} />
       )}
       {searching && editing && (
-        <AddPanelSearch owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name} ownerKind={dashboard.owner_kind}
+        <AddPanelSearch suggestions={suggestions} owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name} ownerKind={dashboard.owner_kind}
           vars={ctx.vars} range={ctx.range} draft={editing.draft} refused={refused}
           onAdd={addFromSearch} onEmpty={emptyFromSearch} onClose={() => setSearching(false)} restoreFocusTo={searchOpener} />
       )}
@@ -635,10 +668,11 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
             <VariablesBar projects={ctx.projects} projectsLoading={ctx.owner === null} variables={ctx.variables}
               onVar={setVar} onProjects={(value) => setVar(PROJECTS_VAR, value)} onRetry={ctx.retryVariable}
               onOpenProject={(p, e) => openPage({ page: "project", id: p.id }, e)} />
-            <RailLayout rail={editing && editing.suggestions === "open" ? (
-              <SuggestionsRail owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name}
-                ownerKind={dashboard.owner_kind} vars={ctx.vars} range={ctx.range} draft={editing.draft}
-                onAdd={addFromRail} onClose={hideSuggestions} onEscape={toAddPanel} />
+            <RailLayout rail={editing && railShown ? (
+              <SuggestionsRail suggestions={suggestions} ownerName={ctx.ownerName || dashboard.owner_name}
+                ownerKind={dashboard.owner_kind} draft={editing.draft}
+                onAdd={addFromRail} onClose={hideSuggestions} onEscape={toAddPanel}
+                focusRequest={railFocus} onFocused={() => setRailFocus(null)} />
             ) : null}>
             <DashboardGrid dashboardId={dashboard.id} panels={spec.panels} owner={ctx.owner} ownerName={ctx.ownerName}
               vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} blocked={ctx.blocked} refreshSeq={ctx.refreshSeq} status={ctx.status}
