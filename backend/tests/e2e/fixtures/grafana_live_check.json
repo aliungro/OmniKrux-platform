@@ -1,0 +1,72 @@
+{
+  "id": null,
+  "uid": "omnikrux-live",
+  "title": "OmniKrux live check",
+  "tags": ["omnikrux-check"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "1m",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "job",
+        "label": "job",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prom"},
+        "query": {"query": "label_values(up, job)", "refId": "job"},
+        "definition": "label_values(up, job)",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Prometheus requests",
+      "gridPos": {"x": 0, "y": 0, "w": 16, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "expr": "rate(prometheus_http_requests_total[5m])",
+          "legendFormat": "{{handler}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Targets up",
+      "gridPos": {"x": 16, "y": 0, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "expr": "sum(up)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "logs",
+      "title": "Check logs",
+      "gridPos": {"x": 0, "y": 8, "w": 24, "h": 8},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "loki", "uid": "loki"},
+          "expr": "{job=\"omnikrux-live-check\"}"
+        }
+      ]
+    }
+  ]
+}
