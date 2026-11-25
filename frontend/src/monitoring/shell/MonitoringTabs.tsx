@@ -6,7 +6,8 @@ import type { MonitoringView } from "./tabState";
 
 interface Props {
   tabs: AppTabs<MonitoringView>;
-  labelFor(view: MonitoringView): string;
+  /** The tab's name; `tabId` lets a tab editing a dashboard show its draft title. */
+  labelFor(view: MonitoringView, tabId: string): string;
   /** The tab's top stripe: the project's colour, lilac otherwise. */
   colorFor(view: MonitoringView): string;
   onActivate(id: string): void;
@@ -61,7 +62,7 @@ export function MonitoringTabs({ tabs, labelFor, colorFor, onActivate, onClose, 
     <div className={s.strip}>
       <div className={m.list} role="tablist" aria-label="Monitoring tabs">
       {tabs.tabs.map((tab, i) => {
-        const label = labelFor(tab.view);
+        const label = labelFor(tab.view, tab.id);
         const active = tab.id === tabs.active;
         return (
           <div className={`${s.wrap} ${m.wrap}`} key={tab.id} data-active={active}

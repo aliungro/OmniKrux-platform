@@ -6,6 +6,8 @@
 // suggestions column and Add panel share one suggestion source, read only while either is open.
 // A link to a panel (`panel`) scrolls to it and flashes it; `editAlert` opens edit mode on that
 // panel's Alert tab. A panel's alert badge and its Alert tab open the rule on the Alerts page.
+// In edit mode the title is a field (Rename… opens edit mode there) and the workspace tab follows
+// it; Undo and Ctrl+Z (outside text fields) step back through the session's changes.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
@@ -25,11 +27,11 @@ import { CopyDashboardDialog } from "../create/CopyDashboardDialog";
 import { DeleteDashboardDialog } from "../create/DeleteDashboardDialog";
 import type { VarValue } from "../interpolate";
 import type { NewPanel } from "../layout";
-import type { RefreshSpec, TimeSpec } from "../schema";
+import type { DashboardSpec, RefreshSpec, TimeSpec } from "../schema";
 import { DashboardGrid, type GridControls } from "../grid/DashboardGrid";
 import { usePrefersReducedMotion } from "../motion";
-import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/EditBar";
-import { hasUnsavedWork, isDraftEdit, JSON_FIRST, type EditorAction, type EditorState } from "../editor/editorState";
+import { DiscardDialog, EditControls, EditingPill, EditNotice, RemovedNote } from "../editor/EditBar";
+import { canUndo, changedPanelIds, hasUnsavedWork, isDraftEdit, JSON_FIRST, type EditorAction, type EditorState } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
 import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
 import { DraftBanner, DraftsOffNotice, EditedElsewhere } from "../drafts/DraftBanner";
@@ -98,7 +100,12 @@ function RereadNotice({ failed, buttonRef }: { failed: RereadFailure; buttonRef:
   );
 }
 
-function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, activateTab }: MonitoringPageProps & {
+/** Under the title field when it can't stay as typed. */
+const TITLE_BLANK ="Give the dashboard a title.";
+/** How long the note about a removed panel stays (the next edit takes it away sooner). */
+const REMOVED_NOTE_MS = 10_000;
+
+function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, activateTab, setTabTitle }: MonitoringPageProps & {
   view: DashboardViewState;
   dashboard: DashboardOut;
   reread: RereadFailure | null;
@@ -122,6 +129,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const titleId = `${base}-title`;
   const tabIds = useCallback((t: DashboardTab) => ({ tab: `${base}-tab-${t}`, panel: `${base}-panel-${t}` }), [base]);
   const title = useRef<HTMLHeadingElement>(null);
+  const titleInput = useRef<HTMLInputElement>(null);
   const tabRefs = useRef<Partial<Record<DashboardTab, HTMLButtonElement | null>>>({});
   const timeButton = useRef<HTMLButtonElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
@@ -322,6 +330,65 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     if (tile) tileRef(flying)(tile);
   }, [flying, tileRef]);
   const toAddPanel = () => (page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current)?.focus();
+
+  // The title field: each change is a draft edit (one undo step while typing), refused while the
+  // JSON text doesn't apply; a blank title is said under it (and refused by Save, like any problem).
+  const [titleRefused, setTitleRefused] = useState(false);
+  const retitle = (text: string) => {
+    const action: EditorAction = { type: "setDashboard", key: "title", update: (d) => ({ ...d, title: text }) };
+    setTitleRefused(jsonBlocks(action));
+    editor.dispatch(action);
+  };
+  const titleProblem = !editing ? null
+    : titleRefused && editing.jsonText !== null ? JSON_FIRST
+    : editing.draft.title.trim() === "" ? TITLE_BLANK : null;
+  // The workspace tab shows the title being edited; the saved one again once editing ends.
+  const draftTitle = editing ? editing.draft.title : null;
+  useEffect(() => { setTabTitle?.(tabId, draftTitle); }, [setTabTitle, tabId, draftTitle]);
+  useEffect(() => () => setTabTitle?.(tabId, null), [setTabTitle, tabId]);
+
+  // Undo (the button, Ctrl+Z): what it did is said; the keyboard stays, or, when what held it went
+  // away (an undone add, the note's Undo), goes to a panel that came back, else the first tile.
+  const [said, setSaid] = useState({ text: "", seq: 0 });
+  const say = (text: string) => setSaid((was) => ({ text, seq: was.seq + 1 }));
+  const [undone, setUndone] = useState<{ ids: string[]; seq: number } | null>(null);
+  const undo = () => {
+    const st = flushJson.current?.() ?? editor.state;
+    if (st.mode !== "edit") return;
+    if (st.jsonText !== null) return say(JSON_FIRST);
+    if (!canUndo(st)) return say("Nothing to undo.");
+    const next = editor.dispatch({ type: "undo" });
+    if (next.mode !== "edit") return;
+    say("Undid the last change.");
+    setUndone((was) => ({ ids: changedPanelIds(st.draft, next.draft), seq: (was?.seq ?? 0) + 1 }));
+  };
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
+  /** The keyboard was left nowhere: on a panel of `ids`, else the first tile, the Add tile or Save dashboard. */
+  const toGrid = useCallback((ids: readonly string[] = []) => {
+    if (!focusLost()) return;
+    for (const id of ids) if (grid.current?.focusPanel(id)) return;
+    (page.current?.querySelector<HTMLElement>("[data-tile-id], [data-add-tile]") ?? saveButton.current ?? title.current)?.focus({ preventScroll: true });
+  }, []);
+  useLayoutEffect(() => { if (undone) toGrid(undone.ids); }, [undone, toGrid]);
+
+  // A removed panel: said under the header with Undo, until the next edit or 10 s.
+  const [removed, setRemoved] = useState<{ title: string; draft: DashboardSpec } | null>(null);
+  const onRemoved = (removedTitle: string, draft: DashboardSpec) => setRemoved({ title: removedTitle, draft });
+  const removedShown = editing !== null && removed !== null && editing.draft === removed.draft;
+  useEffect(() => { if (removed && !removedShown) setRemoved(null); }, [removed, removedShown]);
+  useEffect(() => {
+    if (!removed) return;
+    const timer = setTimeout(() => setRemoved(null), REMOVED_NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [removed]);
+  const noteWasShown = useRef(false);
+  const inEdit = editing !== null;
+  useLayoutEffect(() => {
+    // Leaving edit mode puts the keyboard on Edit itself (below).
+    if (noteWasShown.current && !removedShown && inEdit) toGrid();
+    noteWasShown.current = removedShown;
+  }, [removedShown, inEdit, toGrid]);
   // Hide suggestions: the keyboard goes to the Suggestions button that brings them back.
   const hideSuggestions = () => {
     (suggestionsButton.current ?? saveButton.current)?.focus();
@@ -424,6 +491,34 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     document.addEventListener("keydown", onSave, true);
     return () => document.removeEventListener("keydown", onSave, true);
   }, [isEditing]);
+
+  // Ctrl+Z (Cmd+Z) while editing undoes, with the keyboard on this page outside any text field: a
+  // field (the title, a query, the JSON editor) keeps its own undo. Ctrl+Shift+Z is left alone.
+  useEffect(() => {
+    if (!isEditing) return;
+    const onUndo = (e: KeyboardEvent) => {
+      if (!pressed("dashboardUndo", e) || e.shiftKey || e.defaultPrevented) return;
+      const t = e.target;
+      if (!(t instanceof Node) || !page.current?.contains(t) || isEditable(t)) return;
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
+      e.preventDefault();
+      undoRef.current();
+    };
+    document.addEventListener("keydown", onUndo);
+    return () => document.removeEventListener("keydown", onUndo);
+  }, [isEditing]);
+
+  // Rename…: edit mode opens with the keyboard in the title field, its text selected. After the
+  // grid's own landing (child effects run first), so this one wins.
+  const renaming = useRef(false);
+  const rename = () => { if (startEditing(null)) renaming.current = true; };
+  useLayoutEffect(() => {
+    const input = titleInput.current;
+    if (!renaming.current || !input) return;
+    renaming.current = false;
+    input.focus();
+    input.select();
+  });
 
   // The owner read failed and Try again worked: its button went with the message, and the
   // keyboard goes to the title rather than <body>.
@@ -571,6 +666,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const copyAction: MenuAction = { label: "Copy dashboard…", onSelect: () => setAsking("copy") };
   const exportAction: MenuAction = { label: "Export as JSON", onSelect: () => { setUpdatedText(null); exporter.run("dashboard", dashboard.id, dashboard.title); } };
   const actions: MenuAction[] = ready ? [copyAction, exportAction] : [
+    { label: "Rename…", onSelect: rename },
     copyAction,
     exportAction,
     ...(ownerName ? [{ label: `Import into ${ownerName}…`, onSelect: () => openInNewTab({ page: "import", target: { kind: dashboard.owner_kind, id: dashboard.owner_id } }) }] : []),
@@ -610,17 +706,21 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
           onChange={(r: RefreshSpec) => replace({ refresh: r })} />}
         editRef={editButton} onEdit={copyToEdit.busy ? undefined : edit} moreRef={moreButton} actions={actions}
         badge={editing ? <EditingPill /> : undefined}
+        titleField={editing ? { value: editing.draft.title, onChange: retitle, inputRef: titleInput, problem: titleProblem } : undefined}
         afterTitle={offer.draft && !editing
           ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft} />
           : undefined}
         editControls={editing
           ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton}
-              suggestions={tab === "dashboard" && !ctx.ownerFailure ? { open: railShown, onToggle: toggleSuggestions } : undefined} suggestionsRef={suggestionsButton} />
+              suggestions={tab === "dashboard" && !ctx.ownerFailure ? { open: railShown, onToggle: toggleSuggestions } : undefined} suggestionsRef={suggestionsButton}
+              undo={{ can: canUndo(editing), onUndo: undo }} />
           : undefined} />
       {reread && <RereadNotice failed={reread} buttonRef={rereadRetry} />}
       {editing && !editor.draftsWork && <DraftsOffNotice />}
       {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
       <p className={s.arrived} role="status">{editing ? arrivedWords : ""}</p>
+      {removedShown && removed && <RemovedNote title={removed.title} onUndo={undo} />}
+      <p className={s.said} role="status" aria-live="polite"><span key={said.seq}>{editing ? said.text : ""}</span></p>
       {copyToEdit.error && <p className={s.copyProblem} role="alert">{copyToEdit.error.text}</p>}
       <div className={s.transferLines}><ExportLine result={exporter.result} /></div>
       <p className={s.transferDone} role="status">{updatedText ?? ""}</p>
@@ -683,7 +783,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
               vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} blocked={ctx.blocked} refreshSeq={ctx.refreshSeq} status={ctx.status}
               editor={editing ? {
                 state: editing, dispatch: editor.dispatch, ownerKind: dashboard.owner_kind, onLeave: () => saveButton.current?.focus(),
-                saveProblems, openRule,
+                saveProblems, openRule, onRemoved,
               } : undefined}
               onAddPanel={editing ? openSearch : undefined} controls={grid}
               board={editing !== null && editing.suggestions === "open" && editing.draft.panels.length === 0}

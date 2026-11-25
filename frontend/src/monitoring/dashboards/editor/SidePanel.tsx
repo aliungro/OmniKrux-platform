@@ -1,6 +1,7 @@
 // The selected panel's settings beside the grid (E2): Query, Chart, Options and Alert. Every change
 // goes into the draft at once (`updatePanel`), so the JSON and the panel agree; the panel's frame
-// redraws in place, and its queries run once the typing stops (D1).
+// redraws in place, and its queries run once the typing stops (D1). The settings end with Duplicate
+// panel and Remove panel (the grid does both, and says where the keyboard goes).
 import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ALERT_PANEL_TYPES } from "../../alerts/limits";
 import { RecommendationBar } from "../../build/RecommendationBar";
@@ -59,10 +60,14 @@ export interface SidePanelProps {
   saveProblems?: readonly Problem[];
   /** Opens the Alerts page on a rule (a new workspace tab with Ctrl). */
   onOpenRule?(ruleId: string, newTab: boolean): void;
+  /** Duplicate panel and Remove panel at the end of the settings. */
+  onDuplicate?(): void;
+  onRemove?(): void;
 }
 
 export function SidePanel({
   state, dispatch, owner, ownerKind, panelData, live = null, initialFocus = "tab", seq = 0, onClose, saveProblems, onOpenRule,
+  onDuplicate, onRemove,
 }: SidePanelProps) {
   const base = useId();
   const tabs = useRef<Partial<Record<SideTab, HTMLButtonElement | null>>>({});
@@ -158,6 +163,12 @@ export function SidePanel({
             thresholdText={state.alertText?.[id]} onThresholdText={(text) => dispatch({ type: "alertText", id, text })} />
         )}
       </div>
+      {(onDuplicate || onRemove) && (
+        <div className={s.foot}>
+          {onDuplicate && <button type="button" className={s.footAction} onClick={onDuplicate}>Duplicate panel</button>}
+          {onRemove && <button type="button" className={s.footAction} data-danger="" onClick={onRemove}>Remove panel</button>}
+        </div>
+      )}
     </aside>
   );
 }

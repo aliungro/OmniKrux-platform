@@ -14,6 +14,7 @@
 }
 
 .toggle,
+.undo,
 .discard,
 .save {
   padding: 4px 12px;
@@ -33,6 +34,28 @@
 .discard:hover {
   border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
   color: var(--ink);
+}
+
+/* Undo: quieter than Discard (no frame until hovered); dimmed while nothing is left to undo. */
+.undo {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.undo:hover {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.undo[aria-disabled="true"] {
+  color: var(--ink-3);
+  opacity: 0.6;
+  cursor: default;
+}
+
+.undo[aria-disabled="true"]:hover {
+  border-color: transparent;
 }
 
 .save {
@@ -70,6 +93,7 @@
 }
 
 .toggle:focus-visible,
+.undo:focus-visible,
 .discard:focus-visible,
 .save:focus-visible {
   outline: 2px solid var(--focus);
@@ -244,6 +268,51 @@
 .secondary:focus-visible,
 .primary:focus-visible,
 .danger:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* What a removal took away, with Undo: a quiet line under the header (not a failure). */
+.removed {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 16px 0;
+  padding: 6px 8px 6px 12px;
+  border-radius: 0 8px 8px 0;
+  box-shadow: inset 2px 0 var(--ink-3);
+  background: color-mix(in srgb, var(--ink-3) 9%, transparent);
+}
+
+.removedLine {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.removedUndo {
+  flex: none;
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, var(--focus) 45%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.removedUndo:hover {
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
+}
+
+.removedUndo:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }

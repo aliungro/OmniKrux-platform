@@ -364,7 +364,7 @@ describe("Update from source", () => {
     const first = await open("d1");
     await screen.findByText("Imported from Team Grafana on 1 Mar 2026");
     expect((await menuItems(first.user)).map((i) => i.textContent)).toEqual([
-      "Copy dashboard…", "Export as JSON", "Import into Shop…", "Update from source…", "Delete dashboard…",
+      "Rename…", "Copy dashboard…", "Export as JSON", "Import into Shop…", "Update from source…", "Delete dashboard…",
     ]);
     // Import into Shop… opens Import for its project in a new tab.
     await first.user.click(screen.getByRole("menuitem", { name: "Import into Shop…" }));
@@ -377,7 +377,7 @@ describe("Update from source", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByText(/^Imported from /)).toBeNull();
     expect((await menuItems(second.user)).map((i) => i.textContent)).toEqual([
-      "Copy dashboard…", "Export as JSON", "Import into Shop…", "Delete dashboard…",
+      "Rename…", "Copy dashboard…", "Export as JSON", "Import into Shop…", "Delete dashboard…",
     ]);
     cleanup();
 

@@ -85,6 +85,50 @@
   white-space: nowrap;
 }
 
+/* Edit mode: the title is a field inside the heading, drawn like it. A faint dashed rule says it
+   can be typed in; it firms up on hover and focus. */
+.title[data-editing] {
+  overflow: visible;
+}
+
+.titleInput {
+  max-width: min(60vw, 640px);
+  min-width: 0;
+  margin: -2px -6px;
+  padding: 1px 5px;
+  border: 1px dashed color-mix(in srgb, var(--ink-3) 45%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+.titleInput:hover {
+  border-color: color-mix(in srgb, var(--focus) 55%, var(--rule));
+}
+
+.titleInput:focus-visible {
+  border-style: solid;
+  border-color: var(--focus);
+  outline: 2px solid color-mix(in srgb, var(--focus) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.titleInput[aria-invalid="true"] {
+  border-style: solid;
+  border-color: var(--bad);
+}
+
+/* Why the title can't stay as typed: on its own row, under the title. */
+.titleProblem {
+  flex-basis: 100%;
+  margin: -4px 0 0;
+  color: var(--bad);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
 .readyTag {
   flex: none;
   align-self: center;
@@ -664,4 +708,17 @@
   .updated {
     padding: 7px 12px 0;
   }
+}
+
+/* What Undo did, said to screen readers only (the page shows the change itself). */
+.said {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

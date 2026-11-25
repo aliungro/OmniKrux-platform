@@ -1,5 +1,5 @@
-// The header in edit mode: the Editing pill, Suggestions, Discard and Save dashboard; under it, why a save
-// didn't go through; and the question before discarding changes.
+// The header in edit mode: the Editing pill, Suggestions, Undo, Discard and Save dashboard; under it,
+// why a save didn't go through and what a removal took away; and the question before discarding changes.
 import { useId, useRef, type RefObject } from "react";
 import { failure } from "../../../api/http";
 import { DialogShell } from "../../../features/dock/ConfirmDialog";
@@ -10,7 +10,7 @@ export function EditingPill() {
   return <span className={s.pill}>Editing</span>;
 }
 
-export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, suggestions, suggestionsRef }: {
+export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, suggestions, suggestionsRef, undo }: {
   saving: boolean;
   onDiscard(): void;
   onSave(): void;
@@ -19,6 +19,8 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, s
   /** Shows or hides the suggestions column (not a draft edit, so it works while saving too). */
   suggestions?: { open: boolean; onToggle(): void };
   suggestionsRef?: RefObject<HTMLButtonElement | null>;
+  /** Undo: `can` is false when nothing in the session is left to undo (it says so, and stays). */
+  undo?: { can: boolean; onUndo(): void };
 }) {
   return (
     <>
@@ -26,6 +28,12 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, s
         <button ref={suggestionsRef} type="button" className={s.toggle} aria-pressed={suggestions.open}
           aria-keyshortcuts="s" onClick={suggestions.onToggle}>
           Suggestions
+        </button>
+      )}
+      {undo && (
+        <button type="button" className={s.undo} aria-keyshortcuts="Control+Z" aria-disabled={!undo.can || undefined}
+          onClick={undo.onUndo}>
+          Undo
         </button>
       )}
       <button ref={discardRef} type="button" className={s.discard} aria-disabled={saving || undefined}
@@ -37,6 +45,16 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, s
         Save dashboard
       </button>
     </>
+  );
+}
+
+/** Under the header after a removal: what went, and Undo (gone after the next edit or 10 s). */
+export function RemovedNote({ title, onUndo }: { title: string; onUndo(): void }) {
+  return (
+    <div className={s.removed} role="status">
+      <p className={s.removedLine}>Removed "{title}".</p>
+      <button type="button" className={s.removedUndo} onClick={onUndo}>Undo</button>
+    </div>
   );
 }
 

@@ -518,3 +518,95 @@ describe("Dashboard page", () => {
     expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
   });
 });
+
+describe("Renaming in the header", () => {
+  const puts = (api: FakeMonitoringApi) => api.requests.filter((r) => r.method === "PUT" && r.url === "/api/monitoring/dashboards/d1");
+  const workspaceTab = () => within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")[0];
+
+  async function opened() {
+    const user = userEvent.setup();
+    const api = shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    return { user, api, title };
+  }
+
+  it("the title is a field in edit mode and saves with the dashboard", async () => {
+    const { user, api, title } = await opened();
+    expect(within(title).queryByRole("textbox")).toBeNull();
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    const field = within(title).getByRole("textbox", { name: "Dashboard title" }) as HTMLInputElement;
+    expect(field.value).toBe("API latency");
+    expect(field.maxLength).toBe(120);
+    await user.clear(field);
+    await user.type(field, "Checkout latency");
+    // Letters typed in the field are the field's: `e`, `t` and `r` did nothing else.
+    expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
+    await user.keyboard("{Control>}s{/Control}");
+    await waitFor(() => expect(puts(api)).toHaveLength(1));
+    expect((puts(api)[0].body as { spec: { title: string } }).spec.title).toBe("Checkout latency");
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "Checkout latency" })).toBe(title);
+    expect(within(title).queryByRole("textbox")).toBeNull();
+    notBody();
+  });
+
+  it("Rename… opens edit mode on the title", async () => {
+    const { user, title } = await opened();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const items = screen.getAllByRole("menuitem").map((m) => m.textContent);
+    expect(items[0]).toBe("Rename…");
+    await user.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    const field = await within(title).findByRole("textbox", { name: "Dashboard title" }) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, "API latency".length]);
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    // Typing replaces the selected title.
+    await user.keyboard("Orders");
+    expect(field.value).toBe("Orders");
+  });
+
+  it("a blank title can't be saved", async () => {
+    const { user, api, title } = await opened();
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    const field = within(title).getByRole("textbox", { name: "Dashboard title" });
+    await user.clear(field);
+    const problem = screen.getByText("Give the dashboard a title.");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(field.getAttribute("aria-describedby")).toBe(problem.id);
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    // Refused like any invalid draft: still editing, and the reason is said.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Use 1 to 120 characters");
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    expect(puts(api).every((r) => (r.body as { spec: { title: string } }).spec.title === "")).toBe(true);
+    // Typed again, the note goes.
+    await user.type(field, "Orders");
+    expect(screen.queryByText("Give the dashboard a title.")).toBeNull();
+    notBody();
+  });
+
+  it("the tab label follows the title being edited", async () => {
+    const { user, title } = await opened();
+    expect(workspaceTab().textContent).toContain("API latency");
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    const field = within(title).getByRole("textbox", { name: "Dashboard title" });
+    await user.clear(field);
+    await user.type(field, "Orders");
+    expect(workspaceTab().textContent).toContain("Orders");
+    // Blank: the tab keeps the saved name.
+    await user.clear(field);
+    expect(workspaceTab().textContent).toContain("API latency");
+    await user.type(field, "Orders");
+    // Discarded: the saved name again.
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await user.click(await screen.findByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(workspaceTab().textContent).toContain("API latency"));
+    expect(workspaceTab().textContent).not.toContain("Orders");
+    notBody();
+  });
+});

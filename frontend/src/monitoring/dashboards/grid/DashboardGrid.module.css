@@ -85,6 +85,11 @@
   }
 }
 
+/* A tile whose ⋯ menu is open draws over its neighbours, so the menu isn't hidden under them. */
+.tile:has([aria-haspopup="menu"][aria-expanded="true"]) {
+  z-index: 4;
+}
+
 .tile[data-dragging] {
   z-index: 3;
   border-color: color-mix(in srgb, var(--focus) 70%, var(--rule));
@@ -217,7 +222,7 @@
   cursor: help;
 }
 
-/* The right end of the head: the alert badge, then (in edit mode) the ⋮⋮ handle. */
+/* The right end of the head: the alert badge, then (in edit mode) the ⋯ menu and the ⋮⋮ handle. */
 .headEnd {
   flex: none;
   display: inline-flex;

@@ -3,7 +3,8 @@
 // mode it is also a tile (`tile`): focusable, named by its place, with move and resize handles;
 // it runs its queries 300 ms after the typing stops, and its frame flashes when it is edited (D1).
 // Memoised: an edit re-renders only the panel it changed. A panel with an alert wears its state in
-// the corner (the worst of its targets); in edit mode a changed alert says it isn't saved yet.
+// the corner (the worst of its targets); in edit mode a changed alert says it isn't saved yet, and
+// the tile's ⋯ menu (Settings, Duplicate, Remove) sits before its ⋮⋮ handle.
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { usePanelStates } from "../../alerts/api";
 import { notRefreshedWords, STATE_LABEL, STATE_READING, STATE_UNKNOWN, stateTone } from "../../alerts/format";
@@ -243,7 +244,7 @@ export const PanelFrame = memo(function PanelFrame({
             </span>
           </span>
         )}
-        {badge ? <span className={s.headEnd}>{badge}{tile?.grab}</span> : tile?.grab}
+        {(badge || tile) && <span className={s.headEnd}>{badge}{tile?.menu}{tile?.grab}</span>}
       </header>
       <div className={s.body}>
         {/* Only edits animate: view mode has none, and reduced motion always jumps. */}

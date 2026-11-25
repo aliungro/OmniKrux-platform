@@ -152,6 +152,7 @@ describe("shortcut registry", () => {
       ["dashboardTime", ["t"], "Pick the time range"],
       ["dashboardRefresh", ["r"], "Refresh now"],
       ["dashboardSave", ["Ctrl S"], "While editing (in fields too): save the dashboard"],
+      ["dashboardUndo", ["Ctrl Z"], "While editing: undo the last change"],
       ["panelFocus", ["← → ↑ ↓"], "While editing: move between panels"],
       ["panelMove", ["Shift ← → ↑ ↓"], "While editing: move the panel one step"],
       ["panelResize", ["Ctrl Shift ← → ↑ ↓"], "While editing: make the panel narrower, wider, shorter or taller"],
@@ -160,6 +161,7 @@ describe("shortcut registry", () => {
       ["addPanelPick", ["↑ ↓", "Enter"], "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)"],
       ["suggestionsFocus", ["s"], "While editing: show the suggestions and go to them"],
       ["panelRemove", ["Ctrl Del"], "While editing: remove the panel from the draft"],
+      ["panelDuplicate", ["d"], "While editing: duplicate the panel"],
       ["panelLeave", ["Esc"], "Close the panel's settings, then go to Save dashboard"],
       ["queryRun", ["Ctrl Enter"], "In a query: run it now; in the JSON: review the changes"],
       ["chartCrosshair", ["← →"], "On a chart: move the crosshair; Esc hides it"],
@@ -212,6 +214,25 @@ describe("shortcut registry", () => {
       ["exploreShowAll", ["Esc"], "On the chart: show all log lines again"],
     ]);
     expect(keysFor("exploreRun", true)).toEqual(["⌘ Enter"]);
+  });
+
+  it("the help sheet lists undo and duplicate", () => {
+    const dashboards = allGroups(undefined, "monitoring").find(([t]) => t === "Dashboards")![1];
+    expect(dashboards.find((s) => s.id === "dashboardUndo")).toMatchObject({ keys: ["Ctrl Z"], label: "While editing: undo the last change" });
+    expect(dashboards.find((s) => s.id === "panelDuplicate")).toMatchObject({ keys: ["d"], label: "While editing: duplicate the panel" });
+    expect(keysFor("dashboardUndo", true)).toEqual(["⌘ Z"]);
+    expect(keysFor("panelDuplicate", true)).toEqual(["d"]);
+    expect(pressed("dashboardUndo", { ...base, key: "z", ctrlKey: true })).toBe(true);
+    expect(pressed("dashboardUndo", { ...base, key: "z", metaKey: true })).toBe(true);
+    expect(pressed("dashboardUndo", { ...base, key: "z" })).toBe(false);
+    expect(pressed("dashboardUndo", { ...base, key: "z", ctrlKey: true, altKey: true })).toBe(false);
+    expect(pressed("panelDuplicate", { ...base, key: "d" })).toBe(true);
+    expect(pressed("panelDuplicate", { ...base, key: "d", ctrlKey: true })).toBe(false);
+    expect(pressed("panelDuplicate", { ...base, key: "D", shiftKey: true })).toBe(false);
+    // Kubernetes' help never lists them.
+    const kube = allGroups("pods", "kubernetes").flatMap(([, list]) => list.map((s) => s.id));
+    expect(kube).not.toContain("dashboardUndo");
+    expect(kube).not.toContain("panelDuplicate");
   });
 
   it("explore keys match only as listed", () => {

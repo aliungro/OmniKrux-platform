@@ -45,8 +45,8 @@ export type ShortcutId =
   | "sessionTabs"
   | "confirmReview"
   | "monitoringFind" | "monitoringTree" | "monitoringNewDashboard" | "monitoringImport"
-  | "dashboardEdit" | "dashboardViews" | "dashboardTime" | "dashboardRefresh" | "dashboardSave"
-  | "panelFocus" | "panelMove" | "panelResize" | "panelSettings" | "panelAdd" | "panelRemove" | "panelLeave"
+  | "dashboardEdit" | "dashboardViews" | "dashboardTime" | "dashboardRefresh" | "dashboardSave" | "dashboardUndo"
+  | "panelFocus" | "panelMove" | "panelResize" | "panelSettings" | "panelAdd" | "panelRemove" | "panelDuplicate" | "panelLeave"
   | "queryRun" | "chartCrosshair" | "tableSort" | "logLabels" | "addPanelPick" | "suggestionsFocus"
   | "exploreQuery" | "exploreBrowse" | "exploreLogs" | "exploreTime" | "exploreRun" | "exploreAdd" | "exploreWindow" | "exploreShowAll"
   | "alertsViews" | "alertsMove" | "alertSilence" | "alertsDetails" | "alertsList" | "alertsSave";
@@ -153,6 +153,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "dashboardTime", scope: "dashboard", keys: ["t"], match: ["t"], label: "Pick the time range" },
   { id: "dashboardRefresh", scope: "dashboard", keys: ["r"], match: ["r"], label: "Refresh now" },
   { id: "dashboardSave", scope: "dashboard", keys: ["Ctrl S"], macKeys: ["⌘ S"], match: ["s", "S"], ctrl: true, label: "While editing (in fields too): save the dashboard" },
+  { id: "dashboardUndo", scope: "dashboard", keys: ["Ctrl Z"], macKeys: ["⌘ Z"], match: ["z", "Z"], ctrl: true, label: "While editing: undo the last change" },
   { id: "panelFocus", scope: "dashboard", keys: ["← → ↑ ↓"], match: ARROWS, label: "While editing: move between panels" },
   { id: "panelMove", scope: "dashboard", keys: ["Shift ← → ↑ ↓"], match: ARROWS, shift: true, label: "While editing: move the panel one step" },
   { id: "panelResize", scope: "dashboard", keys: ["Ctrl Shift ← → ↑ ↓"], macKeys: ["⌘ Shift ← → ↑ ↓"], match: ARROWS, ctrl: true, shift: true, label: "While editing: make the panel narrower, wider, shorter or taller" },
@@ -162,6 +163,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "suggestionsFocus", scope: "dashboard", keys: ["s"], match: ["s"], label: "While editing: show the suggestions and go to them" },
   // Matched with isDeleteKey, like deleteFocused.
   { id: "panelRemove", scope: "dashboard", keys: ["Ctrl Del"], macKeys: ["⌘ ⌫"], label: "While editing: remove the panel from the draft" },
+  { id: "panelDuplicate", scope: "dashboard", keys: ["d"], match: ["d"], label: "While editing: duplicate the panel" },
   { id: "panelLeave", scope: "dashboard", keys: ["Esc"], match: ["Escape"], label: "Close the panel's settings, then go to Save dashboard" },
   { id: "queryRun", scope: "dashboard", keys: ["Ctrl Enter"], macKeys: ["⌘ Enter"], match: ["Enter"], ctrl: true, label: "In a query: run it now; in the JSON: review the changes" },
   { id: "chartCrosshair", scope: "dashboard", keys: ["← →"], match: ["ArrowLeft", "ArrowRight"], label: "On a chart: move the crosshair; Esc hides it" },

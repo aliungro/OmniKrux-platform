@@ -70,6 +70,8 @@ export interface MonitoringPageProps {
    * shows Home already (that one becomes active).
    */
   leaveDeleted?(): void;
+  /** A dashboard being edited names tab `tabId` after its draft title; null: its saved name again. */
+  setTabTitle?(tabId: string, title: string | null): void;
 }
 
 /** Ctrl K and the top bar's box in Monitoring (Shell sends it; the same literal there). */
@@ -233,6 +235,24 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       },
     };
   }, [tree.data, sources.data, clusterNames]);
+  // A dashboard being edited names its tab after the draft title (a blank one: the saved name). The
+  // page on screen reports it as it is typed; a tab in the background reads its edit session.
+  const [tabTitles, setTabTitles] = useState<Record<string, string>>({});
+  const setTabTitle = useCallback((id: string, title: string | null) => {
+    const text = title?.trim() || null;
+    setTabTitles((was) => {
+      if ((was[id] ?? null) === text) return was;
+      const next = { ...was };
+      if (text === null) delete next[id];
+      else next[id] = text;
+      return next;
+    });
+  }, []);
+  const tabLabel = (v: MonitoringView, id: string) => {
+    const session = editSessions.get(id);
+    const draft = v.page === "dashboard" && session?.mode === "edit" && session.dashboardId === v.id ? session.draft.title.trim() : "";
+    return (v.page === "dashboard" ? tabTitles[id] : undefined) || draft || names.label(v);
+  };
 
   // A page about to be replaced takes the keyboard with it: hand it to the workspace first, so it
   // never falls to <body>. The tree and Find keep their own focus.
@@ -463,7 +483,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     if (!tab || !equalMonitoringView(tab.view, expected)) return;
     latest.current.dispatchTabs({ type: "navigate", id, view: next, mode: "replace" });
   }, []);
-  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView, leaveDeleted };
+  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView, leaveDeleted, setTabTitle };
   return (
     <div ref={root} className={s.app}>
       {/* Install, uninstall and contact-point reviews, one at a time; around the tool review queue,
@@ -474,7 +494,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
         <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
           index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} findInput={findInput} />
         <div className={s.work}>
-          <MonitoringTabs tabs={tabs} labelFor={names.label} colorFor={names.color}
+          <MonitoringTabs tabs={tabs} labelFor={tabLabel} colorFor={names.color}
             onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
             onClose={(id) => dispatchTabs({ type: "closeTab", id }) === true}
             onNew={() => dispatchTabs({ type: "newTab" })} />
