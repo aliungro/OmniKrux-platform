@@ -1,0 +1,40 @@
+/* Monitoring's tab strip on top of the shared look (WorkspaceTabs.module.css): the tabs scroll
+   sideways inside their own list, never the page, and + stays outside it, always in view. The
+   bar under them is the app's one thin scrollbar (tokens.css). */
+.list {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: end;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* A long name is cut; the tab's title holds all of it. */
+.wrap {
+  max-width: 220px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home {
+  flex: none;
+  margin-right: 0.35em;
+}
+
+/* + and a tab's close button never shrink. */
+.fixed {
+  flex: none;
+}

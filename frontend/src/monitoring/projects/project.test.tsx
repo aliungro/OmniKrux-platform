@@ -577,6 +577,21 @@ describe("Project delete review", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("deleting a project from its own tab leaves one Home tab", async () => {
+    const user = userEvent.setup();
+    const api = withEverything();
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p1" }, { page: "project", id: "p2" }, { page: "home" }) });
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete project" }));
+    // The project's tab closes; the Home tab open already becomes the active one.
+    await waitFor(() => expect(current().tabs.map((t) => t.view.page)).toEqual(["project", "home"]));
+    expect(current().active).toBe("start2");
+    expect(api.state.projects.map((p) => p.id)).toEqual(["p2"]);
+    expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
   it("Ctrl+Enter confirms", async () => {
     const user = userEvent.setup();
     const api = withEverything();

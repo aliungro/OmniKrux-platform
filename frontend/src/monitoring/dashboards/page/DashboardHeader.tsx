@@ -96,7 +96,7 @@ export function DashboardHeader(p: Props) {
           <a href="#" className={s.owner} onClick={(e) => { e.preventDefault(); p.onOwner(e); }}>{p.ownerName}</a>
           <span className={s.slash} aria-hidden="true">/</span>
         </p>
-        <h1 id={p.titleId} ref={p.titleRef} tabIndex={-1} className={s.title}>{p.title}</h1>
+        <h1 id={p.titleId} ref={p.titleRef} tabIndex={-1} className={s.title} title={p.title}>{p.title}</h1>
         {p.readyMade && <span className={s.readyTag}>Ready-made</span>}
         {p.badge}
       </div>

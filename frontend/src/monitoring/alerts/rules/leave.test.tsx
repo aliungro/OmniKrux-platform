@@ -13,7 +13,10 @@ import type { MonitoringView } from "../../shell/tabState";
 import { installFakeMonitoringApi } from "../../test/fakeMonitoringApi";
 import { seedProject } from "../../test/renderMonitoringApp";
 import type { RuleOut } from "../api";
-import { alertFormMarks, clearAlertForms, endRuleForm, keepRuleForm, markAlertForm, ruleFormSessions, startRuleForm } from "./formSessions";
+import {
+  alertFormMarks, clearAlertForms, endRuleForm, heldFormLeave, keepRuleForm, markAlertForm, ruleFormSessions, startRuleForm, type AlertFormMark,
+} from "./formSessions";
+import type { AppTabs } from "../../../features/shell/workspace";
 
 // The chart chunk as a stub.
 vi.mock("../../charts", async () => {
@@ -235,5 +238,48 @@ describe("leaving a silence or contact point being written", () => {
     expect(unload()).toBe(true);
     markAlertForm("m9", "f1", null);
     expect(unload()).toBe(false);
+  });
+});
+
+describe("a close-only mark", () => {
+  const SETUP_MARK: AlertFormMark = { title: "New project", page: "setup", closeOnly: true };
+  const tabs: AppTabs<MonitoringView> = {
+    tabs: [
+      { id: "a", view: { page: "setup" }, back: [HOME], forward: [ALERTS], scrollTop: 0 },
+      { id: "b", view: HOME, back: [], forward: [], scrollTop: 0 },
+    ],
+    active: "a", closed: [],
+  };
+  const marks = (...list: AlertFormMark[]) => new Map([["a", new Map(list.map((m, i) => [`f${i}`, m]))]]);
+
+  it("a close-only mark holds only closing the tab", () => {
+    const only = marks(SETUP_MARK);
+    // Every other way out keeps the setup draft: none of them asks.
+    expect(heldFormLeave({ type: "navigate", id: "a", view: HOME, mode: "push" }, tabs, only)).toBeNull();
+    expect(heldFormLeave({ type: "back", id: "a" }, tabs, only)).toBeNull();
+    expect(heldFormLeave({ type: "forward", id: "a" }, tabs, only)).toBeNull();
+    expect(heldFormLeave({ type: "activateTab", id: "b" }, tabs, only)).toBeNull();
+    expect(heldFormLeave({ type: "nextTab" }, tabs, only)).toBeNull();
+    expect(heldFormLeave({ type: "newTab" }, tabs, only)).toBeNull();
+    expect(heldFormLeave({ type: "closeTab", id: "a" }, tabs, only)).toEqual({ tabId: "a", title: "New project", mark: SETUP_MARK });
+    // A form with changes on the same tab holds as before, and names the question when the tab closes.
+    const hand: AlertFormMark = { title: "New source", page: "setup" };
+    const both = marks(SETUP_MARK, hand);
+    expect(heldFormLeave({ type: "closeTab", id: "a" }, tabs, both)?.mark).toBe(hand);
+    expect(heldFormLeave({ type: "activateTab", id: "b" }, tabs, both)?.mark).toBe(hand);
+    expect(heldFormLeave({ type: "navigate", id: "a", view: HOME, mode: "push" }, tabs, both)?.mark).toBe(hand);
+  });
+
+  it("a close-only mark doesn't ask before a reload: the setup draft survives it", () => {
+    const unload = () => {
+      const e = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    markAlertForm("m9", "setup", SETUP_MARK);
+    expect(unload()).toBe(false);
+    expect(alertFormMarks.get("m9")?.get("setup")).toEqual(SETUP_MARK);
+    markAlertForm("m9", "setup", null);
+    expect(alertFormMarks.has("m9")).toBe(false);
   });
 });

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import k from "../../features/chrome/key.module.css";
 import { useFreshOverview } from "../home/FiringSection";
 import type { TreeColor, TreeOut } from "../api/types";
+import { focusHeadingOnArrival } from "../dashboards/create/arrival";
 import { ownerOfDashboard, type Owner } from "../dashboards/create/currentOwner";
 import type { SearchEntry } from "../search/search";
 import type { MonitoringView } from "../shell/tabState";
@@ -28,6 +29,8 @@ interface Props {
   owner: Owner | null;
   /** Opens New dashboard for `owner` (null: picked in the dialog); the keyboard returns to `from`. */
   onNewDashboard(owner: Owner | null, from: HTMLElement): void;
+  /** Find's field, for MonitoringApp's `openFind`. */
+  findInput: RefObject<HTMLInputElement | null>;
 }
 
 const FOCUSABLE = new Set<TreeRow["kind"]>(["group", "project", "shortcut", "dashboard"]);
@@ -68,7 +71,7 @@ const ICONS: Record<"home" | "explore" | "alerts" | "sources", ReactNode> = {
   sources: <><ellipse cx="8" cy="4" rx="5" ry="1.75" /><path d="M3 4v8c0 .97 2.24 1.75 5 1.75s5-.78 5-1.75V4M3 8c0 .97 2.24 1.75 5 1.75S13 8.97 13 8" /></>,
 };
 
-export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeave, owner, onNewDashboard }: Props) {
+export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeave, owner, onNewDashboard, findInput }: Props) {
   const firing = useFreshOverview()?.counts.firing ?? 0;
   const [expanded, setExpanded] = useState(readExpanded);
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -170,7 +173,11 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
           <span>{row.label}</span>
           <button type="button" className={s.plus} aria-label={groups ? "New group" : "New project"}
             title={groups ? "New group" : "New project"}
-            onClick={(e) => onOpen(groups ? { page: "newGroup" } : { page: "setup" }, ctrl(e))}>+</button>
+            onClick={(e) => {
+              // Setup opens with the keyboard on its step's heading (the group form on its name field).
+              if (!groups) focusHeadingOnArrival("setup");
+              onOpen(groups ? { page: "newGroup" } : { page: "setup" }, ctrl(e));
+            }}>+</button>
         </div>
         {tree && empty && <p className={s.emptyLine}>{groups ? "Combine projects into a group with +" : "No projects yet"}</p>}
       </div>
@@ -214,7 +221,7 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
         )}
         {row.kind === "group" && <i className={`${s.folder} ${row.expanded ? s.folderOpen : ""}`} aria-hidden="true" />}
         {row.color && <i className={s.dot} data-dot={row.color} style={{ background: DOT[row.color] }} aria-hidden="true" />}
-        <span className={s.label}>{row.label}</span>
+        <span className={s.label} title={row.label}>{row.label}</span>
         {row.readyMade && (
           <svg className={s.readyIcon} viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5 7.4 4.6 10.5 6 7.4 7.4 6 10.5 4.6 7.4 1.5 6 4.6 4.6Z" /></svg>
         )}
@@ -235,7 +242,7 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
         <span className={s.title}>Monitoring</span>
         <span className={k.k} aria-hidden="true">Alt 2</span>
       </div>
-      <FindBox index={index} onOpen={onOpen} onLeave={onLeave} />
+      <FindBox index={index} onOpen={onOpen} onLeave={onLeave} inputRef={findInput} />
       <div className={s.nav}>
         {navItem({ page: "home" }, "Home", "home")}
         {navItem(exploreFrom(view, tree), "Explore", "explore")}

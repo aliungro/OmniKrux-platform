@@ -377,3 +377,46 @@ describe("Sources OmniKrux installed", () => {
     await waitFor(() => expect(current().tabs[0].view).toEqual({ page: "tools", clusterId: "c1" }));
   });
 });
+
+describe("leaving a source form with changes", () => {
+  it("closing the tab while a source is edited asks first", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ sources: [source("s1", "Prom")] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "sources" }, { page: "home" }) });
+    await user.click(await screen.findByRole("button", { name: "Edit Prom" }));
+    // Opened, nothing changed: closing doesn't ask.
+    const close = screen.getByRole("button", { name: "Close Sources" });
+    const address = screen.getByLabelText("Address") as HTMLInputElement;
+    await user.type(address, "/x");
+    await user.click(close);
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "Prom" with unsaved changes?' });
+    expect(within(ask).getByText("Leaving loses what you entered in this form.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe("http://prom.example:9090/x");
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Typed back to how it started: nothing to lose, nothing asked.
+    await user.type(screen.getByLabelText("Address"), "{Backspace}{Backspace}");
+    await user.click(screen.getByRole("button", { name: "Close Sources" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a new source form asks under its own name, and Cancel lets the tab go", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "sources" }, { page: "home" }) });
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    await user.type(screen.getByLabelText("Address"), "http://new.example:9090");
+    await user.click(screen.getByRole("button", { name: "Close Sources" }));
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "New source" with unsaved changes?' });
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Close Sources" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+  });
+});

@@ -4,7 +4,7 @@ import type { TabNav } from "../features/shell/browserHistory";
 import type { AppTabs } from "../features/shell/workspace";
 import { useMonitoringTree, useSources } from "./api/hooks";
 import type { SourceOut, TreeOut } from "./api/types";
-import { pressed } from "../features/chrome/shortcuts";
+import { pageKey, pressed } from "../features/chrome/shortcuts";
 import { focusMainFrom } from "./focus";
 import { readRecent, recordRecent } from "./home/recent";
 import GroupForm from "./groups/GroupForm";
@@ -23,14 +23,14 @@ import { pageLetter } from "./dashboards/page/keys";
 import { ToolReviewHost } from "./alerts/reviews/ToolReviewHost";
 import { InstallReviewHost } from "./install/InstallReviewHost";
 import {
-  clearAlertForms, endRuleForm, FORM_LEAVE_BODY, heldFormLeave, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY,
+  alertFormMarks, clearAlertForms, endRuleForm, FORM_LEAVE_BODY, heldFormLeave, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY, SETUP_LEAVE_BODY,
 } from "./alerts/rules/formSessions";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
 import SetupPage from "./setup/SetupPage";
 import { buildSearchIndex } from "./search/search";
-import { pruneSetupDrafts } from "./setup/setupDraftStore";
+import { pruneSetupDrafts, removeSetupDraft } from "./setup/setupDraftStore";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
 import {
   equalMonitoringView, MONITORING_HOME, monitoringTabLabel, setMonitoringLeaveCheck, setMonitoringSwitchCheck, type MonitoringTabAction,
@@ -64,7 +64,15 @@ export interface MonitoringPageProps {
    * shows `expected`. For a page that leaves with a view change still waiting (Explore's last keys).
    */
   replaceTabView?(tabId: string, view: MonitoringView, expected: MonitoringView): void;
+  /**
+   * The page's item was deleted from this tab: the tab shows Home, or closes when another tab
+   * shows Home already (that one becomes active).
+   */
+  leaveDeleted?(): void;
 }
+
+/** Ctrl K and the top bar's box in Monitoring (Shell sends it; the same literal there). */
+const MONITORING_FIND_EVENT = "omnikrux:monitoring-find";
 
 type Page = MonitoringView["page"];
 
@@ -159,6 +167,10 @@ interface Leaving {
   rule?: boolean;
   /** A Silences or Contact points form: no draft is kept, Discard lets the page take it away. */
   form?: boolean;
+  /** What leaving loses, when it isn't a dashboard's draft. */
+  body?: string;
+  /** Closing a tab with a setup started in it: Discard drops the tab's setup draft too. */
+  setupDraft?: boolean;
 }
 
 /**
@@ -192,7 +204,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
 
   const clusterNames = useMemo(() => Object.fromEntries((clusters ?? []).map((c) => [c.id, c.name])), [clusters]);
   const index = useMemo(
-    () => (tree.data ? buildSearchIndex({ tree: tree.data, sources: sources.data ?? [], clusterNames }) : []),
+    () => (tree.data ? buildSearchIndex({ tree: tree.data, sources: sources.data ?? [], clusterNames, pages: true }) : []),
     [tree.data, sources.data, clusterNames],
   );
   const names = useMemo(() => {
@@ -241,14 +253,17 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     const active = document.activeElement;
     if (rule) {
       setLeaving({
-        tabId: rule.tabId, dashboardId: "", title: rule.title, draftsWork: false, rule: true, proceed,
+        tabId: rule.tabId, dashboardId: "", title: rule.title, draftsWork: false, rule: true, body: RULE_LEAVE_BODY, proceed,
         from: active instanceof HTMLElement && active !== document.body ? active : null,
       });
       return true;
     }
     if (form) {
+      // A setup started in the tab holds only its closing; a form's own mark names the question first.
+      const setupDraft = action.type === "closeTab" && [...(alertFormMarks.get(form.tabId)?.values() ?? [])].some((m) => m.closeOnly);
       setLeaving({
-        tabId: form.tabId, dashboardId: "", title: form.title, draftsWork: false, form: true, proceed,
+        tabId: form.tabId, dashboardId: "", title: form.title, draftsWork: false, form: true, proceed, setupDraft,
+        body: form.mark.closeOnly ? SETUP_LEAVE_BODY : FORM_LEAVE_BODY,
         from: active instanceof HTMLElement && active !== document.body ? active : null,
       });
       return true;
@@ -293,6 +308,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       // The form ends first, so the action goes through when performed again.
       if (l.rule) endRuleForm(l.tabId);
       else clearAlertForms(l.tabId);
+      if (l.setupDraft) removeSetupDraft(l.tabId);
       returnFocus.current = root.current?.closest("main") ?? null;
       focusMainFrom(root.current);
       asking.current = false;
@@ -390,6 +406,41 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   }, [owner, pageNav, creating]);
   const goHome = useCallback(() => pageNav.navigate(MONITORING_HOME, "push"), [pageNav]);
 
+  // --- Find: "/", Ctrl K and the top bar's box (MONITORING_FIND_EVENT) -------------------------
+  const findInput = useRef<HTMLInputElement>(null);
+  // The one way to Find. T22's folded sidebar drawer opens here first, before the field takes the keyboard.
+  const openFind = useCallback(() => {
+    findInput.current?.focus();
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!pressed("monitoringFind", e) || !pageKey(e)) return;
+      e.preventDefault();
+      openFind();
+    };
+    document.addEventListener("keydown", onKey);
+    window.addEventListener(MONITORING_FIND_EVENT, openFind);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener(MONITORING_FIND_EVENT, openFind);
+    };
+  }, [openFind]);
+
+  // A project deleted from its own tab: Home takes the tab's place, unless a Home tab is open already.
+  const leaveDeleted = useCallback(() => {
+    const { tabs: t, dispatchTabs: d } = latest.current;
+    const from = t.active;
+    const home = t.tabs.find((x) => x.id !== from && x.view.page === "home");
+    if (!home) {
+      pageNavRef.current?.navigate(MONITORING_HOME, "replace");
+      return;
+    }
+    // What was open about the deleted item has nothing left to hold the tab for.
+    clearAlertForms(from);
+    handOff();
+    if (d({ type: "activateTab", id: home.id }) !== true) d({ type: "closeTab", id: from });
+  }, [handOff]);
+
   // Each tab keeps where its page was scrolled.
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = nav.scrollTop;
@@ -401,7 +452,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     if (!tab || !equalMonitoringView(tab.view, expected)) return;
     latest.current.dispatchTabs({ type: "navigate", id, view: next, mode: "replace" });
   }, []);
-  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView };
+  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView, leaveDeleted };
   return (
     <div ref={root} className={s.app}>
       {/* Install, uninstall and contact-point reviews, one at a time; around the tool review queue,
@@ -410,7 +461,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       {/* Cluster reviews of tool-run alert rules, one at a time, for every page of the app. */}
       <ToolReviewHost place={`${tabs.active}:${view.page}`}>
         <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
-          index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} />
+          index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} findInput={findInput} />
         <div className={s.work}>
           <MonitoringTabs tabs={tabs} labelFor={names.label} colorFor={names.color}
             onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
@@ -427,7 +478,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
         )}
         {leaving && (
           <LeaveDialog title={leaving.title} draftsWork={leaving.draftsWork} restoreFocusTo={returnFocus}
-            body={leaving.rule ? RULE_LEAVE_BODY : leaving.form ? FORM_LEAVE_BODY : undefined}
+            body={leaving.body}
             onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />
         )}
       </ToolReviewHost>

@@ -8,6 +8,8 @@ import { invalidateMonitoring, useDiscovery, useSources } from "../api/hooks";
 import type { FoundTool, ProjectKind, ProjectOut, SourceIn, SourceOut, SuggestIn } from "../api/types";
 import { readyViewTitles, readyViewsPhrase } from "../dashboards/readyViews";
 import { useToolReviews } from "../alerts/reviews/useToolReviews";
+import { markAlertForm } from "../alerts/rules/formSessions";
+import { focusHeadingOnArrival, takeHeadingFocus } from "../dashboards/create/arrival";
 import { GenerateTools, type AnsweredTools } from "../install/GenerateTools";
 import { installKeys, installTools, type Component } from "../install/api";
 import { useInstallReviews } from "../install/useInstallReviews";
@@ -532,7 +534,12 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     if (back) return back.step === 4 && back.importFrom?.secretsDropped && back.importFrom.uids.length > 0 ? { ...back, step: 3 } : back;
     return { step: start ? 2 : 1, kind: start ? "kubernetes" : null, clusterId: start, picks: [], name: "", install: NO_INSTALL };
   });
-  const setDraft = useCallback((update: (d: SetupDraft) => SetupDraft) => setDraftState(update), []);
+  // Every choice made on the page goes through `setDraft`; what the page fills in itself doesn't.
+  const [touched, setTouched] = useState(false);
+  const setDraft = useCallback((update: (d: SetupDraft) => SetupDraft) => {
+    setTouched(true);
+    setDraftState(update);
+  }, []);
   const clusters = useClusters();
   const sources = useSources();
   const discovery = useDiscovery(draft.step >= 2 && draft.kind === "kubernetes" ? draft.clusterId : null);
@@ -589,6 +596,15 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     return () => window.clearTimeout(timer);
   }, [draft, keep]);
   useEffect(() => () => keep(), [keep]);
+
+  // A draft with any choice in it is kept per tab, so only closing the tab loses it: the tab is
+  // marked for that alone (switching tabs, going elsewhere and reloading keep the draft).
+  const chosen = touched || draft.kind !== (start ? "kubernetes" : null) || draft.clusterId !== start || draft.step !== (start ? 2 : 1)
+    || draft.name.trim() !== "" || draft.picks.some(isHand) || draft.importFrom != null;
+  useEffect(() => {
+    markAlertForm(tabId, "setup", chosen ? { title: "New project", page: "setup", closeOnly: true } : null);
+    return () => markAlertForm(tabId, "setup", null);
+  }, [tabId, chosen]);
 
   // --- Step 3: the Grafana found in the cluster --------------------------------------------------
   const found = discovery.data?.cluster_id === draft.clusterId ? discovery.data : undefined;
@@ -728,8 +744,9 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
 
   // Moving to a step puts the keyboard on its heading; on arrival only if nothing else has it.
   const arrived = useRef(false);
+  // From the sidebar's + New project, the keyboard comes to the heading too.
   useEffect(() => {
-    if (arrived.current || keyboardIsFree()) heading.current?.focus();
+    if (arrived.current || takeHeadingFocus("setup") || keyboardIsFree()) heading.current?.focus();
     arrived.current = true;
   }, [draft.step]);
 
@@ -819,9 +836,11 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
       return;
     }
     if (importError !== null) noteImportFailed(project.id, importError);
+    const changes = result?.alert_changes ?? [];
+    // Nothing to review over it: the new project's page opens with the keyboard on its name.
+    if (!installing && changes.length === 0) focusHeadingOnArrival("project", project.id);
     // The page closes with the draft, and every secret typed into it.
     nav.navigate({ page: "project", id: project.id }, "replace");
-    const changes = result?.alert_changes ?? [];
     if (installing) {
       // The install is reviewed over the new project; closed, the keyboard goes to the project's
       // name. The imported alerts' cluster reviews follow it.
@@ -934,7 +953,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
                 if (e.ctrlKey || e.metaKey) openInNewTab(target);
                 else nav.navigate(target, "push");
               }}
-              form={<div className={s.handForm}><SourceForm mode="collect" onCollect={collect} onCancel={() => setHandOpen(false)} /></div>} />
+              form={<div className={s.handForm}><SourceForm mode="collect" tabId={tabId} page="setup" onCollect={collect} onCancel={() => setHandOpen(false)} /></div>} />
           )}
           {draft.step === 3 && (
             <>

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Shell } from "../features/shell/Shell";
+import { defaultWorkspace } from "../features/shell/workspace";
+import { KINDS } from "../test/kinds";
 import { installFakeMonitoringApi } from "./test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "./test/renderMonitoringApp";
 
@@ -83,5 +87,39 @@ describe("Monitoring app shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "New tab" }));
     expect(tabs()).toHaveLength(2);
     expect(tabs()[1].getAttribute("aria-selected")).toBe("true");
+  });
+});
+
+describe("Find from the shell", () => {
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  const shellApi = async (url: string) => json(
+    url.startsWith("/api/kinds") ? KINDS
+      : url.startsWith("/api/audit") ? { records: [], next_before: null }
+        : url === "/api/settings" ? { encryption: { source: "environment", path: null }, discovery_interval_s: 600 } : [],
+  );
+
+  it("Ctrl K in Monitoring goes to Monitoring's Find", async () => {
+    localStorage.clear();
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Shop")] }, shellApi);
+    const ws = defaultWorkspace();
+    ws.app = "monitoring";
+    localStorage.setItem("omnikrux.workspace", JSON.stringify(ws));
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><Shell /></QueryClientProvider>);
+    await screen.findByRole("treeitem", { name: "Shop" }, { timeout: 3000 });
+    const find = screen.getByRole("combobox", { name: "Find anything" });
+    screen.getByRole("main").focus();
+    fireEvent.keyDown(document.body, { key: "k", ctrlKey: true });
+    expect(document.activeElement).toBe(find);
+    expect(screen.queryByRole("dialog", { name: "Commands" })).toBeNull();
+    // The top bar's box goes there too.
+    screen.getByRole("main").focus();
+    fireEvent.click(screen.getByRole("button", { name: "Find in Monitoring" }));
+    expect(document.activeElement).toBe(find);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // And "/" still does.
+    screen.getByRole("main").focus();
+    fireEvent.keyDown(document.body, { key: "/" });
+    expect(document.activeElement).toBe(find);
+    expect(document.activeElement).not.toBe(document.body);
   });
 });

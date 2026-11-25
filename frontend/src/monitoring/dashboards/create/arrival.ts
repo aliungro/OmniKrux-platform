@@ -71,22 +71,26 @@ export function useCopyToEdit(how: Opener) {
 
 let heading: string | null = null;
 
-/** The owner page opened next shows with the keyboard on its heading (after a delete). */
-export function focusHeadingOnArrival(kind: OwnerKind, id: string): void {
+/**
+ * The owner page opened next shows with the keyboard on its heading (after a delete, or once it is
+ * created); "setup" is New project's step heading (opened from the sidebar's +).
+ */
+export function focusHeadingOnArrival(kind: OwnerKind | "setup", id = ""): void {
   heading = `${kind}:${id}`;
 }
 
 /**
- * The active tab shows `view`. Anything but the owner page waiting for the heading drops the wait:
- * a page that never took it (it couldn't load) leaves nothing behind for a later visit.
+ * The active tab shows `view`. Anything but the page waiting for the heading drops the wait: a
+ * page that never took it (it couldn't load) leaves nothing behind for a later visit.
  */
 export function settleHeadingFocus(view: MonitoringView): void {
   if (heading === null) return;
-  if ((view.page !== "project" && view.page !== "group") || heading !== `${view.page}:${view.id}`) heading = null;
+  const waits = view.page === "setup" ? "setup:" : view.page === "project" || view.page === "group" ? `${view.page}:${view.id}` : null;
+  if (heading !== waits) heading = null;
 }
 
-/** Whether this owner page should take the keyboard to its heading; asked once. */
-export function takeHeadingFocus(kind: OwnerKind, id: string): boolean {
+/** Whether this page should take the keyboard to its heading; asked once. */
+export function takeHeadingFocus(kind: OwnerKind | "setup", id = ""): boolean {
   if (heading !== `${kind}:${id}`) return false;
   heading = null;
   return true;

@@ -142,7 +142,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // In the dock.
   { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch the bottom dock between one pane and side by side" },
   // In the Monitoring app; the "?" sheet lists them only there.
-  { id: "monitoringFind", scope: "monitoring", keys: ["/"], match: ["/"], label: "Find a project, group or source" },
+  // Ctrl K comes here too while Monitoring is shown (Shell sends it to Monitoring's Find).
+  { id: "monitoringFind", scope: "monitoring", keys: ["/", "Ctrl K"], macKeys: ["/", "⌘ K"], match: ["/"], label: "Find a project, group or source" },
   { id: "monitoringTree", scope: "monitoring", keys: ["↑ ↓", "← →", "Enter"], label: "In the sidebar: move, close or open a group, open the item" },
   { id: "monitoringNewDashboard", scope: "monitoring", keys: ["N"], match: ["n", "N"], label: "New dashboard" },
   { id: "monitoringImport", scope: "monitoring", keys: ["I"], match: ["i", "I"], label: "Import dashboards" },
@@ -251,15 +252,19 @@ const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs"
 
 /**
  * The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's.
- * The Monitoring, Dashboards, Explore and Alerts groups are there only while Monitoring is shown (`app`); there "/"
- * is Find, so the Anywhere group leaves out Filter rows.
+ * The Monitoring, Dashboards, Explore and Alerts groups are there only while Monitoring is shown (`app`).
+ * Monitoring has no table, kinds or palette: its sheet leaves out the Table group and those rows
+ * ("/" and Ctrl K are its Find), and lists Alt+Down (into the logs) under Anywhere.
  */
 export function allGroups(kindKey?: string, app?: AppId): ShortcutGroup[] {
   const monitoring = app === "monitoring";
-  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "dashboard", "explore", "alerts", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
+  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "dashboard", "explore", "alerts", "global", "logs", "dock"] : ["shell", "row", "logs", "global", "dock"];
+  const shown = (s: Shortcut, scope: Shortcut["scope"]) => monitoring
+    ? (s.scope === scope || (scope === "global" && s.id === "enterLogs")) && !["moveKind", "kinds", "palette", "filter"].includes(s.id)
+    : s.scope === scope;
   return scopes.map((scope) => [
     GROUP_TITLES[scope],
-    SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey)) && !(monitoring && s.id === "filter")),
+    SHORTCUTS.filter((s) => shown(s, scope) && (kindKey === undefined || appliesTo(s, kindKey))),
   ]);
 }
 

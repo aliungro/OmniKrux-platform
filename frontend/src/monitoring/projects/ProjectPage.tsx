@@ -247,7 +247,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   );
 }
 
-export default function ProjectPage({ view, tabId, nav, openInNewTab }: MonitoringPageProps) {
+export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDeleted }: MonitoringPageProps) {
   const id = view.page === "project" ? view.id : "";
   const client = useQueryClient();
   const projectQuery = useProject(id);
@@ -337,8 +337,10 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
     setReviewError(null);
     try {
       await deleteProject(project.id, review.token);
-      // The tab shows Home in place of this project (MonitoringApp hands the keyboard to the workspace).
-      nav.navigate(MONITORING_HOME, "replace");
+      // The tab shows Home in place of this project, or closes onto the Home tab open already
+      // (MonitoringApp hands the keyboard to the workspace).
+      if (leaveDeleted) leaveDeleted();
+      else nav.navigate(MONITORING_HOME, "replace");
       void invalidateMonitoring(client);
     } catch (err) {
       setReviewBusy(false);
@@ -427,7 +429,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
           <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} />
         ) : (
           <div className={s.panel}>
-            <SourceForm mode="save" closeOnEscape onSaved={(saved) => linkNew(saved)} onCancel={closePanel} />
+            <SourceForm mode="save" closeOnEscape tabId={tabId} page="project" onSaved={(saved) => linkNew(saved)} onCancel={closePanel} />
           </div>
         )}
       </section>

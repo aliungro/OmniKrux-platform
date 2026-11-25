@@ -172,7 +172,7 @@ describe("Group delete review and alert rules", () => {
 describe("Group focus and arrival", () => {
   const onMain = () => document.activeElement?.tagName === "MAIN";
 
-  it("after Create group the keyboard is on the workspace and the group is never called gone", async () => {
+  it("after Create group the keyboard is on its heading and the group is never called gone", async () => {
     const user = userEvent.setup();
     installFakeMonitoringApi({ projects: projects() }, fallback);
     // The tree answers slowly, as a real server can: the new group must not look gone meanwhile.
@@ -188,11 +188,11 @@ describe("Group focus and arrival", () => {
     await user.type(await screen.findByLabelText("Name"), "Everything dev");
     await user.click(await screen.findByRole("checkbox", { name: "Dev" }));
     await user.click(screen.getByRole("button", { name: "Create group" }));
-    expect(await screen.findByRole("heading", { name: "Everything dev" })).toBeTruthy();
+    const heading = await screen.findByRole("heading", { name: "Everything dev" });
     await new Promise((r) => setTimeout(r, 50));
     watch.disconnect();
     expect(saidGone).toBe(false);
-    expect(onMain()).toBe(true);
+    expect(document.activeElement).toBe(heading);
   });
 
   it("the shortcut hands the keyboard to the workspace, in this tab or a new one", async () => {

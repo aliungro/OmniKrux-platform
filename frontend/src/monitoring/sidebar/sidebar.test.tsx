@@ -181,6 +181,42 @@ describe("Monitoring sidebar", () => {
     expect(document.activeElement).toBe(screen.getByRole("main"));
   });
 
+  it("find says nothing while it is empty", async () => {
+    installFakeMonitoringApi({
+      projects: Array.from({ length: 10 }, (_, i) => seedProject(`p${i}`, `Shop ${i}`)),
+    });
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Shop 0" });
+    const findArea = find().closest("div")!.parentElement!;
+    // Empty: no live line at all, so nothing is announced.
+    expect(within(findArea).queryByRole("status")).toBeNull();
+    find().focus();
+    expect(within(findArea).queryByRole("status")).toBeNull();
+    // More than eight match: eight are listed and the rest are counted.
+    fireEvent.change(find(), { target: { value: "shop" } });
+    expect(within(screen.getByRole("listbox", { name: "Find results" })).getAllByRole("option")).toHaveLength(8);
+    expect(within(findArea).getByRole("status").textContent).toBe("2 more: keep typing to narrow them down.");
+    // A page is found by name, its line says what it is once.
+    fireEvent.change(find(), { target: { value: "explo" } });
+    const hit = within(screen.getByRole("listbox", { name: "Find results" })).getByRole("option");
+    expect(hit.textContent).toBe("ExplorePage");
+    expect(within(findArea).getByRole("status").textContent).toBe("");
+    fireEvent.change(find(), { target: { value: "zzz" } });
+    expect(within(findArea).getByRole("status").textContent).toBe("Nothing matches “zzz”.");
+    fireEvent.change(find(), { target: { value: "" } });
+    expect(within(findArea).queryByRole("status")).toBeNull();
+    expect(document.activeElement).toBe(find());
+  });
+
+  it("long names in the tree and the New dashboards line carry their full text", async () => {
+    const LONG = "A project whose name is far too long for the sidebar to show whole";
+    installFakeMonitoringApi({ projects: [seedProject("p1", LONG)] });
+    renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p1" }) });
+    const row = await screen.findByRole("treeitem", { name: LONG });
+    expect(row.querySelector(`[title="${LONG}"]`)?.textContent).toBe(LONG);
+    await waitFor(() => expect(document.querySelector("[data-new-dashboard-note]")?.getAttribute("title")).toBe(`New dashboards go to ${LONG}`));
+  });
+
   it("Find subtitles name the cluster, not its id", async () => {
     seedTwo(async (url) => new Response(JSON.stringify(url === "/api/clusters" ? [{ id: "c1", name: "East cluster", provider: "aks" }] : []), {
       status: 200, headers: { "content-type": "application/json" },
@@ -189,7 +225,7 @@ describe("Monitoring sidebar", () => {
     await screen.findByRole("treeitem", { name: "Both" });
     find().focus();
     fireEvent.change(find(), { target: { value: "A" } });
-    await waitFor(() => expect(screen.getByRole("option", { name: /^A/ }).textContent).toContain("Kubernetes · East cluster"));
+    await waitFor(() => expect(screen.getByRole("option", { name: /^AProject/ }).textContent).toContain("Kubernetes · East cluster"));
   });
 
   it("treeRows lays out the sections", () => {

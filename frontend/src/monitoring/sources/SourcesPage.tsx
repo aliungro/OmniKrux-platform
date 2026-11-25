@@ -108,10 +108,10 @@ export default function SourcesPage({ nav, openInNewTab, tabId }: MonitoringPage
       </header>
 
       {editing?.kind === "new" && (
-        <SourceForm mode="save" closeOnEscape onSaved={closeForm} onCancel={closeForm} />
+        <SourceForm mode="save" closeOnEscape tabId={tabId} page="sources" onSaved={closeForm} onCancel={closeForm} />
       )}
       {editing?.kind === "edit" && editingSource && (
-        <SourceForm key={editingSource.id} mode="save" closeOnEscape initial={editingSource} onSaved={closeForm} onCancel={closeForm} />
+        <SourceForm key={editingSource.id} mode="save" closeOnEscape tabId={tabId} page="sources" initial={editingSource} onSaved={closeForm} onCancel={closeForm} />
       )}
 
       {pageError && <p className={s.note} role="alert">{pageError}</p>}
@@ -185,7 +185,7 @@ export default function SourcesPage({ nav, openInNewTab, tabId }: MonitoringPage
 }
 
 /** One source's page: its form, as opened from a tab or a link. */
-export function SourcePage({ view, nav }: MonitoringPageProps) {
+export function SourcePage({ view, nav, tabId }: MonitoringPageProps) {
   const sources = useSources();
   const id = view.page === "source" ? view.id : "";
   const source = sources.data?.find((x) => x.id === id);
@@ -204,7 +204,7 @@ export function SourcePage({ view, nav }: MonitoringPageProps) {
   return (
     <section className={s.page} aria-labelledby="monitoring-source-title">
       <h1 id="monitoring-source-title" className={s.title}>{source.name}</h1>
-      <SourceForm key={source.id} mode="save" initial={source} onSaved={back} onCancel={back} />
+      <SourceForm key={source.id} mode="save" tabId={tabId} page="source" initial={source} onSaved={back} onCancel={back} />
     </section>
   );
 }

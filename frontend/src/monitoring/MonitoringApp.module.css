@@ -71,3 +71,9 @@
   color: var(--ink-3);
   font-size: 13px;
 }
+
+/* A page heading the app puts the keyboard on (arriving on a page) shows no box unless the
+   keyboard brought it there. */
+.app :is(h1, h2):focus:not(:focus-visible) {
+  outline: none;
+}

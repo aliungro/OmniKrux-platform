@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SourceOut, TreeOut } from "../api/types";
-import { buildSearchIndex, searchMonitoring } from "./search";
+import { buildSearchIndex, FIND_MORE, findResults, hitSubtitle, searchMonitoring } from "./search";
 
 const tree: TreeOut = {
   projects: [
@@ -57,13 +57,54 @@ describe("search", () => {
     const found = buildSearchIndex({ tree: withDashboards, sources: [] });
     const hits = searchMonitoring(found, "latency");
     expect(hits.map((h) => [h.kind, h.name, h.subtitle, h.view])).toEqual([
-      ["dashboard", "API latency", "prod-east · Dashboard", { page: "dashboard", id: "d1" }],
-      ["dashboard", "Fleet latency", "Everything · Dashboard", { page: "dashboard", id: "d2" }],
+      ["dashboard", "API latency", "Dashboard · prod-east", { page: "dashboard", id: "d1" }],
+      ["dashboard", "Fleet latency", "Dashboard · Everything", { page: "dashboard", id: "d2" }],
     ]);
     expect(searchMonitoring(found, "pod health").map((h) => [h.subtitle, h.view])).toEqual([
-      ["prod-east · Ready-made", { page: "dashboard", id: "ready:p1:pods" }],
+      ["Ready-made view · prod-east", { page: "dashboard", id: "ready:p1:pods" }],
     ]);
     // The owner's name finds its dashboards too.
     expect(searchMonitoring(found, "everything").map((h) => h.name)).toEqual(["Everything", "Fleet latency"]);
+  });
+
+  it("a dashboard result says Ready-made view first", () => {
+    const owned: TreeOut = {
+      projects: [{
+        id: "p1", name: "A project with a long name that a narrow list cuts", kind: "custom", cluster_id: null, color: "custom",
+        dashboards: [{ id: "d1", title: "Cluster health", ready_made: false }, { id: "ready:p1:cluster", title: "Cluster health", ready_made: true }],
+      }],
+      groups: [], source_count: 0,
+    };
+    const hits = searchMonitoring(buildSearchIndex({ tree: owned, sources: [] }), "cluster health");
+    // What tells the two apart comes first, so a cut line keeps it; the second line isn't doubled.
+    expect(hits.map(hitSubtitle)).toEqual([
+      "Dashboard · A project with a long name that a narrow list cuts",
+      "Ready-made view · A project with a long name that a narrow list cuts",
+    ]);
+    expect(hitSubtitle(index.find((e) => e.id === "p1")!)).toBe("Project · Kubernetes · east-cluster");
+  });
+
+  it("find lists pages and says how many more matched", () => {
+    const withPages = buildSearchIndex({ tree, sources, clusterNames: { c1: "east-cluster" }, pages: true });
+    expect(withPages.filter((e) => e.kind === "page").map((e) => [e.name, e.subtitle, e.view])).toEqual([
+      ["Home", "Page", { page: "home" }],
+      ["Explore", "Page", { page: "explore" }],
+      ["Alerts", "Page", { page: "alerts" }],
+      ["Sources", "Page", { page: "sources" }],
+      ["Import", "Page", { page: "import" }],
+    ]);
+    expect(findResults(withPages, "expl").shown.map((e) => e.name)).toEqual(["Explore"]);
+    expect(hitSubtitle(findResults(withPages, "alerts").shown[0])).toBe("Page");
+    // Without `pages`, the index is as before (Home's own search).
+    expect(index.some((e) => e.kind === "page")).toBe(false);
+    // "o" matches more than eight: eight are shown, and the rest counted.
+    const all = searchMonitoring(withPages, "o", 100);
+    expect(all.length).toBeGreaterThan(8);
+    const { shown, more } = findResults(withPages, "o");
+    expect(shown).toEqual(all.slice(0, 8));
+    expect(more).toBe(all.length - 8);
+    expect(findResults(withPages, "zeta")).toEqual({ shown: [withPages.find((e) => e.id === "p4")], more: 0 });
+    expect(findResults(withPages, "  ")).toEqual({ shown: [], more: 0 });
+    expect(FIND_MORE).toBe("{n} more: keep typing to narrow them down.");
   });
 });

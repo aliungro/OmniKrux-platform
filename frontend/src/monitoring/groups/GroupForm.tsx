@@ -4,6 +4,7 @@ import { failure } from "../../api/http";
 import { createGroup } from "../api/client";
 import { invalidateMonitoring, useProjects } from "../api/hooks";
 import type { ProjectOut } from "../api/types";
+import { focusHeadingOnArrival } from "../dashboards/create/arrival";
 import { projectDot } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import s from "./GroupPage.module.css";
@@ -57,6 +58,8 @@ export default function GroupForm({ nav }: MonitoringPageProps) {
       const made = await createGroup({ name: text.trim(), project_ids });
       // Read the lists again first: the group page then opens on a list that names it.
       await invalidateMonitoring(client);
+      // The new group's page opens with the keyboard on its name.
+      focusHeadingOnArrival("group", made.id);
       nav.navigate({ page: "group", id: made.id }, "replace");
     } catch (err) {
       setError(failure(err, "try again"));

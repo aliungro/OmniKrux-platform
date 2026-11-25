@@ -3,6 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import { createSource, testNewSource, testSource, updateSource } from "../api/client";
 import { invalidateMonitoring } from "../api/hooks";
+import { markAlertForm } from "../alerts/rules/formSessions";
+import type { MonitoringView } from "../shell/tabState";
 import type { AuthIn, AuthType, HeaderIn, SourceIn, SourceOut, SourcePatch, SourceType, TestOut } from "../api/types";
 import { escapeCloses } from "../focus";
 import { ADDRESS_EXAMPLE, autoTypeName, sourceTypeLabel } from "./sourceLabels";
@@ -21,6 +23,12 @@ interface CommonProps {
   onCancel(): void;
   /** Shown as an inline panel: Esc cancels it, as Cancel does. */
   closeOnEscape?: boolean;
+  /**
+   * The Monitoring tab and page it is shown on: while a field differs from its start, closing the
+   * tab or leaving the page asks first (the form keeps nothing outside its page).
+   */
+  tabId?: string;
+  page?: MonitoringView["page"];
 }
 
 /** `save` stores the source and reports it; `collect` hands the entered source to `onCollect` and stores nothing. */
@@ -81,7 +89,7 @@ function Secret({ label, value, onChange, saved, multiline = false }: {
 }
 
 export function SourceForm(props: SourceFormProps) {
-  const { initial, onCancel, mode, closeOnEscape = false } = props;
+  const { initial, onCancel, mode, closeOnEscape = false, tabId, page } = props;
   const client = useQueryClient();
   const ids = useId();
   const address = useRef<HTMLInputElement>(null);
@@ -108,6 +116,29 @@ export function SourceForm(props: SourceFormProps) {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => { (byCluster ? nameInput : address).current?.focus(); }, [byCluster]);
+
+  // What every field holds, to tell whether one differs from its start. Secrets start empty and
+  // are never copied here: only whether one was typed.
+  const fields = JSON.stringify([
+    type, url, name, authType, username, headerName, Object.values(secrets).map((v) => v !== ""),
+    headers.map((h) => [h.name, h.value !== ""]), ca, removeCa,
+  ]);
+  const [start] = useState(fields);
+  // Saved or cancelled: the form is done and holds the tab no more, whatever it still shows.
+  const [done, setDone] = useState(false);
+  const formId = useId();
+  const changed = !done && fields !== start;
+  const title = initial?.name ?? "New source";
+  useEffect(() => {
+    if (tabId === undefined || page === undefined) return;
+    markAlertForm(tabId, formId, changed ? { title, page } : null);
+    return () => markAlertForm(tabId, formId, null);
+  }, [tabId, page, formId, changed, title]);
+  /** Lets the tab go before the caller moves on (its navigation would otherwise ask about this form). */
+  const release = () => {
+    setDone(true);
+    if (tabId !== undefined) markAlertForm(tabId, formId, null);
+  };
 
   const setSecret = (k: keyof Secrets) => (v: string) => setSecrets((cur) => ({ ...cur, [k]: v }));
   const sameType = stored?.type === authType;
@@ -150,7 +181,10 @@ export function SourceForm(props: SourceFormProps) {
     setError(null);
     const built = build();
     if (typeof built === "string") return setError(built);
-    if (props.mode === "collect") return props.onCollect?.(built.body);
+    if (props.mode === "collect") {
+      release();
+      return props.onCollect?.(built.body);
+    }
     busyRef.current = true;
     setBusy(true);
     try {
@@ -161,6 +195,7 @@ export function SourceForm(props: SourceFormProps) {
       setHeaders((cur) => cur.map((h) => ({ ...h, value: "" })));
       setCa("");
       await invalidateMonitoring(client);
+      release();
       await props.onSaved?.(saved);
     } catch (err) {
       setError(failure(err));
@@ -194,7 +229,7 @@ export function SourceForm(props: SourceFormProps) {
   const editHeader = (key: number, patch: Partial<HeaderRow>) => setHeaders((cur) => cur.map((h) => (h.key === key ? { ...h, ...patch } : h)));
 
   return (
-    <form className={s.form} onSubmit={save} noValidate onKeyDown={closeOnEscape ? escapeCloses(onCancel, busy) : undefined} aria-label={initial ? `Edit ${initial.name}` : "Add a source by hand"}>
+    <form className={s.form} onSubmit={save} noValidate onKeyDown={closeOnEscape ? escapeCloses(() => { release(); onCancel(); }, busy) : undefined} aria-label={initial ? `Edit ${initial.name}` : "Add a source by hand"}>
       <h2 className={s.title}>{initial ? `Edit ${initial.name}` : "Add a source by hand"}</h2>
       <div className={s.field}>
         <label htmlFor={`${ids}-type`}>Type</label>
@@ -298,7 +333,7 @@ export function SourceForm(props: SourceFormProps) {
           {testing ? "Testing…" : "Test connection"}
         </button>
         <span className={s.spacer} />
-        <button type="button" className={s.secondary} onClick={() => { if (!busyRef.current) onCancel(); }} aria-disabled={busy || undefined}>Cancel</button>
+        <button type="button" className={s.secondary} onClick={() => { if (!busyRef.current) { release(); onCancel(); } }} aria-disabled={busy || undefined}>Cancel</button>
         <button type="submit" className={s.primary} aria-disabled={busy || undefined}>{mode === "collect" ? "Use this source" : busy ? "Saving…" : "Save source"}</button>
       </div>
     </form>

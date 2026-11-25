@@ -119,7 +119,7 @@ describe("shortcut registry", () => {
     expect(allGroups("pods").map(([t]) => t)).not.toContain("Monitoring");
     const monitoring = allGroups(undefined, "monitoring").find(([t]) => t === "Monitoring")![1];
     expect(monitoring.map((s) => [s.id, s.keys, s.label])).toEqual([
-      ["monitoringFind", ["/"], "Find a project, group or source"],
+      ["monitoringFind", ["/", "Ctrl K"], "Find a project, group or source"],
       ["monitoringTree", ["↑ ↓", "← →", "Enter"], "In the sidebar: move, close or open a group, open the item"],
       ["monitoringNewDashboard", ["N"], "New dashboard"],
       ["monitoringImport", ["I"], "Import dashboards"],
@@ -261,6 +261,27 @@ describe("shortcut registry", () => {
     expect(pressed("monitoringNewDashboard", { ...base, key: "n", altKey: true })).toBe(false);
     expect(pressed("monitoringNewDashboard", { ...base, key: "n", metaKey: true })).toBe(false);
     expect(pressed("monitoringNewDashboard", { ...base, key: "N", ctrlKey: true, shiftKey: true })).toBe(false);
+  });
+
+  it("Monitoring's help leaves out the Kubernetes groups", () => {
+    const groups = allGroups(undefined, "monitoring");
+    expect(groups.map(([t]) => t)).toEqual(["Apps and tabs", "Monitoring", "Dashboards", "Explore", "Alerts", "Anywhere", "Logs", "Dock"]);
+    const ids = groups.flatMap(([, list]) => list.map((s) => s.id));
+    for (const id of ["moveKind", "kinds", "palette", "filter", "move", "details", "yaml", "logs", "shell", "scale", "drain"] as const) expect(ids).not.toContain(id);
+    // Alt+Down still moves into the shared dock: listed under Anywhere.
+    expect(groups.find(([t]) => t === "Anywhere")![1].map((s) => s.id)).toContain("enterLogs");
+    expect(keysFor("monitoringFind", true)).toEqual(["/", "⌘ K"]);
+    // Outside Monitoring the sheet is exactly what it was.
+    const kube = (kindKey?: string) => (["shell", "row", "logs", "global", "dock"] as const).map((scope) => [
+      { shell: "Apps and tabs", row: "Table", logs: "Logs", global: "Anywhere", dock: "Dock" }[scope],
+      SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || s.kinds === undefined || s.kinds.includes(kindKey))),
+    ]);
+    expect(allGroups()).toEqual(kube());
+    expect(allGroups(undefined, "kubernetes")).toEqual(kube());
+    expect(allGroups("pods", "kubernetes")).toEqual(kube("pods"));
+    expect(allGroups().find(([t]) => t === "Anywhere")![1].map((s) => s.id)).toEqual(
+      ["kinds", "palette", "filter", "help", "deleteFocused", "confirmReview"],
+    );
   });
 
   it("the sheet drops Filter rows while Monitoring is shown", () => {

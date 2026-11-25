@@ -132,6 +132,11 @@
   font-size: 12px;
 }
 
+/* Every result fits: the live line stays, with nothing to say and no room taken. */
+.noHits:empty {
+  padding: 0;
+}
+
 /* Home, Explore, Alerts, Sources */
 .nav {
   display: flex;
@@ -186,6 +191,12 @@
   margin-left: auto;
   font: 11px "Geist Mono", ui-monospace, monospace;
   color: var(--ink-3);
+}
+
+/* A tree row shows its box only for the keyboard (or as the open page's row, below), never when
+   clicked or focused by the app on its own. */
+.row:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .navItem:focus-visible,
