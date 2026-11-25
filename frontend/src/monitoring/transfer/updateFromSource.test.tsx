@@ -178,6 +178,27 @@ async function reviewShown() {
   return replace;
 }
 
+/** Holds each preview request in front of the fake until released; the fake answers from its state then. */
+function holdPreviews() {
+  const inner = globalThis.fetch;
+  const held: { body: unknown; release(): void }[] = [];
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (!url.endsWith("/update-from-source/preview")) return inner(input, init);
+    return new Promise<Response>((resolve) => {
+      held.push({ body: JSON.parse(String(init?.body ?? "{}")), release: () => resolve(inner(input, init)) });
+    });
+  }));
+  return held;
+}
+
+const notBody = () => expect(document.activeElement).not.toBe(document.body);
+const lokiRef = {
+  key: "loki", type: "loki" as const, type_guessed: false, name: "Logs", detail: null, suggestion: null, leave_out: false,
+  reason: "No Loki source is linked to Shop.",
+};
+const UNREACHABLE = "Couldn't reach Team Grafana. Check that it's running, then check again.";
+
 describe("Update from source", () => {
   it("update from source shows the diff and warns about local edits", async () => {
     const api = seed();
@@ -220,8 +241,7 @@ describe("Update from source", () => {
     const box = await openUpdate(user);
     const pick = within(box).getByRole("button", { name: "Pick the file again" });
     expect(document.activeElement).toBe(pick);
-    expect(within(box).getByRole("textbox", { name: "Paste its JSON" })).toBeTruthy();
-    expect(within(box).getByText("or paste its JSON")).toBeTruthy();
+    expect(within(box).getByRole("textbox", { name: "or paste its JSON" })).toBeTruthy();
     const check = within(box).getByRole("button", { name: "Check" });
     expect(check.getAttribute("aria-disabled")).toBe("true");
     expect(within(box).getByText("From api-latency.json")).toBeTruthy();
@@ -251,7 +271,7 @@ describe("Update from source", () => {
     const api = seed({ origins: { d1: { ...fileOrigin(), via: "paste", label: "Pasted JSON" } } });
     const { user } = await open();
     const box = await openUpdate(user);
-    const area = within(box).getByRole("textbox", { name: "Paste its JSON" });
+    const area = within(box).getByRole("textbox", { name: "or paste its JSON" });
     expect(document.activeElement).toBe(area);
     await user.click(area);
     await user.paste(text);
@@ -434,5 +454,131 @@ describe("Update from source", () => {
     const review = await screen.findByRole("dialog");
     expect(within(review).getByRole("heading", { name: "Delete PrometheusRule omnikrux-slow-1a2b" })).toBeTruthy();
     expect(screen.getByText('Updated "API latency" from its source.')).toBeTruthy();
+  });
+
+  it("a retried Grafana read keeps the keyboard on Try again", async () => {
+    const api = seed({ updatePreviews: { d1: refusal(502, "grafana", UNREACHABLE) } });
+    const { user } = await open();
+    const box = await openUpdate(user);
+    expect((await within(box).findByRole("alert")).textContent).toContain(UNREACHABLE);
+    const again = within(box).getByRole("button", { name: "Try again" });
+    const held = holdPreviews();
+    await user.click(again);
+    // While it runs, the button stays where the keyboard is.
+    await waitFor(() => expect(held).toHaveLength(1));
+    expect(again.isConnected).toBe(true);
+    expect(again.textContent).toBe("Trying again…");
+    expect(again.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(again);
+    notBody();
+    // It fails again: still there, still with the keyboard.
+    held[0].release();
+    await waitFor(() => expect(again.textContent).toBe("Try again"));
+    expect(document.activeElement).toBe(again);
+    // Then it works: the review, with the keyboard on Replace with the source.
+    api.state.transfer.updatePreviews.d1 = preview();
+    await user.click(again);
+    await waitFor(() => expect(held).toHaveLength(2));
+    held[1].release();
+    await reviewShown();
+    expect(within(box).queryByRole("alert")).toBeNull();
+    expect(previews(api)).toHaveLength(3);
+  });
+
+  it("a failed check after a source choice keeps the keyboard in the dialog", async () => {
+    const api = seed({ updatePreviews: { d1: preview({ new_sources: [lokiRef] }) } });
+    const { user } = await open();
+    const box = await openUpdate(user);
+    await reviewShown();
+    api.state.transfer.updatePreviews.d1 = refusal(502, "grafana", UNREACHABLE);
+    await user.selectOptions(within(box).getByRole("combobox", { name: "Source for Logs" }), "Leave its panels out");
+    expect((await within(box).findByRole("alert")).textContent).toContain(UNREACHABLE);
+    // The review (and the select that had the keyboard) went with the failure: Try again has it.
+    expect(within(box).queryByRole("combobox")).toBeNull();
+    expect(within(box).queryByRole("button", { name: "Replace with the source" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(within(box).getByRole("button", { name: "Try again" })));
+    notBody();
+  });
+
+  it("a Grafana whose connection is gone asks for the file", async () => {
+    const api = seed({ origins: { d1: grafanaOrigin({ grafana_id: null, grafana_name: null, can_refetch: false }) } });
+    const { user } = await open();
+    const box = await openUpdate(user);
+    expect(document.activeElement).toBe(within(box).getByRole("button", { name: "Pick the file again" }));
+    expect(within(box).getByRole("textbox", { name: "or paste its JSON" })).toBeTruthy();
+    expect(within(box).getByRole("button", { name: "Check" }).getAttribute("aria-disabled")).toBe("true");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(previews(api)).toHaveLength(0);
+  });
+
+  it("a late preview answer is dropped for a newer one", async () => {
+    const api = seed({ updatePreviews: { d1: preview({ new_sources: [lokiRef] }) } });
+    const held = holdPreviews();
+    const { user } = await open();
+    const box = await openUpdate(user);
+    await waitFor(() => expect(held).toHaveLength(1));
+    held[0].release();
+    await reviewShown();
+    const select = within(box).getByRole("combobox", { name: "Source for Logs" });
+    await user.selectOptions(select, "Leave its panels out");
+    await user.selectOptions(select, "first");
+    await waitFor(() => expect(held).toHaveLength(3));
+    expect(held[1].body).toEqual({ mapping: [{ key: "loki", leave_out: true }] });
+    expect(held[2].body).toEqual({ mapping: [{ key: "loki", source_id: null }] });
+    // The newer one answers first; the older one, answered later, is not shown.
+    api.state.transfer.updatePreviews.d1 = preview({ new_sources: [lokiRef], title_note: "Fresh answer." });
+    held[2].release();
+    expect(await within(box).findByText("Fresh answer.")).toBeTruthy();
+    api.state.transfer.updatePreviews.d1 = preview({ new_sources: [lokiRef], title_note: "Stale answer." });
+    held[1].release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(within(box).queryByText("Stale answer.")).toBeNull();
+    expect(within(box).getByText("Fresh answer.")).toBeTruthy();
+  });
+
+  it("the file's text never reaches the query or mutation cache", async () => {
+    const text = JSON.stringify({ title: "API latency", panels: [], note: "FILE-ONLY-7f3c" });
+    const api = seed({ origins: { d1: fileOrigin() } });
+    const { user, app } = await open();
+    const box = await openUpdate(user);
+    await user.upload(app.container.querySelector<HTMLInputElement>('input[type="file"]')!, new File([text], "api-latency.json", { type: "application/json" }));
+    const check = within(box).getByRole("button", { name: "Check" });
+    await waitFor(() => expect(check.hasAttribute("aria-disabled")).toBe(false));
+    await user.click(check);
+    await reviewShown();
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(JSON.stringify(applies(api)[0].body)).toContain("FILE-ONLY-7f3c");
+    await screen.findByText('Updated "API latency" from its source.');
+    const queries = app.client.getQueryCache().getAll().map((q) => JSON.stringify([q.queryKey, q.state.data]));
+    const mutations = app.client.getMutationCache().getAll().map((m) => JSON.stringify([m.options.mutationKey, m.state.variables, m.state.data]));
+    expect(queries.length).toBeGreaterThan(0);
+    for (const entry of [...queries, ...mutations]) expect(entry).not.toContain("FILE-ONLY-7f3c");
+  });
+
+  it("Esc in the paste box goes to Check first", async () => {
+    seed({ origins: { d1: { ...fileOrigin(), via: "paste", label: "Pasted JSON" } } });
+    const { user } = await open();
+    const box = await openUpdate(user);
+    await user.click(within(box).getByRole("textbox", { name: "or paste its JSON" }));
+    await user.paste('{"title": "API latency"}');
+    await user.keyboard("{Escape}");
+    expect(dialog()).toBeTruthy();
+    expect(document.activeElement).toBe(within(box).getByRole("button", { name: "Check" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(more());
+  });
+
+  it("Cancel never says the update was refused", async () => {
+    seed();
+    const { user } = await open();
+    await openUpdate(user);
+    await reviewShown();
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 3, savedAt: Date.now(), draft: now(), jsonText: null, writer: "w-other" });
+    await user.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(REFUSED)).toBeNull();
+    expect(document.activeElement).toBe(more());
   });
 });

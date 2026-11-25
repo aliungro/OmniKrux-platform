@@ -46,8 +46,11 @@ const asSpec = (doc: Record<string, unknown>) => doc as unknown as DashboardSpec
 export interface UpdateFromSourceDialogProps {
   dashboard: DashboardOut;
   origin: OriginOut;
-  /** `updated` true: the dashboard took the source (`out`: the server's answer, with its `alert_changes`). */
-  onClose(updated: boolean, out?: DashboardOut): void;
+  /**
+   * `updated` true: the dashboard took the source (`out`: the server's answer, with its `alert_changes`).
+   * `why` "refused": closed because `refuse()` said a draft or edit session exists now.
+   */
+  onClose(updated: boolean, out?: DashboardOut, why?: "refused"): void;
   /** Asked before replacing: true when a draft or edit session exists now (the dialog then closes and the page says so). */
   refuse?(): boolean;
   /** Where the keyboard goes when the dialog closes (More actions). */
@@ -76,6 +79,8 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
   const [mapping, setMapping] = useState<Record<string, MappingIn>>({});
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
+  /** Counts failed checks: each one makes sure the keyboard is still in the dialog. */
+  const [failures, setFailures] = useState(0);
   /** Why the review ran again (the source or the dashboard changed since it was shown). */
   const [notice, setNotice] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
@@ -88,6 +93,7 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
   const checkRef = useRef<HTMLButtonElement>(null);
   const replaceRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const tryAgainRef = useRef<HTMLButtonElement>(null);
   const first = asks ? (origin.via === "paste" ? pasteArea : fileButton) : cancelRef;
 
   const inflight = useRef<AbortController | null>(null);
@@ -105,18 +111,20 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
     inflight.current = ctl;
     focusResult.current = takeFocus;
     setChecking(true);
-    setCheckError(null);
+    // A failure's words (and its Try again, which may have the keyboard) stay until the answer.
     const list = mappingList(withMapping);
     const body: UpdatePreviewIn = { ...(withInput ? { input: withInput } : {}), ...(list.length ? { mapping: list } : {}) };
     try {
       const out = await previewUpdate(dashboard.id, body, ctl.signal);
       if (ctl.signal.aborted) return;
+      setCheckError(null);
       setPreview(out);
     } catch (err) {
       if (ctl.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
       // Never a review of something else as if it were this one.
       setPreview(null);
       setCheckError(failure(err, "check again"));
+      setFailures((n) => n + 1);
     } finally {
       if (inflight.current === ctl) {
         inflight.current = null;
@@ -138,6 +146,14 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
     focusResult.current = false;
     (preview.same ? closeRef : replaceRef).current?.focus();
   }, [preview]);
+
+  // A failed check removed the review, and with it what had the keyboard (a source's select): the
+  // keyboard goes to Try again, Check or Cancel, never <body>.
+  useLayoutEffect(() => {
+    if (failures === 0) return;
+    const a = document.activeElement;
+    if (a === null || a === document.body || !a.isConnected) (tryAgainRef.current ?? checkRef.current ?? cancelRef.current)?.focus();
+  }, [failures]);
 
   // A new source makes the review out of date: it goes until Check runs again.
   const sourceChanged = () => {
@@ -196,7 +212,7 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
   const replace = async () => {
     if (!preview || preview.same || checking || applying) return;
     if (refuse?.()) {
-      onClose(false);
+      onClose(false, undefined, "refused");
       return;
     }
     setApplying(true);
@@ -272,7 +288,7 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
             </div>
             {fileError && <p className={x.error} role="alert">{fileError}</p>}
             <label className={x.pasteLabel} htmlFor={`${id}-paste`}>or paste its JSON</label>
-            <textarea ref={pasteArea} id={`${id}-paste`} className={x.paste} aria-label="Paste its JSON" spellCheck={false} autoComplete="off"
+            <textarea ref={pasteArea} id={`${id}-paste`} className={x.paste} spellCheck={false} autoComplete="off"
               aria-keyshortcuts="Control+Enter" value={paste} onChange={(e) => typed(e.target.value)} onKeyDown={onPasteKey} />
             <div className={x.checkRow}>
               <button ref={checkRef} type="button" className={x.primary} aria-disabled={!input || checking || reading || undefined}
@@ -287,7 +303,12 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
         {checkError && (
           <div className={x.problem} role="alert">
             <p className={x.problemLine}>{checkError}</p>
-            {!asks && <button type="button" className={x.secondary} onClick={() => void check(null, mapping, true)}>Try again</button>}
+            {!asks && (
+              <button ref={tryAgainRef} type="button" className={x.secondary} aria-disabled={checking || undefined} aria-busy={checking || undefined}
+                onClick={() => { if (!checking) void check(null, mapping, true); }}>
+                {checking ? "Trying again…" : "Try again"}
+              </button>
+            )}
           </div>
         )}
         {notice && <p className={x.notice} role="alert">{notice}</p>}

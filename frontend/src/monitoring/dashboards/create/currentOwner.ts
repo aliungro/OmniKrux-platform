@@ -26,12 +26,13 @@ export function ownerOfDashboard(tree: TreeOut, dashboardId: string): Owner | nu
 }
 
 /**
- * The project or group of the active tab's view (its page, or a dashboard's owner); else the most
- * recently opened project or group that still exists; else null.
+ * The project or group of the active tab's view (its page, a dashboard's owner, or the Import
+ * page's target); else the most recently opened project or group that still exists; else null.
  */
 export function currentOwner(view: MonitoringView, tree: TreeOut, recent: RecentItem[]): Owner | null {
   const here = view.page === "project" || view.page === "group" ? ownerIn(tree, view.page, view.id)
     : view.page === "dashboard" ? ownerOfDashboard(tree, view.id)
+    : view.page === "import" && view.target ? ownerIn(tree, view.target.kind, view.target.id)
     : null;
   if (here) return here;
   for (const r of [...recent].sort((a, b) => b.at - a.at)) {

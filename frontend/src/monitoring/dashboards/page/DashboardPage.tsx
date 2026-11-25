@@ -490,26 +490,32 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const exporter = useExport();
   const origin = useOrigin(dashboard.id, !ready).data ?? null;
   const ownerName = dashboard.owner_name || ctx.ownerName;
-  /** What Update from source said last on the page: refused (a draft or edit session), or done. */
-  const [updateWords, setUpdateWords] = useState<{ refused: boolean; text: string } | null>(null);
+  /** What Update from source said last on the page once it was done. */
+  const [updatedText, setUpdatedText] = useState<string | null>(null);
+  /**
+   * Update from source was refused (a draft or edit session). Its words stand only while the draft
+   * or session does: worked out as the page draws, and only after a refusal (no draft read otherwise).
+   */
+  const [refusedUpdate, setRefusedUpdate] = useState(false);
+  const showRefusal = refusedUpdate && restoreBlocked();
   const askUpdate = () => {
     if (restoreBlocked()) {
-      setUpdateWords({ refused: true, text: UPDATE_REFUSED });
+      setUpdatedText(null);
+      setRefusedUpdate(true);
       return;
     }
-    setUpdateWords(null);
+    setRefusedUpdate(false);
+    setUpdatedText(null);
     updateReturn.current = moreButton.current;
     setAsking("update");
   };
-  // The refusal stands only while the draft or session does (checked whenever the page draws).
-  if (updateWords?.refused && !restoreBlocked()) setUpdateWords(null);
   const reviews = useToolReviews();
   const updateReturn = useRef<HTMLElement | null>(null);
-  const updateClosed = (updated: boolean, out?: DashboardOut) => {
+  const updateClosed = (updated: boolean, out?: DashboardOut, why?: "refused") => {
     if (!updated || !out) {
       updateReturn.current = moreButton.current;
-      // Refused on confirm: a draft or edit session appeared meanwhile.
-      if (restoreBlocked()) setUpdateWords({ refused: true, text: UPDATE_REFUSED });
+      // Refused on confirm: a draft or edit session appeared meanwhile (never on a plain Cancel).
+      setRefusedUpdate(why === "refused");
       setAsking(null);
       return;
     }
@@ -519,11 +525,12 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     updateReturn.current = dashboardTab;
     setAsking(null);
     replace({ tab: "dashboard" });
-    setUpdateWords({ refused: false, text: updatedWords(out.title) });
+    setRefusedUpdate(false);
+    setUpdatedText(updatedWords(out.title));
     if (out.alert_changes.length > 0) reviews.enqueue(out.alert_changes, { focus: dashboardTab });
   };
   const copyAction: MenuAction = { label: "Copy dashboard…", onSelect: () => setAsking("copy") };
-  const exportAction: MenuAction = { label: "Export as JSON", onSelect: () => { setUpdateWords(null); exporter.run("dashboard", dashboard.id, spec.title || dashboard.title); } };
+  const exportAction: MenuAction = { label: "Export as JSON", onSelect: () => { setUpdatedText(null); exporter.run("dashboard", dashboard.id, dashboard.title); } };
   const actions: MenuAction[] = ready ? [copyAction, exportAction] : [
     copyAction,
     exportAction,
@@ -576,8 +583,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
       <p className={s.arrived} role="status">{editing ? arrivedWords : ""}</p>
       {copyToEdit.error && <p className={s.copyProblem} role="alert">{copyToEdit.error.text}</p>}
       <div className={s.transferLines}><ExportLine result={exporter.result} /></div>
-      <p className={s.transferDone} role="status">{updateWords && !updateWords.refused ? updateWords.text : ""}</p>
-      {updateWords?.refused && <p className={s.copyProblem} role="alert">{updateWords.text}</p>}
+      <p className={s.transferDone} role="status">{updatedText ?? ""}</p>
+      {showRefusal && <p className={s.copyProblem} role="alert">{UPDATE_REFUSED}</p>}
       {editing && conflict !== null && (
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />

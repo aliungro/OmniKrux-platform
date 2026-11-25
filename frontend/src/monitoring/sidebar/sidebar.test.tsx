@@ -310,6 +310,17 @@ describe("Monitoring sidebar", () => {
     expect(app.current().tabs).toHaveLength(2);
   });
 
+  it("the Import icon on the Import page keeps its target", async () => {
+    seedTwo();
+    const app = renderMonitoringApp({ tabs: tabsWith({ page: "import", target: { kind: "group", id: "g1" } }) });
+    await screen.findByRole("treeitem", { name: "Both" });
+    fireEvent.click(screen.getByRole("button", { name: "Import" }), { ctrlKey: true });
+    await waitFor(() => expect(app.current().tabs).toHaveLength(2));
+    expect(app.current().tabs[1].view).toEqual({ page: "import", target: { kind: "group", id: "g1" } });
+    // New dashboards from here go there too.
+    expect(screen.getByText("Both", { selector: "b" })).toBeTruthy();
+  });
+
   it("the Import icon stays on with no project", async () => {
     installFakeMonitoringApi({ projects: [] });
     const app = renderMonitoringApp();
