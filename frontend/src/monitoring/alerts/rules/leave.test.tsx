@@ -270,6 +270,20 @@ describe("a close-only mark", () => {
     expect(heldFormLeave({ type: "navigate", id: "a", view: HOME, mode: "push" }, tabs, both)?.mark).toBe(hand);
   });
 
+  it("a mark about one item holds going to another item's page of the same kind", () => {
+    const onSource: AppTabs<MonitoringView> = {
+      tabs: [{ id: "a", view: { page: "source", id: "s1" }, back: [{ page: "source", id: "s2" }], forward: [], scrollTop: 0 }],
+      active: "a", closed: [],
+    };
+    const edited = marks({ title: "Prom", page: "source", id: "s1" });
+    expect(heldFormLeave({ type: "navigate", id: "a", view: { page: "source", id: "s1" }, mode: "push" }, onSource, edited)).toBeNull();
+    expect(heldFormLeave({ type: "navigate", id: "a", view: { page: "source", id: "s2" }, mode: "push" }, onSource, edited)?.title).toBe("Prom");
+    expect(heldFormLeave({ type: "back", id: "a" }, onSource, edited)?.title).toBe("Prom");
+    // Without an item, any view of the page keeps the form (the Sources list's forms).
+    const listed = marks({ title: "New source", page: "sources" });
+    expect(heldFormLeave({ type: "navigate", id: "a", view: { page: "sources" }, mode: "replace" }, onSource, listed)).toBeNull();
+  });
+
   it("a close-only mark doesn't ask before a reload: the setup draft survives it", () => {
     const unload = () => {
       const e = new Event("beforeunload", { cancelable: true });

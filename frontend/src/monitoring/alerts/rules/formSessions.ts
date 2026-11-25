@@ -77,6 +77,8 @@ export interface AlertFormMark {
   tab?: "silences" | "contacts";
   /** Or the Monitoring page it lives on (a Grafana connection form): any view of it keeps the form. */
   page?: MonitoringView["page"];
+  /** With `page`: the item it is about (a source's own page): another item's page is a way out. */
+  id?: string;
   /**
    * Holds only closing the tab: every other way out keeps the work (setup keeps its draft per tab),
    * and a reload keeps it too.
@@ -135,8 +137,11 @@ export function heldFormLeave(
   const found = first(action.id, action.type === "closeTab");
   if (!found) return null;
   const held = { tabId: action.id, title: found.mark.title, mark: found.mark };
+  const { page, id, tab: alertsTab } = found.mark;
   const stays = (v: MonitoringView) =>
-    (found.mark.page !== undefined ? v.page === found.mark.page : v.page === "alerts" && (v.tab ?? "rules") === found.mark.tab);
+    (page !== undefined
+      ? v.page === page && (id === undefined || ("id" in v && v.id === id))
+      : v.page === "alerts" && (v.tab ?? "rules") === alertsTab);
   if (action.type === "closeTab") return held;
   const tab = tabs.tabs.find((t) => t.id === action.id);
   if (!tab) return null;

@@ -71,6 +71,8 @@ const STEPS: { n: 1 | 2 | 3 | 4; title: string }[] = [
 ];
 
 const isHand = (p: SetupPick) => p.key.startsWith("hand:");
+/** The tab's mark while its setup draft holds a choice: only closing the tab loses it. */
+const SETUP_MARK = { title: "New project", page: "setup", closeOnly: true } as const;
 const sourcesInUse = (n: number) => `${n} ${n === 1 ? "source" : "sources"} in use`;
 const inUseAndInstalls = (n: number, m: number) => (m > 0 ? `${sourcesInUse(n)} · ${m} to install` : sourcesInUse(n));
 /** Where the keyboard goes once the install review over a new project closes: its name. */
@@ -598,13 +600,20 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
   useEffect(() => () => keep(), [keep]);
 
   // A draft with any choice in it is kept per tab, so only closing the tab loses it: the tab is
-  // marked for that alone (switching tabs, going elsewhere and reloading keep the draft).
+  // marked for that alone (switching tabs, going elsewhere and reloading keep the draft). The mark
+  // belongs to the tab, not to this page: it stays while the page is away (another tab shown, or
+  // this one moved on) and goes with Discard, a created project, a draft with no choice left, or
+  // the tab itself.
   const chosen = touched || draft.kind !== (start ? "kubernetes" : null) || draft.clusterId !== start || draft.step !== (start ? 2 : 1)
     || draft.name.trim() !== "" || draft.picks.some(isHand) || draft.importFrom != null;
+  const chosenNow = useRef(chosen);
+  chosenNow.current = chosen;
   useEffect(() => {
-    markAlertForm(tabId, "setup", chosen ? { title: "New project", page: "setup", closeOnly: true } : null);
-    return () => markAlertForm(tabId, "setup", null);
+    markAlertForm(tabId, "setup", chosen ? SETUP_MARK : null);
   }, [tabId, chosen]);
+  useEffect(() => () => {
+    if (made.current || !chosenNow.current) markAlertForm(tabId, "setup", null);
+  }, [tabId]);
 
   // --- Step 3: the Grafana found in the cluster --------------------------------------------------
   const found = discovery.data?.cluster_id === draft.clusterId ? discovery.data : undefined;
@@ -814,6 +823,8 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
       return;
     }
     made.current = true;
+    // Made: nothing is left to lose when the tab closes.
+    markAlertForm(tabId, "setup", null);
     removeSetupDraft(tabId);
     let result: ImportResultOut | null = null;
     let importError: string | null = null;

@@ -617,13 +617,81 @@ describe("Setup installs what's missing", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("an untouched setup tab closes without asking", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
+    // What was found fills in by itself: no choice made yet.
+    await screen.findByRole("group", { name: "Prometheus" });
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("closing a background New project tab asks first, by × and by middle-click", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
+    await screen.findByRole("group", { name: "Prometheus" });
+    await user.click(continueButton());
+    await screen.findByRole("heading", { name: "Name and review" });
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Home is shown now: the setup page is gone from the screen, its draft is kept for its tab.
+    await user.click(screen.getAllByRole("tab")[1]);
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Name and review" })).toBeNull());
+    await waitFor(() => expect(localStorage.getItem(`${SETUP_DRAFT_PREFIX}start0`)).not.toBeNull());
+    expect(document.activeElement).not.toBe(document.body);
+    const ASK = 'Leave "New project" with unsaved changes?';
+
+    // The × on the background tab.
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    let ask = screen.getByRole("alertdialog", { name: ASK });
+    expect(within(ask).getByText("Closing this tab loses the project you started setting up.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(current().tabs).toHaveLength(2);
+    expect(document.activeElement).not.toBe(document.body);
+
+    // A middle-click on it.
+    const wrap = screen.getByRole("button", { name: "Close New project" }).parentElement!;
+    fireEvent.mouseDown(wrap, { button: 1 });
+    fireEvent(wrap, new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
+    ask = screen.getByRole("alertdialog", { name: ASK });
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Discard: the tab closes and its draft goes with it.
+    await user.click(within(ask).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(current().tabs.map((t) => t.view.page)).toEqual(["home"]));
+    await waitFor(() => expect(Object.keys(localStorage).filter((k) => k.startsWith(SETUP_DRAFT_PREFIX))).toEqual([]));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("with a source being added by hand, closing names the setup", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
+    // A choice in the setup (a filter typed), then a source being added by hand.
+    await user.type(await screen.findByRole("textbox", { name: "Filter for Prometheus" }), 'job="api"');
+    await user.click(screen.getByRole("button", { name: "+ Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    expect(document.activeElement).not.toBe(document.body);
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "New project" with unsaved changes?' });
+    expect(within(ask).getByText("Closing this tab loses the project you started setting up.")).toBeTruthy();
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("closing the tab with a setup draft asks first", async () => {
     const user = userEvent.setup();
     install({ discovery: { c1: PROM_AND_LOKI } });
     renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
     await screen.findByRole("group", { name: "Prometheus" });
-    // Nothing chosen yet: closing doesn't ask (what was found comes back by itself).
-    expect(screen.queryByRole("alertdialog")).toBeNull();
     await user.click(continueButton());
     await screen.findByRole("heading", { name: "Name and review" });
 

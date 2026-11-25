@@ -429,7 +429,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
           <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} />
         ) : (
           <div className={s.panel}>
-            <SourceForm mode="save" closeOnEscape tabId={tabId} page="project" onSaved={(saved) => linkNew(saved)} onCancel={closePanel} />
+            <SourceForm mode="save" closeOnEscape tabId={tabId} page="project" pageId={id} onSaved={(saved) => linkNew(saved)} onCancel={closePanel} />
           </div>
         )}
       </section>

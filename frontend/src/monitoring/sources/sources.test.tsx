@@ -384,10 +384,11 @@ describe("leaving a source form with changes", () => {
     installFakeMonitoringApi({ sources: [source("s1", "Prom")] }, fallback);
     renderMonitoringApp({ tabs: tabsWith({ page: "sources" }, { page: "home" }) });
     await user.click(await screen.findByRole("button", { name: "Edit Prom" }));
-    // Opened, nothing changed: closing doesn't ask.
+    expect(document.activeElement).not.toBe(document.body);
     const close = screen.getByRole("button", { name: "Close Sources" });
     const address = screen.getByLabelText("Address") as HTMLInputElement;
     await user.type(address, "/x");
+    expect(document.activeElement).not.toBe(document.body);
     await user.click(close);
     const ask = screen.getByRole("alertdialog", { name: 'Leave "Prom" with unsaved changes?' });
     expect(within(ask).getByText("Leaving loses what you entered in this form.")).toBeTruthy();
@@ -409,14 +410,45 @@ describe("leaving a source form with changes", () => {
     const user = userEvent.setup();
     installFakeMonitoringApi({}, fallback);
     renderMonitoringApp({ tabs: tabsWith({ page: "sources" }, { page: "home" }) });
+    const off = () => expect(document.activeElement).not.toBe(document.body);
     await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    off();
     await user.type(screen.getByLabelText("Address"), "http://new.example:9090");
+    off();
     await user.click(screen.getByRole("button", { name: "Close Sources" }));
     const ask = screen.getByRole("alertdialog", { name: 'Leave "New source" with unsaved changes?' });
+    off();
     await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    off();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
+    off();
     await user.click(screen.getByRole("button", { name: "Close Sources" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.getAllByRole("tab")).toHaveLength(1);
+    off();
+  });
+
+  it("another source's page is a way out of an edited source; the same source is not", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ sources: [source("s1", "Prom"), source("s2", "Other")] }, fallback);
+    const { navigate, current } = renderMonitoringApp({ tabs: tabsWith({ page: "source", id: "s1" }) });
+    const off = () => expect(document.activeElement).not.toBe(document.body);
+    await screen.findByRole("heading", { name: "Prom" });
+    await user.type(screen.getByLabelText("Address"), "/x");
+    off();
+    // The same source again (a link to it) keeps the form: nothing asked, nothing lost.
+    navigate({ page: "source", id: "s1" }, "push");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe("http://prom.example:9090/x");
+    off();
+    // Another source (Find, a link) would remount the form: asked first.
+    navigate({ page: "source", id: "s2" }, "push");
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "Prom" with unsaved changes?' });
+    expect(current().tabs[0].view).toEqual({ page: "source", id: "s1" });
+    off();
+    await user.click(within(ask).getByRole("button", { name: "Discard changes" }));
+    expect(await screen.findByRole("heading", { name: "Other" })).toBeTruthy();
+    expect(current().tabs[0].view).toEqual({ page: "source", id: "s2" });
+    off();
   });
 });

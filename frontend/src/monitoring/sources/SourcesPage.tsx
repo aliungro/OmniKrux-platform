@@ -204,7 +204,7 @@ export function SourcePage({ view, nav, tabId }: MonitoringPageProps) {
   return (
     <section className={s.page} aria-labelledby="monitoring-source-title">
       <h1 id="monitoring-source-title" className={s.title}>{source.name}</h1>
-      <SourceForm key={source.id} mode="save" tabId={tabId} page="source" initial={source} onSaved={back} onCancel={back} />
+      <SourceForm key={source.id} mode="save" tabId={tabId} page="source" pageId={source.id} initial={source} onSaved={back} onCancel={back} />
     </section>
   );
 }

@@ -29,6 +29,8 @@ interface CommonProps {
    */
   tabId?: string;
   page?: MonitoringView["page"];
+  /** The item that page is about (a source's or a project's own page): another one's page asks too. */
+  pageId?: string;
 }
 
 /** `save` stores the source and reports it; `collect` hands the entered source to `onCollect` and stores nothing. */
@@ -89,7 +91,7 @@ function Secret({ label, value, onChange, saved, multiline = false }: {
 }
 
 export function SourceForm(props: SourceFormProps) {
-  const { initial, onCancel, mode, closeOnEscape = false, tabId, page } = props;
+  const { initial, onCancel, mode, closeOnEscape = false, tabId, page, pageId } = props;
   const client = useQueryClient();
   const ids = useId();
   const address = useRef<HTMLInputElement>(null);
@@ -131,9 +133,9 @@ export function SourceForm(props: SourceFormProps) {
   const title = initial?.name ?? "New source";
   useEffect(() => {
     if (tabId === undefined || page === undefined) return;
-    markAlertForm(tabId, formId, changed ? { title, page } : null);
+    markAlertForm(tabId, formId, changed ? { title, page, ...(pageId !== undefined ? { id: pageId } : {}) } : null);
     return () => markAlertForm(tabId, formId, null);
-  }, [tabId, page, formId, changed, title]);
+  }, [tabId, page, pageId, formId, changed, title]);
   /** Lets the tab go before the caller moves on (its navigation would otherwise ask about this form). */
   const release = () => {
     setDone(true);

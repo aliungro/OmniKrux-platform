@@ -259,11 +259,12 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       return true;
     }
     if (form) {
-      // A setup started in the tab holds only its closing; a form's own mark names the question first.
-      const setupDraft = action.type === "closeTab" && [...(alertFormMarks.get(form.tabId)?.values() ?? [])].some((m) => m.closeOnly);
+      // A setup started in the tab holds only its closing. Closing it loses the whole setup (a form
+      // open in it included), so the question names that, whichever mark was found.
+      const setup = action.type === "closeTab" ? [...(alertFormMarks.get(form.tabId)?.values() ?? [])].find((m) => m.closeOnly) : undefined;
       setLeaving({
-        tabId: form.tabId, dashboardId: "", title: form.title, draftsWork: false, form: true, proceed, setupDraft,
-        body: form.mark.closeOnly ? SETUP_LEAVE_BODY : FORM_LEAVE_BODY,
+        tabId: form.tabId, dashboardId: "", title: setup?.title ?? form.title, draftsWork: false, form: true, proceed, setupDraft: setup !== undefined,
+        body: setup ? SETUP_LEAVE_BODY : FORM_LEAVE_BODY,
         from: active instanceof HTMLElement && active !== document.body ? active : null,
       });
       return true;
