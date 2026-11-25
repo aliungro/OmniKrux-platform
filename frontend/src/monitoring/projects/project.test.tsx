@@ -1002,3 +1002,40 @@ describe("Project page, one cluster banner", () => {
     expect(screen.queryByText(/can't be reached, so this project's data/)).toBeNull();
   });
 });
+
+describe("Project page, the cluster banner needs the cluster's own words", () => {
+  const inDev = (id: string, name: string) => source(id, name, { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: id, port: "9090" });
+  const clusters = async (url: string) => json(url === "/api/clusters" ? [{ id: "c1", name: "dev", provider: "kind", state: "ready" }] : []);
+  const READY = { key: "cluster" as const, id: "ready:p1:cluster", title: "Cluster health", description: "Nodes and pods.", missing: [], notes: [], checked: false, check_message: "Prom in dev answered, but not as a Prometheus API (HTTP 404). Check the address and the type." };
+
+  it("a wrong address in the cluster keeps its own reason", async () => {
+    const prom = inDev("s1", "Prom in dev");
+    const why = READY.check_message;
+    installFakeMonitoringApi({
+      sources: [prom],
+      projects: [project("p1", "Dev", [link(prom, "", { source_cluster_id: "c1" })], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: { s1: { state: "down", message: why, version: null, checked_at: new Date().toISOString(), answered: true } },
+      dashboards: { "ready:p1:cluster": seedDashboard("ready:p1:cluster", { kind: "project", id: "p1", name: "Dev" }, spec("Cluster health", []), true) },
+      readyMade: { p1: [READY] },
+    }, clusters);
+    open("p1");
+    expect(await screen.findByText(why)).toBeTruthy();
+    expect(screen.queryByText(/can't be reached, so this project's data/)).toBeNull();
+    expect(screen.queryByText("Can't be checked now.")).toBeNull();
+  });
+
+  it("one failing link with the cluster's words says it once, even beside an up link", async () => {
+    const a = inDev("s1", "Prom in dev");
+    const b = inDev("s2", "Loki in dev");
+    installFakeMonitoringApi({
+      sources: [a, b],
+      projects: [project("p1", "Dev", [link(a, "", { source_cluster_id: "c1" }), link(b, "", { source_cluster_id: "c1" })], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: {
+        s1: { state: "down", message: "Can't reach dev, so Prom in dev can't be read. Check that the cluster is running.", version: null, checked_at: new Date().toISOString() },
+        s2: { state: "up", message: null, version: null, checked_at: new Date().toISOString() },
+      },
+    }, clusters);
+    open("p1");
+    expect(await screen.findByText("dev can't be reached, so this project's data can't be read now.")).toBeTruthy();
+  });
+});

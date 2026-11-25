@@ -569,3 +569,38 @@ describe("Source form, states and words", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 });
+
+describe("Source form, fix round 1", () => {
+  it("the buttons, not only the message, are scrolled into view", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    try {
+      open();
+      await user.click(await screen.findByRole("button", { name: "Add a source" }));
+      await user.click(screen.getByRole("button", { name: "Save source" }));
+      await screen.findByRole("alert");
+      expect(scrolled.at(-1)?.contains(screen.getByRole("button", { name: "Test connection" }))).toBe(true);
+      expect(scrolled.at(-1)?.tagName).toBe("DIV");
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("an existing source's type is read-only text, and clearing the name says it is kept", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ sources: [source("s1", "Prom")] }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Prom" }));
+    expect(screen.queryByRole("combobox", { name: "Type" })).toBeNull();
+    expect(document.querySelector("[data-fixed-type]")?.textContent).toBe("Prometheus-compatible");
+    expect(screen.queryByText("Leave empty to keep the name.")).toBeNull();
+    await user.clear(screen.getByLabelText("Name"));
+    expect(screen.getByText("Leave empty to keep the name.")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(api.requests.some((r) => r.method === "PATCH")).toBe(true));
+    expect(api.requests.find((r) => r.method === "PATCH")!.body).not.toHaveProperty("type");
+  });
+});

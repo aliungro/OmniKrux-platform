@@ -120,7 +120,7 @@ export function SourceForm(props: SourceFormProps) {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const message = useRef<HTMLParagraphElement>(null);
+  const actions = useRef<HTMLDivElement>(null);
 
   useEffect(() => { (byCluster ? nameInput : address).current?.focus(); }, [byCluster]);
 
@@ -135,7 +135,8 @@ export function SourceForm(props: SourceFormProps) {
   const reached = JSON.stringify([type, url, authType, username, headerName, Object.values(secrets).map((v) => v !== ""), headers, ca, removeCa]);
   useEffect(() => { setResult(null); }, [reached]);
   // An error or a test answer is brought into view above any sticky footer (its scroll margin).
-  useEffect(() => { if (error || result) message.current?.scrollIntoView?.({ block: "nearest" }); }, [error, result]);
+  // The buttons are what must stay visible; the message above them comes along.
+  useEffect(() => { if (error || result) actions.current?.scrollIntoView?.({ block: "nearest" }); }, [error, result]);
   // Saved or cancelled: the form is done and holds the tab no more, whatever it still shows.
   const [done, setDone] = useState(false);
   const formId = useId();
@@ -180,7 +181,7 @@ export function SourceForm(props: SourceFormProps) {
     };
     const caPatch = removeCa ? { ca_pem: "" } : ca.trim() ? { ca_pem: ca } : {};
     const patch: SourcePatch = {
-      ...(typed ? { name: typed } : {}), type,
+      ...(typed ? { name: typed } : {}),
       ...(byCluster ? {} : { url: url.trim(), auth, headers: hdrs }), ...caPatch,
     };
     return { body, patch };
@@ -243,7 +244,7 @@ export function SourceForm(props: SourceFormProps) {
   return (
     <form className={s.form} onSubmit={save} noValidate onKeyDown={closeOnEscape ? escapeCloses(() => { release(); onCancel(); }, busy) : undefined} aria-label={initial ? `Edit ${initial.name}` : "Add a source by hand"}>
       <h2 className={s.title}>{initial ? `Edit ${initial.name}` : "Add a source by hand"}</h2>
-      {byCluster ? (
+      {initial ? (
         <div className={s.field}>
           <span className={s.fixedLabel}>Type</span>
           <span className={s.fixedValue} data-fixed-type>{sourceTypeLabel(type)}</span>
@@ -271,6 +272,7 @@ export function SourceForm(props: SourceFormProps) {
         <label htmlFor={`${ids}-name`}>Name</label>
         <input id={`${ids}-name`} ref={nameInput} className={s.input} type="text" autoComplete="off" placeholder={initial ? initial.name : autoName}
           value={name} onChange={(e) => setName(e.target.value)} />
+        {initial && name.trim() === "" && <span className={s.hint}>Leave empty to keep the name.</span>}
       </div>
 
       {!byCluster && (
@@ -343,9 +345,9 @@ export function SourceForm(props: SourceFormProps) {
         )}
       </div>}
 
-      {error && <p ref={message} className={s.error} role="alert">{error}</p>}
-      {result && <p ref={error ? undefined : message} className={result.ok ? s.ok : s.error} role="status">{result.text}</p>}
-      <div className={s.actions}>
+      {error && <p className={s.error} role="alert">{error}</p>}
+      {result && <p className={result.ok ? s.ok : s.error} role="status">{result.text}</p>}
+      <div ref={actions} className={s.actions}>
         {/* aria-disabled, not disabled: a pressed button keeps the keyboard while it waits. */}
         <button type="button" className={s.secondary} onClick={() => void test()} aria-disabled={busy || testing || undefined}>
           {testing ? "Testing…" : "Test connection"}

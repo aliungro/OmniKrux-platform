@@ -188,7 +188,7 @@ class HealthCache:
         self._entries[source.id] = _Entry(health, source.updated_at, time.monotonic())
         try:
             await self._sources.record_check(
-                source.id, SourceCheck(ok, message, version, checked_at)
+                source.id, SourceCheck(ok, message, version, checked_at, result.answered)
             )
         except KeyError:  # removed meanwhile
             self._entries.pop(source.id, None)

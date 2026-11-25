@@ -208,14 +208,15 @@ export default function ToolsPage({ view, nav, openInNewTab }: MonitoringPagePro
     else nav.navigate(target, "push");
   };
 
-  const sourceName = (id: string) => sources?.find((x) => x.id === id)?.name ?? "a saved source";
+  // Until the list has loaded (or when it failed) the source is not named.
+  const sourceWords = (id: string) => { const name = sources?.find((x) => x.id === id)?.name; return name ? `the source ${name}` : "an existing source"; };
   const others = status && status.others.length > 0 && (
     <div className={s.others}>
       <ul className={s.otherList}>
         {status.others.map((t) => (
           <li key={`${t.type}:${t.namespace}/${t.service}`}>
             {t.existing_source_id
-              ? `${status.cluster_name} already runs ${TOOL_WORDS[t.type as ToolType] ?? t.type} at ${t.namespace}/${t.service}, and it is the source ${sourceName(t.existing_source_id)}.`
+              ? `${status.cluster_name} already runs ${TOOL_WORDS[t.type as ToolType] ?? t.type} at ${t.namespace}/${t.service}, and it is ${sourceWords(t.existing_source_id)}.`
               : `${status.cluster_name} already runs ${TOOL_WORDS[t.type as ToolType] ?? t.type} at ${t.namespace}/${t.service}. You can connect it instead of installing another.`}
           </li>
         ))}

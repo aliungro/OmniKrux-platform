@@ -562,3 +562,12 @@ async def test_a_stored_not_an_api_check_still_answers(monitoring_app, fake_prom
     listed = (await http.get(BASE)).json()
     health = next(s for s in listed if s["id"] == created["id"])["health"]
     assert health["state"] == "down" and health["answered"] is True
+
+
+def test_the_stored_words_of_every_type_still_answer():
+    from omnikrux.monitoring.sources.connector import NOT_AN_API, is_not_an_api
+
+    for word in ("a Prometheus", "a Loki", "an Alertmanager"):
+        assert is_not_an_api(NOT_AN_API.format(name="Some · name", type=word, status=405))
+    assert not is_not_an_api("Some answered HTTP 500. Try again, or check the tool.")
+    assert not is_not_an_api(None)

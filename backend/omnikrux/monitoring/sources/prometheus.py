@@ -74,7 +74,7 @@ class PrometheusConnector:
             if isinstance(info, dict) and isinstance(info.get("version"), str):
                 version = info["version"]
         if got.status != 200:
-            return probe_failure(name, got.status, "Prometheus")
+            return probe_failure(name, got.status, "a Prometheus")
         data = json_object(got.body)
         if data is None or data.get("status") != "success":
             return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))

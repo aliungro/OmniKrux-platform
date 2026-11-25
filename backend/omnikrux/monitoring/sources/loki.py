@@ -59,12 +59,12 @@ class LokiConnector:
         if got.status == 404:
             ready = await t.request("GET", "/ready", timeout=PROBE_SECONDS)
             if ready.status != 200:
-                return probe_failure(name, ready.status, "Loki")
+                return probe_failure(name, ready.status, "a Loki")
             if ready.body.strip().lower() != b"ready":
                 return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))
             return TestResult(True, None, None)
         if got.status != 200:
-            return probe_failure(name, got.status, "Loki")
+            return probe_failure(name, got.status, "a Loki")
         data = json_object(got.body)
         if data is None:
             return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))

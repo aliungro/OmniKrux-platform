@@ -51,6 +51,20 @@ export const nothingVisibleWords = (source: string) => `Nothing in ${source} is 
 const UNDO_AFTER_MS = 10_000;
 const SAVED_FOR_MS = 5_000;
 
+/**
+ * The cluster every failing source fails for, when each says it can't reach that very cluster
+ * (the server's words, `Can't reach {cluster}, so …`); any other reason keeps its own line.
+ */
+export function unreachableCluster(links: LinkOut[], health: Record<string, HealthOut>, nameOf: (id: string) => string | null): string | null {
+  const failing = links.filter((l) => stateOf(health[l.source_id]) === "down");
+  if (failing.length === 0) return null;
+  const ids = new Set(failing.map((l) => l.source_cluster_id ?? null));
+  const id = ids.size === 1 ? [...ids][0] : null;
+  const name = id === null ? null : nameOf(id);
+  if (name === null) return null;
+  return failing.every((l) => (health[l.source_id]?.message ?? "").startsWith(`Can't reach ${name}, so `)) ? name : null;
+}
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** The origin a saved filter carries: nothing typed is "none"; otherwise what the user or OmniKrux made of it. */
@@ -362,11 +376,8 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
   const clusterName = clusterGone ? null
     : (project.cluster_name ?? clusters.data?.find((c) => c.id === project.cluster_id)?.name ?? null);
   // Every failing source is reached through the one cluster, which can't be reached: said once here.
-  const failing = project.links.filter((l) => stateOf(health[l.source_id]) === "down");
-  const failingIn = new Set(failing.map((l) => l.source_cluster_id ?? null));
-  const downClusterId = failing.length > 0 && failingIn.size === 1 && !failingIn.has(null) ? [...failingIn][0] : null;
-  const downCluster = downClusterId === null ? null
-    : (clusters.data?.find((c) => c.id === downClusterId)?.name ?? (project.cluster_id === downClusterId ? project.cluster_name : null) ?? "The cluster");
+  const downCluster = unreachableCluster(project.links, health, (id) =>
+    clusters.data?.find((c) => c.id === id)?.name ?? (project.cluster_id === id ? project.cluster_name : null));
   const inGroups = (groups.data ?? []).filter((g) => g.project_ids.includes(project.id));
 
   const rename = async (name: string) => {

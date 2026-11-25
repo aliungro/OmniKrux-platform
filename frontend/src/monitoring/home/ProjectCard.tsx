@@ -70,7 +70,7 @@ export function ProjectCard({ project, health, now, clusterName, clusterGone, fi
       <span className={s.cardSub}>{kindLine(project, clusterName)}</span>
       {clusterGone && <span className={s.cardWarn}>Cluster no longer connected</span>}
       <span className={s.rows}>
-        {project.links.length === 0 && <span className={s.row}>No sources yet</span>}
+        {project.links.length === 0 && <span className={s.row}><span className={s.rowText}>No sources yet</span></span>}
         {sortLinks(project.links).map((l) => {
           const h = health[l.source_id] ?? UNKNOWN;
           const state = stateOf(h);

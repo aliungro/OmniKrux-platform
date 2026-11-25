@@ -35,7 +35,7 @@ QueryRejectedCode = Literal["bad_query", "tool_error", "unauthorized"]
 MAX_TOOL_MESSAGE = 300
 TOOL_ERROR = "{name} answered HTTP {status}. Try again, or check the tool."
 NOT_AN_API = (
-    "{name} answered, but not as a {type} API (HTTP {status}). Check the address and the type."
+    "{name} answered, but not as {type} API (HTTP {status}). Check the address and the type."
 )
 QUERY_REFUSED = "{name} couldn't run that query."
 NOT_LIKE = "{name} answered, but not like {what}. Check the address and its path."
@@ -304,7 +304,7 @@ _NOT_AN_API = re.compile(
     "^"
     + re.escape(NOT_AN_API)
     .replace(re.escape("{name}"), ".+")
-    .replace(re.escape("{type}"), "(?:Prometheus|Loki|Alertmanager)")
+    .replace(re.escape("{type}"), "(?:a Prometheus|a Loki|an Alertmanager)")
     .replace(re.escape("{status}"), "[0-9]+")
     + "$",
     re.DOTALL,

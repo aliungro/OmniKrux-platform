@@ -458,3 +458,12 @@ describe("Monitoring tools, states and words", () => {
     noBody();
   });
 });
+
+describe("Monitoring tools, a source not yet listed", () => {
+  it("never says the source is a saved source", async () => {
+    const found = { type: "prometheus", state: "reachable", namespace: "obs", service: "prometheus-k8s", port: "9090", scheme: "http", version: null, message: null, existing_source_id: "gone", detail: null } as const;
+    renderPage({ seed: { install: { tools: TOOLS, status: { c1: status({ others: [found] }) } } } });
+    expect(await screen.findByText("kind-install already runs Prometheus at obs/prometheus-k8s, and it is an existing source.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("a saved source");
+  });
+});

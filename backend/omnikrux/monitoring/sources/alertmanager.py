@@ -36,7 +36,7 @@ class AlertmanagerConnector:
         except SourceUnreachable as exc:
             return TestResult(False, None, exc.message)
         if got.status != 200:
-            return probe_failure(name, got.status, "Alertmanager")
+            return probe_failure(name, got.status, "an Alertmanager")
         data = json_object(got.body)
         info = data.get("versionInfo") if data is not None else None
         if not isinstance(info, dict) or not isinstance(info.get("version"), str):

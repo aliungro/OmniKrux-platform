@@ -185,7 +185,7 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
                   {p.name}
                   <i className={s.healthDot} aria-hidden="true" />
                 </button>
-                {memberHealth(p, healthQuery.data) === "down" && <span id={`member-${p.id}-trouble`} hidden>A source of this project can&apos;t be reached.</span>}
+                {memberHealth(p, healthQuery.data) === "down" && <span id={`member-${p.id}-trouble`} hidden>A source of this project is down.</span>}
               </li>
             ))}
           </ul>

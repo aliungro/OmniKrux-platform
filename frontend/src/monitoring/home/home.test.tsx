@@ -382,3 +382,16 @@ describe("Home, states and words", () => {
     expect(card.textContent).not.toContain("Sources not checked yet");
   });
 });
+
+describe("Home, a project without sources", () => {
+  it("No sources yet has a text element of its own in the card's row", async () => {
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Empty one")] }, clustersFallback([]));
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Empty one/ });
+    const text = within(card).getByText("No sources yet");
+    // Wrapped, so the grid row places it across its text column and not in the dot's.
+    expect(text.parentElement).not.toBe(card);
+    expect(text.parentElement?.children).toHaveLength(1);
+    expect(text.parentElement?.textContent).toBe("No sources yet");
+  });
+});

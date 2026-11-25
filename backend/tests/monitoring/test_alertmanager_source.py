@@ -26,7 +26,7 @@ async def test_alertmanager_test_refuses_something_else(fake_prometheus, direct)
     result = await AlertmanagerConnector().test(t, "Alerts")
     assert result.ok is False
     assert result.message == (
-        "Alerts answered, but not as a Alertmanager API (HTTP 404). Check the address and the type."
+        "Alerts answered, but not as an Alertmanager API (HTTP 404). Check the address and the type."
     )
     assert result.answered is True
 

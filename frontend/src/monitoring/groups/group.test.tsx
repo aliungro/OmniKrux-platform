@@ -292,6 +292,6 @@ describe("Groups, states and words", () => {
     await waitFor(() => expect(dev.getAttribute("data-health")).toBe("down"));
     expect(within(list).getByRole("button", { name: /Stage/ }).getAttribute("data-health")).toBe("unknown");
     expect(dev.getAttribute("aria-describedby")).toBeTruthy();
-    expect(document.getElementById(dev.getAttribute("aria-describedby") as string)?.textContent).toBe("A source of this project can't be reached.");
+    expect(document.getElementById(dev.getAttribute("aria-describedby") as string)?.textContent).toBe("A source of this project is down.");
   });
 });

@@ -160,8 +160,7 @@ async def test_rule_6_the_source_cant_be_reached(monitoring_app, kind_cluster):
     assert answer == {
         "filter": "",
         "origin": "none",
-        "reason": "Couldn't check the source: "
-        + messages.REFUSED.format(name="Prometheus · 127.0.0.1"),
+        "reason": messages.REFUSED.format(name="Prometheus · 127.0.0.1"),
     }
 
 
