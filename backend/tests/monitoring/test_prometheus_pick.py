@@ -2,14 +2,17 @@
 about the exporters none of them (or only a hidden part of one) holds."""
 
 import asyncio
+from dataclasses import replace
 from urllib.parse import quote
 
 from omnikrux.monitoring.dashboards.prometheus_pick import (
     NEED_SELECTOR,
+    UNREAD_OTHER,
     PromLink,
     pick_prometheus,
 )
 from omnikrux.monitoring.dashboards.ready_made import NEED_FILTERED, NEED_NOTE
+from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE
 from tests.monitoring.fakes import serve_fake_prometheus
 
 API = "/api/monitoring"
@@ -224,7 +227,9 @@ async def test_an_unreadable_prometheus_is_not_called_missing(
     # kube-state-metrics might report to the one that can't be read: nothing is called missing.
     cluster = views["cluster"]
     assert cluster["checked"] is False and cluster["missing"] == [] and cluster["notes"] == []
-    assert cluster["check_message"].startswith("Can't reach Gone")
+    # The reason names the one that couldn't be read, not the one the view reads.
+    prefix = "Can't read Gone now, so this view can't tell whether its metrics are there. "
+    assert cluster["check_message"].startswith(prefix + "Can't reach Gone")
     assert cluster["source_name"] == "Prom"
 
     # The one that can be read has everything: it is read, and nothing is said.
@@ -240,6 +245,41 @@ async def test_an_unreadable_prometheus_is_not_called_missing(
         assert view["checked"] is False and view["notes"] == [] and view["missing"] == []
         assert view["source_name"] == "Gone" and view["check_message"].startswith("Can't reach")
     assert prometheus_ids(await spec_of(http, only_dead, "cluster")) == {dead}
+
+
+async def test_another_links_reason_names_that_link(
+    monitoring_app, kube_cluster, fake_prometheus, monkeypatch
+):
+    http, app = monitoring_app
+    fake_prometheus.label_values_from_series = True
+    fake_prometheus.series = series("container_cpu_usage_seconds_total")
+    async with serve_fake_prometheus() as second:
+        locked = await add_prometheus(http, second.url, "Locked")
+        alive = await add_prometheus(http, fake_prometheus.url, "Prom")
+        pid = await project_over(http, kube_cluster, [(locked, ""), (alive, "")])
+        store = app.state.monitoring.sources
+        real_get = store.get
+
+        async def unreadable(id):
+            found = await real_get(id)
+            return replace(found, secrets_unreadable=True) if id == locked else found
+
+        monkeypatch.setattr(store, "get", unreadable)
+        cluster = (await views_of(http, pid))["cluster"]
+        # "this source's saved credentials" is about Locked, which the line now names; the view
+        # reads Prom.
+        assert cluster["source_name"] == "Prom" and cluster["checked"] is False
+        assert cluster["check_message"] == UNREAD_OTHER.format(
+            source="Locked", message=SECRETS_UNREADABLE
+        )
+        assert cluster["check_message"] == (
+            "Can't read Locked now, so this view can't tell whether its metrics are there. "
+            "OmniKrux can't read this source's saved credentials: its encryption key changed. "
+            "Enter the credentials and header values again."
+        )
+        assert cluster["missing"] == [] and cluster["notes"] == []
+        # Nothing is asked of a source whose credentials can't be read.
+        assert not [r for r in second.requests if "__name__" in r.path]
 
 
 async def test_links_are_read_at_once(monitoring_app, kube_cluster, fake_prometheus):

@@ -43,6 +43,10 @@ NEED_SELECTOR = (
     '{__name__=~"kube_pod_info|container_cpu_usage_seconds_total|node_cpu_seconds_total"}'
 )
 _NEED_OF = {metric: need for need, metric in NEED_METRIC.items()}
+# Why a view can't tell what it lacks when a link other than the one it reads couldn't be read.
+UNREAD_OTHER = (
+    "Can't read {source} now, so this view can't tell whether its metrics are there. {message}"
+)
 ALL_NEEDS: frozenset[Need] = frozenset(NEED_METRIC)
 
 
@@ -138,14 +142,16 @@ def check_needs(key: ReadyKey, chosen: PromLink, links: list[PromLink]) -> PromC
     """`missing` = the view's needs no readable link holds; each is said as `NEED_FILTERED` when a
     link's filter hides it (the first such link), else as `NEED_NOTE`. When the chosen link is
     unread, or a need is missing while another link is unread (that one might hold it), nothing
-    is said but why."""
+    is said but why: the chosen link's own reason, or `UNREAD_OTHER` naming the other link (its
+    reason alone might speak of "this source" under the name of the one the view reads)."""
     if chosen.has is None:
         return PromCheck(False, chosen.message, [], [])
     readable = [link for link in links if link.has is not None]
     missing = [n for n in NEEDS[key] if not any(n in link.has for link in readable)]  # type: ignore[operator]
     unread = next((link for link in links if link.has is None), None)
     if missing and unread is not None:
-        return PromCheck(False, unread.message, [], [])
+        message = UNREAD_OTHER.format(source=unread.source_name, message=unread.message)
+        return PromCheck(False, message, [], [])
     notes = []
     for need in missing:
         hiding = next((link for link in readable if need in link.hidden), None)

@@ -273,6 +273,28 @@ describe("Project page", () => {
     expect(within(solo).queryByText(/^Reads /)).toBeNull();
   });
 
+  it("a view that can't be checked because of another Prometheus names that source", async () => {
+    const locked = source("s1", "Locked");
+    const prom = source("s2", "Prom");
+    const reason = "Can't read Locked now, so this view can't tell whether its metrics are there. "
+      + "OmniKrux can't read this source's saved credentials: its encryption key changed. Enter the credentials and header values again.";
+    installFakeMonitoringApi({
+      sources: [locked, prom],
+      projects: [project("p1", "Dev", [link(locked), link(prom)])],
+      readyMade: { p1: [{
+        key: "cluster", id: "ready:p1:cluster", title: "Cluster health", description: "Nodes and pods.",
+        missing: [], notes: [], checked: false, check_message: reason, source_name: "Prom",
+      }] },
+    }, fallback);
+    open("p1");
+    const ready = await screen.findByRole("list", { name: "Ready-made views" });
+    const [cluster] = within(ready).getAllByRole("listitem");
+    // The view reads Prom; the reason it can't be checked is Locked's, and says so.
+    expect(within(cluster).getByText("Reads Prom.")).toBeTruthy();
+    expect(within(cluster).getByText(reason)).toBeTruthy();
+    expect(within(cluster).getByText(/^Can't read Locked now/).textContent).toContain("Locked");
+  });
+
   it("linking a Loki source says it adds Logs overview", async () => {
     const user = userEvent.setup();
     const loki = source("s2", "Logs", { type: "loki" });
