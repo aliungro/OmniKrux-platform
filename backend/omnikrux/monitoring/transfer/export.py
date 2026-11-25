@@ -18,6 +18,7 @@ from datetime import datetime
 
 from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.monitoring.dashboards.loki_labels import read_loki_facts
+from omnikrux.monitoring.dashboards.prometheus_pick import chosen_prometheus_id
 from omnikrux.monitoring.dashboards.ready_made import (
     LOKI_VIEWS,
     build_ready_made,
@@ -232,13 +233,15 @@ async def _dashboard_export(reader: _Reader, id: str, now: datetime) -> tuple[st
             raise _gone()
         has_loki = "loki" in types.values()
         loki = None
+        # The labels and the Prometheus the view is built on now, as the dashboard page reads
+        # them: the export keeps that Prometheus.
+        linked = [configs[link.source_id] for link in project.links if link.source_id in configs]
         if has_loki and ready[1] in LOKI_VIEWS:
-            # The labels the view is built on now, as the dashboard page reads them.
-            linked = [
-                configs[link.source_id] for link in project.links if link.source_id in configs
-            ]
             loki = await read_loki_facts(services, project, linked, time.time())
-        doc = build_ready_made(ready[1], kind=project.kind, has_loki=has_loki, loki=loki)
+        prometheus_id = await chosen_prometheus_id(services, project, linked, ready[1])
+        doc = build_ready_made(
+            ready[1], kind=project.kind, has_loki=has_loki, loki=loki, prometheus_id=prometheus_id
+        )
         owner_kind: OwnerKind = "project"
         owner_name, version, projects = project.name, 0, [project]
     else:

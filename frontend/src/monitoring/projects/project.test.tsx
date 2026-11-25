@@ -243,6 +243,36 @@ describe("Project page", () => {
     expect(screen.queryByText(/Link a Prometheus-compatible or Loki source/)).toBeNull();
   });
 
+  it("a project with two Prometheus sources says which one a view reads", async () => {
+    const operator = source("s1", "Operator Prometheus");
+    const server = source("s2", "Prometheus server");
+    const loki = source("s3", "Logs", { type: "loki" });
+    const view = (key: "cluster" | "logs", title: string, sourceName: string | null) => ({
+      key, id: `ready:p1:${key}`, title, description: `${title} things.`,
+      missing: [], notes: [], checked: true, check_message: null, source_name: sourceName,
+    });
+    const views = [view("cluster", "Cluster health", "Prometheus server"), view("logs", "Logs overview", null)];
+    installFakeMonitoringApi({
+      sources: [operator, server, loki],
+      projects: [project("p1", "Dev", [link(operator), link(server), link(loki)]), project("p2", "Solo", [link(server)])],
+      readyMade: { p1: views, p2: [view("cluster", "Cluster health", "Prometheus server")] },
+    }, fallback);
+    open("p1");
+    const ready = await screen.findByRole("list", { name: "Ready-made views" });
+    const [cluster, logs] = within(ready).getAllByRole("listitem");
+    expect(within(cluster).getByText("Reads Prometheus server.")).toBeTruthy();
+    // The line sits right under the description.
+    expect(within(cluster).getByText("Cluster health things.").nextElementSibling?.textContent).toBe("Reads Prometheus server.");
+    expect(within(logs).queryByText(/^Reads /)).toBeNull();
+    cleanup();
+
+    // One Prometheus: nothing to tell apart, so nothing is said.
+    open("p2");
+    const solo = await screen.findByRole("list", { name: "Ready-made views" });
+    expect(within(solo).getByText("Cluster health")).toBeTruthy();
+    expect(within(solo).queryByText(/^Reads /)).toBeNull();
+  });
+
   it("linking a Loki source says it adds Logs overview", async () => {
     const user = userEvent.setup();
     const loki = source("s2", "Logs", { type: "loki" });

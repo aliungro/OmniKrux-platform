@@ -394,7 +394,7 @@ describe("Dashboard page", () => {
     const user = userEvent.setup();
     const id = "ready:p1:pods";
     const ready: ReadyMadeOut = {
-      key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null,
+      key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, source_name: null,
       notes: ["Restarts need kube-state-metrics; this Prometheus doesn't have it."],
     };
     const api = installFakeMonitoringApi({
@@ -421,7 +421,7 @@ describe("Dashboard page", () => {
 
   it("the Logs overview says it comes from Loki, not Prometheus", async () => {
     const id = "ready:p1:logs";
-    const ready: ReadyMadeOut = { key: "logs", id, title: "Logs overview", description: "Logs", missing: [], checked: true, check_message: null, notes: [] };
+    const ready: ReadyMadeOut = { key: "logs", id, title: "Logs overview", description: "Logs", missing: [], checked: true, check_message: null, source_name: null, notes: [] };
     installFakeMonitoringApi({
       projects: [linkedProject("p1", "Shop", "s1")],
       dashboards: { [id]: seedDashboard(id, SHOP, spec("Logs overview", [panel("p-1", "Pods", "up")]), true) },
@@ -435,7 +435,7 @@ describe("Dashboard page", () => {
   it("Copy to edit on a ready-made view's JSON tab copies it, like the header's", async () => {
     const user = userEvent.setup();
     const id = "ready:p1:pods";
-    const ready: ReadyMadeOut = { key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, notes: [] };
+    const ready: ReadyMadeOut = { key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, source_name: null, notes: [] };
     const api = installFakeMonitoringApi({
       projects: [linkedProject("p1", "Shop", "s1")],
       dashboards: { [id]: seedDashboard(id, SHOP, spec("Pod health", [panel("p-1", "Pods", "up")]), true) },

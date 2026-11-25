@@ -31,7 +31,7 @@ const ok = { result_type: "matrix" as const, series: [{ labels: { job: "api" }, 
 
 const READY: ReadyMadeOut = {
   key: "cluster", id: "ready:p1:cluster", title: "Cluster health", description: "Nodes, pods and their resources.",
-  missing: [], notes: [], checked: true, check_message: null,
+  missing: [], notes: [], checked: true, check_message: null, source_name: null,
 };
 
 function shop(extra: Parameters<typeof installFakeMonitoringApi>[0] = {}): FakeMonitoringApi {

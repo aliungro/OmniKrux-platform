@@ -77,8 +77,8 @@ export interface FakeMonitoringState extends FakeAlertsState {
   queryAnswers: Record<string, FakeQueryAnswer>;
   /** By id. */
   dashboards: Record<string, FakeDashboard>;
-  /** Ready-made views by project id (also listed in the tree). */
-  readyMade: Record<string, ReadyMadeOut[]>;
+  /** Ready-made views by project id (also listed in the tree); `source_name` left out answers null. */
+  readyMade: Record<string, FakeReadyMade[]>;
   /** Label values by `"<project id>|<label>"`. */
   labelValues: Record<string, string[]>;
   /** Project catalogs by project id (`GET /projects/{id}/catalog`; absent answers 404). */
@@ -87,6 +87,9 @@ export interface FakeMonitoringState extends FakeAlertsState {
    * `unknown` by default, so an empty panel keeps the generic words. */
   whyEmpty: WhyEmptyOut | { error: { code: QueryErrorCode; message: string }; status: number };
 }
+
+/** A ready-made view as a test seeds it: `source_name` may be left out. */
+export type FakeReadyMade = Omit<ReadyMadeOut, "source_name"> & { source_name?: string | null };
 
 /** A seed: any part of the state; `install` may be seeded in part (the rest keeps its defaults). */
 export type FakeMonitoringSeed = Partial<Omit<FakeMonitoringState, "install" | "transfer">> & {
@@ -472,7 +475,9 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
       return alertsRoute({ state, nextId, project, group: (id) => state.groups.find((g) => g.id === id) }, method, seg.slice(1), query, body, found);
     }
     if (is("GET", "projects", null, "ready-made")) {
-      return project(b) ? json(state.readyMade[b] ?? []) : dashboardError(404, "not_found", DASHBOARD_GONE);
+      return project(b)
+        ? json((state.readyMade[b] ?? []).map((r): ReadyMadeOut => ({ source_name: null, ...r })))
+        : dashboardError(404, "not_found", DASHBOARD_GONE);
     }
     if (is("GET", "projects", null, "catalog")) {
       const found = state.catalogs[b];

@@ -78,6 +78,8 @@ export interface ReadyMadeOut {
   notes: string[];
   checked: boolean;
   check_message: string | null;
+  /** The Prometheus a Prometheus view reads (the one that holds its metrics); null for the Logs overview. */
+  source_name: string | null;
 }
 
 export interface LabelValuesOut {

@@ -1,14 +1,20 @@
 """Ready-made views: read-only dashboards OmniKrux generates for a project.
 
 They are data, built on request from small helpers; nothing here calls Prometheus or Loki (the
-Loki labels the log panels use are read by `loki_labels` and handed in). Each view is
-a normalised, valid dashboard document whose sources are `{"type": …, "id": None}` (the project's
-first source of that type). Their ids are `ready:<project id>:<key>`; they are never stored, so
-they have no versions and can't be saved, restored or deleted (only copied).
+Loki labels the log panels use are read by `loki_labels`, and the Prometheus a view reads is
+chosen by `prometheus_pick`; both are handed in). Each view is a normalised, valid dashboard
+document: its Prometheus queries and variables name the chosen Prometheus by id (`None` when
+none was chosen: the project's first one), its Loki queries `{"type": "loki", "id": None}` (the
+project's first Loki). Their ids are `ready:<project id>:<key>`; they are never stored, so they
+have no versions and can't be saved, restored or deleted (only copied).
 
 `NEEDS` says which exporters a view reads; `NEED_METRIC` is one metric that proves each is
-reporting, and `NEED_NOTE` is what the project page says when it isn't. The Logs overview reads
-only Loki; `loki_notes` says what its labels (and Pod health's Logs panel's) lack."""
+reporting, `NEED_NOTE` is what the project page says when no Prometheus the project uses has it,
+and `NEED_FILTERED` when one has it but the project's filter there hides it. The Logs overview
+reads only Loki; `loki_notes` says what its labels (and Pod health's Logs panel's) lack.
+
+The query texts are module constants: FakePrometheus can't evaluate PromQL, so the kind tests
+(`tests/e2e/test_monitoring_kind.py`) run them against a real one."""
 
 from collections.abc import Mapping
 from typing import Literal
@@ -64,11 +70,22 @@ NEED_METRIC: dict[Need, str] = {
     "node_exporter": "node_cpu_seconds_total",
 }
 NEED_NOTE: dict[Need, str] = {
-    "kube_state": "kube-state-metrics isn't reporting to this Prometheus, so counts and states "
-    "stay empty.",
-    "cadvisor": "Container usage from the kubelet (cAdvisor) isn't collected, so CPU and memory "
-    "stay empty.",
-    "node_exporter": "node-exporter isn't reporting to this Prometheus, so node panels stay empty.",
+    "kube_state": "kube-state-metrics isn't reporting to any Prometheus this project uses, so "
+    "counts and states stay empty.",
+    "cadvisor": "No Prometheus this project uses collects container usage from the kubelet "
+    "(cAdvisor), so CPU and memory stay empty.",
+    "node_exporter": "node-exporter isn't reporting to any Prometheus this project uses, so node "
+    "panels stay empty.",
+}
+NEED_FILTERED = (
+    "{exporter} reports to {source}, but this project's filter there ({filter}) hides it, so "
+    "{what} stay empty. Check the filter on the project page."
+)
+# (exporter, what stays empty) for NEED_FILTERED.
+NEED_WORDS: dict[Need, tuple[str, str]] = {
+    "kube_state": ("kube-state-metrics", "counts and states"),
+    "cadvisor": ("Container usage from the kubelet (cAdvisor)", "CPU and memory"),
+    "node_exporter": ("node-exporter", "node panels"),
 }
 
 LOKI_UNREAD = (
@@ -203,6 +220,109 @@ def _document(key: ReadyKey, panels: _Panels, variables: list[dict]) -> dict:
     )
 
 
+# --- Query texts --------------------------------------------------------------------------------
+
+_NS = 'namespace=~"$namespace"'
+_NODE = 'nodename=~"$node"'
+
+# 0 when every node is ready, and no data (not 0) when no node is reported at all.
+NODES_NOT_READY = (
+    'count(kube_node_status_condition{condition="Ready",status="true"} == 0)'
+    ' or (sum(kube_node_status_condition{condition="Ready",status="true"}) * 0)'
+)
+
+
+def _short(want: str, have: str) -> str:
+    """How many objects have fewer than they want: 0 while there are objects, else no data."""
+    return f"count({want} > {have}) or (count({want}) * 0)"
+
+
+DEPLOYMENTS_SHORT = _short(
+    f"kube_deployment_spec_replicas{{{_NS}}}",
+    f"kube_deployment_status_replicas_available{{{_NS}}}",
+)
+STATEFULSETS_SHORT = _short(
+    f"kube_statefulset_replicas{{{_NS}}}", f"kube_statefulset_status_replicas_ready{{{_NS}}}"
+)
+DAEMONSETS_SHORT = _short(
+    f"kube_daemonset_status_desired_number_scheduled{{{_NS}}}",
+    f"kube_daemonset_status_number_ready{{{_NS}}}",
+)
+
+
+def _requested(resource: str) -> str:
+    """The share of the nodes' allocatable `resource` that scheduled, live Pods request (a
+    finished or unscheduled Pod's requests hold nothing)."""
+    return (
+        f'sum(kube_pod_container_resource_requests{{resource="{resource}"}}'
+        ' and on (namespace, pod) kube_pod_info{node!=""}'
+        ' and on (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Running"} == 1))'
+        f' / sum(kube_node_status_allocatable{{resource="{resource}"}})'
+    )
+
+
+CPU_REQUESTED = _requested("cpu")
+MEMORY_REQUESTED = _requested("memory")
+
+PODS_BY_PHASE = "sort_desc(sum by (phase) (kube_pod_status_phase))"
+NAMESPACE_PODS_BY_PHASE = f"sort_desc(sum by (phase) (kube_pod_status_phase{{{_NS}}}))"
+
+# Each Pod's workload: its owner, a ReplicaSet's Deployment instead of the ReplicaSet, and
+# "(no owner)" for a static or bare Pod (kube-state-metrics 2 leaves `owner_kind` out of a bare
+# Pod's series, where older ones wrote `<none>`).
+WORKLOAD = (
+    "max by (namespace, pod, workload) ("
+    f'label_replace(kube_pod_owner{{owner_kind!~"ReplicaSet|Node|<none>|",{_NS}}}, '
+    '"workload", "$1", "owner_name", "(.+)")'
+    f' or label_replace(kube_pod_owner{{owner_kind="ReplicaSet",{_NS}}}, '
+    '"replicaset", "$1", "owner_name", "(.+)")'
+    " * on (namespace, replicaset) group_left (workload) "
+    f'label_replace(kube_replicaset_owner{{owner_kind="Deployment",{_NS}}}, '
+    '"workload", "$1", "owner_name", "(.+)")'
+    f' or label_replace(kube_pod_owner{{owner_kind=~"Node|<none>|",{_NS}}}, '
+    '"workload", "(no owner)", "", ""))'
+)
+CPU_BY_WORKLOAD = (
+    "sum by (namespace, workload) "
+    f'(rate(container_cpu_usage_seconds_total{{container!="",{_NS}}}[$__rate_interval])'
+    f" * on (namespace, pod) group_left (workload) {WORKLOAD})"
+)
+MEMORY_BY_WORKLOAD = (
+    "sum by (namespace, workload) "
+    f'(container_memory_working_set_bytes{{container!="",{_NS}}}'
+    f" * on (namespace, pod) group_left (workload) {WORKLOAD})"
+)
+WORKLOAD_LEGEND = "{{namespace}}/{{workload}}"
+
+# node-exporter's series name a node by its address (`instance`); `node_uname_info` gives the
+# node's name.
+_BY_NODE = f"* on (instance) group_left (nodename) node_uname_info{{{_NODE}}}"
+CPU_BUSY = (
+    "1 - avg by (nodename) "
+    f'(rate(node_cpu_seconds_total{{mode="idle"}}[$__rate_interval]) {_BY_NODE})'
+)
+MEMORY_USED = (
+    "1 - avg by (nodename) "
+    f"((node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) {_BY_NODE})"
+)
+LOAD_1 = f"avg by (nodename) (node_load1 {_BY_NODE})"
+_FS = 'fstype!~"tmpfs|overlay|squashfs|nsfs|rootfs"'
+FULLEST_DISK = (
+    f"max by (nodename) ((1 - node_filesystem_avail_bytes{{{_FS}}}"
+    f" / node_filesystem_size_bytes{{{_FS}}}) {_BY_NODE})"
+)
+_DEVICE = 'device!~"lo|veth.*|cali.*|cni.*|flannel.*"'
+
+
+def _network(metric: str) -> str:
+    return f"sum by (nodename) (rate({metric}{{{_DEVICE}}}[$__rate_interval]) {_BY_NODE})"
+
+
+NETWORK_RECEIVED = _network("node_network_receive_bytes_total")
+NETWORK_SENT = _network("node_network_transmit_bytes_total")
+NODE_LEGEND = "{{nodename}}"
+
+
 # --- The views ----------------------------------------------------------------------------------
 
 
@@ -218,13 +338,7 @@ def _cluster() -> dict:
         "stat",
         "Nodes not ready",
         (6, 0, 6, 4),
-        [
-            _pq(
-                "A",
-                'count(kube_node_status_condition{condition="Ready",status="true"} == 0)'
-                " or vector(0)",
-            )
-        ],
+        [_pq("A", NODES_NOT_READY)],
         thresholds=[_above(1, "bad")],
     )
     p.add(
@@ -249,33 +363,21 @@ def _cluster() -> dict:
         "gauge",
         "CPU requested",
         (0, 4, 6, 6),
-        [
-            _pq(
-                "A",
-                'sum(kube_pod_container_resource_requests{resource="cpu"})'
-                ' / sum(kube_node_status_allocatable{resource="cpu"})',
-            )
-        ],
+        [_pq("A", CPU_REQUESTED)],
         **gauge,
     )
     p.add(
         "gauge",
         "Memory requested",
         (6, 4, 6, 6),
-        [
-            _pq(
-                "A",
-                'sum(kube_pod_container_resource_requests{resource="memory"})'
-                ' / sum(kube_node_status_allocatable{resource="memory"})',
-            )
-        ],
+        [_pq("A", MEMORY_REQUESTED)],
         **gauge,
     )
     p.add(
         "bar",
         "Pods by phase",
         (12, 4, 12, 6),
-        [_pq("A", "sum by (phase) (kube_pod_status_phase)", "{{phase}}")],
+        [_pq("A", PODS_BY_PHASE, "{{phase}}")],
     )
     p.add(
         "timeseries",
@@ -325,19 +427,11 @@ def _cluster() -> dict:
 
 def _nodes(kind: ProjectKind) -> dict:
     p = _Panels()
-    node = 'instance=~"$instance"'
     p.add(
         "timeseries",
         "CPU busy",
         (0, 0, 12, 8),
-        [
-            _pq(
-                "A",
-                f'1 - avg by (instance) (rate(node_cpu_seconds_total{{mode="idle",{node}}}'
-                "[$__rate_interval]))",
-                "{{instance}}",
-            )
-        ],
+        [_pq("A", CPU_BUSY, NODE_LEGEND)],
         unit="percentunit",
         max=1,
     )
@@ -345,13 +439,7 @@ def _nodes(kind: ProjectKind) -> dict:
         "timeseries",
         "Memory used",
         (12, 0, 12, 8),
-        [
-            _pq(
-                "A",
-                f"1 - node_memory_MemAvailable_bytes{{{node}}} / node_memory_MemTotal_bytes{{{node}}}",
-                "{{instance}}",
-            )
-        ],
+        [_pq("A", MEMORY_USED, NODE_LEGEND)],
         unit="percentunit",
         max=1,
     )
@@ -359,42 +447,22 @@ def _nodes(kind: ProjectKind) -> dict:
         "timeseries",
         "Load (1 min)",
         (0, 8, 12, 8),
-        [_pq("A", f"node_load1{{{node}}}", "{{instance}}")],
+        [_pq("A", LOAD_1, NODE_LEGEND)],
         unit="short",
     )
-    disk = f'mountpoint="/",fstype!="rootfs",{node}'
     p.add(
         "bar",
-        "Root disk used",
+        "Fullest disk",
         (12, 8, 12, 8),
-        [
-            _pq(
-                "A",
-                f"1 - node_filesystem_avail_bytes{{{disk}}} / node_filesystem_size_bytes{{{disk}}}",
-                "{{instance}}",
-            )
-        ],
+        [_pq("A", FULLEST_DISK, NODE_LEGEND)],
         unit="percentunit",
         thresholds=[_above(0.8, "warn"), _above(0.9, "bad")],
     )
-    device = f'device!~"lo|veth.*|cali.*|cni.*|flannel.*",{node}'
-    for title, at, metric in (
-        ("Network received", (0, 16, 12, 8), "node_network_receive_bytes_total"),
-        ("Network sent", (12, 16, 12, 8), "node_network_transmit_bytes_total"),
+    for title, at, expr in (
+        ("Network received", (0, 16, 12, 8), NETWORK_RECEIVED),
+        ("Network sent", (12, 16, 12, 8), NETWORK_SENT),
     ):
-        p.add(
-            "timeseries",
-            title,
-            at,
-            [
-                _pq(
-                    "A",
-                    f"sum by (instance) (rate({metric}{{{device}}}[$__rate_interval]))",
-                    "{{instance}}",
-                )
-            ],
-            unit="Bps",
-        )
+        p.add("timeseries", title, at, [_pq("A", expr, NODE_LEGEND)], unit="Bps")
     if kind == "kubernetes":
         p.add(
             "table",
@@ -403,7 +471,7 @@ def _nodes(kind: ProjectKind) -> dict:
             [_pq("A", 'kube_node_status_condition{status="true"} == 1')],
             columns=["node", "condition"],
         )
-    variable = _variable("instance", "Node", "instance", "node_uname_info")
+    variable = _variable("node", "Node", "nodename", "node_uname_info")
     return _document("nodes", p, [variable])
 
 
@@ -427,7 +495,7 @@ def _namespaces() -> dict:
         "bar",
         "Pods by phase",
         (12, 0, 12, 4),
-        [_pq("A", f"sum by (phase) (kube_pod_status_phase{{{ns}}})", "{{phase}}")],
+        [_pq("A", NAMESPACE_PODS_BY_PHASE, "{{phase}}")],
     )
     p.add(
         "timeseries",
@@ -479,46 +547,13 @@ def _namespaces() -> dict:
 
 def _workloads() -> dict:
     p = _Panels()
-    ns = 'namespace=~"$namespace"'
-    p.add(
-        "stat",
-        "Deployments short of replicas",
-        (0, 0, 8, 4),
-        [
-            _pq(
-                "A",
-                f"count(kube_deployment_spec_replicas{{{ns}}}"
-                f" > kube_deployment_status_replicas_available{{{ns}}}) or vector(0)",
-            )
-        ],
-        thresholds=[_above(1, "warn")],
-    )
-    p.add(
-        "stat",
-        "StatefulSets short of replicas",
-        (8, 0, 8, 4),
-        [
-            _pq(
-                "A",
-                f"count(kube_statefulset_replicas{{{ns}}}"
-                f" > kube_statefulset_status_replicas_ready{{{ns}}}) or vector(0)",
-            )
-        ],
-        thresholds=[_above(1, "warn")],
-    )
-    p.add(
-        "stat",
-        "DaemonSets short of Pods",
-        (16, 0, 8, 4),
-        [
-            _pq(
-                "A",
-                f"count(kube_daemonset_status_desired_number_scheduled{{{ns}}}"
-                f" > kube_daemonset_status_number_ready{{{ns}}}) or vector(0)",
-            )
-        ],
-        thresholds=[_above(1, "warn")],
-    )
+    ns = _NS
+    for title, at, expr in (
+        ("Deployments short of replicas", (0, 0, 8, 4), DEPLOYMENTS_SHORT),
+        ("StatefulSets short of replicas", (8, 0, 8, 4), STATEFULSETS_SHORT),
+        ("DaemonSets short of Pods", (16, 0, 8, 4), DAEMONSETS_SHORT),
+    ):
+        p.add("stat", title, at, [_pq("A", expr)], thresholds=[_above(1, "warn")])
     p.add(
         "table",
         "Deployments",
@@ -528,36 +563,20 @@ def _workloads() -> dict:
             _pq("B", f"kube_deployment_spec_replicas{{{ns}}}", "Desired"),
         ],
         columns=["namespace", "deployment"],
+        sort={"column": "namespace", "descending": False},
     )
-    legend = "{{namespace}}/{{owner_name}}"
-    owner = f"* on (namespace, pod) group_left (owner_name) kube_pod_owner{{{ns}}}"
     p.add(
         "timeseries",
-        "CPU by owner",
+        "CPU by workload",
         (0, 12, 12, 8),
-        [
-            _pq(
-                "A",
-                "sum by (namespace, owner_name) "
-                f'(rate(container_cpu_usage_seconds_total{{container!="",{ns}}}'
-                f"[$__rate_interval]) {owner})",
-                legend,
-            )
-        ],
+        [_pq("A", CPU_BY_WORKLOAD, WORKLOAD_LEGEND)],
         unit="cores",
     )
     p.add(
         "timeseries",
-        "Memory by owner",
+        "Memory by workload",
         (12, 12, 12, 8),
-        [
-            _pq(
-                "A",
-                "sum by (namespace, owner_name) "
-                f'(container_memory_working_set_bytes{{container!="",{ns}}} {owner})',
-                legend,
-            )
-        ],
+        [_pq("A", MEMORY_BY_WORKLOAD, WORKLOAD_LEGEND)],
         unit="bytes",
     )
     return _document("workloads", p, [_namespace_variable()])
@@ -738,11 +757,7 @@ def _logs(loki: LokiFacts | None) -> dict:
     return _document("logs", p, [])
 
 
-def build_ready_made(
-    key: ReadyKey, *, kind: ProjectKind, has_loki: bool, loki: LokiFacts | None = None
-) -> dict:
-    """The view as a normalised, valid document; no Prometheus or Loki call is made. `loki` is
-    what the project's Loki holds (`read_loki_facts`); None or unread labels: the classic set."""
+def _built(key: ReadyKey, kind: ProjectKind, has_loki: bool, loki: LokiFacts | None) -> dict:
     if key == "logs":
         return _logs(loki)
     if key == "cluster":
@@ -754,3 +769,26 @@ def build_ready_made(
     if key == "workloads":
         return _workloads()
     return _pods(has_loki, loki)
+
+
+def build_ready_made(
+    key: ReadyKey,
+    *,
+    kind: ProjectKind,
+    has_loki: bool,
+    loki: LokiFacts | None = None,
+    prometheus_id: str | None = None,
+) -> dict:
+    """The view as a normalised, valid document; no Prometheus or Loki call is made. `loki` is
+    what the project's Loki holds (`read_loki_facts`); None or unread labels: the classic set.
+    Every Prometheus query and variable reads `prometheus_id` (`pick_prometheus`'s choice; None:
+    the project's first Prometheus)."""
+    doc = _built(key, kind, has_loki, loki)
+    for variable in doc["variables"]:
+        if variable["source"]["type"] == "prometheus":
+            variable["source"]["id"] = prometheus_id
+    for panel in doc["panels"]:
+        for query in panel["queries"]:
+            if query["source"]["type"] == "prometheus":
+                query["source"]["id"] = prometheus_id
+    return doc

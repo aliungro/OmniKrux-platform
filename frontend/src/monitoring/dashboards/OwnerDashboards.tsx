@@ -70,8 +70,8 @@ function DashboardRow({ d, onOpen }: { d: DashboardSummaryOut; onOpen(id: string
 }
 
 /** A project's ready-made views: what each shows, what its sources lack, and Copy to edit. */
-function ReadyMadeViews({ projectId, readyMade, opener, onOpen, clusterDown }: {
-  projectId: string; readyMade: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void; clusterDown: boolean;
+function ReadyMadeViews({ projectId, readyMade, opener, onOpen, clusterDown, manyPrometheus }: {
+  projectId: string; readyMade: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void; clusterDown: boolean; manyPrometheus: boolean;
 }) {
   const ready = useReadyMade(projectId);
   const copy = useCopyToEdit(opener);
@@ -89,6 +89,7 @@ function ReadyMadeViews({ projectId, readyMade, opener, onOpen, clusterDown }: {
               <div className={s.readyText}>
                 <button type="button" className={s.readyTitle} onClick={(e) => onOpen(r.id, toNewTab(e))}>{r.title}</button>
                 {r.description && <p className={s.description}>{r.description}</p>}
+                {manyPrometheus && r.source_name && <p className={s.reads}>{`Reads ${r.source_name}.`}</p>}
                 {r.notes.map((n) => <p key={n} className={s.readyNote}>{n}</p>)}
                 {!r.checked && r.check_message && <p className={s.readyNote}>{clusterDown ? CANT_CHECK : r.check_message}</p>}
                 {copy.error?.from === r.id && <p className={s.bad} role="alert">{copy.error.text}</p>}
@@ -105,7 +106,7 @@ function ReadyMadeViews({ projectId, readyMade, opener, onOpen, clusterDown }: {
   );
 }
 
-export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = false, clusterDown = false }: {
+export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = false, clusterDown = false, manyPrometheus = false }: {
   owner: Owner;
   /** The tab the page is in: a dashboard made here opens in it (or a new one when it holds unsaved edits). */
   tabId: string;
@@ -115,6 +116,8 @@ export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = f
   readyMade?: boolean;
   /** The project's cluster can't be reached, which its page says once: a view doesn't say why again. */
   clusterDown?: boolean;
+  /** The project links two or more Prometheus sources: each ready-made view says which one it reads. */
+  manyPrometheus?: boolean;
 }) {
   const list = useOwnerDashboards(owner);
   const [creating, setCreating] = useState(false);
@@ -146,7 +149,7 @@ export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = f
           {list.data.map((d) => <DashboardRow key={d.id} d={d} onOpen={open} />)}
         </ul>
       )}
-      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} readyMade={readyMade} opener={opener} onOpen={open} clusterDown={clusterDown} />}
+      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} readyMade={readyMade} opener={opener} onOpen={open} clusterDown={clusterDown} manyPrometheus={manyPrometheus} />}
       {creating && (
         <NewDashboardDialog owner={owner} restoreFocusTo={newButton} onCancel={() => setCreating(false)}
           onCreated={(out) => { setCreating(false); openMade(out, { edit: true }, opener); }} />

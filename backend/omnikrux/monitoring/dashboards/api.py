@@ -29,12 +29,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from omnikrux.monitoring.alerts.sync import AlertChangeOut
 from omnikrux.monitoring.audit import begin_change, finish_change
 from omnikrux.monitoring.dashboards.loki_labels import LokiFacts, read_loki_facts
+from omnikrux.monitoring.dashboards.prometheus_pick import (
+    PromLink,
+    check_needs,
+    chosen_prometheus_id,
+    pick_prometheus,
+    read_prometheus_links,
+)
 from omnikrux.monitoring.dashboards.ready_made import (
     DESCRIPTIONS,
     LOKI_VIEWS,
-    NEED_METRIC,
-    NEED_NOTE,
-    NEEDS,
     PROMETHEUS_VIEWS,
     TITLES,
     Need,
@@ -80,16 +84,10 @@ from omnikrux.monitoring.dashboards.writes import (
 from omnikrux.monitoring.models import ContactPointRow, lock_first
 from omnikrux.monitoring.projects.types import Project, UnknownProject
 from omnikrux.monitoring.services import MonitoringServices
-from omnikrux.monitoring.sources.connector import QueryRejected
-from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE
-from omnikrux.monitoring.sources.transport import SourceUnreachable
 from omnikrux.monitoring.sources.types import NameTaken, SourceConfig
 
 VERSION_GONE = "That version of the dashboard no longer exists."
 NOT_REMOVED = "The dashboard couldn't be removed. Try again."
-CANT_READ_ALL = "OmniKrux couldn't read every metric name, so it can't tell what's missing."
-# Metric names read to tell which exporters report; well past a large Prometheus.
-NAME_LIMIT = 100_000
 
 # What a body of the wrong shape is told, by field. Never the value sent.
 NOT_JSON = "The request body isn't valid JSON. Correct it and try again."
@@ -161,12 +159,13 @@ class VersionDetailOut(BaseModel):
 
 
 class ReadyMadeOut(BaseModel):
-    """A ready-made view of a project and what its data lacks. For a Prometheus view, `checked`
-    is False when the metric names couldn't be read (`check_message` says why); `missing` and
-    the notes about exporters are then empty, never guessed. For the Logs overview, `checked` is
-    False when the Loki's labels couldn't be read, and its note says why (`check_message` stays
-    None, so the reason isn't said twice). Pod health's notes also say what its Logs panel's
-    labels lack (`loki_notes`)."""
+    """A ready-made view of a project and what its data lacks. A Prometheus view reads
+    `source_name` (`pick_prometheus`); its `checked` is False when that link, or another that
+    might hold what it lacks, couldn't be read (`check_message` says why; `check_needs`), and
+    `missing` and the notes about exporters are then empty, never guessed. For the Logs
+    overview, `source_name` is None and `checked` is False when the Loki's labels couldn't be
+    read, and its note says why (`check_message` stays None, so the reason isn't said twice).
+    Pod health's notes also say what its Logs panel's labels lack (`loki_notes`)."""
 
     key: ReadyKey
     id: str
@@ -176,6 +175,7 @@ class ReadyMadeOut(BaseModel):
     notes: list[str]
     checked: bool
     check_message: str | None
+    source_name: str | None
 
 
 class _Body(BaseModel):
@@ -308,10 +308,18 @@ async def _ready_document(services: MonitoringServices, id: str) -> tuple[Projec
     if key not in project_ready_keys(project, types):
         raise dashboard_gone()
     has_loki = "loki" in types.values()
-    loki = None
-    if has_loki and key in LOKI_VIEWS:
-        loki = await read_loki_facts(services, project, configs, time.time())
-    doc = build_ready_made(key, kind=project.kind, has_loki=has_loki, loki=loki)
+
+    async def loki_facts() -> LokiFacts | None:
+        if not has_loki or key not in LOKI_VIEWS:
+            return None
+        return await read_loki_facts(services, project, configs, time.time())
+
+    loki, prometheus_id = await asyncio.gather(
+        loki_facts(), chosen_prometheus_id(services, project, configs, key)
+    )
+    doc = build_ready_made(
+        key, kind=project.kind, has_loki=has_loki, loki=loki, prometheus_id=prometheus_id
+    )
     return project, key, doc
 
 
@@ -685,10 +693,10 @@ async def restore_version(id: str, v: str, request: Request) -> DashboardOut:
 
 @router.get("/projects/{id}/ready-made")
 async def ready_made_views(id: str, request: Request) -> list[ReadyMadeOut]:
-    """The project's ready-made views, each with what its data lacks. The metric names are read
-    once, from the project's first Prometheus source with that link's filter, and only when a
-    Prometheus view is listed; the Loki labels likewise, from its first Loki link, when a view
-    that uses them is listed. Both are read at once."""
+    """The project's ready-made views, each with what its data lacks. Every Prometheus link is
+    read once (`read_prometheus_links`), only when a Prometheus view is listed; the Loki labels
+    likewise, from its first Loki link, when a view that uses them is listed. All are read at
+    once."""
     services = _services(request)
     project = await _ready_project(services, id)
     configs = await _source_configs(services, project)
@@ -696,66 +704,47 @@ async def ready_made_views(id: str, request: Request) -> list[ReadyMadeOut]:
     if not keys:
         return []
 
-    async def metric_names() -> tuple[set[str] | None, str | None]:
+    async def prometheus_links() -> list[PromLink]:
         if not any(key in PROMETHEUS_VIEWS for key in keys):
-            return None, None
-        return await _metric_names(services, project, configs)
+            return []
+        return await read_prometheus_links(services, project, configs)
 
     async def loki_facts() -> LokiFacts | None:
         if not any(key in LOKI_VIEWS for key in keys):
             return None
         return await read_loki_facts(services, project, configs, time.time())
 
-    (names, message), loki = await asyncio.gather(metric_names(), loki_facts())
+    links, loki = await asyncio.gather(prometheus_links(), loki_facts())
     views = []
     for key in keys:
-        if key == "logs":
+        common = {
+            "key": key,
+            "id": ready_id(project.id, key),
+            "title": TITLES[key],
+            "description": DESCRIPTIONS[key],
+        }
+        chosen = pick_prometheus(key, links) if key in PROMETHEUS_VIEWS else None
+        if chosen is None:
             views.append(
                 ReadyMadeOut(
-                    key=key,
-                    id=ready_id(project.id, key),
-                    title=TITLES[key],
-                    description=DESCRIPTIONS[key],
+                    **common,
                     missing=[],
                     notes=loki_notes(key, loki),
                     checked=loki is not None and loki.labels is not None,
                     check_message=None,
+                    source_name=None,
                 )
             )
             continue
-        missing: list[Need] = []
-        if names is not None:
-            missing = [n for n in NEEDS[key] if NEED_METRIC[n] not in names]
+        check = check_needs(key, chosen, links)
         views.append(
             ReadyMadeOut(
-                key=key,
-                id=ready_id(project.id, key),
-                title=TITLES[key],
-                description=DESCRIPTIONS[key],
-                missing=missing,
-                notes=[NEED_NOTE[n] for n in missing] + loki_notes(key, loki),
-                checked=names is not None,
-                check_message=message,
+                **common,
+                missing=check.missing,
+                notes=check.notes + loki_notes(key, loki),
+                checked=check.checked,
+                check_message=check.message,
+                source_name=chosen.source_name,
             )
         )
     return views
-
-
-async def _metric_names(
-    services: MonitoringServices, project: Project, configs: list[SourceConfig]
-) -> tuple[set[str] | None, str | None]:
-    """(every metric name, None), or (None, why they couldn't be read)."""
-    source = next(c for c in configs if c.type == "prometheus")
-    link = next(link for link in project.links if link.source_id == source.id)
-    if source.secrets_unreadable:
-        return None, SECRETS_UNREADABLE
-    connector = services.connectors.get(source.type)
-    try:
-        catalog = await connector.describe_fields(
-            services.transports.for_source(source), matchers=link.matchers, limit=NAME_LIMIT
-        )
-    except (SourceUnreachable, QueryRejected) as exc:
-        return None, exc.message
-    if catalog.truncated:  # never say "isn't reporting" about names that weren't all read
-        return None, CANT_READ_ALL
-    return {m.name for m in catalog.metrics}, None

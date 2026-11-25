@@ -24,13 +24,11 @@ from omnikrux.monitoring.dashboards.ready_made import (
 from omnikrux.monitoring.dashboards.schema import validate_dashboard
 from omnikrux.monitoring.projects.types import Matcher
 from omnikrux.monitoring.query.filters import inject_logql, inject_promql
-from omnikrux.monitoring.sources.connector import FieldCatalog
 
 API = "/api/monitoring"
 DASHBOARDS = f"{API}/dashboards"
 FILTER = (Matcher("cluster", "=", "a"),)
 READ_ONLY = "Ready-made views can't be changed. Copy one to edit it."
-CANT_READ_ALL = "OmniKrux couldn't read every metric name, so it can't tell what's missing."
 PROMETHEUS_KEYS = ["cluster", "nodes", "namespaces", "workloads", "pods"]
 
 # The labels the test cluster's Loki holds over 7 days (OpenTelemetry Collector, plus
@@ -188,13 +186,152 @@ def test_node_health_outside_kubernetes_has_no_conditions_table():
     assert [p["title"] for p in kube["panels"]][-1] == "Node conditions"
     assert "Node conditions" not in [p["title"] for p in servers["panels"]]
     assert len(kube["panels"]) == len(servers["panels"]) + 1
-    assert kube["title"] == "Node health" and kube["variables"][0]["name"] == "instance"
+    assert kube["title"] == "Node health" and kube["variables"][0]["name"] == "node"
 
 
 def test_needs_and_notes():
     assert NEEDS["nodes"] == ("node_exporter",)
     assert NEED_METRIC["cadvisor"] == "container_cpu_usage_seconds_total"
-    assert NEED_NOTE["kube_state"].startswith("kube-state-metrics isn't reporting")
+    assert NEED_NOTE["kube_state"].startswith(
+        "kube-state-metrics isn't reporting to any Prometheus this project uses"
+    )
+
+
+def all_queries(doc):
+    return [q for p in doc["panels"] for q in p["queries"]]
+
+
+def panels_of(key, kind="kubernetes"):
+    doc = build_ready_made(key, kind=kind, has_loki=False)
+    return {p["title"]: p for p in doc["panels"]}
+
+
+def test_no_ready_made_query_says_zero_without_data():
+    for key in READY_ORDER:
+        for kind, loki, facts in kinds_for(key):
+            doc = build_ready_made(key, kind=kind, has_loki=loki, loki=facts)
+            for query in all_queries(doc):
+                assert "vector(0)" not in query["expr"], (key, query["expr"])
+    ready = 'kube_node_status_condition{condition="Ready",status="true"}'
+    assert panels_of("cluster")["Nodes not ready"]["queries"][0]["expr"] == (
+        f"count({ready} == 0) or (sum({ready}) * 0)"
+    )
+    workloads = panels_of("workloads")
+    for title, want, have in (
+        (
+            "Deployments short of replicas",
+            "kube_deployment_spec_replicas",
+            "kube_deployment_status_replicas_available",
+        ),
+        (
+            "StatefulSets short of replicas",
+            "kube_statefulset_replicas",
+            "kube_statefulset_status_replicas_ready",
+        ),
+        (
+            "DaemonSets short of Pods",
+            "kube_daemonset_status_desired_number_scheduled",
+            "kube_daemonset_status_number_ready",
+        ),
+    ):
+        a, b = f"{want}{{{NS}}}", f"{have}{{{NS}}}"
+        assert workloads[title]["queries"][0]["expr"] == f"count({a} > {b}) or (count({a}) * 0)"
+
+
+def test_cpu_requested_counts_scheduled_pods():
+    panels = panels_of("cluster")
+    for title, resource in (("CPU requested", "cpu"), ("Memory requested", "memory")):
+        assert panels[title]["queries"][0]["expr"] == (
+            f'sum(kube_pod_container_resource_requests{{resource="{resource}"}} and on '
+            '(namespace, pod) kube_pod_info{node!=""} and on (namespace, pod) '
+            '(kube_pod_status_phase{phase=~"Pending|Running"} == 1)) / '
+            f'sum(kube_node_status_allocatable{{resource="{resource}"}})'
+        )
+
+
+NS = 'namespace=~"$namespace"'
+# The brief's workload query, with a bare Pod's missing `owner_kind` (kube-state-metrics 2 leaves
+# it out; older ones wrote `<none>`) read as "(no owner)" too: `|` matches the empty value.
+WORKLOAD = (
+    "max by (namespace, pod, workload) ("
+    f'label_replace(kube_pod_owner{{owner_kind!~"ReplicaSet|Node|<none>|",{NS}}}, "workload", '
+    '"$1", "owner_name", "(.+)") or '
+    f'label_replace(kube_pod_owner{{owner_kind="ReplicaSet",{NS}}}, "replicaset", "$1", '
+    '"owner_name", "(.+)") * on (namespace, replicaset) group_left (workload) '
+    f'label_replace(kube_replicaset_owner{{owner_kind="Deployment",{NS}}}, "workload", "$1", '
+    '"owner_name", "(.+)") or '
+    f'label_replace(kube_pod_owner{{owner_kind=~"Node|<none>|",{NS}}}, "workload", '
+    '"(no owner)", "", ""))'
+)
+
+
+def test_workloads_group_by_deployment():
+    panels = panels_of("workloads")
+    assert "CPU by owner" not in panels and "Memory by owner" not in panels
+    cpu, memory = panels["CPU by workload"], panels["Memory by workload"]
+    assert cpu["queries"][0]["expr"] == (
+        "sum by (namespace, workload) "
+        f'(rate(container_cpu_usage_seconds_total{{container!="",{NS}}}[$__rate_interval]) '
+        f"* on (namespace, pod) group_left (workload) {WORKLOAD})"
+    )
+    assert memory["queries"][0]["expr"] == (
+        "sum by (namespace, workload) "
+        f'(container_memory_working_set_bytes{{container!="",{NS}}} '
+        f"* on (namespace, pod) group_left (workload) {WORKLOAD})"
+    )
+    for panel in (cpu, memory):
+        assert panel["queries"][0]["legend"] == "{{namespace}}/{{workload}}"
+    assert (cpu["options"]["unit"], memory["options"]["unit"]) == ("cores", "bytes")
+    # The Deployments table reads by namespace, A to Z.
+    assert panels["Deployments"]["options"]["sort"] == {"column": "namespace", "descending": False}
+
+
+def test_pods_by_phase_list_the_most_first():
+    assert panels_of("cluster")["Pods by phase"]["queries"][0]["expr"] == (
+        "sort_desc(sum by (phase) (kube_pod_status_phase))"
+    )
+    assert panels_of("namespaces")["Pods by phase"]["queries"][0]["expr"] == (
+        f"sort_desc(sum by (phase) (kube_pod_status_phase{{{NS}}}))"
+    )
+
+
+def test_node_health_names_nodes():
+    by_node = '* on (instance) group_left (nodename) node_uname_info{nodename=~"$node"}'
+    fs = 'fstype!~"tmpfs|overlay|squashfs|nsfs|rootfs"'
+    for kind in ("kubernetes", "servers"):
+        doc = build_ready_made("nodes", kind=kind, has_loki=False)
+        [variable] = doc["variables"]
+        assert (variable["name"], variable["label"], variable["labelName"]) == (
+            "node",
+            "Node",
+            "nodename",
+        )
+        assert variable["match"] == "node_uname_info"
+        panels = {p["title"]: p for p in doc["panels"]}
+        assert "Root disk used" not in panels
+        for title, panel in panels.items():
+            if title == "Node conditions":
+                continue
+            [query] = panel["queries"]
+            assert by_node in query["expr"], title
+            assert re.search(r"(sum|avg|max) by \(nodename\)", query["expr"]), title
+            assert "instance=~" not in query["expr"], title
+            assert query["legend"] == "{{nodename}}", title
+        assert panels["Fullest disk"]["queries"][0]["expr"] == (
+            f"max by (nodename) ((1 - node_filesystem_avail_bytes{{{fs}}} / "
+            f"node_filesystem_size_bytes{{{fs}}}) {by_node})"
+        )
+        assert panels["Fullest disk"]["type"] == "bar"
+
+
+def test_ready_queries_name_the_chosen_source():
+    for key in READY_ORDER:
+        for kind, loki, facts in kinds_for(key):
+            doc = build_ready_made(key, kind=kind, has_loki=loki, loki=facts, prometheus_id="s9")
+            assert validate_dashboard(doc, owner_kind="project") == doc
+            for source in sources_of(doc):
+                want = "s9" if source["type"] == "prometheus" else None
+                assert source == {"type": source["type"], "id": want}, (key, source)
 
 
 async def kube_project(http, cluster_id, fake_prometheus, name="Cluster apps"):
@@ -235,10 +372,13 @@ async def test_ready_made_lists_what_is_missing(monitoring_app, kube_cluster, fa
     pods = next(v for v in views if v["key"] == "pods")
     assert pods["missing"] == ["cadvisor"]
     assert pods["notes"] == [
-        "Container usage from the kubelet (cAdvisor) isn't collected, so CPU and memory stay empty."
+        (
+            "No Prometheus this project uses collects container usage from the kubelet "
+            "(cAdvisor), so CPU and memory stay empty."
+        )
     ]
     assert pods["id"] == f"ready:{pid}:pods" and pods["checked"] is True
-    assert pods["check_message"] is None
+    assert pods["check_message"] is None and pods["source_name"] == "Cluster apps"
     assert pods["title"] == "Pod health"
     assert pods["description"] == "Readiness, restarts, waiting reasons and resource use per Pod."
     nodes = next(v for v in views if v["key"] == "nodes")
@@ -261,26 +401,6 @@ async def test_ready_made_with_an_unreachable_source_says_so(monitoring_app, kub
     for view in views:
         assert view["checked"] is False and view["missing"] == [] and view["notes"] == []
         assert view["check_message"].startswith("Can't reach")
-
-
-async def test_ready_made_never_invents_notes_from_a_cut_catalog(
-    monitoring_app, kube_cluster, fake_prometheus
-):
-    http, app = monitoring_app
-    project = await kube_project(http, kube_cluster, fake_prometheus)
-    connector = app.state.monitoring.connectors.get("prometheus")
-    asked = []
-
-    async def cut(t, *, matchers, limit=2000):
-        asked.append(limit)
-        return FieldCatalog((), (), True)
-
-    connector.describe_fields = cut
-    views = (await http.get(f"{API}/projects/{project['id']}/ready-made")).json()
-    assert asked == [100_000]
-    for view in views:
-        assert view["checked"] is False and view["missing"] == [] and view["notes"] == []
-        assert view["check_message"] == CANT_READ_ALL
 
 
 async def test_ready_made_without_prometheus_is_empty(monitoring_app, kube_cluster):
@@ -308,7 +428,10 @@ async def test_ready_made_opens_and_copies(monitoring_app, kube_cluster, fake_pr
     assert body["id"] == f"ready:{pid}:cluster" and body["title"] == "Cluster health"
     assert body["owner_kind"] == "project" and body["owner_id"] == pid
     assert body["owner_name"] == "Cluster apps"
-    assert body["spec"] == build_ready_made("cluster", kind="kubernetes", has_loki=False)
+    prometheus_id = project["links"][0]["source_id"]
+    assert body["spec"] == build_ready_made(
+        "cluster", kind="kubernetes", has_loki=False, prometheus_id=prometheus_id
+    )
 
     save = await http.put(url, json={"base_version": 0, "spec": body["spec"]})
     assert save.status_code == 409
@@ -585,6 +708,7 @@ async def test_a_loki_only_project_gets_the_logs_overview(
             "notes": [],
             "checked": True,
             "check_message": None,
+            "source_name": None,
         }
     ]
     assert fake_prometheus.requests == []

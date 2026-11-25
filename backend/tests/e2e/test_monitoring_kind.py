@@ -297,6 +297,109 @@ def test_node_health_on_the_cluster(client, prometheus_project):
     assert len(busy["series"]) == count
 
 
+# --- Ready-made views over both Prometheus (the operator's first, then prometheus-server) --------
+#
+# The operator's Prometheus (kps) holds cAdvisor's metrics but not kube-state-metrics'; the
+# plain prometheus-server holds both. These run the ready-made query texts on a real Prometheus:
+# FakePrometheus can't evaluate PromQL.
+
+NO_OPERATOR_PROMETHEUS = "The operator's Prometheus isn't installed in the monitoring namespace."
+REPLICASET_HASH = re.compile(r"-[0-9a-f]{8,10}$")
+
+
+@pytest.fixture
+def two_prometheus_project(client, cluster, tools):
+    """A Kubernetes project linking the operator's Prometheus first, then prometheus-server."""
+    response = client.get(f"{API}/discovery/{cluster}")
+    assert response.status_code == 200, response.text
+    operator = reachable(response.json()["found"], "prometheus", OPERATOR_PROMETHEUS)
+    if operator is None:
+        pytest.skip(NO_OPERATOR_PROMETHEUS)
+    sources = [
+        {"source": new_source(cluster, tool), "filter": ""}
+        for tool in (operator, tools["prometheus"])
+    ]
+    with project_cleanup(client) as made:
+        project = set_up(client, cluster, "Kind two Prometheus", sources)
+        made.append(project["id"])
+        yield project
+
+
+def ready_panel(client, project: dict, key: str, title: str) -> list[dict]:
+    """The series of the ready-made view's panel, each query run against the source it names."""
+    document = dashboard(client, ready_views(client, project)[key]["id"])["spec"]
+    [panel] = [p for p in document["panels"] if p["title"] == title]
+    now = time.time()
+    requests = []
+    for q in panel["queries"]:
+        request = {
+            "source_id": q["source"]["id"],
+            "project_id": project["id"],
+            "query": fill_in(q["expr"], document),
+        }
+        if panel["type"] in ("bar", "table"):
+            request |= {"kind": "instant", "time": now}
+        else:
+            request |= {"kind": "range", "start": now - HOUR, "end": now, "step": STEP}
+        requests.append(request)
+    results = run_batch(client, requests)
+    assert all(r["ok"] for r in results), results
+    return [s for r in results for s in r["response"]["series"]]
+
+
+def last_value(series: dict) -> float | None:
+    values = [p[1] for p in series["points"] if p[1] is not None]
+    return values[-1] if values else None
+
+
+def test_ready_made_reads_the_prometheus_with_kube_state_metrics(client, two_prometheus_project):
+    project = two_prometheus_project
+    server = project["links"][1]
+    views = ready_views(client, project)
+    cluster_view = views["cluster"]
+    assert cluster_view["checked"], cluster_view["check_message"]
+    assert cluster_view["source_name"] == server["source_name"], cluster_view
+    assert cluster_view["missing"] == [] and cluster_view["notes"] == [], cluster_view
+    document = dashboard(client, cluster_view["id"])["spec"]
+    ids = {q["source"]["id"] for p in document["panels"] for q in p["queries"]}
+    assert ids == {server["source_id"]}
+
+    [ready] = ready_panel(client, project, "cluster", "Nodes ready")
+    assert (last_value(ready) or 0) >= 1
+    [not_ready] = ready_panel(client, project, "cluster", "Nodes not ready")
+    assert last_value(not_ready) == 0
+
+
+def test_cpu_requested_is_a_share_of_scheduled_requests(client, two_prometheus_project):
+    for title in ("CPU requested", "Memory requested"):
+        [share] = ready_panel(client, two_prometheus_project, "cluster", title)
+        value = last_value(share)
+        assert value is not None and 0 < value < 1.0, (title, value)
+
+
+def test_workloads_have_no_replicaset_names(client, two_prometheus_project):
+    for title in ("CPU by workload", "Memory by workload"):
+        series = ready_panel(client, two_prometheus_project, "workloads", title)
+        assert series, title
+        names = [
+            f"{s['labels'].get('namespace', '')}/{s['labels'].get('workload', '')}" for s in series
+        ]
+        # Every Pod has a workload (a bare or static Pod's is "(no owner)"), never a ReplicaSet.
+        assert all(not name.endswith("/") for name in names), names
+        assert not [n for n in names if REPLICASET_HASH.search(n)], names
+        assert len(names) == len(set(names)), names
+
+
+def test_node_health_uses_node_names(client, two_prometheus_project):
+    views = ready_views(client, two_prometheus_project)
+    if "node_exporter" in views["nodes"]["missing"]:
+        pytest.skip(NO_NODE_EXPORTER)
+    nodes = set(kubectl("get", "nodes", "-o", "jsonpath={.items[*].metadata.name}").split())
+    for title in ("CPU busy", "Memory used", "Fullest disk", "Network received"):
+        series = ready_panel(client, two_prometheus_project, "nodes", title)
+        assert {s["labels"].get("nodename") for s in series} == nodes, title
+
+
 def test_dashboard_lifecycle_on_the_cluster(client, prometheus_project):
     project = prometheus_project
     ready = ready_views(client, project)["cluster"]

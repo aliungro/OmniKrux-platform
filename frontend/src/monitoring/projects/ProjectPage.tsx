@@ -37,7 +37,8 @@ export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab, clust
 }) {
   return (
     <OwnerDashboards owner={{ kind: "project", id: project.id, name: project.name }} tabId={tabId} nav={nav} openInNewTab={openInNewTab}
-      readyMade={project.links.some((l) => l.source_type === "prometheus" || l.source_type === "loki")} clusterDown={clusterDown} />
+      readyMade={project.links.some((l) => l.source_type === "prometheus" || l.source_type === "loki")} clusterDown={clusterDown}
+      manyPrometheus={project.links.filter((l) => l.source_type === "prometheus").length >= 2} />
   );
 }
 
