@@ -4,7 +4,7 @@
 
 import { forwardRef, type KeyboardEvent, type ReactNode } from "react";
 import { pressed } from "../../features/chrome/shortcuts";
-import type { ExploreKind, ExploreRunState } from "./useExploreRun";
+import type { ExploreKind, ExploreRunState, LinesRunState } from "./useExploreRun";
 import s from "./ExplorePage.module.css";
 
 const MAX_ROWS = 6;
@@ -63,15 +63,45 @@ const clock = (ms: number) => {
   return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
 };
 
+/** `✓ {n} lines · {time words} · updated {hh:mm:ss}`: what a log query's run found. */
+function linesBody(lines: LinesRunState): ReactNode {
+  const n = lines.lines.length;
+  return (
+    <>
+      <span className={s.metaOk}>✓ {n} {n === 1 ? "line" : "lines"}</span>
+      {lines.timeText && (
+        <>
+          <span className={s.metaSep}>·</span>
+          <span>{lines.timeText}</span>
+        </>
+      )}
+      {lines.at !== null && (
+        <>
+          <span className={s.metaSep}>·</span>
+          <span>updated {clock(lines.at)}</span>
+        </>
+      )}
+    </>
+  );
+}
+
 /**
  * The meta line: how the last run ended, kept while the next one waits and runs (dimmed, with
  * Running… beside it). Its time words are the ones that run read, not the picker's current range.
+ * A log query has no chart: given `lines`, the line speaks for the log lines' run instead.
  */
-export function MetaLine({ state, expr }: { state: ExploreRunState; expr: string; kind?: ExploreKind }) {
+export function MetaLine({ state, expr, lines }: { state: ExploreRunState; expr: string; kind?: ExploreKind; lines?: LinesRunState }) {
   let body: ReactNode = null;
   let tone: "bad" | "quiet" = "quiet";
-  const running = state.status === "running";
-  if (state.shown === "idle") {
+  const running = (lines ?? state).status === "running";
+  if (lines) {
+    if (lines.shown === "idle") body = expr.trim() === "" ? NO_QUERY : null;
+    else if (lines.shown === "done") body = linesBody(lines);
+    else {
+      tone = "bad";
+      body = `✗ ${lines.message ?? ""}`;
+    }
+  } else if (state.shown === "idle") {
     // Nothing ran, or an emptied field ended its run: the hint. Before the first end, the field says.
     body = (state.expr ?? expr).trim() === "" ? NO_QUERY : null;
   } else if (state.shown === "done" && state.data) {

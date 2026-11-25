@@ -129,6 +129,30 @@ describe("Explore", () => {
     expect(batches(api)).toHaveLength(1);
   });
 
+  it("several queries say Explore runs one at a time", async () => {
+    const ONE = "Explore runs one query at a time. Keep one query in the field, or run them one after another.";
+    const api = shop();
+    await openExplore({ page: "explore", project: "p1", expr: "up\nrate(x[5m])" });
+    await waitFor(() => expect(meta().textContent).toBe(`✗ ${ONE}`));
+    expect(batches(api)).toHaveLength(0);
+    // A text to fix, not a failure: no failure panel and no Try again.
+    expect(screen.queryByRole("heading", { name: /^(Query error|Source unreachable)$/ })).toBeNull();
+    expect(document.querySelector("[aria-labelledby='explore-failure-title']")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add to dashboard" }).getAttribute("aria-disabled")).toBe("true");
+    // After a good run the same refusal keeps the last good result, captioned with its own text.
+    fireEvent.change(query(), { target: { value: "up" } });
+    await screen.findByText("chart 3");
+    fireEvent.change(query(), { target: { value: "up\nsum(up)" } });
+    await waitFor(() => expect(meta().textContent).toBe(`✗ ${ONE} · showing the last result`));
+    const label = screen.getByText("Last good result");
+    expect((label.closest("[data-last-good]") as HTMLElement).querySelector("code")?.textContent).toBe("up");
+    expect(batches(api)).toHaveLength(1);
+    // One query over two lines is still one query.
+    fireEvent.change(query(), { target: { value: "up\nor vector(0)" } });
+    await waitFor(() => expect(batches(api)).toHaveLength(2));
+    expect(batches(api)[1].queries[0].query).toBe("up\nor vector(0)");
+  });
+
   it("an empty metric answer says why once the reason arrives", async () => {
     const MISSING = "This Prometheus doesn't collect node metrics (node-exporter) for this project: node_load1 has no series.";
     const api = shop({ node_load1: { result_type: "matrix", series: [] } }, three, { whyEmpty: { reason: "missing_metric", message: MISSING } });

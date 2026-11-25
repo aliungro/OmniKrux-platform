@@ -175,6 +175,29 @@
   background: color-mix(in srgb, var(--bad) 6%, transparent);
 }
 
+/* A text that can't run: the same red rule as a failure, but no wash and no button. The way on
+   is the query field, so the strip only says what's wrong and what to do. */
+.invalid {
+  margin: 10px 0 0;
+  padding: 6px 12px;
+  max-inline-size: 80ch;
+  border-left: 2px solid var(--bad);
+  border-radius: 2px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.invalidMark {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.invalidStep {
+  color: var(--ink-3);
+}
+
 .failureReason {
   margin: 0;
   max-width: 80ch;

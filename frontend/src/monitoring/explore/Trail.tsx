@@ -2,17 +2,18 @@
 // the newest); ← and → move between them; Enter or a click brings one back with its source.
 
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { TrailEntry } from "./trailStore";
+import { normalizeQuery, type TrailEntry } from "./trailStore";
 import s from "./ExplorePage.module.css";
 
 const SHORT = 38;
-export const trailKey = (e: Pick<TrailEntry, "expr" | "sourceId">) => `${e.sourceId}\n${e.expr}`;
+/** One chip per query: the trail keeps each text once, whatever source it ran on. */
+export const trailKey = (e: Pick<TrailEntry, "expr">) => normalizeQuery(e.expr);
 const short = (text: string) => (text.length > SHORT ? `${text.slice(0, SHORT)}…` : text);
 
 interface Props {
   /** Oldest first, already cut to the ones shown. */
   entries: TrailEntry[];
-  /** The entry equal to the query being shown (text and source). */
+  /** The key of the entry equal to the query being shown (its text, on the source shown). */
   currentKey: string;
   onPick(entry: TrailEntry): void;
   onClear(): void;

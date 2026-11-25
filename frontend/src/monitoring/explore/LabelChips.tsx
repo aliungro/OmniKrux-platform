@@ -112,12 +112,15 @@ export function LabelChips({ builder, labels, loki, known, read, onSplit, onOnly
 
   return (
     <div ref={root} className={s.chips}>
-      <div className={s.row} role="group" aria-label="Split by">
-        <span className={s.label} aria-hidden="true">Split by</span>
-        {splitLabels.map((l) => (
-          <button key={l} type="button" className={s.chip} aria-pressed={builder.split === l} onClick={() => onSplit(l)}>{l}</button>
-        ))}
-      </div>
+      {/* Log lines aren't split: a log query lists its lines and has no chart to split. */}
+      {!builder.stream && (
+        <div className={s.row} role="group" aria-label="Split by">
+          <span className={s.label} aria-hidden="true">Split by</span>
+          {splitLabels.map((l) => (
+            <button key={l} type="button" className={s.chip} aria-pressed={builder.split === l} onClick={() => onSplit(l)}>{l}</button>
+          ))}
+        </div>
+      )}
       {onlyLabels.length > 0 && (
         <div className={s.row} role="group" aria-label="Only">
           <span className={s.label} aria-hidden="true">Only</span>

@@ -1,17 +1,19 @@
 // Explore's run: the query text runs 300 ms after the last change (at once on request), one batch
 // item per run on the project, so its filter always applies. A newer run aborts the older one and
-// an older answer is dropped. Honest states: a query the tool can't read is `invalid` and keeps the
-// last good result (drawn dimmed and labelled); any other failure is `failed` and draws nothing.
-// In logs mode the chart is the log volume (Task 5's `writeVolumeQuery`, split by the Split chip).
+// an older answer is dropped. Honest states: a query the tool can't read (or a field with several
+// queries) is `invalid` and keeps the last good result (drawn dimmed and labelled); any other
+// failure is `failed` and draws nothing. A log query has no chart: the page turns this run off
+// (`enabled: false`) and shows only its lines.
 //
-// `useLinesRun` is the log lines under the chart (X3): one batch item of at most 1000 lines, newest
-// first, on the project, for the whole range or a chosen window. It has its own honest states: a
-// failure stays in its section, and an answer for an older window or text is dropped.
+// `useLinesRun` is the log lines (X3): one batch item of at most 1000 lines, newest first, on the
+// project, for the whole range or a chosen window. It has its own honest states: a text the tool
+// refuses is `invalid` (fixing it is the way on, so no Try again), any other failure is `failed`;
+// both clear the lines, and an answer for an older window or text is dropped.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { failure } from "../../api/http";
 import type { LinkOut, ProjectOut, QueryErrorCode, QueryRequest } from "../api/types";
-import { quickCheck } from "../build/promql";
+import { ONE_QUERY, quickCheck, severalQueries } from "../build/promql";
 import { UnwritableQuery, writeVolumeQuery } from "../build/writeQuery";
 import { DashboardRequestError } from "../dashboards/api";
 import { interpolate, VariableError } from "../dashboards/interpolate";
@@ -83,6 +85,8 @@ export interface ExploreRunInput {
   timeText?: string;
   /** Logs mode: the Split chip's label for the volume chart. */
   split?: string | null;
+  /** False for a log query (its lines are the result): nothing runs and the state stays idle. */
+  enabled?: boolean;
 }
 
 const INITIAL: ExploreRunState = {
@@ -93,8 +97,10 @@ const INITIAL: ExploreRunState = {
 
 /** The tool couldn't answer: the same family M2 calls unreachable. */
 const UNREACHABLE = new Set<QueryErrorCode | "network">(["unreachable", "timeout", "unauthorized", "too_large", "tool_error", "network"]);
-/** Codes that mean "the query text is wrong": the last good result stays. */
+/** Codes that mean "the query text is wrong": fixing it is the way on, and the last good result stays. */
 const INVALID = new Set<string>(["bad_query", "bad_request"]);
+/** What a text says before anything is sent: unreadable, or several queries; `null` when it can run. */
+const refuseText = (expr: string): string | null => quickCheck(expr) ?? (severalQueries(expr) ? ONE_QUERY : null);
 const NO_ANSWER = "This query didn't answer. Try again.";
 
 /** The panel Explore runs and draws: full width, one query on the chosen source. */
@@ -136,7 +142,8 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
   const immediate = useRef(-1);
 
   const fire = useCallback(async () => {
-    const { project, source, expr, range, kind, panelId = "explore", timeText = null, split = null } = latest.current;
+    const { project, source, expr, range, kind, panelId = "explore", timeText = null, split = null, enabled = true } = latest.current;
+    if (!enabled) return;
     controller.current?.abort();
     controller.current = null;
     const runId = ++runIds.current;
@@ -152,8 +159,8 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
       end({ status: "idle", shown: "idle", data: null, message: null, failure: null, tookMs: null, at: null, request: null });
       return;
     }
-    const unreadable = quickCheck(expr);
-    if (unreadable) { invalid(unreadable); return; }
+    const refused = refuseText(expr);
+    if (refused) { invalid(refused); return; }
 
     let panel: PanelSpec;
     try {
@@ -194,6 +201,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
     } catch (err) {
       if (isAbort(err) || ctl.signal.aborted || runId !== runIds.current) return;
       const code = err instanceof DashboardRequestError ? err.code : "network";
+      if (INVALID.has(code)) { invalid((err as Error).message || NO_ANSWER); return; }
       end({
         status: "failed", shown: "failed", data: null, lastGood: null, message: failure(err, "try again") || NO_ANSWER,
         failure: UNREACHABLE.has(code as QueryErrorCode) ? "unreachable" : "error", tookMs: null, request: null,
@@ -215,10 +223,11 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
     setState((s) => ({ ...INITIAL, runId: s.runId }));
   }
 
+  const enabled = input.enabled ?? true;
   const key = JSON.stringify([
     input.project?.id ?? null, input.source?.source_id ?? null, input.source?.source_type ?? null,
     input.expr, input.range.start, input.range.end, input.kind, input.panelId ?? null,
-    input.kind === "logs" ? (input.split ?? null) : null,
+    input.kind === "logs" ? (input.split ?? null) : null, enabled,
   ]);
   // The input and request an immediate run already went out for (StrictMode runs effects twice).
   const firedFor = useRef<string | null>(null);
@@ -229,6 +238,15 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
     // Whatever was on its way is about older input: drop it.
     controller.current?.abort();
     controller.current = null;
+    if (!enabled) {
+      // Turned off (a log query): nothing runs, and nothing an earlier run read is kept.
+      runIds.current++;
+      immediate.current = -1;
+      setState((s) => (s.status === "idle" && s.shown === "idle" && s.lastGood === null && s.data === null
+        ? s
+        : { ...INITIAL, runId: s.runId }));
+      return;
+    }
     const nothing = !latest.current.project || !latest.current.source || latest.current.expr.trim() === "";
     if (immediate.current === nonce || nothing) {
       immediate.current = -1;
@@ -240,7 +258,7 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
     setState((s) => (s.status === "waiting" ? s : { ...s, status: "waiting" }));
     const timer = setTimeout(() => void fire(), EXPLORE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [key, nonce, fire]);
+  }, [key, nonce, fire, enabled]);
 
   useEffect(() => () => {
     controller.current?.abort();
@@ -260,6 +278,10 @@ export function useExploreRun(input: ExploreRunInput): { run(now?: boolean): voi
 
 export type LinesRunState = {
   status: "idle" | "waiting" | "running" | "done" | "failed" | "invalid";
+  /** How the last run ended: what is said while the next one waits or runs. */
+  shown: ExploreOutcome;
+  /** When the last run ended (ms since the epoch). */
+  at: number | null;
   /** The lines of the last answered run, newest first; never another text's, window's or place's. */
   lines: ChartLogLine[];
   /** For `failed` and `invalid`: why, in words. */
@@ -291,7 +313,7 @@ export interface LinesRunInput {
 }
 
 const LINES_INITIAL: LinesRunState = {
-  status: "idle", lines: [], message: null, window: null, timeText: null, marks: [], marksFor: null, key: null, runId: 0,
+  status: "idle", shown: "idle", at: null, lines: [], message: null, window: null, timeText: null, marks: [], marksFor: null, key: null, runId: 0,
   request: null,
 };
 const NO_LINES = "The log lines didn't answer. Try again.";
@@ -318,11 +340,11 @@ export function useLinesRun(input: LinesRunInput): { state: LinesRunState; retry
       setState((s) => ({ ...LINES_INITIAL, runId, key: forKey, marks: s.marksFor === forKey ? s.marks : [], marksFor: s.marksFor === forKey ? s.marksFor : null }));
       return;
     }
-    const unreadable = quickCheck(query);
-    if (unreadable) {
-      setState({ ...LINES_INITIAL, status: "invalid", message: unreadable, window, key: forKey, runId });
-      return;
-    }
+    // A text that can't run says so and clears the lines.
+    const invalid = (message: string) =>
+      setState({ ...LINES_INITIAL, status: "invalid", shown: "invalid", at: Date.now(), message, window, timeText, key: forKey, runId });
+    const refused = refuseText(query);
+    if (refused) { invalid(refused); return; }
     const span = window ?? range;
     const seconds = span.end - span.start;
     const step = stepFor(seconds, GRID_COLUMNS);
@@ -332,7 +354,7 @@ export function useLinesRun(input: LinesRunInput): { state: LinesRunState; retry
       text = interpolate(query, {}, { stepSeconds: step, rangeSeconds: seconds });
     } catch (err) {
       if (!(err instanceof VariableError)) throw err;
-      setState({ ...LINES_INITIAL, status: "invalid", message: err.message, window, key: forKey, runId });
+      invalid(err.message);
       return;
     }
     const request: QueryRequest = {
@@ -351,7 +373,7 @@ export function useLinesRun(input: LinesRunInput): { state: LinesRunState; retry
     controller.current = ctl;
     setState((s) => ({ ...s, status: "running", runId }));
     const failed = (message: string) => setState((s) => ({
-      ...LINES_INITIAL, status: "failed", message, window, timeText, key: forKey, runId,
+      ...LINES_INITIAL, status: "failed", shown: "failed", at: Date.now(), message, window, timeText, key: forKey, runId,
       // A failed window keeps the whole range's ticks; a failed whole range has none.
       marks: window && s.marksFor === forKey ? s.marks : [], marksFor: window && s.marksFor === forKey ? forKey : null,
     }));
@@ -360,18 +382,21 @@ export function useLinesRun(input: LinesRunInput): { state: LinesRunState; retry
       if (runId !== runIds.current) return;
       const first = results[0];
       if (!first?.ok || !first.response) {
-        failed(first?.error?.message || NO_LINES);
+        // A text the tool refused is the text's to fix; anything else can be tried again.
+        if (INVALID.has(first?.error?.code ?? "")) invalid(first?.error?.message || NO_LINES);
+        else failed(first?.error?.message || NO_LINES);
         return;
       }
       const lines = mergePanelResults(panel, run, results, "project").logs;
       setState((s) => ({
-        status: "done", lines, message: null, window, timeText, key: forKey, runId, request,
+        status: "done", shown: "done", at: Date.now(), lines, message: null, window, timeText, key: forKey, runId, request,
         marks: window ? (s.marksFor === forKey ? s.marks : []) : lines,
         marksFor: window ? (s.marksFor === forKey ? forKey : null) : forKey,
       }));
     } catch (err) {
       if (isAbort(err) || ctl.signal.aborted || runId !== runIds.current) return;
-      failed(failure(err, "try again") || NO_LINES);
+      if (err instanceof DashboardRequestError && INVALID.has(err.code)) invalid(err.message || NO_LINES);
+      else failed(failure(err, "try again") || NO_LINES);
     } finally {
       if (controller.current === ctl) controller.current = null;
     }

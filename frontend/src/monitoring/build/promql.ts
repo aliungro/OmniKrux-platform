@@ -3,6 +3,8 @@
 // once, for all of them); a query that does not balance (quotes or brackets) reads as null and is
 // never edited.
 export const UNREADABLE = "The query has an unclosed quote or bracket.";
+/** Explore sends one query per run: a field with several says so before anything is sent. */
+export const ONE_QUERY = "Explore runs one query at a time. Keep one query in the field, or run them one after another.";
 
 export type SelectorRef = {
   metric: string | null;
@@ -263,4 +265,45 @@ export function logSelector(expr: string): string | null {
   if (!t || open < 0) return null;
   for (let j = open + 1; j < t.length; j++) if (isP(t[j], "}")) return expr.slice(t[open].a, t[j].b);
   return null;
+}
+
+/** Words that join two expressions or qualify one: a line that starts or ends with one never stands alone. */
+const JOINING_WORDS = new Set(["and", "or", "unless", "by", "without", "on", "ignoring", "group_left", "group_right", "bool", "offset", "atan2"]);
+
+/**
+ * Two or more queries on separate lines: a non-blank, non-comment line starts a new expression (a
+ * `{`, or a name or function, outside any bracket) right after a line that ended a complete one (not
+ * after an operator, `(`, `,`, `|` or a joining word). A line that starts with an operator or a
+ * joining word continues the one before it, so "up" then "or vector(0)" is one query. Text that
+ * doesn't tokenize is left to `quickCheck`.
+ */
+export function severalQueries(expr: string): boolean {
+  const toks = tokenize(expr);
+  if (toks === null) return false;
+  let depth = 0;
+  let line = 0;
+  let scanned = 0;
+  let last: Tok | null = null;
+  let lastLine = -1;
+  for (const t of toks) {
+    for (; scanned < t.a; scanned++) if (expr[scanned] === "\n") line++;
+    if (last !== null && line !== lastLine && depth === 0 && startsExpression(t) && endsExpression(last)) return true;
+    if (t.k === "p" && (t.s === "(" || t.s === "[" || t.s === "{")) depth++;
+    else if (t.k === "p" && CLOSER[t.s] !== undefined) depth = Math.max(0, depth - 1);
+    last = t;
+    lastLine = line;
+  }
+  return false;
+}
+
+function startsExpression(t: Tok): boolean {
+  if (t.k === "p") return t.s === "{";
+  if (t.k === "var") return true;
+  return t.k === "id" && !KEYWORDS.has(t.s.toLowerCase());
+}
+
+function endsExpression(t: Tok): boolean {
+  if (t.k === "p") return t.s === ")" || t.s === "]" || t.s === "}";
+  if (t.k === "id") return !JOINING_WORDS.has(t.s.toLowerCase());
+  return true;
 }

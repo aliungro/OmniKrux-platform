@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { QueryRequest, QueryResponse } from "../api/types";
 import type { CatalogOut } from "../catalog/api";
@@ -351,23 +351,20 @@ describe("Metrics and logs on one timeline", () => {
     expect(await screen.findByText("ticks 3")).toBeTruthy();
   });
 
-  it("logs mode charts volume and lists lines", async () => {
+  it("logs mode lists lines without a chart", async () => {
     shop();
     const sent = batchItems();
-    const user = userEvent.setup();
     await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
-    await waitFor(() => expect(sent.some((q) => /^sum\(count_over_time\(\{app="shop"\}\[\d+[smh]\]\)\)$/.test(q.query))).toBe(true));
     await waitFor(() => expect(linesSent(sent).at(-1)).toMatchObject({ query: '{app="shop"}', limit: 1000, source_id: "l1", project_id: "p1" }));
     const region = section();
     // The query bar is the logs query: no second field.
     expect(within(region).queryByRole("textbox", { name: "Logs query" })).toBeNull();
     expect(await within(region).findByText("Last 1 hour · 3 log lines")).toBeTruthy();
     expect(within(region).getAllByRole("listitem")).toHaveLength(3);
-    expect(await screen.findByText("ticks 3")).toBeTruthy();
-    // The same window behaviour.
-    await user.click(screen.getByRole("button", { name: "Drag a window" }));
-    const win = windowOf(lastRange as Range);
-    await waitFor(() => expect(linesSent(sent).at(-1)).toMatchObject({ start: win.start, end: win.end }));
+    // Task 8: no volume read, no chart, so no ticks and no window to drag.
+    expect(sent.some((q) => /count_over_time/.test(q.query))).toBe(false);
+    expect(screen.queryByText(/^ticks /)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Drag a window" })).toBeNull();
   });
 
   it("a LogQL metric query says there are no lines", async () => {
@@ -423,7 +420,6 @@ describe("Metrics and logs on one timeline", () => {
     const OLDER = "No lines in this time range. The newest matching line is 3 days old: try a longer range.";
     api.state.whyEmpty = { reason: "older_lines", message: OLDER };
     const sent = batchItems((q) => (q.limit != null ? noLines(q) : null));
-    const user = userEvent.setup();
     await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
     const reason = await within(await screen.findByRole("region", { name: "Log lines" })).findByText(OLDER);
     expect(reason.hasAttribute("data-empty-reason")).toBe(true);
@@ -434,10 +430,22 @@ describe("Metrics and logs on one timeline", () => {
     expect(why()).toEqual([{
       source_id: "l1", project_id: "p1", query: '{app="shop"}', start: ran.start, end: ran.end, metrics: [], selector: '{app="shop"}',
     }]);
-    // A window chosen on the chart asks about that window.
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("empty lines in a window chosen on the chart ask about that window", async () => {
+    const api = shop();
+    const OLDER = "No lines in this time range. The newest matching line is 3 days old: try a longer range.";
+    api.state.whyEmpty = { reason: "older_lines", message: OLDER };
+    batchItems((q) => (q.limit != null ? noLines(q) : null));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", expr: "up" });
+    await linkByChip(user);
+    expect(await within(section()).findByText(OLDER)).toBeTruthy();
+    const why = () => api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty").map((r) => r.body as Record<string, unknown>);
     await user.click(screen.getByRole("button", { name: "Drag a window" }));
     const win = windowOf(lastRange as Range);
-    await waitFor(() => expect(why().at(-1)).toMatchObject({ start: win.start, end: win.end, selector: '{app="shop"}' }));
+    await waitFor(() => expect(why().at(-1)).toMatchObject({ start: win.start, end: win.end, selector: '{namespace="api"}' }));
     expect(await within(section()).findByText(OLDER)).toBeTruthy();
     expect(within(section()).queryByText("No log lines in this window.")).toBeNull();
     expect(document.activeElement).not.toBe(document.body);
@@ -467,5 +475,198 @@ describe("Metrics and logs on one timeline", () => {
     await user.keyboard("l");
     expect(list.contains(document.activeElement)).toBe(true);
     expect(document.activeElement?.getAttribute("role")).toBe("listitem");
+  });
+});
+
+describe("Explore with Loki: one query, one result", () => {
+  const ONE = "Explore runs one query at a time. Keep one query in the field, or run them one after another.";
+  const FIX = "Fix the query to run it again.";
+  const PARSE = "parse error at line 2, col 1: syntax error: unexpected {";
+  /** Sent to Loki as one query (the first line ends with an operator), refused as a syntax error. */
+  const BAD = '{app="shop"} |=\n{app="web"}';
+  const refusedBad: FakeQueryAnswer = { error: { code: "bad_query", message: PARSE }, status: 400 };
+  const oneLine: Partial<QueryResponse> = {
+    result_type: "streams", streams: [{ labels: { app: "one" }, entries: [[nowNs(1), "only line"]] }], took_ms: 2,
+  };
+  const meta = () => document.querySelector("[data-explore-meta]") as HTMLElement;
+  const query = () => screen.getByRole("textbox", { name: "Query" }) as HTMLTextAreaElement;
+  const invalidNote = () => section().querySelector("[data-lines-invalid]");
+  const add = () => screen.getByRole("button", { name: "Add to dashboard" });
+  const notBody = () => expect(document.activeElement).not.toBe(document.body);
+
+  it("a log query shows only the log lines", async () => {
+    shop({ '{app="one"}': oneLine });
+    const sent = batchItems();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
+    const region = await screen.findByRole("region", { name: "Log lines" });
+    expect(await within(region).findByText("Last 1 hour · 3 log lines")).toBeTruthy();
+    await waitFor(() => expect(meta().textContent).toMatch(/^✓ 3 lines·Last 1 hour·updated \d\d:\d\d:\d\d$/));
+    // No chart, no last good result, no volume read: the lines are the only read.
+    expect(document.querySelector("[data-chart]")).toBeNull();
+    expect(document.querySelector("[data-explore-chart]")).toBeNull();
+    expect(screen.queryByText("Last good result")).toBeNull();
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every((q) => q.limit != null)).toBe(true);
+    // The section sits under the meta line, and the query can be added.
+    expect(meta().compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(add().getAttribute("aria-disabled")).toBeNull();
+    // A run whose lines answered, left alone for two seconds, goes into the trail.
+    const trail = await screen.findByRole("toolbar", { name: "Recent queries" }, { timeout: 4000 });
+    expect(within(trail).getByRole("button", { name: '{app="shop"}' }).getAttribute("aria-current")).toBe("true");
+    // One line is one line.
+    fireEvent.change(query(), { target: { value: '{app="one"}' } });
+    await waitFor(() => expect(meta().textContent).toMatch(/^✓ 1 line·Last 1 hour·updated /));
+    expect(document.querySelector("[data-chart]")).toBeNull();
+  });
+
+  it("a LogQL metric query keeps the chart", async () => {
+    shop();
+    const sent = batchItems();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: 'sum(rate({app="shop"}[5m]))' });
+    expect(await screen.findByText("ticks 0")).toBeTruthy();
+    await waitFor(() => expect(meta().textContent).toContain("✓ 1 series"));
+    expect(sent.map((q) => q.query)).toEqual(['sum(rate({app="shop"}[5m]))']);
+    expect(within(section()).getByText("This is a metric query, so there are no lines to list.")).toBeTruthy();
+  });
+
+  it("several queries say Explore runs one at a time", async () => {
+    shop();
+    const sent = batchItems();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}\n{app="web"}' });
+    await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${ONE} ${FIX}`));
+    expect(meta().textContent).toBe(`✗ ${ONE}`);
+    // Nothing was sent, nothing can be tried again, and no selector is named.
+    expect(sent).toEqual([]);
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(within(section()).queryByText(/Logs from/)).toBeNull();
+    expect(add().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("a syntax error offers no Try again", async () => {
+    shop({ [BAD]: refusedBad });
+    const sent = batchItems();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: BAD });
+    await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${PARSE} ${FIX}`));
+    expect(linesSent(sent).map((q) => q.query)).toEqual([BAD]);
+    expect(meta().textContent).toBe(`✗ ${PARSE}`);
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(within(section()).queryByRole("list", { name: "Log lines" })).toBeNull();
+    expect(add().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("an unreachable Loki still offers Try again", async () => {
+    shop();
+    let fail = true;
+    batchItems((q) => (fail && q.limit != null
+      ? { ok: false, response: null, error: { code: "unreachable", message: "Loki didn't answer in time.", status: 502 } }
+      : null));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
+    const retry = await within(await screen.findByRole("region", { name: "Log lines" })).findByRole("button", { name: "Try again" });
+    expect(within(section()).getByText("Loki didn't answer in time.")).toBeTruthy();
+    expect(meta().textContent).toBe("✗ Loki didn't answer in time.");
+    expect(invalidNote()).toBeNull();
+    fail = false;
+    await user.click(retry);
+    expect(await within(section()).findByText("Last 1 hour · 3 log lines")).toBeTruthy();
+    await waitFor(() => expect(meta().textContent).toMatch(/^✓ 3 lines/));
+    notBody();
+  });
+
+  it("an invalid log query clears the lines and names only itself", async () => {
+    shop({ [BAD]: refusedBad });
+    batchItems();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
+    expect(await within(await screen.findByRole("region", { name: "Log lines" })).findByText("Last 1 hour · 3 log lines")).toBeTruthy();
+    expect(within(section()).getByText((_, el) => el?.tagName === "P" && el.textContent === 'Logs from {app="shop"} · l1 name')).toBeTruthy();
+    fireEvent.change(query(), { target: { value: BAD } });
+    await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${PARSE} ${FIX}`));
+    // Nothing of the query before it is left: no lines, no selector, no last good result.
+    expect(within(section()).queryByRole("list", { name: "Log lines" })).toBeNull();
+    expect(within(section()).queryByText(/Logs from/)).toBeNull();
+    expect(within(section()).queryByText("Last 1 hour · 3 log lines")).toBeNull();
+    expect(section().textContent).not.toContain('{app="shop"} ·');
+    expect(screen.queryByText("Last good result")).toBeNull();
+    expect(document.querySelector("[data-chart]")).toBeNull();
+    expect(meta().textContent).toBe(`✗ ${PARSE}`);
+  });
+
+  it("a broken metric query keeps its own caption and the lines never name it", async () => {
+    shop();
+    batchItems();
+    const user = userEvent.setup();
+    await openExplore();
+    await linkByChip(user);
+    await within(section()).findByText("Last 1 hour · 3 log lines");
+    const good = query().value;
+    const broken = `${good}\n)`;
+    fireEvent.change(query(), { target: { value: broken } });
+    const label = await screen.findByText("Last good result");
+    expect((label.closest("[data-last-good]") as HTMLElement).querySelector("code")?.textContent).toBe(good);
+    expect(section().textContent).not.toContain(broken);
+    expect(within(section()).getByText((_, el) => el?.tagName === "P" && el.textContent === 'Logs from {namespace="api"} · l1 name')).toBeTruthy();
+  });
+
+  it("a late answer for an older text never shows", async () => {
+    shop({ '{app="one"}': oneLine });
+    let releaseOld!: () => void;
+    const old = new Promise<void>((r) => { releaseOld = r; });
+    let releaseMetric!: () => void;
+    const metricHeld = new Promise<void>((r) => { releaseMetric = r; });
+    const METRIC = 'sum(rate({app="shop"}[5m]))';
+    const sent = batchItems(() => null, (q) => (q.query === '{app="shop"}' ? old : q.query === METRIC ? metricHeld : null));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}' });
+    await waitFor(() => expect(linesSent(sent).map((q) => q.query)).toEqual(['{app="shop"}']));
+    // Log, then metric, then another log query, while the first two answers are still on their way.
+    fireEvent.change(query(), { target: { value: METRIC } });
+    await waitFor(() => expect(sent.some((q) => q.query === METRIC)).toBe(true));
+    fireEvent.change(query(), { target: { value: '{app="one"}' } });
+    await waitFor(() => expect(meta().textContent).toMatch(/^✓ 1 line·/));
+    expect(within(section()).getAllByRole("listitem")).toHaveLength(1);
+    // The older answers arrive last and are dropped.
+    releaseOld();
+    releaseMetric();
+    await act(async () => { await old; await metricHeld; await new Promise((r) => setTimeout(r, 50)); });
+    expect(meta().textContent).toMatch(/^✓ 1 line·/);
+    expect(within(section()).getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByText("500 POST /orders: upstream timeout")).toBeNull();
+    expect(document.querySelector("[data-chart]")).toBeNull();
+    expect(screen.queryByText("Last good result")).toBeNull();
+  });
+
+  it("the logs flow works from the keyboard", async () => {
+    shop();
+    batchItems();
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1" });
+    const heading = screen.getByRole("heading", { level: 1, name: "Explore" });
+    await user.keyboard("q");
+    expect(document.activeElement).toBe(query());
+    await user.paste('{app="shop"}');
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    notBody();
+    const list = await within(section()).findByRole("list", { name: "Log lines" });
+    await waitFor(() => expect(meta().textContent).toMatch(/^✓ 3 lines/));
+    // Esc leaves the field to the heading (there is no chart), and l goes to the lines.
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(heading);
+    await user.keyboard("l");
+    expect(list.contains(document.activeElement)).toBe(true);
+    // Back to the query: two queries on two lines are refused before anything is sent.
+    await user.keyboard("q");
+    expect(document.activeElement).toBe(query());
+    await user.keyboard("{Control>}a{/Control}");
+    await user.paste('{app="shop"}\n{app="web"}');
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${ONE} ${FIX}`));
+    expect(document.activeElement).toBe(query());
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(heading);
+    // No lines to go to: l lands on the section's heading, and a can't add a query that can't run.
+    await user.keyboard("l");
+    expect(document.activeElement).toBe(within(section()).getByRole("heading", { name: "Log lines" }));
+    await user.keyboard("a");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    notBody();
   });
 });

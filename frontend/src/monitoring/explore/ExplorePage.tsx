@@ -3,6 +3,8 @@
 // trail to jump back to. The page's state (project, source, query, time) lives in the tab's view,
 // written with `replace` after a pause, so a reload or another tab brings it back.
 // Under the chart, the log lines of the same time line (X3): a window dragged on the chart narrows them.
+// A log query on a Loki source has no chart at all: its lines are the result. One query runs at a
+// time, and everything on screen belongs to the query in the field (or, dimmed, names its own).
 
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -11,7 +13,7 @@ import { pressed } from "../../features/chrome/shortcuts";
 import { getProject } from "../api/client";
 import { projectKey, useMonitoringTree } from "../api/hooks";
 import { RecommendationBar } from "../build/RecommendationBar";
-import { firstMetric, isLogQlMetric, logSelector, quickCheck } from "../build/promql";
+import { firstMetric, isLogQlMetric, logSelector, quickCheck, severalQueries } from "../build/promql";
 import { guessUnit, humanTitle } from "../build/writeQuery";
 import { useOwnerCatalog } from "../catalog/merge";
 import { browseMetrics } from "../catalog/metrics";
@@ -50,6 +52,8 @@ const SOURCE_WORDS = { prometheus: "Prometheus-compatible", loki: "Loki", alertm
 const NARROW_QUERY = "(max-width: 959px)";
 const ADD_FIRST = "Run a query first.";
 const DEFAULT_PANEL_TITLE = "Explore query";
+/** A text that can run: it reads as one query (balanced, and not several on separate lines). */
+const runnable = (text: string) => quickCheck(text) === null && !severalQueries(text);
 
 /**
  * The page. A view that changes under it (Back, Forward, the sidebar opening Explore on another
@@ -133,7 +137,10 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     [time.from, time.to, expr, project, source?.source_id, tick],
   );
   const panelId = `explore:${tabId}`;
-  const { run, state } = useExploreRun({ project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time), split: builder.split });
+  // A log query has no chart: only its lines run (below), and this run stays idle.
+  const { run, state } = useExploreRun({
+    project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time), split: builder.split, enabled: kind !== "logs",
+  });
   const runNow = useCallback(() => { setTick((n) => n + 1); run(true); }, [run]);
 
   // --- the view: written a pause after a change; a replace keeps the keyboard where it is ---------
@@ -173,12 +180,13 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     pushTrail(project, { ...entry, at: Date.now() });
     setTrailVersion((n) => n + 1);
   }, [project]);
-  // A run that answered, with its text left alone for two seconds, is worth keeping.
+  // A run that answered, with its text left alone for two seconds, is worth keeping. A log query's
+  // run is its lines' (below).
   useEffect(() => {
-    if (state.status !== "done" || state.expr !== expr || !source) return;
+    if (kind === "logs" || state.status !== "done" || state.expr !== expr || !source) return;
     const timer = setTimeout(() => record({ expr, sourceId: source.source_id }), TRAIL_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [state.status, state.runId, state.expr, expr, source, record]);
+  }, [kind, state.status, state.runId, state.expr, expr, source, record]);
 
   const pickTrail = (entry: TrailEntry) => {
     record(entry);
@@ -300,7 +308,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     // A name the writers refuse leaves the text alone.
     if (text === null) return;
     // Text the chips didn't write is kept in the trail before they replace it.
-    if (source && text !== expr && quickCheck(expr) === null && (builder.detached || !builderActive(builder))) {
+    if (source && text !== expr && runnable(expr) && (builder.detached || !builderActive(builder))) {
       record({ expr, sourceId: source.source_id });
     }
     setBuilder(next);
@@ -361,7 +369,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const linesText = logsMode ? expr : fieldText;
   const metricQuery = linesText.trim() !== "" && isLogQlMetric(linesText);
   const linesQuery = metricQuery ? "" : linesText;
-  const selector = linesQuery.trim() === "" ? null : (logSelector(linesQuery) ?? linesQuery.trim());
+  // A text that can't run never has its selector named: the section says only what is wrong with it.
+  const selector = linesQuery.trim() === "" || !runnable(linesQuery) ? null : (logSelector(linesQuery) ?? linesQuery.trim());
   // The lines' whole range stays put while only the metric text changes; a new lines text, place or
   // explicit run reads "now" again, so the lines always cover the time their label names.
   const linesRange = useMemo(
@@ -377,6 +386,12 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   });
   const linesCurrent = lines.key === linesFor
     && (lines.window === null ? chosen === null : chosen !== null && lines.window.start === chosen.start && lines.window.end === chosen.end);
+  // A log query's lines that answered, with the text left alone for two seconds, go into the trail.
+  useEffect(() => {
+    if (kind !== "logs" || !source || !linesCurrent || lines.status !== "done" || linesQuery !== expr) return;
+    const timer = setTimeout(() => record({ expr, sourceId: source.source_id }), TRAIL_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [kind, source, linesCurrent, lines.status, lines.runId, linesQuery, expr, record]);
   // No Loki in the project: no section and no ticks.
   const linesShown = projectOut !== null && linesSource !== null;
   const linesOn = linesShown && selector !== null;
@@ -398,7 +413,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
 
   // --- add to dashboard -------------------------------------------------------------------------
   // Only a text that reads as a query can be added. What the builder wrote names the panel.
-  const canAdd = source !== null && expr.trim() !== "" && quickCheck(expr) === null && !(state.shown === "invalid" && state.expr === expr);
+  // A log query is judged by its lines' run, any other by the main run.
+  const refusedNow = kind === "logs"
+    ? linesCurrent && lines.status === "invalid"
+    : state.shown === "invalid" && state.expr === expr;
+  const canAdd = source !== null && expr.trim() !== "" && runnable(expr) && !refusedNow;
   const builderWrote = builderActive(builder) && !builder.detached;
   const panelKind = kind;
   const defaultPanelTitle = (() => {
@@ -424,7 +443,9 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     ? { sourceType: emptyType, request: state.request, range: state.range ?? undefined }
     : null);
   let result: ReactNode = null;
-  if (state.shown === "done" && state.data && state.range) {
+  if (kind === "logs") {
+    // A log query: no chart, no last good result. The Log lines section is the whole answer.
+  } else if (state.shown === "done" && state.data && state.range) {
     const empty = state.data.state === "empty";
     result = empty ? (
       emptyReason
@@ -472,7 +493,9 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const noSources = projectOut !== null && queryable.length === 0;
   const working = projectOut !== null && !noSources;
   const shown = trail.slice(-TRAIL_SHOWN);
-  const current = source ? trailKey({ expr, sourceId: source.source_id }) : "";
+  // The chip for the query in the field, when it ran on the source shown (one chip per text).
+  const fieldKey = trailKey({ expr });
+  const current = source && shown.some((e) => e.sourceId === source.source_id && trailKey(e) === fieldKey) ? fieldKey : "";
 
   return (
     <section
@@ -591,7 +614,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
             <QueryBar ref={queryField} expr={expr} language={language} onChange={onType}
               onRun={() => {
                 // Only a text that reads as a query is worth keeping.
-                if (source && quickCheck(expr) === null) record({ expr, sourceId: source.source_id });
+                if (source && runnable(expr)) record({ expr, sourceId: source.source_id });
                 runNow();
               }}
               onLeave={leaveQuery} />
@@ -600,7 +623,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
                 onSplit={(label) => applyBuilder({ type: "split", label })}
                 onOnly={(label, value) => applyBuilder({ type: "only", label, value })} />
             )}
-            <MetaLine state={state} expr={expr} kind={kind} />
+            <MetaLine state={state} expr={expr} kind={kind} lines={kind === "logs" ? lines : undefined} />
             <RecommendationBar context={recContext} scope={`explore:${project}`} onApply={applyRec}
               onDone={() => queryField.current?.focus()} />
             <div className={s.result}>{result}</div>
