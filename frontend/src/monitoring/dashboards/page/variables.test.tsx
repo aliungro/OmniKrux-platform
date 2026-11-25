@@ -248,7 +248,7 @@ describe("Dashboard variables", () => {
   it("a long value menu has a filter", async () => {
     const user = userEvent.setup();
     const many = Array.from({ length: 12 }, (_, i) => `ns-${String(i).padStart(2, "0")}`);
-    const doc = spec("Pods", [panel("p-1", "Restarts", "up")], [variable("namespace", "Namespace")]);
+    const doc = spec("Pods", [panel("p-1", "Restarts", "up")], [variable("namespace", "Namespace", { includeAll: true })]);
     installFakeMonitoringApi({
       projects: [linkedProject("p1", "Shop", "s1")],
       dashboards: { d1: seedDashboard("d1", SHOP, doc) },
@@ -260,10 +260,12 @@ describe("Dashboard variables", () => {
     const list = screen.getByRole("group", { name: "Namespace" });
     const filter = within(list).getByRole("textbox", { name: "Filter values" });
     expect(document.activeElement).toBe(filter);
-    await user.type(filter, "ns-1");
-    expect(within(list).getAllByRole("radio").map((r) => (r as HTMLInputElement).value === "on" ? r.parentElement!.textContent : "")).toEqual(["ns-10", "ns-11"]);
+    await user.type(filter, "ns-0");
+    expect(within(list).getAllByRole("radio").map((r) => r.parentElement!.textContent)).toEqual(["All", ...many.slice(0, 10)]);
+    // Down lands on the chosen value, not on All above it.
     await user.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(within(list).getByRole("radio", { name: "ns-10" }));
+    expect(document.activeElement).toBe(within(list).getByRole("radio", { name: "ns-00" }));
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("opening a menu doesn't scroll the page", async () => {

@@ -157,6 +157,7 @@ export function interpolateTitle(title: string, values: Record<string, VarValue>
     if (!Object.hasOwn(values, name)) return token;
     const v = values[name];
     if (v === "all") return "All";
-    return v.length === 0 ? "None" : v.join(", ");
+    // Nothing chosen (still loading, or it failed): no value is claimed.
+    return v.length === 0 ? "…" : v.join(", ");
   });
 }

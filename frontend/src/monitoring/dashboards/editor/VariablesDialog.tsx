@@ -11,7 +11,8 @@ import { sourceChoices } from "./QueryTab";
 import s from "./VariablesDialog.module.css";
 
 export const VARIABLES_EMPTY = "No variables yet. A variable adds a menu above the panels, filled with one label's values.";
-export const PANELS_USE = (name: string) => `Panels use \${${name}}: change their queries before removing it.`;
+export const PANELS_USE = (name: string) => `Panels use $${name}: change their queries before removing it.`;
+export const PANELS_RENAME = (name: string) => `Panels use $${name}: change their queries before renaming it.`;
 
 export interface VariableProblems {
   /** `"{index}.{field}"` (a problem on the row itself is `"{index}."`), first problem each. */
@@ -20,6 +21,8 @@ export interface VariableProblems {
   list: string[];
   /** The variables a panel still uses but the list no longer has (or has after the panel). */
   panels: string[];
+  /** Every problem found in a panel (`name` is the variable it names, if any). */
+  panelIssues: { path: string; message: string; name: string | null }[];
 }
 
 const VARIABLE_PATH = /^variables\[(\d+)\](?:\.(\w+))?/;
@@ -27,7 +30,7 @@ const USES = /\$([A-Za-z_][A-Za-z0-9_]*)/;
 
 /** What the dashboard would say about these variables, by running the same check as Save. */
 export function variableProblems(draft: DashboardSpec, variables: VariableSpec[], ownerKind: OwnerKind): VariableProblems {
-  const out: VariableProblems = { fields: new Map(), list: [], panels: [] };
+  const out: VariableProblems = { fields: new Map(), list: [], panels: [], panelIssues: [] };
   const checked = parseDashboardJson(JSON.stringify({ ...draft, variables }), ownerKind);
   if (checked.ok) return out;
   for (const p of checked.problems) {
@@ -39,6 +42,7 @@ export function variableProblems(draft: DashboardSpec, variables: VariableSpec[]
       out.list.push(p.message);
     } else if (p.path.startsWith("panels")) {
       const name = USES.exec(p.message)?.[1];
+      out.panelIssues.push({ path: p.path, message: p.message, name: name ?? null });
       if (name !== undefined && !out.panels.includes(name)) out.panels.push(name);
     }
   }
@@ -74,12 +78,13 @@ function sameSource(a: VariableSpec["source"], b: VariableSpec["source"]) {
 function toVariables(rows: Row[]): VariableSpec[] {
   return rows.map((r) => {
     const w = r.was;
-    const same = w !== null && w.name === r.name && sameSource(w.source, r.source) && w.labelName === r.labelName
-      && w.match === r.match && w.multi === r.multi && w.includeAll === r.includeAll;
+    // The starting value stays while the settings still allow it; a new variable, or one that no
+    // longer allows it, starts at All (if it offers it) or empty.
+    const keep = w !== null && !(w.default === "all" && !r.includeAll) && !(w.default !== "all" && w.default.length > 1 && !r.multi);
     return {
       name: r.name, label: r.label.trim() === "" ? r.name : r.label, type: "labelValues", source: r.source,
       labelName: r.labelName, match: r.match, multi: r.multi, includeAll: r.includeAll,
-      default: same ? w.default : r.includeAll ? "all" : [],
+      default: keep ? w.default : r.includeAll ? "all" : [],
     };
   });
 }
@@ -160,7 +165,21 @@ export function VariablesDialog({ draft, ownerKind, owner, onApply, onCancel, re
     (target ?? root.querySelector<HTMLElement>("[data-add]"))?.focus();
   }, [focusAfter]);
 
-  const broken = problems.fields.size > 0 || problems.panels.length > 0 || problems.list.length > 0;
+  // Only what this change brought about counts: a panel that already had a problem doesn't block it.
+  const fresh = useMemo(() => {
+    const had = new Set(variableProblems(draft, draft.variables, ownerKind).panelIssues.map((x) => `${x.path}|${x.message}`));
+    const was = new Set(draft.variables.map((v) => v.name));
+    const now = new Set(variables.map((v) => v.name));
+    const renamed = new Set(rows.flatMap((r) => (r.was !== null && r.was.name !== r.name ? [r.was.name] : [])));
+    const words = new Set<string>();
+    for (const x of problems.panelIssues) {
+      if (had.has(`${x.path}|${x.message}`)) continue;
+      const gone = x.name !== null && was.has(x.name) && !now.has(x.name) && /isn't a variable/.test(x.message);
+      words.add(gone ? (renamed.has(x.name!) ? PANELS_RENAME(x.name!) : PANELS_USE(x.name!)) : x.message);
+    }
+    return [...words];
+  }, [draft, ownerKind, problems, rows, variables]);
+  const broken = problems.fields.size > 0 || fresh.length > 0 || problems.list.length > 0;
   const apply = () => {
     if (broken) {
       setAttempts((n) => n + 1);
@@ -176,18 +195,16 @@ export function VariablesDialog({ draft, ownerKind, owner, onApply, onCancel, re
   }, [attempts]);
 
   const listProblems = attempts > 0 ? problems.list : [];
-  // Removing a variable panels use is said at once; the rest wait for an Apply.
-  const panelProblems = attempts > 0 || rows.length < draft.variables.length ? problems.panels : [];
 
   return (
     <DialogShell provider="monitoring" role="dialog" busy={false} onCancel={onCancel} onConfirm={apply} first={first}
       restoreFocusTo={restoreFocusTo} labelledBy={`${id}-t`} className={s.dialog}>
       <h2 id={`${id}-t`} className={s.title}>Variables</h2>
       <div ref={body} className={s.body}>
-        {(listProblems.length > 0 || panelProblems.length > 0) && (
+        {(listProblems.length > 0 || fresh.length > 0) && (
           <div ref={problemsRef} tabIndex={-1} className={s.problems} role="alert">
             {listProblems.map((m) => <p key={m} className={s.problem}>{m}</p>)}
-            {panelProblems.map((n) => <p key={n} className={s.problem}>{PANELS_USE(n)}</p>)}
+            {fresh.map((m) => <p key={m} className={s.problem}>{m}</p>)}
           </div>
         )}
         {rows.length === 0 && <p className={s.empty}>{VARIABLES_EMPTY}</p>}
@@ -205,7 +222,9 @@ export function VariablesDialog({ draft, ownerKind, owner, onApply, onCancel, re
                     <div key={field} className={`${s.field} ${field === "match" ? s.wide : ""}`}>
                       <label htmlFor={fid} className={s.fieldLabel}>{label}</label>
                       <input id={fid} data-field={field} className={s.input} value={r[field]} spellCheck={false} autoComplete="off"
-                        placeholder={field === "match" ? 'Optional, like kube_pod_info{namespace="$namespace"}' : field === "label" ? r.name : undefined}
+                        placeholder={field === "match"
+                          ? (r.source.type === "loki" ? 'Optional, like {namespace="$namespace"}' : 'Optional, like kube_pod_info{namespace="$namespace"}')
+                          : field === "label" ? r.name : undefined}
                         aria-invalid={message ? true : undefined} aria-describedby={message ? `${fid}-p` : undefined}
                         onChange={(e) => edit(r, field, { [field]: e.target.value })} />
                       {message && <p id={`${fid}-p`} className={s.problem}>{message}</p>}
@@ -214,14 +233,15 @@ export function VariablesDialog({ draft, ownerKind, owner, onApply, onCancel, re
                 })}
                 <div className={s.field}>
                   <label htmlFor={`${id}-${r.key}-source`} className={s.fieldLabel}>Source</label>
-                  <select id={`${id}-${r.key}-source`} className={s.input} value={value}
+                  <select id={`${id}-${r.key}-source`} className={s.input} value={value} aria-invalid={shown(i, "source") ? true : undefined}
+                    aria-describedby={shown(i, "source") ? `${id}-${r.key}-source-p` : undefined}
                     onChange={(e) => {
                       const c = choices.find((x) => x.value === e.target.value);
                       if (c) edit(r, "source", { source: c.source });
                     }}>
                     {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
-                  {shown(i, "source") && <p className={s.problem}>{shown(i, "source")}</p>}
+                  {shown(i, "source") && <p id={`${id}-${r.key}-source-p`} className={s.problem}>{shown(i, "source")}</p>}
                 </div>
               </div>
               {rowMessage && <p className={s.problem}>{rowMessage}</p>}

@@ -138,9 +138,9 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const discardButton = useRef<HTMLButtonElement>(null);
   const page = useRef<HTMLElement>(null);
   const [timeOpen, setTimeOpen] = useState(false);
-  /** Asking before Discard drops changes; the keyboard goes back to the Discard it came from. */
   const variablesButton = useRef<HTMLButtonElement>(null);
   const [askVariables, setAskVariables] = useState(false);
+  /** Asking before Discard drops changes; the keyboard goes back to the Discard it came from. */
   const [askDiscard, setAskDiscard] = useState<RefObject<HTMLButtonElement | null> | null>(null);
   /** The JSON tab's typing that hasn't paused yet: Save and Discard apply it first. */
   const flushJson = useRef<(() => EditorState | null) | null>(null);
@@ -342,6 +342,14 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     setTitleRefused(jsonBlocks(action));
     editor.dispatch(action);
   };
+  // Opening applies any JSON typing first, so the dialog starts from the draft as it really is.
+  const openVariables = () => {
+    flushJson.current?.();
+    setAskVariables(true);
+  };
+  // The dialog never outlives the edit session (it would reopen on the next edit).
+  const sessionOn = editing !== null;
+  useEffect(() => { if (!sessionOn) setAskVariables(false); }, [sessionOn]);
   // The variables dialog: Apply is one edit (one undo step), refused while the JSON text doesn't apply.
   const applyVariables = (variables: VariableSpec[]): string | null => {
     const st = flushJson.current?.() ?? editor.state;
@@ -738,7 +746,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
           ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton}
               suggestions={tab === "dashboard" && !ctx.ownerFailure ? { open: railShown, onToggle: toggleSuggestions } : undefined} suggestionsRef={suggestionsButton}
               undo={{ can: canUndo(editing), onUndo: undo }}
-              variables={{ onOpen: () => setAskVariables(true), buttonRef: variablesButton }} />
+              variables={{ onOpen: openVariables, buttonRef: variablesButton }} />
           : undefined} />
       {reread && <RereadNotice failed={reread} buttonRef={rereadRetry} />}
       {editing && !editor.draftsWork && <DraftsOffNotice />}

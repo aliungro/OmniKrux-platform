@@ -13,6 +13,7 @@ import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type Pan
 import { sameJson } from "../sameJson";
 import type { Layout, PanelAlert, PanelSpec } from "../schema";
 import type { TileProps } from "../editor/EditableGrid";
+import { panelName } from "../editor/SidePanel";
 import { useDebouncedQueries } from "../editor/useDebouncedQueries";
 import { FLASH_MS, usePrefersReducedMotion } from "../motion";
 import type { PanelStatusStore } from "../page/useDashboardContext";
@@ -212,7 +213,11 @@ export const PanelFrame = memo(function PanelFrame({
     "--rows": h,
     ...(tile?.offset ? { "--dx": `${tile.offset.x}px`, "--dy": `${tile.offset.y}px` } : {}),
   } as CSSProperties;
-  const named = tile ? { "aria-label": tile.label } : { "aria-labelledby": titleId };
+  // The tile is named by the title it shows (the chosen values in place of `$name`), then its place.
+  const stored = panelName(panel);
+  const named = tile
+    ? { "aria-label": tile.label.startsWith(stored) ? (shownTitle.trim() || "Untitled panel") + tile.label.slice(stored.length) : tile.label }
+    : { "aria-labelledby": titleId };
 
   const classes = [s.panel, tile ? s.tile : "", flash ? s.flash : "", spot ? s.spot : ""].filter(Boolean).join(" ");
   const saved = savedAlert === undefined ? panel.alert : savedAlert;

@@ -169,6 +169,6 @@ describe("interpolate", () => {
 describe("interpolateTitle", () => {
   it("shows the chosen values, All, and leaves other names alone", () => {
     expect(interpolateTitle("CPU in $ns and ${pod}", { ns: ["a", "b"], pod: "all" })).toBe("CPU in a, b and All");
-    expect(interpolateTitle("$__interval $other $ns", { ns: [] })).toBe("$__interval $other None");
+    expect(interpolateTitle("$__interval $other $ns", { ns: [] })).toBe("$__interval $other …");
   });
 });

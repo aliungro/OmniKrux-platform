@@ -59,7 +59,8 @@ function Picker({
     setFilter("");
     // The filter (when there is one) first, else the chosen value. Never scrolls the page.
     const first = popup.current?.querySelector<HTMLElement>("[data-values-filter]")
-      ?? popup.current?.querySelector<HTMLElement>("input:checked, input, button");
+      ?? popup.current?.querySelector<HTMLElement>("input:checked")
+      ?? popup.current?.querySelector<HTMLElement>("input, button");
     first?.focus({ preventScroll: true });
     // Only when it opens.
   }, [open]);
@@ -132,7 +133,8 @@ function Picker({
               spellCheck={false} autoComplete="off" data-values-filter="" onChange={(e) => setFilter(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key !== "ArrowDown") return;
-                const next = popup.current?.querySelector<HTMLElement>("[data-choices] input:checked, [data-choices] input");
+                const next = popup.current?.querySelector<HTMLElement>("[data-choices] input:checked")
+                  ?? popup.current?.querySelector<HTMLElement>("[data-choices] input");
                 if (!next) return;
                 e.preventDefault();
                 next.focus({ preventScroll: true });
