@@ -841,3 +841,127 @@ describe("Project page and the cluster's monitoring tools", () => {
     expect(within(await screen.findByRole("alertdialog")).queryByText(/stay\. Uninstall them/)).toBeNull();
   });
 });
+
+describe("Setup and project links", () => {
+  const inCluster = (id: string, name: string, over: Partial<SourceOut> = {}) =>
+    source(id, name, { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "Dev", namespace: "monitoring", service: "prometheus-server", port: "80", ...over });
+
+  it("an in-cluster source of the project's own cluster is never called mixed", async () => {
+    const mine = inCluster("s1", "Prom");
+    const elsewhere = source("s2", "Central");
+    installFakeMonitoringApi({
+      sources: [mine, elsewhere],
+      projects: [project("p1", "Dev", [
+        link(mine, "", { source_cluster_id: "c1", filter_origin: "none" }),
+        link(elsewhere, "", { source_cluster_id: null, filter_origin: "none" }),
+      ], { kind: "kubernetes", cluster_id: "c1" })],
+    }, fallback);
+    open("p1");
+    await screen.findByRole("textbox", { name: "Filter for Prom" });
+    expect(screen.getAllByText(/may include data from other clusters/)).toHaveLength(1);
+    expect(screen.getByText(/^Central may include data from other clusters/)).toBeTruthy();
+  });
+
+  it("a filter that matches nothing is said at the filter", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const api = installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom)])],
+      filterChecks: { s1: { matches: false, message: null } },
+    }, fallback);
+    open("p1");
+    await user.type(await screen.findByRole("textbox", { name: "Filter for Prom" }), 'namespace="nope-ns"');
+    // Nothing is asked while the text is still changing, and nothing is said before the answer.
+    expect(screen.queryByText(/matches this filter/)).toBeNull();
+    const line = await screen.findByText("Nothing in Prom matches this filter. Check the label names and values.", {}, { timeout: 3000 });
+    expect(line.getAttribute("role")).toBe("status");
+    const asked = api.requests.filter((r) => r.url === "/api/monitoring/sources/s1/filter-check");
+    expect(asked).toHaveLength(1);
+    expect(asked[0].body).toEqual({ filter: 'namespace="nope-ns"' });
+    // Changing the text takes the line away until the new text is answered.
+    await user.type(screen.getByRole("textbox", { name: "Filter for Prom" }), "x");
+    expect(screen.queryByText(/matches this filter/)).toBeNull();
+  });
+
+  it("a filter the source can't answer for says nothing new", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom)])],
+      filterChecks: { s1: { matches: null, message: "Can't reach Prom." } },
+    }, fallback);
+    open("p1");
+    await user.type(await screen.findByRole("textbox", { name: "Filter for Prom" }), 'a="b"');
+    await new Promise((r) => setTimeout(r, 900));
+    expect(screen.queryByText(/matches this filter/)).toBeNull();
+  });
+
+  it("Check data with nothing visible is a warning", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const loki = source("s2", "Logs", { type: "loki" });
+    installFakeMonitoringApi({
+      sources: [prom, loki], projects: [project("p1", "Dev", [link(prom), link(loki)])],
+      fields: { s1: { metrics: [], labels: [], truncated: false }, s2: { metrics: [], labels: [], truncated: false } },
+    }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Check data for Prom" }));
+    expect(await screen.findByText("Nothing in Prom is visible to this project. Check the filter.")).toBeTruthy();
+    expect(screen.queryByText(/0 metrics/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Check data for Logs" }));
+    expect(await screen.findByText("Nothing in Logs is visible to this project. Check the filter.")).toBeTruthy();
+  });
+
+  it("the source picker doesn't repeat names", async () => {
+    const user = userEvent.setup();
+    const a = source("s1", "Prom", { url: "http://prom.example:9090" });
+    const b = source("s2", "http://other.example:9090", { url: "http://other.example:9090" });
+    const mine = inCluster("s3", "Local");
+    const far = inCluster("s4", "Far", { cluster_id: "c9", cluster_name: "Other" });
+    installFakeMonitoringApi({
+      sources: [a, b, mine, far], projects: [project("p1", "Dev", [], { kind: "kubernetes", cluster_id: "c1" })],
+    }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
+    const picker = await screen.findByRole("combobox", { name: "Source" });
+    const options = within(picker).getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual([
+      "Choose a source…", "Prom · http://prom.example:9090", "http://other.example:9090", "Local · Dev · monitoring/prometheus-server",
+      "Far · Other · monitoring/prometheus-server",
+    ]);
+    const group = within(picker).getByRole("group", { name: "Other clusters" });
+    expect(within(group).getAllByRole("option").map((o) => o.textContent)).toEqual(["Far · Other · monitoring/prometheus-server"]);
+  });
+
+  it("Unlink can be undone with the same filter", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const api = installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom, 'cluster="a"', { filter_origin: "auto" })])],
+    }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Unlink Prom" }));
+    const note = await screen.findByText(/^Unlinked Prom\./);
+    expect(note.getAttribute("role")).toBe("status");
+    expect(document.activeElement).not.toBe(document.body);
+    await user.click(within(note).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(api.state.projects[0].links).toHaveLength(1));
+    expect(api.state.projects[0].links[0]).toMatchObject({ source_id: "s1", filter: 'cluster="a"', filter_origin: "auto" });
+    await screen.findByRole("textbox", { name: "Filter for Prom" });
+    expect(screen.queryByText(/^Unlinked Prom/)).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the Unlink note goes with the next action", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const logs = source("s2", "Logs", { type: "loki" });
+    installFakeMonitoringApi({ sources: [prom, logs], projects: [project("p1", "Dev", [link(prom), link(logs)])] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Unlink Prom" }));
+    await screen.findByText(/^Unlinked Prom\./);
+    await user.click(screen.getByRole("button", { name: "Unlink Logs" }));
+    expect(await screen.findByText(/^Unlinked Logs\./)).toBeTruthy();
+    expect(screen.queryByText(/^Unlinked Prom\./)).toBeNull();
+  });
+});

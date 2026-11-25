@@ -150,6 +150,16 @@ export function setupBody(draft: SetupDraft): SetupIn {
   };
 }
 
+/** `base`, or `base 2`, `base 3`… when `taken` already holds it (case-insensitive). */
+export function uniqueName(base: string, taken: readonly string[]): string {
+  const used = new Set(taken.map((t) => t.trim().toLowerCase()));
+  if (!used.has(base.trim().toLowerCase())) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base} ${n}`;
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
 export const NOTHING_PICKED = "Pick at least one source, or add one by hand.";
 export const NOTHING_PICKED_OR_INSTALLED = "Pick at least one source, install one, or add one by hand.";
 

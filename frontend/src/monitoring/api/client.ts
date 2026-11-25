@@ -1,6 +1,6 @@
 import { deleteEmpty, getJson, patchJson, postJson, putJson } from "../../api/http";
 import type {
-  AlertingOut, DiscoveryOut, FieldCatalogOut, FilterOrigin, GroupDeleteReviewOut, GroupIn, GroupOut, GroupPatch, HealthOut, LinkOut,
+  AlertingOut, DiscoveryOut, FieldCatalogOut, FilterCheckOut, FilterOrigin, GroupDeleteReviewOut, GroupIn, GroupOut, GroupPatch, HealthOut, LinkOut,
   ProjectDeleteReviewOut, ProjectOut, SetupIn, SourceDeleteReviewOut, SourceIn, SourceOut, SourcePatch,
   SuggestIn, SuggestOut, TestOut, TreeOut,
 } from "./types";
@@ -21,6 +21,9 @@ export const sourceHealth = (refresh = false) => getJson<Record<string, HealthOu
 /** The metrics and labels a source holds for one project (that project's link filter applied). */
 export const sourceFields = (id: string, projectId: string) =>
   getJson<FieldCatalogOut>(`${BASE}/sources/${enc(id)}/fields?project=${enc(projectId)}`);
+/** Whether anything in the source matches a filter (nothing is stored). */
+export const checkFilter = (id: string, filter: string, signal?: AbortSignal) =>
+  postJson<FilterCheckOut>(`${BASE}/sources/${enc(id)}/filter-check`, { filter }, { signal });
 export const sourceAlerting = (id: string) => getJson<AlertingOut>(`${BASE}/sources/${enc(id)}/alerting`);
 
 // --- Discovery and suggestions ---------------------------------------------------------------

@@ -98,15 +98,15 @@ describe("Setup page", () => {
     const prom = await screen.findByRole("group", { name: "Prometheus" });
     expect(within(prom).getByText("monitoring/prometheus-server · v3.1.0")).toBeTruthy();
     expect(within(prom).getByText("Reachable")).toBeTruthy();
-    expect((within(prom).getByRole("checkbox", { name: "Use" }) as HTMLInputElement).checked).toBe(true);
+    expect((within(prom).getByRole("checkbox", { name: "Use Prometheus" }) as HTMLInputElement).checked).toBe(true);
     const loki = screen.getByRole("group", { name: "Loki" });
     expect(within(loki).getByText("Can't be reached")).toBeTruthy();
     expect(within(loki).getByText("connection refused")).toBeTruthy();
-    expect((within(loki).getByRole("checkbox", { name: "Use" }) as HTMLInputElement).checked).toBe(false);
+    expect((within(loki).getByRole("checkbox", { name: "Use Loki" }) as HTMLInputElement).checked).toBe(false);
     expect(screen.getByText("1 source in use")).toBeTruthy();
     expect(continueButton().disabled).toBe(false);
 
-    fireEvent.click(within(prom).getByRole("checkbox", { name: "Use" }));
+    fireEvent.click(within(prom).getByRole("checkbox", { name: "Use Prometheus" }));
     expect(screen.getByText("0 sources in use")).toBeTruthy();
     expect(continueButton().disabled).toBe(true);
     expect(screen.getByText("Pick at least one source, or add one by hand.")).toBeTruthy();
@@ -204,7 +204,7 @@ describe("Setup page", () => {
     const prom = screen.getByRole("group", { name: "Prometheus" });
     expect(within(prom).getByText("Comes with the ready-made views Cluster health, Node health, Namespace health, Workload health, Pod health.")).toBeTruthy();
     // A source that isn't used brings nothing.
-    fireEvent.click(within(loki).getByRole("checkbox", { name: "Use" }));
+    fireEvent.click(within(loki).getByRole("checkbox", { name: "Use Loki" }));
     expect(within(loki).queryByText(/Comes with/)).toBeNull();
   });
 
@@ -218,7 +218,7 @@ describe("Setup page", () => {
     const summary = screen.getByRole("list", { name: "Summary" });
     expect(within(summary).getByText("Ready-made views: Cluster health, Node health, Namespace health, Workload health, Pod health, Logs overview")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Back" }));
-    fireEvent.click(within(screen.getByRole("group", { name: "Prometheus" })).getByRole("checkbox", { name: "Use" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Prometheus" })).getByRole("checkbox", { name: "Use Prometheus" }));
     await user.click(continueButton());
     expect(within(screen.getByRole("list", { name: "Summary" })).getByText("Ready-made views: Logs overview")).toBeTruthy();
   });
@@ -281,6 +281,9 @@ describe("Setup page", () => {
     await screen.findByRole("group", { name: "Prometheus" });
     await user.click(continueButton());
     const name = await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    // A taken name is suggested no more (the free one is `${CLUSTER} 2`): typing it again clashes.
+    await user.clear(name);
+    await user.type(name, CLUSTER);
     name.focus();
     await user.keyboard("{Control>}{Enter}{/Control}");
     expect(await screen.findByText(`A project named "${CLUSTER}" already exists. Pick another name.`)).toBeTruthy();
@@ -947,5 +950,103 @@ describe("Setup draft in this browser", () => {
     await user.click(within(lost).getByRole("button", { name: "Enter it again" }));
     expect(screen.queryByRole("group", { name: "Prometheus · bearer.example" })).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Address")));
+  });
+});
+
+describe("Setup and project links", () => {
+  const down = { state: "down" as const, message: "refused", version: null, checked_at: T };
+
+  it("setup says when it can't look inside the cluster", async () => {
+    const user = userEvent.setup();
+    const api = install({
+      discovery: { c1: { ...found(), state: "error", message: `OmniKrux can't reach ${CLUSTER}. Check that the cluster is running, then try again.` } },
+    });
+    startFromCluster();
+    expect(await screen.findByRole("heading", { name: `Can't look inside ${CLUSTER}` })).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toBe(`OmniKrux can't reach ${CLUSTER}. Check that it is running, or add a source by hand.`);
+    expect(screen.queryByText(/What we found/)).toBeNull();
+    expect(screen.getByText("Pick at least one source, or add one by hand.")).toBeTruthy();
+    // Nothing to install into a cluster that can't be looked into: the footer never says "install one".
+    await waitFor(() => expect(api.requests.some((r) => r.url.includes("/install/tools"))).toBe(true));
+    expect(screen.queryByText(/install one/)).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    await user.click(screen.getByRole("button", { name: "+ Add a source by hand" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("an unreachable cluster says so in the cluster choice", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, async (url: string) => json(url === "/api/clusters"
+      ? [{ id: "c1", name: CLUSTER, provider: "kind", state: "error", message: "refused" }, { id: "c2", name: "prod-east", provider: "aks", state: "ready" }] : []));
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await user.click(await screen.findByRole("radio", { name: /A Kubernetes cluster/ }));
+    expect(await screen.findByRole("heading", { name: "Which cluster?" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: `${CLUSTER} · Can't be reached` })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "prod-east" })).toBeTruthy();
+    // It stays choosable: the step after it says what happened.
+    await user.click(screen.getByRole("radio", { name: `${CLUSTER} · Can't be reached` }));
+    expect(continueButton().disabled).toBe(false);
+  });
+
+  it("the stepper's notes carry their full text as a title", async () => {
+    install();
+    startFromCluster();
+    await screen.findByRole("group", { name: "Prometheus" });
+    const note = within(screen.getByRole("list", { name: "Steps" })).getByText(`${CLUSTER} · Kubernetes`);
+    expect(note.getAttribute("title")).toBe(`${CLUSTER} · Kubernetes`);
+  });
+
+  it("setup suggests a free name", async () => {
+    const user = userEvent.setup();
+    install({ projects: [seedProject("p0", CLUSTER), seedProject("p1", `${CLUSTER} 2`)] });
+    startFromCluster();
+    await screen.findByRole("group", { name: "Prometheus" });
+    await waitFor(() => expect(screen.getByText("1 source in use")).toBeTruthy());
+    await user.click(continueButton());
+    expect((await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe(`${CLUSTER} 3`);
+  });
+
+  it("an unreachable existing source says so when ticked", async () => {
+    const user = userEvent.setup();
+    const gone = source("s1", "Central Prometheus");
+    installFakeMonitoringApi({ sources: [gone], health: { s1: down } }, async () => json([]));
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await user.click(await screen.findByRole("radio", { name: /Something of your own/ }));
+    expect(screen.getByText("Any Prometheus-compatible, Loki or Alertmanager source you can reach.")).toBeTruthy();
+    await user.click(continueButton());
+    const existing = await screen.findByRole("group", { name: "Use an existing source" });
+    expect(await within(existing).findByText("Can't be reached")).toBeTruthy();
+    expect(screen.queryByText(/can't be reached now/)).toBeNull();
+    await user.click(within(existing).getByRole("checkbox", { name: "Use Central Prometheus" }));
+    expect(screen.getByText("Central Prometheus can't be reached now. You can still use it; its panels say so until it answers.")).toBeTruthy();
+  });
+
+  it("setup's switches are named after their sources", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ discovery: { c1: PROM_AND_LOKI }, sources: [source("s1", "Central Prometheus")] }, clustersFallback);
+    startFromCluster();
+    await screen.findByRole("group", { name: "Prometheus" });
+    expect(screen.getByRole("checkbox", { name: "Use Prometheus" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "Use Loki" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "Use" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(await screen.findByRole("radio", { name: /Something of your own/ }));
+    await user.click(continueButton());
+    expect(await screen.findByRole("checkbox", { name: "Use Central Prometheus" })).toBeTruthy();
+  });
+
+  it("a filter that matches nothing is said at the filter in setup", async () => {
+    const user = userEvent.setup();
+    const known = source("s1", "Central Prometheus");
+    const api = installFakeMonitoringApi({
+      discovery: { c1: found(tool("prometheus", "reachable", { existing_source_id: "s1" })) }, sources: [known],
+      filterChecks: { s1: { matches: false, message: null } },
+    }, clustersFallback);
+    startFromCluster();
+    const field = await screen.findByRole("textbox", { name: "Filter for Central Prometheus" });
+    await user.type(field, 'namespace="nope-ns"');
+    const line = await screen.findByText("Nothing in Central Prometheus matches this filter. Check the label names and values.", {}, { timeout: 3000 });
+    expect(line.getAttribute("role")).toBe("status");
+    expect(api.requests.some((r) => r.url === "/api/monitoring/sources/s1/filter-check")).toBe(true);
   });
 });

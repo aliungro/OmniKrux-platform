@@ -73,6 +73,13 @@
   margin-bottom: 10px;
 }
 
+.undo {
+  margin: 0 0 10px;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .note {
   margin: 0 0 12px;
   padding: 12px 14px;

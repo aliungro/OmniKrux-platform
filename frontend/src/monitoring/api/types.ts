@@ -188,6 +188,12 @@ export interface SuggestOut {
   reason: string | null;
 }
 
+export interface FilterCheckOut {
+  /** Whether anything in the source matches the filter; null when the source couldn't say. */
+  matches: boolean | null;
+  message: string | null;
+}
+
 // --- Projects, groups, the tree --------------------------------------------------------------
 
 export interface LinkOut {
@@ -197,6 +203,8 @@ export interface LinkOut {
   filter: string;
   filter_origin: FilterOrigin;
   created_by_project: boolean;
+  /** The cluster a source reached inside a cluster runs in; null for any other source. */
+  source_cluster_id?: string | null;
 }
 
 export interface ProjectOut {

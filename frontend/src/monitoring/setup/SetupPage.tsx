@@ -4,7 +4,7 @@ import { failure, HttpError } from "../../api/http";
 import type { Cluster } from "../../api/types";
 import { useClusters } from "../../api/useClusters";
 import { setupProject, suggestFilter } from "../api/client";
-import { invalidateMonitoring, useDiscovery, useSources } from "../api/hooks";
+import { invalidateMonitoring, useDiscovery, useProjects, useSourceHealth, useSources } from "../api/hooks";
 import type { FoundTool, ProjectKind, ProjectOut, SourceIn, SourceOut, SuggestIn } from "../api/types";
 import { readyViewTitles, readyViewsPhrase } from "../dashboards/readyViews";
 import { useToolReviews } from "../alerts/reviews/useToolReviews";
@@ -18,6 +18,7 @@ import { FilterField } from "../projects/FilterField";
 import { DOT } from "../sidebar/Sidebar";
 import { SourceForm } from "../sources/SourceForm";
 import { autoTypeName, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
+import { stateOf } from "../home/ProjectCard";
 import { commitImport, previewImport, TransferRequestError, type GrafanaIn, type ImportResultOut } from "../transfer/api";
 import { dashboardsWord } from "../transfer/grafanaLabels";
 import { CHANGED } from "../transfer/importModel";
@@ -26,7 +27,7 @@ import { importFailedWords, noteImportFailed } from "./importNotice";
 import { readSetupDraft, removeSetupDraft, SECRET_NOT_KEPT, writeSetupDraft } from "./setupDraftStore";
 import {
   blockedBy, foundDetail, foundKey, grafanaFromDiscovery, hasImportStep, importable, importCommitBody, importSkipped, installComponents, INSTALLS, inUse, readyFor,
-  isAnswered, NO_INSTALL, picksFromAnswered, picksFromDiscovery, setupBody, TOOL_NAMES,
+  isAnswered, NO_INSTALL, picksFromAnswered, picksFromDiscovery, setupBody, TOOL_NAMES, uniqueName,
   type SetupDraft, type SetupPick, type SetupStep,
 } from "./setupModel";
 import s from "./SetupPage.module.css";
@@ -39,6 +40,8 @@ const KEEP_AFTER_MS = 300;
 const PREVIEW_AFTER_MS = 500;
 const NO_READY = "No ready-made views: they come with a Prometheus-compatible or Loki source.";
 const NOTHING_TO_IMPORT = "Nothing to import";
+/** Setup's words for a cluster discovery couldn't reach (the server's words say the same, with a next step for any caller). */
+const cantReachWords = (cluster: string) => `OmniKrux can't reach ${cluster}. Check that it is running, or add a source by hand.`;
 const CHECK_AGAIN = "Check what converts again on the Import step.";
 const NONE_CONVERTS = "None of the chosen dashboards can be copied any more. Import them from the project instead.";
 
@@ -62,7 +65,7 @@ const KINDS: { kind: ProjectKind; title: string; what: string; sub: string }[] =
   { kind: "kubernetes", title: "A Kubernetes cluster", what: "Kubernetes cluster", sub: "OmniKrux looks inside it for Prometheus, Loki and Grafana." },
   { kind: "docker", title: "A Docker host", what: "Docker host", sub: "Tools that run on one Docker host." },
   { kind: "servers", title: "Servers", what: "Servers", sub: "Tools that watch machines you run." },
-  { kind: "custom", title: "Something of your own", what: "Something of your own", sub: "Any Prometheus-compatible or Loki source you can reach." },
+  { kind: "custom", title: "Something of your own", what: "Something of your own", sub: "Any Prometheus-compatible, Loki or Alertmanager source you can reach." },
 ];
 const kindInfo = (kind: ProjectKind) => KINDS.find((k) => k.kind === kind) ?? KINDS[3];
 
@@ -142,17 +145,20 @@ function ComesWith({ kind, type }: { kind: ProjectKind | null; type: FoundTool["
   return <p className={s.later}>{`Comes with ${readyViewsPhrase(titles)}.`}</p>;
 }
 
+/** The saved source a pick's filter can be checked against: only one already saved has anything to ask. */
+const checkOf = (pick: SetupPick) => ("existingId" in pick.source ? { sourceId: pick.source.existingId, sourceName: pick.label } : undefined);
+
 /** A pick's on/off switch and, while it is in use, its filter. */
 function PickControls({ pick, onChange }: { pick: SetupPick; onChange(patch: Partial<SetupPick>): void }) {
   return (
     <>
       <label className={s.use}>
-        <input type="checkbox" className={s.switch} checked={pick.use} onChange={(e) => onChange({ use: e.target.checked })} />
+        <input type="checkbox" className={s.switch} aria-label={`Use ${pick.label}`} checked={pick.use} onChange={(e) => onChange({ use: e.target.checked })} />
         Use
       </label>
       {pick.use && (
         <div className={s.filter}>
-          <FilterField value={pick.filter} origin={pick.origin} reason={pick.reason} forName={pick.label}
+          <FilterField value={pick.filter} origin={pick.origin} reason={pick.reason} forName={pick.label} check={checkOf(pick)}
             onChange={(filter, origin) => onChange({ filter, origin })} />
         </div>
       )}
@@ -311,6 +317,7 @@ function KindStep({ draft, setDraft, heading, clusters, onOpenSettings }: StepPr
 
       {draft.kind === "kubernetes" && (
         <section className={s.clusters} aria-label="Clusters">
+          <h3 className={s.clustersTitle}>Which cluster?</h3>
           {clusters.isPending && <p className={s.note} role="status">Loading clusters…</p>}
           {clusters.isError && !list && (
             <div className={s.note} role="alert">
@@ -330,8 +337,11 @@ function KindStep({ draft, setDraft, heading, clusters, onOpenSettings }: StepPr
                 <label key={c.id} className={s.cluster}>
                   <input type="radio" name={`${ids}-cluster`} className={s.radio} checked={draft.clusterId === c.id}
                     onChange={() => setDraft((d) => retarget(d, "kubernetes", c.id))} />
-                  <i className={s.dot} style={{ background: c.provider in DOT ? DOT[c.provider] : DOT.custom }} aria-hidden="true" />
-                  <span className={s.clusterName}>{c.name}</span>
+                  <i className={s.dot} data-down={c.state === "error" ? "" : undefined}
+                    style={c.state === "error" ? undefined : { background: c.provider in DOT ? DOT[c.provider] : DOT.custom }} aria-hidden="true" />
+                  <span className={s.clusterName} title={c.state === "error" ? c.message ?? undefined : undefined}>
+                    {c.state === "error" ? `${c.name} · Can't be reached` : c.name}
+                  </span>
                 </label>
               ))}
             </div>
@@ -370,6 +380,10 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
   const want = draft.install ?? NO_INSTALL;
   const hand = draft.picks.filter(isHand);
   const d = discovery.data;
+  const health = useSourceHealth().data;
+  const downNow = (x: SourceOut) => stateOf(health?.[x.id] ?? x.health) === "down";
+  // The cluster couldn't be looked into: said as the step's heading, not as a "found" list.
+  const lookFailed = cluster && (d?.state === "error" || (discovery.isError && !d));
   const toggleExisting = (x: SourceOut, on: boolean) => setDraft((cur) => ({
     ...cur,
     picks: on
@@ -381,12 +395,16 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
     <>
       {cluster ? (
         <>
-          <h2 ref={heading} tabIndex={-1} className={s.stepTitle}>What we found in {clusterName}</h2>
-          <p className={s.lead}>
-            {offer?.available
-              ? "OmniKrux looked inside the cluster. Use what's there, install what's missing, or add a source by hand."
-              : "OmniKrux looked inside the cluster. Use what's there, or add a source by hand."}
-          </p>
+          <h2 ref={heading} tabIndex={-1} className={s.stepTitle}>
+            {lookFailed ? `Can't look inside ${clusterName}` : `What we found in ${clusterName}`}
+          </h2>
+          {!lookFailed && (
+            <p className={s.lead}>
+              {offer?.available
+                ? "OmniKrux looked inside the cluster. Use what's there, install what's missing, or add a source by hand."
+                : "OmniKrux looked inside the cluster. Use what's there, or add a source by hand."}
+            </p>
+          )}
           <div className={s.looking}>
             <span role="status">{discovery.isFetching ? `Looking inside ${clusterName}…` : ""}</span>
             {/* aria-disabled, not disabled: a button that disables itself would drop the keyboard onto <body>. */}
@@ -394,7 +412,11 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
               onClick={() => { if (!discovery.isFetching) void discovery.refetch(); }}>Look again</button>
           </div>
           {discovery.isError && !d && <p className={s.problem} role="alert">{failure(discovery.error, "look again")}</p>}
-          {d?.state === "error" && <p className={s.problem} role="alert">{d.message}</p>}
+          {d?.state === "error" && (
+            <p className={s.problem} role="alert">
+              {d.message?.startsWith("OmniKrux can't reach ") ? cantReachWords(clusterName) : d.message}
+            </p>
+          )}
           {d && d.state === "ok" && d.found.length === 0 && <p className={s.note}>Nothing was found in this cluster. Add a source by hand.</p>}
           {d && d.found.length > 0 && (
             <div className={s.rows}>
@@ -441,14 +463,16 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
                       <Badge type={x.type} />
                       <label className={s.what}>
                         <span className={s.toolName}>
-                          <input type="checkbox" className={s.switch} checked={pick !== undefined} onChange={(e) => toggleExisting(x, e.target.checked)} />
+                          <input type="checkbox" className={s.switch} aria-label={`Use ${x.name}`} checked={pick !== undefined} onChange={(e) => toggleExisting(x, e.target.checked)} />
                           {x.name}
                         </span>
                         <span className={s.detail}>{sourceTypeLabel(x.type)} · {whereLabel(x)}</span>
                       </label>
+                      {downNow(x) && <div className={s.state}><Chip tone="bad">Can&apos;t be reached</Chip></div>}
+                      {pick && downNow(x) && <p className={s.later}>{x.name} can&apos;t be reached now. You can still use it; its panels say so until it answers.</p>}
                       {pick && (
                         <div className={s.filter}>
-                          <FilterField value={pick.filter} origin={pick.origin} reason={pick.reason} forName={pick.label}
+                          <FilterField value={pick.filter} origin={pick.origin} reason={pick.reason} forName={pick.label} check={checkOf(pick)}
                             onChange={(filter, origin) => edit(pick.key)({ filter, origin })} />
                         </div>
                       )}
@@ -543,6 +567,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
   }, []);
   const clusters = useClusters();
   const sources = useSources();
+  const projects = useProjects();
   const discovery = useDiscovery(draft.step >= 2 && draft.kind === "kubernetes" ? draft.clusterId : null);
   const onCluster = draft.kind === "kubernetes" && draft.clusterId !== null;
   const tools = useQuery({ queryKey: installKeys.tools, queryFn: () => installTools(), enabled: onCluster && draft.step >= 2 });
@@ -550,7 +575,9 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     : tools.data ? (tools.data.available ? { available: true } : { available: false, why: tools.data.message ?? "OmniKrux can't install tools here." })
     : tools.isError ? { available: false, why: failure(tools.error, "try again") }
     : null;
-  const installOffered = offer?.available === true;
+  // Nothing can be installed into a cluster that couldn't be looked into.
+  const lookedInto = discovery.data?.state === "error" || (discovery.isError && !discovery.data);
+  const installOffered = offer?.available === true && !lookedInto;
   const heading = useRef<HTMLHeadingElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -771,7 +798,8 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
     setDraftState((d) => ({
       ...d, step,
       // Until a name is typed, it follows what is monitored: the cluster's name, or nothing.
-      name: step === 4 && !nameTouched.current ? (d.kind === "kubernetes" ? clusterName : "") : d.name,
+      // A name another project has is never suggested again.
+      name: step === 4 && !nameTouched.current ? uniqueName(d.kind === "kubernetes" ? clusterName : "", projects.data?.map((p) => p.name) ?? []) : d.name,
     }));
   };
 
@@ -943,7 +971,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
                 <span className={s.stepNo} aria-hidden="true">{state === "done" ? "✓" : st.n}</span>
                 <span className={s.stepText}>
                   {st.title}
-                  {note && <small>{note}</small>}
+                  {note && <small title={note}>{note}</small>}
                 </span>
               </li>
             );

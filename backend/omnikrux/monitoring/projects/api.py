@@ -95,6 +95,8 @@ class LinkOut(BaseModel):
     filter: str
     filter_origin: FilterOrigin
     created_by_project: bool
+    # The cluster a source reached inside a cluster runs in; None for any other source.
+    source_cluster_id: str | None = None
 
 
 class ProjectOut(BaseModel):
@@ -344,6 +346,9 @@ def _link_out(project_id: str, link: Link, source: SourceConfig) -> LinkOut:
         filter=render_matchers(link.matchers),
         filter_origin=link.origin,
         created_by_project=source.created_by_project_id == project_id,
+        source_cluster_id=source.cluster.cluster_id
+        if source.reach == "cluster" and source.cluster is not None
+        else None,
     )
 
 

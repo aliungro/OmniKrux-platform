@@ -7,22 +7,23 @@ rules a source must follow (`rules.py`) answer 422 with plain words from the han
 only checks the shape: `omnikrux/validation.py` replaces its messages)."""
 
 import logging
+import time
 from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from omnikrux.clusters.registry import ClusterRegistry
 from omnikrux.monitoring.audit import begin_change, finish_change
 from omnikrux.monitoring.projects.types import REVIEW_CHANGED, ReviewChanged, UnknownProject
-from omnikrux.monitoring.query.filters import render_matchers
+from omnikrux.monitoring.query.filters import FilterError, parse_matchers, render_matchers
 from omnikrux.monitoring.query.suggest import suggest_filter
 from omnikrux.monitoring.services import MonitoringServices
 from omnikrux.monitoring.sources.capability import CapabilityUnknown
-from omnikrux.monitoring.sources.connector import QueryRejected
+from omnikrux.monitoring.sources.connector import LOKI_LABEL_WINDOW, QueryRejected
 from omnikrux.monitoring.sources.discovery import (
     CLUSTER_GONE,
     FoundState,
@@ -30,6 +31,7 @@ from omnikrux.monitoring.sources.discovery import (
     UnknownCluster,
 )
 from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE, HealthOut, run_test
+from omnikrux.monitoring.sources.loki import LokiConnector
 from omnikrux.monitoring.sources.rules import (
     AUTH_NEEDS,
     CLUSTER_ONLY,
@@ -55,6 +57,7 @@ from omnikrux.monitoring.sources.store import SourceChange
 from omnikrux.monitoring.sources.transport import SourceUnreachable
 from omnikrux.monitoring.sources.types import (
     AUTH_SECRET,
+    QUERYABLE_TYPES,
     AuthType,
     FilterOrigin,
     NameTaken,
@@ -214,6 +217,19 @@ class SuggestIn(BaseModel):
     kind: ProjectKind
     source_id: str | None = None
     source: SourceIn | None = None
+
+
+class FilterCheckIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filter: str = Field(max_length=2000)
+
+
+class FilterCheckOut(BaseModel):
+    """`matches` is None when the source couldn't say (`message` has the words)."""
+
+    matches: bool | None
+    message: str | None
 
 
 class SuggestOut(BaseModel):
@@ -566,6 +582,41 @@ async def source_fields(id: str, project: str, request: Request) -> FieldCatalog
         labels=list(catalog.labels),
         truncated=catalog.truncated,
     )
+
+
+@router.post("/{id}/filter-check")
+async def check_filter(id: str, body: FilterCheckIn, request: Request) -> FilterCheckOut:
+    """Whether anything in the source matches the filter: one small question to the source
+    (a metric name under the filter, or the label names of its streams in the last seven days).
+    Nothing is stored. An empty filter matches by definition."""
+    services = _services(request)
+    source = await _source(services, id)
+    try:
+        matchers = parse_matchers(body.filter)
+    except FilterError as exc:
+        raise refuse(str(exc)) from None
+    if not matchers:
+        return FilterCheckOut(matches=True, message=None)
+    if source.secrets_unreadable:
+        return FilterCheckOut(matches=None, message=SECRETS_UNREADABLE)
+    if source.type not in QUERYABLE_TYPES:
+        return FilterCheckOut(matches=None, message=None)
+    connector = services.connectors.get(source.type)
+    transport = services.transports.for_source(source)
+    try:
+        if source.type == "loki":
+            now = time.time()
+            names = await cast("LokiConnector", connector).label_names(
+                transport, matchers=matchers, start=now - LOKI_LABEL_WINDOW, end=now
+            )
+            found = bool(names)
+        else:
+            found = bool(
+                await connector.label_values(transport, "__name__", matchers=matchers, limit=1)
+            )
+    except (SourceUnreachable, QueryRejected) as exc:
+        return FilterCheckOut(matches=None, message=exc.message)
+    return FilterCheckOut(matches=found, message=None)
 
 
 @router.get("/{id}/alerting")

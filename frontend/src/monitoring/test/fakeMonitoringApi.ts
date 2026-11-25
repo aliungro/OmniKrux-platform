@@ -5,7 +5,7 @@
 import { vi } from "vitest";
 import type {
   AuthOut, DashboardRefOut, DiscoveryOut, FieldCatalogOut, GroupOut, HealthOut, LinkOut, ProjectKind, ProjectOut,
-  QueryErrorCode, QueryRequest, QueryResponse, SetupIn, SourceIn, SourceOut, SuggestOut, TreeColor, TreeDashboard, TreeOut,
+  FilterCheckOut, QueryErrorCode, QueryRequest, QueryResponse, SetupIn, SourceIn, SourceOut, SuggestOut, TreeColor, TreeDashboard, TreeOut,
 } from "../api/types";
 import type { CatalogOut } from "../catalog/api";
 import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut, WhyEmptyOut } from "../dashboards/api";
@@ -65,6 +65,8 @@ export interface FakeMonitoringState extends FakeAlertsState {
   health: Record<string, HealthOut>;
   /** By cluster id. */
   discovery: Record<string, DiscoveryOut>;
+  /** `POST /sources/{id}/filter-check` answers by source id, then by filter text (first wins); whatever is left out matches. */
+  filterChecks: Record<string, FilterCheckOut>;
   /** Field catalogs by source id. */
   fields: Record<string, FieldCatalogOut>;
   /** Answers to `/query`, by query text; whatever is left out is filled in. */
@@ -167,7 +169,7 @@ function color(kind: ProjectKind, provider: string | null): TreeColor {
 
 export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback?: Fallback): FakeMonitoringApi {
   const state: FakeMonitoringState = {
-    sources: [], projects: [], groups: [], health: {}, discovery: {}, fields: {}, queries: {},
+    sources: [], projects: [], groups: [], health: {}, discovery: {}, filterChecks: {}, fields: {}, queries: {},
     suggestion: { filter: "", origin: "none", reason: null },
     queryAnswers: {}, dashboards: {}, readyMade: {}, labelValues: {}, catalogs: {},
     whyEmpty: { reason: "unknown", message: null },
@@ -536,6 +538,10 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
         if (!project(query.get("project") ?? "")) return refuse(NOT_LINKED, 404);
         return json(state.fields[b] ?? { metrics: [], labels: [], truncated: false });
       }
+      if (is("POST", "sources", b, "filter-check")) {
+        const text = String((body as Obj).filter ?? "").trim();
+        return json(state.filterChecks[`${b}|${text}`] ?? state.filterChecks[b] ?? { matches: true, message: null });
+      }
       if (is("GET", "sources", b, "alerting")) return json({ omnikrux_engine: true, tool_engine: null, reason: null });
       if (is("GET", "sources", b, "delete-review")) return json({ source_id: b, name: source.name, projects: usedBy(b), token: TOKEN });
       if (is("DELETE", "sources", b)) {
@@ -585,6 +591,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
           source_id: source.id, source_name: source.name, source_type: source.type,
           filter: String((body as Obj).filter ?? ""), filter_origin: ((body as Obj).origin as LinkOut["filter_origin"]) ?? "user",
           created_by_project: source.created_by_project_id === p.id,
+          source_cluster_id: source.reach === "cluster" ? source.cluster_id : null,
         };
         p.links = [...p.links.filter((l) => l.source_id !== source.id), link];
         refreshUsedBy();
@@ -659,6 +666,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
         links.push({
           source_id: source.id, source_name: source.name, source_type: source.type, filter: entry.filter ?? "",
           filter_origin: entry.origin ?? "user", created_by_project: source.created_by_project_id === id,
+          source_cluster_id: source.reach === "cluster" ? source.cluster_id : null,
         });
       }
       const cluster = input.cluster_id ? { id: input.cluster_id, name: input.cluster_id } : null;

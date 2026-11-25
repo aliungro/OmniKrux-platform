@@ -53,6 +53,7 @@ async def test_link_filter_is_validated_and_editable(monitoring_app):
         "filter": 'cluster="prod"',
         "filter_origin": "user",
         "created_by_project": False,
+        "source_cluster_id": None,
     }
     edited = await http.put(link_url, json={"filter": 'cluster="dev"', "origin": "auto"})
     assert edited.json()["filter"] == 'cluster="dev"' and edited.json()["filter_origin"] == "auto"
@@ -434,3 +435,35 @@ async def test_no_audit_no_project_delete(monitoring_app, monkeypatch):
     assert (await http.get(f"{API}/dashboards/{made['id']}")).json()["version"] == 1
     assert len((await http.get(f"{API}/dashboards/{made['id']}/versions")).json()) == 1
     assert not [r for r in await monitoring_records(http) if r["action"].endswith("_remove")]
+
+
+async def test_link_names_the_cluster_a_source_runs_in(monitoring_app, kube_cluster):
+    http, _ = monitoring_app
+    shop = await set_up(http, "Shop")
+    inside = await http.post(
+        f"{API}/sources",
+        json={
+            "type": "prometheus",
+            "reach": "cluster",
+            "cluster_id": kube_cluster,
+            "namespace": "monitoring",
+            "service": "prometheus-server",
+            "port": "80",
+            "name": "Inside",
+        },
+    )
+    assert inside.status_code == 201, inside.text
+    outside = await add_source(http, "Outside")
+    for source in (inside.json(), outside):
+        link = await http.put(
+            f"{API}/projects/{shop['id']}/sources/{source['id']}", json={"filter": 'a="b"'}
+        )
+        assert link.status_code == 200, link.text
+        assert link.json()["source_cluster_id"] == (
+            kube_cluster if source["name"] == "Inside" else None
+        )
+    links = (await http.get(f"{API}/projects/{shop['id']}")).json()["links"]
+    assert {link["source_name"]: link["source_cluster_id"] for link in links} == {
+        "Inside": kube_cluster,
+        "Outside": None,
+    }

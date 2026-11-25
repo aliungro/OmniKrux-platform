@@ -3,6 +3,7 @@ delete reviews and the per-project field catalog."""
 
 import logging
 import socket
+import time
 
 from cryptography.fernet import Fernet
 
@@ -435,3 +436,79 @@ async def test_undecryptable_source_needs_every_secret_again(monitoring_app, fak
     # Nothing was changed: the source still asks for its credentials.
     listed = (await http.get(BASE)).json()[0]
     assert listed["health"]["message"] == SECRETS_UNREADABLE
+
+
+async def make_source(http, url: str, type: str = "prometheus") -> str:
+    response = await http.post(BASE, json={"type": type, "reach": "url", "url": url})
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def test_filter_check_says_when_nothing_matches(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    fake_prometheus.label_values_from_series = True
+    fake_prometheus.series = [{"__name__": "up", "namespace": "shop"}]
+    source_id = await make_source(http, fake_prometheus.url)
+    url = f"{BASE}/{source_id}/filter-check"
+
+    none = await http.post(url, json={"filter": 'namespace="nope-ns"'})
+    assert none.status_code == 200, none.text
+    assert none.json() == {"matches": False, "message": None}
+    asked = [r for r in fake_prometheus.requests if r.path == "/api/v1/label/__name__/values"]
+    assert asked[-1].params["match[]"] == ['{namespace="nope-ns"}']
+
+    some = await http.post(url, json={"filter": 'namespace="shop"'})
+    assert some.json() == {"matches": True, "message": None}
+
+    fake_prometheus.requests.clear()
+    empty = await http.post(url, json={"filter": "  "})
+    assert empty.json() == {"matches": True, "message": None}
+    assert fake_prometheus.requests == []
+
+
+async def test_filter_check_on_loki_reads_seven_days(monitoring_app, fake_loki):
+    http, _ = monitoring_app
+    fake_loki.series = [{"namespace": "shop", "job": "shop/api"}]
+    source_id = await make_source(http, fake_loki.url, "loki")
+    before = time.time()
+
+    found = await http.post(f"{BASE}/{source_id}/filter-check", json={"filter": 'job="x"'})
+
+    assert found.json() == {"matches": True, "message": None}
+    series = next(r for r in fake_loki.requests if r.path == "/loki/api/v1/series")
+    assert series.params["match[]"] == ['{job="x"}']
+    start, end = int(series.params["start"][0]) / 1e9, int(series.params["end"][0]) / 1e9
+    assert abs((end - start) - 7 * 86400) < 1
+    assert before - 5 < end < time.time() + 5
+
+    fake_loki.series = []
+    nothing = await http.post(f"{BASE}/{source_id}/filter-check", json={"filter": 'job="x"'})
+    assert nothing.json() == {"matches": False, "message": None}
+
+
+async def test_filter_check_reports_an_unreachable_source(monitoring_app):
+    http, _ = monitoring_app
+    source_id = await make_source(http, closed_port_url())
+
+    answer = await http.post(f"{BASE}/{source_id}/filter-check", json={"filter": 'job="x"'})
+
+    assert answer.status_code == 200
+    body = answer.json()
+    assert body["matches"] is None and "Can't reach" in body["message"]
+
+
+async def test_filter_check_refuses_a_bad_filter(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    source_id = await make_source(http, fake_prometheus.url)
+    url = f"{BASE}/{source_id}/filter-check"
+
+    refused = await http.post(url, json={"filter": "cluster=prod"})
+    assert refused.status_code == 422
+    assert refused.json()["detail"].startswith("Use label matchers")
+    too_long = await http.post(url, json={"filter": 'a="' + "x" * 2000 + '"'})
+    assert too_long.status_code == 422
+    gone = await http.post(f"{BASE}/nope/filter-check", json={"filter": 'a="b"'})
+    assert gone.status_code == 404
+    cross = await http.post(url, json={"filter": 'a="b"'}, headers={"Origin": "http://evil.test"})
+    assert cross.status_code in (403, 400)
+    assert [r for r in fake_prometheus.requests if "label" in r.path] == []

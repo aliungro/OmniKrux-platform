@@ -46,6 +46,7 @@
 }
 
 .error,
+.nothing,
 .reason {
   grid-column: 2;
   font-size: 12px;
@@ -58,4 +59,8 @@
 
 .reason {
   color: var(--ink-3);
+}
+
+.nothing {
+  color: var(--warn);
 }

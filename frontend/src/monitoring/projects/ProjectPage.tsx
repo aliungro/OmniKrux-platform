@@ -45,26 +45,36 @@ const addsLine = (project: ProjectOut, type: string | undefined): string | null 
   return titles.length > 0 ? `adds ${readyViewsPhrase(titles)}.` : null;
 };
 
+export const nothingVisibleWords = (source: string) => `Nothing in ${source} is visible to this project. Check the filter.`;
+const UNDO_AFTER_MS = 10_000;
+const SAVED_FOR_MS = 5_000;
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** The origin a saved filter carries: nothing typed is "none"; otherwise what the user or OmniKrux made of it. */
 const originOf = (filter: string, origin: FilterOrigin): FilterOrigin => (filter.trim() === "" ? "none" : origin);
 
 /** One source link: its health, its label filter (editable here), Check data and Unlink. */
-function LinkRow({ project, link, health, onUnlinked }: {
-  project: ProjectOut; link: LinkOut; health: HealthOut; onUnlinked(): void;
+function LinkRow({ project, link, health, onUnlinked, onAct }: {
+  project: ProjectOut; link: LinkOut; health: HealthOut; onUnlinked(link: LinkOut): void; onAct(): void;
 }) {
   const client = useQueryClient();
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [check, setCheck] = useState<"busy" | { ok: boolean; text: string } | null>(null);
+  const [check, setCheck] = useState<"busy" | { ok: boolean; text: string; warn?: boolean } | null>(null);
   const [unlinking, setUnlinking] = useState(false);
   // Which filter a Check data answer belongs to: editing or saving the filter starts a new one, and
   // an answer for an older one is dropped.
   const checkRound = useRef(0);
   const forgetCheck = () => { checkRound.current += 1; setCheck(null); };
+  // "Filter saved." goes after a while.
+  useEffect(() => {
+    if (!saved) return;
+    const timer = window.setTimeout(() => setSaved(false), SAVED_FOR_MS);
+    return () => window.clearTimeout(timer);
+  }, [saved]);
 
   const value = draft ?? link.filter;
   const dirty = draft !== null && draft !== link.filter;
@@ -74,6 +84,7 @@ function LinkRow({ project, link, health, onUnlinked }: {
 
   const save = async () => {
     if (!dirty || invalid || saving) return;
+    onAct();
     setSaving(true);
     setProblem(null);
     try {
@@ -91,16 +102,19 @@ function LinkRow({ project, link, health, onUnlinked }: {
 
   const runCheck = async () => {
     if (check === "busy") return;
+    onAct();
     const round = checkRound.current;
     setCheck("busy");
-    const answer = (next: { ok: boolean; text: string }) => { if (round === checkRound.current) setCheck(next); };
+    const answer = (next: { ok: boolean; text: string; warn?: boolean }) => { if (round === checkRound.current) setCheck(next); };
     try {
       const out = await sourceFields(link.source_id, project.id);
       const labels = plural(out.labels.length, "label", "labels");
       const text = link.source_type === "loki"
         ? `${labels} visible to this project`
         : `${plural(out.metrics.length, "metric", "metrics")} and ${labels} visible to this project`;
-      answer({ ok: true, text });
+      // Nothing visible is a warning, not a green answer: the project's filter may select nothing.
+      const nothing = link.source_type === "loki" ? out.labels.length === 0 : out.metrics.length === 0 && out.labels.length === 0;
+      answer(nothing ? { ok: true, warn: true, text: nothingVisibleWords(link.source_name) } : { ok: true, text });
     } catch (err) {
       answer({ ok: false, text: failure(err, "check again") });
     }
@@ -108,12 +122,13 @@ function LinkRow({ project, link, health, onUnlinked }: {
 
   const unlink = async () => {
     if (unlinking) return;
+    onAct();
     setUnlinking(true);
     setProblem(null);
     try {
       await unlinkSource(project.id, link.source_id);
       await invalidateMonitoring(client);
-      onUnlinked();
+      onUnlinked(link);
     } catch (err) {
       setProblem(failure(err, "try again"));
       setUnlinking(false);
@@ -132,6 +147,7 @@ function LinkRow({ project, link, health, onUnlinked }: {
         </div>
         <div className={s.filterLine}>
           <FilterField value={value} origin={draft === null ? link.filter_origin : "user"} reason={null} forName={link.source_name}
+            check={isQueryable(link.source_type) ? { sourceId: link.source_id, sourceName: link.source_name } : undefined}
             onChange={(v) => { setDraft(v); setSaved(false); forgetCheck(); }} />
           <button type="button" className={s.secondary} aria-label={`Save filter for ${link.source_name}`}
             aria-disabled={!dirty || invalid || saving || undefined} onClick={() => void save()}>
@@ -150,15 +166,29 @@ function LinkRow({ project, link, health, onUnlinked }: {
             aria-disabled={unlinking || undefined} onClick={() => void unlink()}>Unlink</button>
         </div>
         {saved && !dirty && <p className={s.ok} role="status">Filter saved.</p>}
-        {check && check !== "busy" && <p className={check.ok ? s.ok : s.bad} role={check.ok ? "status" : "alert"}>{check.text}</p>}
+        {check && check !== "busy" && <p className={check.warn ? s.warn : check.ok ? s.ok : s.bad} role={check.ok ? "status" : "alert"}>{check.text}</p>}
         {problem && <p className={s.bad} role="alert">{problem}</p>}
       </div>
     </li>
   );
 }
 
+function hostOf(url: string | null): string {
+  try { return new URL(url ?? "").hostname; } catch { return ""; }
+}
+/** Whether a source's name already says where it is reached. */
+function holdsWhere(x: SourceOut): boolean {
+  const name = x.name.toLowerCase();
+  const where = whereLabel(x).toLowerCase();
+  if (where === "" || name.includes(where)) return true;
+  const part = (x.reach === "cluster" ? x.service ?? "" : hostOf(x.url)).toLowerCase();
+  return part !== "" && name.includes(part);
+}
+/** An option of the source picker: the name, and where the source is only when the name doesn't say. */
+const optionWords = (x: SourceOut) => (holdsWhere(x) ? x.name : `${x.name} · ${whereLabel(x)}`);
+
 /** Pick a saved source that is not linked yet and give it a filter (suggested where OmniKrux can tell). */
-function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; onClose(): void; onLinked(): void }) {
+function ExistingPanel({ project, onClose, onLinked, onAct }: { project: ProjectOut; onClose(): void; onLinked(): void; onAct(): void }) {
   const client = useQueryClient();
   const sources = useSources();
   const select = useRef<HTMLSelectElement>(null);
@@ -175,7 +205,12 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   const linked = new Set(project.links.map((l) => l.source_id));
   const choices = (sources.data ?? []).filter((x) => !linked.has(x.id));
   const invalid = validFilter(filter) !== null;
-  const adds = sourceId ? addsLine(project, choices.find((x) => x.id === sourceId)?.type) : null;
+  const chosen = choices.find((x) => x.id === sourceId);
+  const adds = sourceId ? addsLine(project, chosen?.type) : null;
+  // A Kubernetes project lists sources inside another cluster apart.
+  const other = (x: SourceOut) => project.kind === "kubernetes" && project.cluster_id !== null && x.reach === "cluster" && x.cluster_id !== project.cluster_id;
+  const here = choices.filter((x) => !other(x));
+  const elsewhere = choices.filter(other);
 
   // The keyboard goes to the choice, or to Cancel when there is nothing to choose: the button that opened this is gone.
   useEffect(() => { (select.current ?? cancel.current)?.focus(); }, [choices.length > 0]);
@@ -202,6 +237,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
 
   const link = async () => {
     if (busy || !sourceId || invalid) return;
+    onAct();
     setBusy(true);
     setError(null);
     try {
@@ -224,11 +260,17 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
             <label htmlFor="project-existing-source" className={s.fieldLabel}>Source</label>
             <select id="project-existing-source" ref={select} className={s.select} value={sourceId} onChange={(e) => choose(e.target.value)}>
               <option value="">Choose a source…</option>
-              {choices.map((x) => <option key={x.id} value={x.id}>{x.name} · {sourceTypeLabel(x.type)} · {whereLabel(x)}</option>)}
+              {here.map((x) => <option key={x.id} value={x.id}>{optionWords(x)}</option>)}
+              {elsewhere.length > 0 && (
+                <optgroup label="Other clusters">
+                  {elsewhere.map((x) => <option key={x.id} value={x.id}>{optionWords(x)}</option>)}
+                </optgroup>
+              )}
             </select>
           </div>
           {sourceId && (
             <FilterField value={filter} origin={origin} reason={reason} forName="the new link"
+              check={chosen && isQueryable(chosen.type) ? { sourceId: chosen.id, sourceName: chosen.name } : undefined}
               onChange={(v, o) => { touched.current = true; setFilter(v); setOrigin(o); }} />
           )}
           {adds && <p className={s.muted}>{`Linking it ${adds}`}</p>}
@@ -262,6 +304,19 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
   const [adding, setAdding] = useState<"existing" | "hand" | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [linkedNote, setLinkedNote] = useState<{ projectId: string; sourceId: string; text: string } | null>(null);
+  // The link just removed, kept for a while so Undo can put it back with the same filter and origin.
+  const [unlinked, setUnlinked] = useState<{ projectId: string; link: LinkOut } | null>(null);
+  const undoButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (unlinked === null) return;
+    const timer = window.setTimeout(() => {
+      // The keyboard never falls onto <body> with the button.
+      if (document.activeElement === undoButton.current) sourcesHeading.current?.focus();
+      setUnlinked(null);
+    }, UNDO_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [unlinked]);
+  const settle = () => { setLinkedNote(null); setUnlinked(null); };
   const [review, setReview] = useState<ProjectDeleteReviewOut | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -383,6 +438,21 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
     closePanel();
   };
 
+  const undoUnlink = async () => {
+    if (!unlinked) return;
+    const { link } = unlinked;
+    setUnlinked(null);
+    sourcesHeading.current?.focus();
+    try {
+      await linkSource(project.id, link.source_id, link.filter, link.filter_origin);
+    } catch (err) {
+      setPageError(`Couldn't link ${link.source_name} again: ${failure(err, "link it again from Use an existing source")}`);
+    }
+    await invalidateMonitoring(client);
+  };
+  const unlinkedName = unlinked && unlinked.projectId === project.id && !project.links.some((l) => l.source_id === unlinked.link.source_id)
+    ? unlinked.link.source_name : null;
+
   const linkedText = linkedNote && linkedNote.projectId === project.id && project.links.some((l) => l.source_id === linkedNote.sourceId)
     ? linkedNote.text : "";
 
@@ -416,17 +486,24 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
           <ul className={s.list}>
             {project.links.map((l) => (
               <LinkRow key={l.source_id} project={project} link={l} health={health[l.source_id] ?? UNKNOWN}
-                onUnlinked={() => { setLinkedNote(null); sourcesHeading.current?.focus(); }} />
+                onAct={settle}
+                onUnlinked={(gone) => { setLinkedNote(null); setUnlinked({ projectId: project.id, link: gone }); sourcesHeading.current?.focus(); }} />
             ))}
           </ul>
         )}
+        {unlinkedName !== null && (
+          <p className={s.undo} role="status">
+            Unlinked {unlinkedName}.{" "}
+            <button ref={undoButton} type="button" className={s.quiet} onClick={() => void undoUnlink()}>Undo</button>
+          </p>
+        )}
         {adding === null ? (
           <div className={s.addRow}>
-            <button ref={addExisting} type="button" className={s.secondary} onClick={() => setAdding("existing")}>Use an existing source</button>
-            <button ref={addHand} type="button" className={s.secondary} onClick={() => setAdding("hand")}>Add a source by hand</button>
+            <button ref={addExisting} type="button" className={s.secondary} onClick={() => { settle(); setAdding("existing"); }}>Use an existing source</button>
+            <button ref={addHand} type="button" className={s.secondary} onClick={() => { settle(); setAdding("hand"); }}>Add a source by hand</button>
           </div>
         ) : adding === "existing" ? (
-          <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} />
+          <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} onAct={settle} />
         ) : (
           <div className={s.panel}>
             <SourceForm mode="save" closeOnEscape tabId={tabId} page="project" pageId={id} onSaved={(saved) => linkNew(saved)} onCancel={closePanel} />

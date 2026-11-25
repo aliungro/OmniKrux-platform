@@ -7,6 +7,7 @@ import { intercept } from "../../test/dashboardSeeds";
 import { emptyInstallState, installFakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../../test/renderMonitoringApp";
 import type { CapabilityOut, ContactPointOut, RuleIn, RuleOut, TargetOut } from "../api";
+import { mayMixClusters, mixedClusterWarnings } from "./clusterWarning";
 import { endRuleForm, ruleFormSessions } from "./formSessions";
 
 afterEach(() => {
@@ -359,6 +360,18 @@ describe("a source that may hold other clusters", () => {
     expect(screen.getAllByText(/may include other clusters/).map((p) => p.textContent)).toEqual([words]);
     await user.selectOptions(screen.getByLabelText("For"), "dev");
     expect(screen.queryByText(/may include other clusters/)).toBeNull();
+  });
+
+  it("an in-cluster source of the project's own cluster is never called mixed", () => {
+    const own = { ...east, links: [link("s9", "Prometheus", { source_cluster_id: "c1" })] };
+    const other = { ...east, links: [link("s9", "Prometheus", { source_cluster_id: "c2" })] };
+    const none = { ...east, links: [link("s9", "Prometheus", { source_cluster_id: null })] };
+    const scope = { kind: "project" as const, id: "p3" };
+    expect(mixedClusterWarnings(scope, "prometheus", null, [own])).toEqual([]);
+    expect(mixedClusterWarnings(scope, "prometheus", null, [other])).toHaveLength(1);
+    expect(mixedClusterWarnings(scope, "prometheus", null, [none])).toHaveLength(1);
+    expect(mayMixClusters(own, own.links[0])).toBe(false);
+    expect(mayMixClusters(east, { ...own.links[0], filter_origin: "auto" })).toBe(false);
   });
 
   it("a rule on a project whose link is filtered says nothing", async () => {
