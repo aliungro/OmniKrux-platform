@@ -66,9 +66,10 @@ function UpdatedLine({ status }: { status: PanelStatusStore }) {
 function ReadyNote({ dashboard }: { dashboard: DashboardOut }) {
   const ready = useReadyMade(dashboard.owner_id);
   const notes = ready.data?.find((r) => r.id === dashboard.id)?.notes ?? [];
+  const tool = dashboard.id.endsWith(":logs") ? "Loki" : "Prometheus";
   return (
     <div className={s.readyNote}>
-      <p className={s.readyLine}>Ready-made views are generated from what {dashboard.owner_name}'s Prometheus has. Copy one to change it.</p>
+      <p className={s.readyLine}>Ready-made views are generated from what {dashboard.owner_name}'s {tool} has. Copy one to change it.</p>
       {notes.map((n) => <p key={n} className={s.readyLine}>{n}</p>)}
     </div>
   );

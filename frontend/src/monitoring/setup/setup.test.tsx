@@ -195,6 +195,33 @@ describe("Setup page", () => {
     expect(document.activeElement?.textContent).toBe("+ Add a source by hand");
   });
 
+  it("setup says a Loki source comes with Logs overview", async () => {
+    install({ discovery: { c1: found(tool("prometheus", "reachable"), tool("loki", "reachable")) } });
+    startFromCluster();
+    const loki = await screen.findByRole("group", { name: "Loki" });
+    expect(within(loki).getByText("Comes with the ready-made view Logs overview.")).toBeTruthy();
+    const prom = screen.getByRole("group", { name: "Prometheus" });
+    expect(within(prom).getByText("Comes with the ready-made views Cluster health, Node health, Namespace health, Workload health, Pod health.")).toBeTruthy();
+    // A source that isn't used brings nothing.
+    fireEvent.click(within(loki).getByRole("checkbox", { name: "Use" }));
+    expect(within(loki).queryByText(/Comes with/)).toBeNull();
+  });
+
+  it("the review lists the ready-made views", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: found(tool("prometheus", "reachable"), tool("loki", "reachable")) } });
+    startFromCluster();
+    await screen.findByRole("group", { name: "Loki" });
+    await user.click(continueButton());
+    await screen.findByRole("heading", { name: "Name and review" });
+    const summary = screen.getByRole("list", { name: "Summary" });
+    expect(within(summary).getByText("Ready-made views: Cluster health, Node health, Namespace health, Workload health, Pod health, Logs overview")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Prometheus" })).getByRole("checkbox", { name: "Use" }));
+    await user.click(continueButton());
+    expect(within(screen.getByRole("list", { name: "Summary" })).getByText("Ready-made views: Logs overview")).toBeTruthy();
+  });
+
   it("create sends one setup request and opens the project", async () => {
     const user = userEvent.setup();
     const api = install({ suggestion: KEEPS });

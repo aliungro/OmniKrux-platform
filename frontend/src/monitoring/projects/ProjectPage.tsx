@@ -4,9 +4,10 @@ import { useClusters } from "../../api/useClusters";
 import { failure, HttpError } from "../../api/http";
 import { deleteProject, linkSource, projectDeleteReview, renameProject, sourceFields, suggestFilter, unlinkSource } from "../api/client";
 import { invalidateMonitoring, useGroups, useProject, useSourceHealth, useSources } from "../api/hooks";
-import type { FilterOrigin, HealthOut, LinkOut, ProjectDeleteReviewOut, ProjectOut } from "../api/types";
+import type { FilterOrigin, HealthOut, LinkOut, ProjectDeleteReviewOut, ProjectOut, SourceOut } from "../api/types";
 import { takeHeadingFocus } from "../dashboards/create/arrival";
 import { OwnerDashboards } from "../dashboards/OwnerDashboards";
+import { readyAddedBy, readyViewsPhrase } from "../dashboards/readyViews";
 import { EditableName } from "../EditableName";
 import { escapeCloses } from "../focus";
 import { mayMixClusters, mixedLinkWords } from "../alerts/rules/clusterWarning";
@@ -25,7 +26,7 @@ import s from "./ProjectPage.module.css";
 const UNKNOWN: HealthOut = { state: "unknown", message: null, version: null, checked_at: null };
 const STALE_REVIEW = "Something changed since the review. Review it again.";
 
-/** The project's dashboards, then its ready-made views (generated from its Prometheus). */
+/** The project's dashboards, then its ready-made views (generated from its Prometheus and Loki). */
 export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab }: {
   project: ProjectOut;
   tabId: string;
@@ -34,9 +35,15 @@ export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab }: {
 }) {
   return (
     <OwnerDashboards owner={{ kind: "project", id: project.id, name: project.name }} tabId={tabId} nav={nav} openInNewTab={openInNewTab}
-      prometheus={project.links.some((l) => l.source_type === "prometheus")} />
+      readyMade={project.links.some((l) => l.source_type === "prometheus" || l.source_type === "loki")} />
   );
 }
+
+/** What linking a source of this type brings: "It adds the ready-made view Logs overview." or nothing. */
+const addsLine = (project: ProjectOut, type: string | undefined): string | null => {
+  const titles = type === "prometheus" || type === "loki" ? readyAddedBy(project, type) : [];
+  return titles.length > 0 ? `adds ${readyViewsPhrase(titles)}.` : null;
+};
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -168,6 +175,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   const linked = new Set(project.links.map((l) => l.source_id));
   const choices = (sources.data ?? []).filter((x) => !linked.has(x.id));
   const invalid = validFilter(filter) !== null;
+  const adds = sourceId ? addsLine(project, choices.find((x) => x.id === sourceId)?.type) : null;
 
   // The keyboard goes to the choice, or to Cancel when there is nothing to choose: the button that opened this is gone.
   useEffect(() => { (select.current ?? cancel.current)?.focus(); }, [choices.length > 0]);
@@ -223,6 +231,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
             <FilterField value={filter} origin={origin} reason={reason} forName="the new link"
               onChange={(v, o) => { touched.current = true; setFilter(v); setOrigin(o); }} />
           )}
+          {adds && <p className={s.muted}>{`Linking it ${adds}`}</p>}
         </>
       )}
       {error && <p className={s.bad} role="alert">{error}</p>}
@@ -252,6 +261,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
   const backTo = useRef<"existing" | "hand" | null>(null);
   const [adding, setAdding] = useState<"existing" | "hand" | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [linkedNote, setLinkedNote] = useState<string | null>(null);
   const [review, setReview] = useState<ProjectDeleteReviewOut | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -346,8 +356,11 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
   };
 
   /** A source made by hand here is saved already; give it a link, with a suggested filter where one can be made. */
-  const linkNew = async (sourceId: string) => {
+  const linkNew = async (saved: SourceOut) => {
+    const sourceId = saved.id;
+    const adds = addsLine(project, saved.type);
     setPageError(null);
+    setLinkedNote(null);
     let filter = "";
     let origin: FilterOrigin = "none";
     try {
@@ -360,6 +373,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
     try {
       await linkSource(project.id, sourceId, filter, originOf(filter, origin));
       await invalidateMonitoring(client);
+      setLinkedNote(`Linked ${saved.name}.${adds ? ` It ${adds}` : ""}`);
     } catch (err) {
       setPageError(`The source was saved but could not be linked to this project: ${failure(err)} Use an existing source to link it.`);
       void invalidateMonitoring(client);
@@ -379,6 +393,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
       </header>
 
       {pageError && <p className={s.bad} role="alert">{pageError}</p>}
+      {linkedNote && <p className={s.muted} role="status">{linkedNote}</p>}
       {importFailed.id === project.id && importFailed.message !== null && (
         <div className={s.importFailed} role="alert">
           <p>{importFailedWords(importFailed.message)}</p>
@@ -408,7 +423,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
           <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} />
         ) : (
           <div className={s.panel}>
-            <SourceForm mode="save" closeOnEscape onSaved={(saved) => linkNew(saved.id)} onCancel={closePanel} />
+            <SourceForm mode="save" closeOnEscape onSaved={(saved) => linkNew(saved)} onCancel={closePanel} />
           </div>
         )}
       </section>

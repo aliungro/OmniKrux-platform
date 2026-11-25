@@ -6,6 +6,7 @@
 // is written (the pick comes back unticked, the Grafana asks for its sign-in again), and the forms
 // being typed are never kept. Nothing here goes in a query or mutation cache.
 import type { DiscoveryOut, FilterOrigin, FoundTool, ProjectKind, SetupIn, SetupSourceIn, SourceIn, SourceOut, SourceType } from "../api/types";
+import { readyViewTitles } from "../dashboards/readyViews";
 import type { Component, ToolType } from "../install/api";
 import { validFilter } from "../projects/FilterField";
 import type { GrafanaIn, ImportCommitIn, ImportPreviewOut, PreviewDashboardOut } from "../transfer/api";
@@ -216,4 +217,22 @@ export function importCommitBody(draft: Pick<SetupDraft, "importFrom">, projectI
     mapping: imp.preview.sources.map((r) => ({ key: r.key, source_id: null })),
     dashboards,
   };
+}
+
+/** The type of a pick's source: found ones carry it in their key, new ones in the source, existing ones by id. */
+export function pickType(p: SetupPick, types: ReadonlyMap<string, SourceType>): SourceType | undefined {
+  const found = /^found:(prometheus|loki|alertmanager):/.exec(p.key);
+  if (found) return found[1] as SourceType;
+  return "new" in p.source ? p.source.new.type : types.get(p.source.existingId);
+}
+
+/** Which ready-made views the sources in use (and tools to install) bring, by title. */
+export function readyFor(
+  draft: Pick<SetupDraft, "kind" | "picks" | "install">, types: ReadonlyMap<string, SourceType>, installs: Component[],
+): string[] {
+  const used = inUse(draft).map((p) => pickType(p, types));
+  return readyViewTitles(draft.kind ?? "custom", {
+    prometheus: used.includes("prometheus") || installs.includes("metrics"),
+    loki: used.includes("loki") || installs.includes("logs"),
+  });
 }

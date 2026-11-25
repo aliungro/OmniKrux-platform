@@ -178,7 +178,7 @@ describe("Project page", () => {
     expect(await screen.findByText("Cluster no longer connected")).toBeTruthy();
     const page = within(document.querySelector("[data-monitoring-page]") as HTMLElement);
     expect(page.getByText("No dashboards yet. Start one with New dashboard, or copy a ready-made view.")).toBeTruthy();
-    expect(page.getByText("Link a Prometheus-compatible source to get ready-made views.")).toBeTruthy();
+    expect(page.getByText("Link a Prometheus-compatible or Loki source to get ready-made views.")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Prod" }));
     expect(await screen.findByRole("heading", { name: "Prod" })).toBeTruthy();
   });
@@ -222,6 +222,57 @@ describe("Project page", () => {
     expect(await screen.findByText('Copied "Node health". Changes go to your copy.')).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
     expect(api.requests.find((r) => r.url === "/api/monitoring/dashboards/copy")?.body).toEqual({ from_id: "ready:p1:nodes", owner_kind: "project", owner_id: "p1" });
+  });
+
+  it("a Loki-only project lists the Logs overview with Copy to edit", async () => {
+    const loki = source("s2", "Logs", { type: "loki" });
+    const DEV = { kind: "project" as const, id: "p1", name: "Dev" };
+    installFakeMonitoringApi({
+      sources: [loki],
+      projects: [project("p1", "Dev", [link(loki)])],
+      dashboards: { "ready:p1:logs": seedDashboard("ready:p1:logs", DEV, spec("Logs overview", []), true) },
+      readyMade: { p1: [{
+        key: "logs", id: "ready:p1:logs", title: "Logs overview", description: "Log volume and the noisiest streams.",
+        missing: [], notes: [], checked: true, check_message: null,
+      }] },
+    }, fallback);
+    open("p1");
+    const ready = await screen.findByRole("list", { name: "Ready-made views" });
+    expect(within(ready).getByText("Logs overview")).toBeTruthy();
+    expect(within(ready).getByRole("button", { name: "Copy to edit Logs overview" })).toBeTruthy();
+    expect(screen.queryByText(/Link a Prometheus-compatible or Loki source/)).toBeNull();
+  });
+
+  it("linking a Loki source says it adds Logs overview", async () => {
+    const user = userEvent.setup();
+    const loki = source("s2", "Logs", { type: "loki" });
+    installFakeMonitoringApi({ sources: [loki], projects: [project("p1", "Dev")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
+    expect(screen.queryByText(/^Linking it/)).toBeNull();
+    await user.selectOptions(screen.getByLabelText("Source"), "s2");
+    expect(screen.getByText("Linking it adds the ready-made view Logs overview.")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Link source" }));
+    expect(await screen.findByRole("button", { name: "Unlink Logs" })).toBeTruthy();
+  });
+
+  it("a source added by hand says which ready-made view it adds, none when it has them already", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: [project("p1", "Dev")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    const status = await screen.findByText(/^Linked .+\. It adds the ready-made view Logs overview\.$/);
+    expect(status.getAttribute("role")).toBe("status");
+    // A second Loki adds nothing: the status has no second sentence.
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki2.example:3100");
+    await user.type(screen.getByLabelText("Name"), "Second logs");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(screen.getAllByRole("status").some((n) => /^Linked .+\.$/.test(n.textContent ?? "") && !(n.textContent ?? "").includes("It adds"))).toBe(true));
   });
 
   it("New dashboard on the project page goes to the project", async () => {

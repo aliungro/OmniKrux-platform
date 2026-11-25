@@ -6,6 +6,7 @@ import { useClusters } from "../../api/useClusters";
 import { setupProject, suggestFilter } from "../api/client";
 import { invalidateMonitoring, useDiscovery, useSources } from "../api/hooks";
 import type { FoundTool, ProjectKind, ProjectOut, SourceIn, SourceOut, SuggestIn } from "../api/types";
+import { readyViewTitles, readyViewsPhrase } from "../dashboards/readyViews";
 import { useToolReviews } from "../alerts/reviews/useToolReviews";
 import { GenerateTools, type AnsweredTools } from "../install/GenerateTools";
 import { installKeys, installTools, type Component } from "../install/api";
@@ -22,7 +23,7 @@ import { CHECKING, ImportStep, PreviewLedger, skippedWords, type ImportCheck } f
 import { importFailedWords, noteImportFailed } from "./importNotice";
 import { readSetupDraft, removeSetupDraft, SECRET_NOT_KEPT, writeSetupDraft } from "./setupDraftStore";
 import {
-  blockedBy, foundDetail, foundKey, grafanaFromDiscovery, hasImportStep, importable, importCommitBody, importSkipped, installComponents, INSTALLS, inUse,
+  blockedBy, foundDetail, foundKey, grafanaFromDiscovery, hasImportStep, importable, importCommitBody, importSkipped, installComponents, INSTALLS, inUse, readyFor,
   isAnswered, NO_INSTALL, picksFromAnswered, picksFromDiscovery, setupBody, TOOL_NAMES,
   type SetupDraft, type SetupPick, type SetupStep,
 } from "./setupModel";
@@ -34,6 +35,7 @@ const GENERATES = "OmniKrux connects to tools that already run there, or writes 
 const KEEP_AFTER_MS = 300;
 /** How long the chosen Grafana dashboards settle before what converts is checked. */
 const PREVIEW_AFTER_MS = 500;
+const NO_READY = "No ready-made views: they come with a Prometheus-compatible or Loki source.";
 const NOTHING_TO_IMPORT = "Nothing to import";
 const CHECK_AGAIN = "Check what converts again on the Import step.";
 const NONE_CONVERTS = "None of the chosen dashboards can be copied any more. Import them from the project instead.";
@@ -131,6 +133,13 @@ function Badge({ type }: { type: FoundTool["type"] }) {
   return <span className={s.badge} data-type={type} aria-hidden="true">{TOOL_NAMES[type][0]}</span>;
 }
 
+/** Under a source in use: the ready-made views it brings to the project (none for other types). */
+function ComesWith({ kind, type }: { kind: ProjectKind | null; type: FoundTool["type"] | undefined }) {
+  if (type !== "prometheus" && type !== "loki") return null;
+  const titles = readyViewTitles(kind ?? "custom", { prometheus: type === "prometheus", loki: type === "loki" });
+  return <p className={s.later}>{`Comes with ${readyViewsPhrase(titles)}.`}</p>;
+}
+
 /** A pick's on/off switch and, while it is in use, its filter. */
 function PickControls({ pick, onChange }: { pick: SetupPick; onChange(patch: Partial<SetupPick>): void }) {
   return (
@@ -165,8 +174,8 @@ function InstallToggle({ name, component, offer, pressed, onToggle }: {
   );
 }
 
-function FoundRow({ tool, pick, existing, offer, installing, onChange, onInstall, onOpenTools }: {
-  tool: FoundTool; pick: SetupPick | undefined; existing: SourceOut | undefined; offer: Offer; installing: boolean;
+function FoundRow({ kind, tool, pick, existing, offer, installing, onChange, onInstall, onOpenTools }: {
+  kind: ProjectKind | null; tool: FoundTool; pick: SetupPick | undefined; existing: SourceOut | undefined; offer: Offer; installing: boolean;
   onChange(patch: Partial<SetupPick>): void; onInstall(): void; onOpenTools(e: MouseEvent<HTMLButtonElement>): void;
 }) {
   const name = TOOL_NAMES[tool.type];
@@ -197,12 +206,13 @@ function FoundRow({ tool, pick, existing, offer, installing, onChange, onInstall
       {component !== undefined && <InstallToggle name={name} component={component} offer={offer} pressed={pressed} onToggle={onInstall} />}
       {tool.type === "grafana" && tool.state === "reachable" && <p className={s.later}>You can copy its dashboards in the next step.</p>}
       {pick && <PickControls pick={pick} onChange={onChange} />}
+      {pick?.use && <ComesWith kind={kind} type={tool.type} />}
     </div>
   );
 }
 
-function HandRow({ pick, onChange, onRemove, onEnterAgain }: {
-  pick: SetupPick; onChange(patch: Partial<SetupPick>): void; onRemove(): void; onEnterAgain(): void;
+function HandRow({ kind, pick, onChange, onRemove, onEnterAgain }: {
+  kind: ProjectKind | null; pick: SetupPick; onChange(patch: Partial<SetupPick>): void; onRemove(): void; onEnterAgain(): void;
 }) {
   const type = "new" in pick.source ? pick.source.new.type : "prometheus";
   // Restored without its secret: it can't be used as it is; entering it again replaces it.
@@ -240,13 +250,14 @@ function HandRow({ pick, onChange, onRemove, onEnterAgain }: {
         <FilterField value={pick.filter} origin={pick.origin} reason={pick.reason} forName={pick.label}
           onChange={(filter, origin) => onChange({ filter, origin })} />
       </div>
+      <ComesWith kind={kind} type={type} />
     </div>
   );
 }
 
 /** A tool the generated files brought up: answering at its address, in use until removed. */
-function AnsweredRow({ pick, focusRow, onChange, onRemove }: {
-  pick: SetupPick; focusRow: RefObject<string | null>; onChange(patch: Partial<SetupPick>): void; onRemove(): void;
+function AnsweredRow({ kind, pick, focusRow, onChange, onRemove }: {
+  kind: ProjectKind | null; pick: SetupPick; focusRow: RefObject<string | null>; onChange(patch: Partial<SetupPick>): void; onRemove(): void;
 }) {
   const type = "new" in pick.source ? pick.source.new.type : "prometheus";
   return (
@@ -265,6 +276,7 @@ function AnsweredRow({ pick, focusRow, onChange, onRemove }: {
         <FilterField value={pick.filter} origin={pick.origin} reason={pick.reason} forName={pick.label}
           onChange={(filter, origin) => onChange({ filter, origin })} />
       </div>
+      <ComesWith kind={kind} type={type} />
     </div>
   );
 }
@@ -388,7 +400,7 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
                 const key = foundKey(t);
                 const component = t.state === "missing" ? COMPONENT_OF[t.type] : undefined;
                 return (
-                  <FoundRow key={key} tool={t} pick={byKey.get(key)} offer={offer}
+                  <FoundRow key={key} kind={draft.kind} tool={t} pick={byKey.get(key)} offer={offer}
                     installing={component !== undefined && want[component]}
                     existing={t.existing_source_id ? known.get(t.existing_source_id) : undefined} onChange={edit(key)}
                     onInstall={() => { if (component) toggleInstall(component); }} onOpenTools={onOpenTools} />
@@ -407,7 +419,7 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
               {draft.picks.some(isAnswered) && (
                 <div className={s.rows}>
                   {draft.picks.filter(isAnswered).map((p) => (
-                    <AnsweredRow key={p.key} pick={p} focusRow={focusRow} onChange={edit(p.key)} onRemove={() => remove(p.key)} />
+                    <AnsweredRow key={p.key} kind={draft.kind} pick={p} focusRow={focusRow} onChange={edit(p.key)} onRemove={() => remove(p.key)} />
                   ))}
                 </div>
               )}
@@ -438,6 +450,7 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
                             onChange={(filter, origin) => edit(pick.key)({ filter, origin })} />
                         </div>
                       )}
+                      {pick && <ComesWith kind={draft.kind} type={x.type} />}
                     </div>
                   );
                 })}
@@ -450,7 +463,7 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
       {hand.length > 0 && (
         <div className={s.rows}>
           {hand.map((p) => (
-            <HandRow key={p.key} pick={p} onChange={edit(p.key)} onRemove={() => remove(p.key)} onEnterAgain={() => enterAgain(p.key)} />
+            <HandRow key={p.key} kind={draft.kind} pick={p} onChange={edit(p.key)} onRemove={() => remove(p.key)} onEnterAgain={() => enterAgain(p.key)} />
           ))}
         </div>
       )}
@@ -461,9 +474,9 @@ function SourcesStep({ draft, setDraft, heading, clusterName, discovery, existin
   );
 }
 
-function ReviewStep({ draft, setDraft, heading, clusterName, nameInput, nameError, onNameEdit, onEnter, installs, importLine }: StepProps & {
+function ReviewStep({ draft, setDraft, heading, clusterName, nameInput, nameError, onNameEdit, onEnter, installs, ready, importLine }: StepProps & {
   clusterName: string; nameInput: RefObject<HTMLInputElement | null>; nameError: string | null; onNameEdit(): void; onEnter(): void;
-  installs: Component[]; importLine: string;
+  installs: Component[]; ready: string[]; importLine: string;
 }) {
   const ids = useId();
   const what = draft.kind === "kubernetes" ? `Kubernetes cluster · ${clusterName}` : kindInfo(draft.kind ?? "custom").what;
@@ -489,6 +502,7 @@ function ReviewStep({ draft, setDraft, heading, clusterName, nameInput, nameErro
           </li>
         ))}
         {installs.map((c) => <li key={c} className={s.summaryInstall}>{INSTALL_WORDS[c].summary}</li>)}
+        <li className={s.summaryImport}>{ready.length > 0 ? `Ready-made views: ${ready.join(", ")}` : NO_READY}</li>
         <li className={s.summaryImport}>{importLine}</li>
       </ul>
       {installs.length > 0 && <p className={s.installNext}>You review the install right after the project is created.</p>}
@@ -871,6 +885,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
   const reason = blocked ?? (draft.step === 4 ? importWait : null);
   const used = inUse(draft).length;
   const installs = installOffered ? installComponents(draft) : [];
+  const ready = readyFor(draft, new Map((sources.data ?? []).map((x) => [x.id, x.type])), installs);
   const copying = importReady && imp.preview ? importable(imp.preview).length : 0;
   const stepNote = (n: number): string | null => {
     if (n === 1 && draft.kind) return draft.kind === "kubernetes" && clusterName ? `${clusterName} · Kubernetes` : kindInfo(draft.kind).what;
@@ -939,7 +954,7 @@ function SetupFlow({ view, tabId, nav, openInNewTab, onOpenSettings }: Monitorin
           )}
           {draft.step === 4 && !created && (
             <ReviewStep {...stepProps} clusterName={clusterName} nameInput={nameInput} nameError={nameError}
-              onNameEdit={() => { nameTouched.current = true; setNameError(null); }} onEnter={() => void create()} installs={installs}
+              onNameEdit={() => { nameTouched.current = true; setNameError(null); }} onEnter={() => void create()} installs={installs} ready={ready}
               importLine={importLine} />
           )}
           {created && (

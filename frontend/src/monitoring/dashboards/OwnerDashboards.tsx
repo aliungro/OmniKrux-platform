@@ -14,7 +14,7 @@ const EMPTY = {
   project: "No dashboards yet. Start one with New dashboard, or copy a ready-made view.",
   group: "No group dashboards yet. A group dashboard runs each panel once per project in the group.",
 } as const;
-const NO_PROMETHEUS = "Link a Prometheus-compatible source to get ready-made views.";
+const NO_READY = "Link a Prometheus-compatible or Loki source to get ready-made views.";
 
 /** "saved just now", "saved 5 min ago", "saved 3 h ago", "saved 2 days ago", then the date. */
 export function savedAgo(iso: string | null, now: number): string | null {
@@ -68,13 +68,13 @@ function DashboardRow({ d, onOpen }: { d: DashboardSummaryOut; onOpen(id: string
   );
 }
 
-/** A project's ready-made views: what each shows, what its Prometheus lacks, and Copy to edit. */
-function ReadyMadeViews({ projectId, prometheus, opener, onOpen }: {
-  projectId: string; prometheus: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void;
+/** A project's ready-made views: what each shows, what its sources lack, and Copy to edit. */
+function ReadyMadeViews({ projectId, readyMade, opener, onOpen }: {
+  projectId: string; readyMade: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void;
 }) {
   const ready = useReadyMade(projectId);
   const copy = useCopyToEdit(opener);
-  if (!prometheus) return <p className={s.muted}>{NO_PROMETHEUS}</p>;
+  if (!readyMade) return <p className={s.muted}>{NO_READY}</p>;
   if (ready.isError) return <p className={s.bad} role="alert">{failure(ready.error, "reload the page")}</p>;
   if (!ready.data?.length) return null;
   return (
@@ -104,14 +104,14 @@ function ReadyMadeViews({ projectId, prometheus, opener, onOpen }: {
   );
 }
 
-export function OwnerDashboards({ owner, tabId, nav, openInNewTab, prometheus = false }: {
+export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = false }: {
   owner: Owner;
   /** The tab the page is in: a dashboard made here opens in it (or a new one when it holds unsaved edits). */
   tabId: string;
   nav: MonitoringPageProps["nav"];
   openInNewTab(view: MonitoringView): void;
-  /** A project with a Prometheus-compatible source linked (ready-made views come from it). */
-  prometheus?: boolean;
+  /** A project with a Prometheus-compatible or Loki source linked (ready-made views come from them). */
+  readyMade?: boolean;
 }) {
   const list = useOwnerDashboards(owner);
   const [creating, setCreating] = useState(false);
@@ -143,7 +143,7 @@ export function OwnerDashboards({ owner, tabId, nav, openInNewTab, prometheus = 
           {list.data.map((d) => <DashboardRow key={d.id} d={d} onOpen={open} />)}
         </ul>
       )}
-      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} prometheus={prometheus} opener={opener} onOpen={open} />}
+      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} readyMade={readyMade} opener={opener} onOpen={open} />}
       {creating && (
         <NewDashboardDialog owner={owner} restoreFocusTo={newButton} onCancel={() => setCreating(false)}
           onCreated={(out) => { setCreating(false); openMade(out, { edit: true }, opener); }} />
