@@ -45,6 +45,9 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "kind: needs a running kind cluster",
     "cloud_live: opt-in, read-only checks against the user's own cloud accounts",
+    "mailpit: needs Mailpit on 127.0.0.1:1025 and :8025; skipped when absent",
+    "helm: needs the pinned Helm and chart archives in .tools/ (scripts/dev-monitoring-tools.sh); skipped when absent",
+    "compose: needs Docker for docker compose config; skipped when absent",
 ]
 # Temporary: drop once starlette stops triggering the httpx deprecation warning.
 filterwarnings = [

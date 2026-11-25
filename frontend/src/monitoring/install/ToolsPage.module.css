@@ -1,0 +1,477 @@
+/* The Monitoring tools page: a plain column that reads like the setup page's found-tools list
+   (a row per tool, chips for its state, mono for versions). Territories tokens only. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 860px;
+  box-sizing: border-box;
+  padding: 24px 28px 32px;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.title:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.readLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.read {
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.lead {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.warn {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: var(--bad);
+  font-size: 13px;
+}
+
+.problem p {
+  flex: 1 1 320px;
+  margin: 0;
+}
+
+/* --- Nothing installed ---------------------------------------------------------------------- */
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf);
+  cursor: pointer;
+}
+
+.choice[data-on] {
+  border-color: color-mix(in srgb, var(--focus) 60%, transparent);
+  background: color-mix(in srgb, var(--focus) 8%, var(--surf));
+}
+
+.choice:has(.box:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.box {
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--focus);
+}
+
+.choiceText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.choiceName {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.choiceWhat {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.mono {
+  color: var(--ink-3);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.others {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 12px 14px;
+  border: 1px dashed var(--rule);
+  border-radius: 10px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.otherList {
+  display: flex;
+  flex: 1 1 360px;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* --- An install ----------------------------------------------------------------------------- */
+
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.state {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.state[data-state="failed"] {
+  color: var(--bad);
+}
+
+.state[data-state="installing"],
+.state[data-state="uninstalling"],
+.state[data-state="cancelled"] {
+  color: var(--warn);
+}
+
+.message {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.progress {
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf);
+}
+
+.states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.states li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stateName {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  padding: 10px 10px 10px 0;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.table thead th {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tool {
+  font-weight: 650;
+}
+
+.workloads {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workloads li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+}
+
+.wname {
+  color: var(--ink-2);
+}
+
+.ready {
+  color: var(--warn);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.ready[data-ok] {
+  color: var(--ok);
+}
+
+.why {
+  flex-basis: 100%;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 20px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.chip[data-tone="ok"] {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  color: var(--ok);
+}
+
+.chip[data-tone="bad"] {
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  color: var(--bad);
+}
+
+.chip[data-tone="warn"] {
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  color: var(--warn);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 13px;
+}
+
+.rowLabel {
+  flex: none;
+  width: 104px;
+  color: var(--ink-3);
+}
+
+.sourceList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourceList li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.sourceType {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--focus);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.contactsText {
+  color: var(--ink-2);
+}
+
+.contactsText[data-state="failed"] {
+  color: var(--bad);
+}
+
+.contactsText[data-state="needs_review"] {
+  color: var(--warn);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* --- Buttons -------------------------------------------------------------------------------- */
+
+.primary,
+.secondary,
+.danger,
+.quiet {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.danger {
+  border: 1px solid color-mix(in srgb, var(--bad) 55%, transparent);
+  background: transparent;
+  color: var(--bad);
+}
+
+.danger[data-lead] {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+
+.quiet {
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.quiet:hover {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.primary:disabled,
+.secondary:disabled,
+.danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.danger:focus-visible,
+.quiet:focus-visible,
+.link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 18px 16px 24px;
+  }
+
+  .choices {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .table,
+  .table tbody,
+  .table tr,
+  .table th,
+  .table td {
+    display: block;
+  }
+
+  .table td,
+  .table th {
+    padding: 2px 0;
+    border: 0;
+  }
+
+  .table tr {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .rowLabel {
+    width: 100%;
+  }
+}

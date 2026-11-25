@@ -1,0 +1,73 @@
+/* The Monitoring app: the sidebar on the left, the tab strip and the open page on the right. */
+.app {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.work {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* A page whose project, group or source was removed. */
+.gone {
+  max-width: 64ch;
+  padding: 28px 28px 40px;
+}
+
+.goneText {
+  margin: 0 0 14px;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.primary {
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--focus);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .app > nav {
+    max-height: 42vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+}
+
+/* A page loading its own chunk: a quiet line where the page will be. */
+.loadingPage {
+  margin: 0;
+  padding: 28px;
+  color: var(--ink-3);
+  font-size: 13px;
+}

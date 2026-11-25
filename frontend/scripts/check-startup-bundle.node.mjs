@@ -18,7 +18,7 @@ test("checks emitted bytes and HTML modulepreloads against reachable chunks", t 
   feature.modules = [
     "audit/AuditView", "settings/SettingsView", "settings/AccountsSection", "settings/ClustersSection",
     "settings/ConnectAccountDialog", "settings/ImportKubeconfig", "territories/TerritoryTable", "inspector/Inspector",
-  ].map(name => "/features/" + name + ".tsx").concat("/node_modules/@xterm/xterm/x", "/node_modules/@codemirror/view/x");
+  ].map(name => "/features/" + name + ".tsx").concat("/node_modules/@xterm/xterm/x", "/node_modules/@codemirror/view/x", "/monitoring/MonitoringApp.tsx");
   const entry = chunk("entry.js", true);
   const chunks = [entry, chunk("preload.js"), feature];
   const saveGraph = () => writeFileSync(join(meta, "startup-graph.json"), JSON.stringify({ chunks }));
@@ -49,4 +49,37 @@ test("checks emitted bytes and HTML modulepreloads against reachable chunks", t 
   run();
   rmSync(join(dist, "entry.js"));
   assert.throws(run, /ENOENT.*entry.js/);
+});
+
+// A snapshot graph: the deferred modules live in a lazy chunk; `eager` lands in the entry chunk.
+function snapshotRun(t, eager) {
+  const dir = mkdtempSync(join(tmpdir(), "omnikrux-startup-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const deferred = [
+    "audit/AuditView", "settings/SettingsView", "settings/AccountsSection", "settings/ClustersSection",
+    "settings/ConnectAccountDialog", "settings/ImportKubeconfig", "territories/TerritoryTable", "inspector/Inspector",
+  ].map(name => "/src/features/" + name + ".tsx").concat(
+    "/node_modules/@xterm/xterm/x", "/node_modules/@codemirror/view/x", "/src/monitoring/MonitoringApp.tsx");
+  const chunks = [
+    { file: "entry.js", entry: true, imports: [], bytes: 1, gzipBytes: 1, modules: ["/src/main.tsx", ...eager] },
+    { file: "lazy.js", entry: false, imports: [], bytes: 1, gzipBytes: 1, modules: deferred },
+  ];
+  const graph = join(dir, "graph.json");
+  writeFileSync(graph, JSON.stringify({ chunks }));
+  const checker = fileURLToPath(new URL("./check-startup-bundle.mjs", import.meta.url));
+  return () => execFileSync(process.execPath, [checker, "--snapshot", graph], { cwd: dir, encoding: "utf8", stdio: "pipe" });
+}
+
+test("a monitoring module in the initial graph fails the check", t => {
+  const run = snapshotRun(t, ["/src/monitoring/sidebar/Sidebar.tsx", "/src/monitoring/shell/tabState.ts"]);
+  assert.throws(run, error => {
+    assert.match(String(error.stderr ?? error.message), /\/src\/monitoring\/sidebar\/Sidebar\.tsx/);
+    assert.doesNotMatch(String(error.stderr ?? error.message), /tabState/);
+    return true;
+  });
+});
+
+test("tabState may be eager", t => {
+  const run = snapshotRun(t, ["/src/monitoring/shell/tabState.ts"]);
+  assert.match(run(), /Initial JavaScript \(raw\/gzip\) 1 1/);
 });

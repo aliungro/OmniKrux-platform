@@ -1,0 +1,352 @@
+/* The Silences view (A3): a quiet list, each silence a line of matcher chips with its time and why;
+   what is active is told by the word, not a colour (rose stays for what fires, amber for problems).
+   The form is the M1 source form's style on the page's ground. Territories tokens only; translucency
+   with color-mix. No motion except the focus ring. */
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 880px;
+  padding: 14px 18px 24px;
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.headTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.problems {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.problem {
+  margin: 0;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--rule));
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--rule);
+}
+
+.item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 14px;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.item[data-state="expired"] {
+  color: var(--ink-3);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  grid-column: 1;
+}
+
+.chip {
+  padding: 1px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.item[data-state="expired"] .chip {
+  color: var(--ink-3);
+}
+
+.when {
+  grid-column: 1;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.when strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.item[data-state="expired"] .when strong {
+  color: var(--ink-3);
+}
+
+.comment {
+  grid-column: 1;
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.item[data-state="expired"] .comment {
+  color: var(--ink-3);
+}
+
+.meta {
+  grid-column: 1;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.side {
+  grid-column: 2;
+  grid-row: 1 / span 4;
+  align-self: start;
+}
+
+.empty {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.note {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.note p {
+  margin: 0;
+}
+
+/* --- the form ---------------------------------------------------------------------------------- */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 600px;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--surf);
+}
+
+.formTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.label {
+  padding: 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+.input::placeholder {
+  color: var(--ink-3);
+}
+
+.input:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.input[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--bad) 60%, var(--rule));
+}
+
+.places {
+  display: grid;
+  gap: 6px;
+}
+
+.place {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.place input {
+  accent-color: var(--focus);
+}
+
+.place:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.hint {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.fieldError {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.blocked {
+  margin: 4px 0 0;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--rule));
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.preview {
+  min-height: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.preview p {
+  margin: 0;
+}
+
+.formError {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.keyHint {
+  margin-right: auto;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.primary,
+.secondary,
+.small {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.secondary,
+.small {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.small {
+  padding: 4px 11px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.small:hover {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+  color: var(--ink);
+}
+
+.primary[aria-disabled="true"],
+.secondary[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.small:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

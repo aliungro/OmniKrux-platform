@@ -10,12 +10,13 @@ export function parseHash(hash: string): HashTarget {
   if (hash === "#audit" || hash === "#/audit") return { app: "audit" };
   if (hash === "#/settings") return { app: "settings" };
   if (hash === "#/kubernetes") return { app: "kubernetes" };
-  const tab = /^#\/kubernetes\/([^/]+)$/.exec(hash);
-  if (tab) { try { return { app: "kubernetes", tab: decodeURIComponent(tab[1]) }; } catch { return null; } }
+  if (hash === "#/monitoring") return { app: "monitoring" };
+  const tab = /^#\/(kubernetes|monitoring)\/([^/]+)$/.exec(hash);
+  if (tab) { try { return { app: tab[1] as "kubernetes" | "monitoring", tab: decodeURIComponent(tab[2]) }; } catch { return null; } }
   const kind = /^#kind=(.+)$/.exec(hash);
   if (kind && isKindKey(kind[1])) return { legacyKind: kind[1] };
   return null;
 }
 export function hashFor(app: import("./features/shell/workspace").AppId, tabId?: string): string {
-  return `#/${app}${app === "kubernetes" && tabId ? `/${encodeURIComponent(tabId)}` : ""}`;
+  return `#/${app}${(app === "kubernetes" || app === "monitoring") && tabId ? `/${encodeURIComponent(tabId)}` : ""}`;
 }

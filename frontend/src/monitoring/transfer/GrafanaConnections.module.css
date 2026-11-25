@@ -1,0 +1,189 @@
+/* The Grafana connections on the Sources page, and the dialog that adds or edits one. Territories tokens only. */
+.section {
+  margin-top: 32px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.title:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+
+.note,
+.empty {
+  margin: 0 0 10px;
+  padding: 12px 14px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 10px;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.note p {
+  margin: 0 0 8px;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--surf);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 11px 14px;
+}
+
+.row + .row {
+  border-top: 1px solid var(--rule);
+}
+
+/* Grafana's initial in a lilac tile: these rows are a different kind of thing than the sources above. */
+.mark {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
+  color: var(--focus);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.name {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.where {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.imported {
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.buttons {
+  display: flex;
+  gap: 2px;
+}
+
+.ok,
+.bad {
+  grid-column: 2 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.bad {
+  color: var(--bad);
+}
+
+.secondary,
+.quiet {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.quiet {
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.quiet:hover:not([aria-disabled="true"]) {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.quiet[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.secondary:focus-visible,
+.quiet:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 18px 20px 16px;
+}
+
+.dialogTitle {
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+@media (max-width: 760px) {
+  .row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .imported,
+  .buttons {
+    grid-column: 2 / -1;
+  }
+}

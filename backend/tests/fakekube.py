@@ -13,12 +13,27 @@ ADDED, then the watch stays open until `release`). Objects live in `objects[kind
 (namespace, name), "" for the namespace of a cluster-scoped object; `pods` is `objects["pods"]` and
 `events` is a list of its own.
 
+A service can be reached through the API server's proxy
+(`/api/v1/namespaces/{ns}/services/{name:port}/proxy/...`): `service_backends` maps
+(namespace, "name:port") or (namespace, "https:name:port") to the base URL of a real local server,
+and the request (method, rest of the path, query, body) is relayed to it, its status, body,
+content type and any `Location` relayed back (a redirect is passed on, never followed). An
+unknown service answers 503 "no endpoints available"; with `proxy_forbidden` set every proxy
+request answers 403.
+
 Any served object can be replaced (PUT, honouring `metadata.resourceVersion` with a 409 like the
 API server, and `dryRun=All`) and patched (`application/merge-patch+json`, or
 `application/json-patch+json` with `test` / `add` / `replace` / `remove`; a failed `test` answers
 the API server's bare 422). Each write bumps `resourceVersion` (and `generation` when `spec` changed)
 and is recorded in `writes`. Any served object can be deleted (recorded in `deletes`), honouring
 DeleteOptions `preconditions.uid` (and `resourceVersion`) with the API server's 409.
+
+Any served collection (`/apis/{g}/{v}/namespaces/{ns}/{plural}`, pods aside) accepts a POST: the
+object is created (recorded in `created_objects`, with a `uid`, `resourceVersion` "1",
+`generation` 1 and `creationTimestamp`), answering 201 and honouring `dryRun=All`, or the API
+server's 409 `AlreadyExists` when it is there. `prometheus_operator(server)` makes a cluster look
+as if the Prometheus Operator ran in it (its CRDs, a Prometheus object, its Service and the
+namespace); call it before the first request to the app, as discovery is cached.
 
 A pod can be evicted (`POST .../pods/{name}/eviction`, recorded in `eviction_requests`): each
 eviction of a pod takes the next status of `evictions[(ns, name)]` (the last one sticks; none:
@@ -37,7 +52,9 @@ starts its containers: each read of the pod moves a new container one step throu
 """
 
 import asyncio
+import base64
 import copy
+import gzip
 import json
 import re
 from collections.abc import Callable
@@ -45,6 +62,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import aiohttp
 import pytest
 from aiohttp import web
 
@@ -145,6 +163,7 @@ def default_resources() -> list[FakeResource]:
             False,
             short_names=("crd", "crds"),
         ),
+        R("storage.k8s.io", "v1", "storageclasses", "StorageClass", False, short_names=("sc",)),
         R("example.omnikrux.dev", "v1", "widgets", "Widget", True, short_names=("wd",)),
         R(METRICS_GROUP, "v1beta1", "pods", "PodMetrics", True, ("get", "list")),
         R(METRICS_GROUP, "v1beta1", "nodes", "NodeMetrics", False, ("get", "list")),
@@ -181,6 +200,9 @@ POD_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods/(?P<name>[^/]+)(
 PODS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/pods$")
 EVENTS_ROUTE = re.compile(r"^/api/v1/namespaces/(?P<ns>[^/]+)/events$")
 # /api/v1/... or /apis/{group}/{version}/...: the group, the version and the rest of the path.
+SERVICE_PROXY_ROUTE = re.compile(
+    r"^/api/v1/namespaces/(?P<ns>[^/]+)/services/(?P<svc>[^/]+)/proxy(?P<rest>/.*)?$"
+)
 API_PATH = re.compile(
     r"^/(?:api/(?P<core>v1)|apis/(?P<group>[^/]+)/(?P<version>[^/]+))(?P<rest>/.*)?$"
 )
@@ -311,6 +333,8 @@ class FakeKubeApi:
         self.forward_gap = 0.0
         self.start_states: list[dict] = [{"waiting": {"reason": "ContainerCreating"}}, STARTED]
         self.created: list[dict] = []
+        # Every object a generic POST created (pods are in `created`).
+        self.created_objects: list[dict] = []
         self.patches: list[dict] = []
         self.deleted: list[tuple[str, str]] = []
         # Every DELETE of one object: its path and DeleteOptions body.
@@ -328,6 +352,10 @@ class FakeKubeApi:
         self._evicting = 0
         # Every PUT and PATCH of an object: method, path, query, content type and body.
         self.writes: list[dict] = []
+        # (namespace, "name:port" or "https:name:port") -> base URL the service proxy relays to.
+        self.service_backends: dict[tuple[str, str], str] = {}
+        # True: every service proxy request answers 403, as when RBAC lacks `services/proxy`.
+        self.proxy_forbidden = False
         # (namespace, pod) -> [status field, container, states still to go through]
         self._starting: dict[tuple[str, str], list[tuple[str, str, list[dict]]]] = {}
 
@@ -350,6 +378,8 @@ class FakeKubeApi:
 
     async def _route(self, request: web.Request) -> web.StreamResponse:
         method, path = request.method, request.path
+        if match := SERVICE_PROXY_ROUTE.match(path):
+            return await self._proxy(request, match)
         if method == "GET":
             if path == "/version":
                 return web.json_response(VERSION)
@@ -389,7 +419,45 @@ class FakeKubeApi:
             return await self._write(request, match)
         if method == "DELETE" and (match := API_PATH.match(path)):
             return await self._delete(request, match)
+        if method == "POST" and (match := API_PATH.match(path)):
+            return await self._create(request, match)
         return not_found()
+
+    async def _proxy(self, request: web.Request, match: re.Match) -> web.Response:
+        """Relay a service proxy request to its backend, or refuse it like the API server."""
+        ns, svc = match["ns"], match["svc"]
+        if self.proxy_forbidden:
+            message = (
+                f'services "{svc}" is forbidden: User "fake" cannot get resource '
+                f'"services/proxy" in API group "" in the namespace "{ns}"'
+            )
+            return web.json_response(status_body(403, "Forbidden", message), status=403)
+        backend = self.service_backends.get((ns, svc))
+        if backend is None:
+            message = f'no endpoints available for service "{svc}"'
+            return web.json_response(status_body(503, "ServiceUnavailable", message), status=503)
+        url = backend.rstrip("/") + (match["rest"] or "/")
+        headers = {
+            name: value
+            for name, value in request.headers.items()
+            if name.lower() in ("content-type", "accept", "x-scope-orgid")
+        }
+        async with (
+            aiohttp.ClientSession() as session,
+            session.request(
+                request.method,
+                url,
+                params=list(request.query.items()),
+                data=await request.read() or None,
+                headers=headers,
+                ssl=False,
+                allow_redirects=False,  # like the API server: a redirect is relayed, not followed
+            ) as upstream,
+        ):
+            relayed = {"Content-Type": upstream.headers.get("Content-Type", "text/plain")}
+            if "Location" in upstream.headers:
+                relayed["Location"] = upstream.headers["Location"]
+            return web.Response(body=await upstream.read(), status=upstream.status, headers=relayed)
 
     async def _metrics(self, path: str) -> web.Response:
         """The metrics.k8s.io API: discovery, lists and single reads, per `metrics_mode`."""
@@ -584,6 +652,39 @@ class FakeKubeApi:
                 md["generation"] += 1
             self.objects[res.key][key] = changed
         return web.json_response(changed)
+
+    async def _create(self, request: web.Request, match: re.Match) -> web.Response:
+        """POST one object into a served collection."""
+        group, version = match["group"] or "", match["core"] or match["version"]
+        parts = [part for part in (match["rest"] or "").split("/") if part]
+        found = self._resolve(group, version, parts) if parts else None
+        if found is None or len(found[2]) != 1:
+            return not_found()
+        res, ns, _ = found
+        body = await _body(request)
+        metadata = body.setdefault("metadata", {})
+        name = metadata.get("name") or ""
+        if not name:
+            message = (
+                f'{res.plural} "" is invalid: metadata.name: Required value: '
+                "name or generateName is required"
+            )
+            return invalid(message)
+        key = (ns or "", name)
+        if key in self.objects[res.key]:
+            label = f"{res.plural}.{res.group}" if res.group else res.plural
+            message = f'{label} "{name}" already exists'
+            return web.json_response(status_body(409, "AlreadyExists", message), status=409)
+        if ns is not None:
+            metadata["namespace"] = ns
+        metadata.setdefault("uid", f"u-{res.plural}-{ns or ''}-{name}")
+        metadata["resourceVersion"] = "1"
+        metadata["generation"] = 1
+        metadata["creationTimestamp"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if request.query.get("dryRun") != "All":
+            self.objects[res.key][key] = body
+            self.created_objects.append(copy.deepcopy(body))
+        return web.json_response(body, status=201)
 
     def _items(self, kind_key: str) -> list[tuple[tuple[str, str], dict]]:
         if kind_key == "events":
@@ -1195,6 +1296,181 @@ async def serve_fake_api():
     finally:
         server.release.set()
         await runner.cleanup()
+
+
+def service(
+    namespace: str,
+    name: str,
+    *,
+    labels: dict[str, str] | None = None,
+    ports: list[dict],
+    cluster_ip: str = "10.96.0.10",
+    selector: dict[str, str] | None = None,
+) -> dict:
+    """A Service object as the API serves it, for `objects["services"][(namespace, name)]`."""
+    spec: dict = {"ports": ports, "clusterIP": cluster_ip}
+    if selector is not None:
+        spec["selector"] = selector
+    return {
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-svc-{namespace}-{name}",
+            "labels": dict(labels or {}),
+        },
+        "spec": spec,
+    }
+
+
+_service = service
+
+
+def prometheus_operator(
+    server: FakeKubeApi,
+    *,
+    namespace: str = "monitoring",
+    name: str = "kps",
+    service: str = "kps-prometheus",
+    rule_selector: dict | None = {"matchLabels": {"release": "kps"}},  # noqa: B006
+    rule_namespace_selector: dict | None = {},  # noqa: B006
+) -> None:
+    """Make `server` look like a cluster running the Prometheus Operator: its CRDs, a Prometheus
+    object with those rule selectors (a None selector is left out), the Service in front of it
+    and the namespace. Call it before the first request to the app (discovery is cached)."""
+    group = "monitoring.coreos.com"
+    R = FakeResource
+    server.resources += [
+        R(group, "v1", "prometheuses", "Prometheus", True),
+        R(group, "v1", "prometheusrules", "PrometheusRule", True),
+        R(group, "v1", "alertmanagers", "Alertmanager", True),
+        R(group, "v1", "servicemonitors", "ServiceMonitor", True),
+        R(group, "v1alpha1", "alertmanagerconfigs", "AlertmanagerConfig", True),
+    ]
+    spec: dict = {"replicas": 1}
+    if rule_selector is not None:
+        spec["ruleSelector"] = copy.deepcopy(rule_selector)
+    if rule_namespace_selector is not None:
+        spec["ruleNamespaceSelector"] = copy.deepcopy(rule_namespace_selector)
+    server.objects[f"prometheuses.{group}"][(namespace, name)] = {
+        "apiVersion": f"{group}/v1",
+        "kind": "Prometheus",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-prometheus-{namespace}-{name}",
+            "resourceVersion": "1",
+            "generation": 1,
+        },
+        "spec": spec,
+    }
+    server.objects["services"][(namespace, service)] = _service(
+        namespace,
+        service,
+        ports=[{"name": "web", "port": 9090, "protocol": "TCP"}],
+        selector={"operator.prometheus.io/name": name},
+    )
+    server.objects["namespaces"][("", namespace)] = {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {
+            "name": namespace,
+            "uid": f"u-ns-{namespace}",
+            "labels": {"kubernetes.io/metadata.name": namespace},
+        },
+    }
+
+
+def storage_class(name: str, default: bool) -> dict:
+    """A StorageClass for `objects["storageclasses.storage.k8s.io"][("", name)]`; the default
+    one carries the annotation Kubernetes reads."""
+    annotations = {"storageclass.kubernetes.io/is-default-class": "true"} if default else {}
+    return {
+        "apiVersion": "storage.k8s.io/v1",
+        "kind": "StorageClass",
+        "metadata": {
+            "name": name,
+            "uid": f"u-sc-{name}",
+            "annotations": annotations,
+        },
+        "provisioner": "example.omnikrux.dev/provisioner",
+    }
+
+
+def helm_release_secret(
+    namespace: str,
+    release: str,
+    revision: int,
+    status: str,
+    *,
+    chart: str,
+    version: str,
+    owner: str = "helm",
+    managed_by_omnikrux: bool = True,
+) -> dict:
+    """The Secret Helm 3 and 4 keep for a release revision: labelled `owner`, `name`, `status` and
+    `version`; `data.release` is base64 of base64 of the gzipped release JSON (the API's own
+    base64 over the one Helm applies). `managed_by_omnikrux` adds the marker OmniKrux's values
+    carry (`config.omnikrux.managedBy`)."""
+    config: dict = {"omnikrux": {"managedBy": "omnikrux"}} if managed_by_omnikrux else {}
+    release_json = {
+        "name": release,
+        "namespace": namespace,
+        "version": revision,
+        "info": {"status": status, "last_deployed": "2026-11-24T10:00:00Z"},
+        "chart": {"metadata": {"name": chart, "version": version, "appVersion": version}},
+        "config": config,
+    }
+    packed = base64.b64encode(gzip.compress(json.dumps(release_json).encode())).decode()
+    name = f"sh.helm.release.v1.{release}.v{revision}"
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "type": "helm.sh/release.v1",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-helm-{namespace}-{release}-{revision}",
+            "labels": {
+                "owner": owner,
+                "name": release,
+                "status": status,
+                "version": str(revision),
+            },
+        },
+        "data": {"release": base64.b64encode(packed.encode()).decode()},
+    }
+
+
+def prometheus_operator_deployment(namespace: str, name: str, *, instance: str) -> dict:
+    """A Deployment running a Prometheus Operator (another install's, `instance` its
+    `app.kubernetes.io/instance` label), for `objects["deployments.apps"][(namespace, name)]`."""
+    labels = {
+        "app.kubernetes.io/name": "prometheus-operator",
+        "app.kubernetes.io/instance": instance,
+        "app.kubernetes.io/component": "controller",
+    }
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "uid": f"u-deploy-{namespace}-{name}",
+            "labels": labels,
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": labels},
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "containers": [
+                        {"name": "prometheus-operator", "image": "example.test/operator:v0"}
+                    ]
+                },
+            },
+        },
+    }
 
 
 @pytest.fixture

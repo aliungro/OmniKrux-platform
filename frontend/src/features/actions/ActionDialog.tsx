@@ -16,7 +16,7 @@ export const PRODUCTION = "This is a production cluster.";
 export const typeToConfirm = (name: string) => `Type ${name} to confirm`;
 
 /** Applies that take something away get the danger colour on their button, and open on Cancel. */
-const DESTRUCTIVE = new Set(["delete", "drain", "evict"]);
+const DESTRUCTIVE = new Set(["delete", "drain", "evict", "uninstall"]);
 
 /**
  * Where a review's focus starts: Cancel for what takes something away and for a review that can't
@@ -41,11 +41,24 @@ export function ActionDialog({
   plan,
   onDone,
   onReview,
+  options,
+  renderProgress,
 }: {
   plan: Plan;
   onDone: (outcome?: ActionOutcome) => void;
   /** Plans the same change again, with `params` changed (a drain's options); rejects with the server's words. */
   onReview: (params?: Record<string, unknown>) => Promise<void>;
+  /**
+   * Options shown in the review (in place of a drain's); `review(params)` plans it again with them.
+   * Called as a plain function, not rendered as a component: it must not use hooks. Return an
+   * element (e.g. `<InstallSettingsPanel …/>`) whose own body uses them.
+   */
+  options?: (ctx: { busy: boolean; review(params: Record<string, unknown>): Promise<boolean> }) => ReactNode;
+  /**
+   * The body once the apply started a job; a drain's progress when left out. Called as a plain
+   * function: it must not use hooks; return an element (e.g. `<InstallProgress …/>`) that does.
+   */
+  renderProgress?: (p: { jobId: string; onClose(): void; onOutcome(o: ActionOutcome | null): void }) => ReactNode;
 }) {
   const id = useId();
   const actions = useActions();
@@ -60,9 +73,9 @@ export function ActionDialog({
   const [typed, setTyped] = useState("");
   const [phase, setPhase] = useState<"idle" | "applying" | "reviewing">("idle");
   const [error, setError] = useState<Failure | null>(null);
-  /** A drain under way: its job, and what the apply said when it started it. */
+  /** A job the apply started (a drain, an install…): its id, and what the apply said when it started it. */
   const [started, setStarted] = useState<{ jobId: string; message: string } | null>(null);
-  /** How the drain ended (or that it is lost), once its progress says so. */
+  /** How that job ended (or that it is lost), once its progress says so. */
   const ended = useRef<ActionOutcome | null>(null);
 
   // A new plan (reviewed again) starts clean: the name is typed again for it.
@@ -117,7 +130,7 @@ export function ActionDialog({
     }
   };
 
-  // Closing a drain's progress, however: say how it ended, or that it was started and carries on.
+  // Closing a started job's progress, however: say how it ended, or that it was started and carries on.
   const close = () => {
     if (started === null) onDone();
     else onDone(ended.current ?? { message: started.message, tone: "ok" });
@@ -125,7 +138,8 @@ export function ActionDialog({
 
   let body: ReactNode;
   if (started !== null) {
-    body = <DrainProgress jobId={started.jobId} onClose={close} onOutcome={(o) => { ended.current = o; }} />;
+    const p = { jobId: started.jobId, onClose: close, onOutcome: (o: ActionOutcome | null) => { ended.current = o; } };
+    body = renderProgress ? renderProgress(p) : <DrainProgress {...p} />;
   } else {
     body = (
       <>
@@ -154,7 +168,7 @@ export function ActionDialog({
             ))}
           </ul>
         )}
-        {plan.action === "drain" && (
+        {options ? options({ busy, review }) : plan.action === "drain" && (
           <DrainOptions disabled={busy} onChange={(flags: DrainFlags) => review({ ...flags })} />
         )}
         {plan.diff && <DiffView before={plan.diff.before} after={plan.diff.after} />}

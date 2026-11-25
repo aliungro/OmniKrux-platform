@@ -1,0 +1,102 @@
+[
+  {
+    "name": "route_and_value",
+    "message": "p95 for {{route}} is {{value}}",
+    "labels": {
+      "route": "/a"
+    },
+    "value": 0.31234,
+    "expected": "p95 for /a is 0.312"
+  },
+  {
+    "name": "missing_label_is_empty",
+    "message": "[{{gone}}]",
+    "labels": {},
+    "value": 1.0,
+    "expected": "[]"
+  },
+  {
+    "name": "no_value_is_a_dash",
+    "message": "{{value}}",
+    "labels": {},
+    "value": null,
+    "expected": "–"
+  },
+  {
+    "name": "thousands_round_to_three_digits",
+    "message": "{{value}}",
+    "labels": {},
+    "value": 1234.5,
+    "expected": "1230"
+  },
+  {
+    "name": "rounds_up_a_digit",
+    "message": "{{value}}",
+    "labels": {},
+    "value": 999.9,
+    "expected": "1000"
+  },
+  {
+    "name": "whole_number",
+    "message": "{{value}}",
+    "labels": {},
+    "value": 100.0,
+    "expected": "100"
+  },
+  {
+    "name": "zero",
+    "message": "{{value}}",
+    "labels": {},
+    "value": 0.0,
+    "expected": "0"
+  },
+  {
+    "name": "negative",
+    "message": "{{value}}",
+    "labels": {},
+    "value": -2.5,
+    "expected": "-2.5"
+  },
+  {
+    "name": "small_has_no_exponent",
+    "message": "{{value}}",
+    "labels": {},
+    "value": 1.234e-05,
+    "expected": "0.0000123"
+  },
+  {
+    "name": "tiny_has_no_exponent",
+    "message": "{{value}}",
+    "labels": {},
+    "value": 1e-07,
+    "expected": "0.0000001"
+  },
+  {
+    "name": "huge_has_no_exponent",
+    "message": "{{value}}",
+    "labels": {},
+    "value": 1e+21,
+    "expected": "1000000000000000000000"
+  },
+  {
+    "name": "other_braces_stay_as_typed",
+    "message": "{{ query \"up\" }} {{ .Labels }} {{ {x} }}",
+    "labels": {},
+    "value": 2.0,
+    "expected": "{{ query \"up\" }} {{ .Labels }} {{ {x} }}"
+  },
+  {
+    "name": "lone_braces_stay_as_typed",
+    "message": "a {{ b }} c",
+    "labels": {},
+    "value": 2.0,
+    "expected": "a {{ b }} c"
+  },
+  {
+    "name": "triple_braces_stay_as_typed",
+    "message": "{{{value}}}",
+    "labels": {},
+    "value": 2.0,
+    "expected": "{{{value}}}"
+  }
+]

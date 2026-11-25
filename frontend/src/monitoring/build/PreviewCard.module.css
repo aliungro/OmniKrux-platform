@@ -1,0 +1,125 @@
+/* A candidate with its live preview, and the ghost that flies to the grid. Territories tokens only. */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  text-align: left;
+  color: var(--ink);
+  background: var(--surf);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.card:hover {
+  background: color-mix(in srgb, var(--surf-2) 60%, var(--surf));
+}
+
+.card:focus-visible,
+.card[data-active="true"] {
+  border-color: var(--focus);
+  outline: none;
+}
+
+.card:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 40%, transparent);
+}
+
+.card[data-added="true"] {
+  opacity: 0.7;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.query {
+  color: var(--ink-3);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview {
+  display: block;
+  min-height: 56px;
+  margin-top: 4px;
+}
+
+.note {
+  display: block;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.badge {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
+.card[data-active="true"] .badge {
+  color: var(--focus);
+}
+
+.loading,
+.loadingStatic {
+  display: flex;
+  align-items: center;
+  height: 56px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--surf-2);
+}
+
+.loading {
+  background-image: linear-gradient(
+    90deg,
+    var(--surf-2),
+    color-mix(in srgb, var(--focus) 10%, var(--surf-2)),
+    var(--surf-2)
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.loadingText {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading { animation: none; background-image: none; }
+}
+
+/* `flyIn` appends this to the page and animates it with transform and opacity. */
+.ghost {
+  position: fixed;
+  z-index: 50;
+  box-sizing: border-box;
+  transform-origin: 0 0;
+  pointer-events: none;
+  background: var(--surf-2);
+  border: 1px solid var(--focus);
+  border-radius: 12px;
+}

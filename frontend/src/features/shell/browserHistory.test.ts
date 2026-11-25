@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { useWorkspace } from "./storage";
-import { useTabNav } from "./browserHistory";
+import { useMonitoringNav, useTabNav, useWorkspaceNav } from "./browserHistory";
 import { kindView } from "./workspace";
 afterEach(cleanup);
 
@@ -118,4 +118,29 @@ it("a browser that throttles history writes keeps in-app history working", () =>
  expect(result.current.view.page).toBe("kind");
  expect(result.current.canBack).toBe(true);
  push.mockRestore();
+});
+
+it("Monitoring tabs push their own entries and follow browser directions only while shown", () => {
+ const {result}=renderHook(()=>{
+   const {ws,dispatch}=useWorkspace(null); const history=useWorkspaceNav(ws,dispatch);
+   const tab=ws.monitoring.tabs.find(t=>t.id===ws.monitoring.active)!;
+   return {ws,dispatch,kube:useTabNav(ws,dispatch),nav:useMonitoringNav(history,tab)};
+ });
+ const id=result.current.ws.monitoring.active;
+ act(()=>result.current.kube.navigate(v=>kindView(v,"pods"),"push"));
+ act(()=>result.current.dispatch({type:"switchApp",app:"monitoring"}));
+ expect(location.hash).toBe(`#/monitoring/${id}`);
+ const start=history.length;
+ act(()=>{
+   result.current.nav.navigate({page:"project",id:"p1"},"push");
+   result.current.nav.navigate(v=>v.page==="project" ? {page:"group",id:"g1"} : v,"push");
+ });
+ expect(history.length).toBe(start+2);
+ expect(result.current.nav.view).toEqual({page:"group",id:"g1"});
+ act(()=>window.dispatchEvent(new PopStateEvent("popstate",{state:{omnikrux:history.state.omnikrux-1}})));
+ expect(result.current.nav.view).toEqual({page:"project",id:"p1"});
+ expect(result.current.kube.view.page).toBe("kind");
+ act(()=>result.current.nav.back());
+ expect(result.current.nav.view).toEqual({page:"home"});
+ expect(result.current.nav.canForward).toBe(true);
 });

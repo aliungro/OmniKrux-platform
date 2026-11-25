@@ -1,0 +1,167 @@
+/* The draft offered back on open, the drafts-off line in edit mode, and the leave dialog.
+   Territories tokens only. */
+
+/* In the header, on its own row under the title row (its buttons follow the title in Tab order). */
+.banner {
+  order: 1;
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--focus) 35%, var(--rule));
+  border-left: 3px solid var(--focus);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--focus) 6%, var(--surf));
+}
+
+.bannerText {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.line {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.line + .line {
+  color: var(--ink-2);
+}
+
+.bannerActions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
+.restore,
+.quiet {
+  padding: 4px 11px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.restore {
+  border: 1px solid transparent;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.restore:hover {
+  background: color-mix(in srgb, var(--focus) 88%, var(--ink));
+}
+
+.quiet {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.quiet:hover {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+  color: var(--ink);
+}
+
+.restore:focus-visible,
+.quiet:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Edit mode in a browser that can't keep drafts. */
+.off {
+  margin: 10px 16px 0;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--rule));
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 7%, var(--surf));
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* The leave dialog, inside the shared dialog shell. */
+.dialog {
+  width: min(460px, calc(100vw - 32px));
+  padding: 18px 20px 16px;
+}
+
+.dialogTitle {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.dialogBody {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.dialogActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.secondary,
+.primary,
+.danger {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.danger {
+  border: 0;
+  background: var(--bad);
+  color: var(--bg);
+}
+
+.secondary:focus-visible,
+.primary:focus-visible,
+.danger:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Edit pressed while another tab edits the dashboard. */
+.elsewhere {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 10px 16px 0;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--focus) 35%, var(--rule));
+  border-left: 3px solid var(--focus);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--focus) 6%, var(--surf));
+}

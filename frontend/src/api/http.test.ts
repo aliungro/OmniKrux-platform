@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getJson, HttpError, postJson } from "./http";
+import { getJson, HttpError, patchJson, postJson, putJson } from "./http";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -65,5 +65,22 @@ describe("http errors", () => {
   it("an answer without a usable detail falls back to the status", async () => {
     vi.stubGlobal("fetch", answer({ detail: [{ nope: true }] }, 500, "Internal Server Error"));
     expect((await rejection(getJson("/api/x"))).message).toBe("500 Internal Server Error");
+  });
+});
+
+describe("patchJson and putJson", () => {
+  it("send JSON with their own verbs and read JSON back", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await patchJson("/x", { a: 1 })).toEqual({ ok: true });
+    expect(await putJson("/y", { b: 2 })).toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0]).toEqual(["/x", { method: "PATCH", headers: { "content-type": "application/json" }, body: '{"a":1}' }]);
+    expect(fetchMock.mock.calls[1]).toEqual(["/y", { method: "PUT", headers: { "content-type": "application/json" }, body: '{"b":2}' }]);
+  });
+
+  it("turn an error answer into an HttpError with the server's words", async () => {
+    vi.stubGlobal("fetch", answer({ detail: "Taken." }, 409));
+    expect(await rejection(patchJson("/x", {}))).toMatchObject({ status: 409, message: "Taken." });
+    expect(await rejection(putJson("/x", {}))).toMatchObject({ status: 409, message: "Taken." });
   });
 });

@@ -1,0 +1,54 @@
+.blocked p {
+  margin: 0;
+}
+
+.list {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.review {
+  padding: 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.review:hover {
+  background: var(--surf-2);
+}
+
+.review:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.problem {
+  margin-top: 6px;
+  color: var(--bad);
+  font-size: 12.5px;
+}
+
+.hint {
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}

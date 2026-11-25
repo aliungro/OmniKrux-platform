@@ -1,0 +1,250 @@
+/* The Dashboards section of a project or group page. Territories tokens only. The saved list is a
+   single ruled card like the page's sources; ready-made views hang below it on a dashed lilac rule,
+   the same mark the sidebar gives them, so "generated, not saved" reads at a glance. */
+.owner {
+  display: grid;
+  gap: 10px;
+}
+
+.bar {
+  display: flex;
+  gap: 8px;
+}
+
+.primary,
+.secondary,
+.copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary {
+  border: 1px solid color-mix(in srgb, var(--focus) 35%, transparent);
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
+  color: var(--ink);
+}
+
+.primary:hover {
+  background: color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.plus {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--focus);
+  color: var(--bg);
+  font: 600 13px/1 "Geist Mono", ui-monospace, monospace;
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.muted,
+.bad {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+.bad {
+  color: var(--bad);
+}
+
+.problem {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.list {
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--surf);
+}
+
+.item + .item {
+  border-top: 1px solid var(--rule);
+}
+
+.open {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.open:hover {
+  background: color-mix(in srgb, var(--surf-2) 70%, transparent);
+}
+
+.mark {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: color-mix(in srgb, var(--focus) 14%, transparent);
+  stroke: var(--focus);
+  stroke-width: 1.2;
+}
+
+.title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  display: flex;
+  flex: none;
+  gap: 14px;
+  margin-left: auto;
+  color: var(--ink-3);
+  font: 11.5px "Geist Mono", ui-monospace, monospace;
+}
+
+.subheading {
+  margin: 12px 0 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.readyList {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 12px;
+  list-style: none;
+  border-left: 1px dashed color-mix(in srgb, var(--focus) 40%, transparent);
+}
+
+.ready {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 4px 8px 0;
+}
+
+.readyText {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.readyTitle {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.readyTitle:hover {
+  color: var(--focus);
+}
+
+.description,
+.readyNote {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.description {
+  color: var(--ink-2);
+}
+
+.readyNote {
+  color: var(--warn);
+}
+
+.copy {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.copy:hover {
+  border-color: color-mix(in srgb, var(--focus) 50%, transparent);
+  color: var(--ink);
+}
+
+.primary[aria-disabled="true"],
+.copy[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.copy:focus-visible,
+.readyTitle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.open:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+@media (max-width: 760px) {
+  .open {
+    flex-wrap: wrap;
+  }
+
+  .meta {
+    width: 100%;
+    margin-left: 25px;
+  }
+
+  .ready {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .open,
+  .primary,
+  .copy {
+    transition: background-color 0.12s ease, border-color 0.12s ease;
+  }
+}

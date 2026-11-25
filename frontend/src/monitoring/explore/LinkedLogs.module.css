@@ -1,0 +1,182 @@
+/* The log lines under Explore's chart (X3). A quiet second half of the card: the chart above stays
+   the strong element, the lines read as its footnotes on the same time line. Territories tokens
+   only; translucency with color-mix. Motion: none of its own (the window band answers the drag). */
+
+.section {
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--rule);
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 8px;
+}
+
+.title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  border-radius: 4px;
+}
+
+.title:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.info {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.selector {
+  color: var(--ink);
+  font: 12px/1.5 "Geist Mono", ui-monospace, monospace;
+}
+
+/* The Logs query field: the query bar's socket, one size smaller. */
+.fieldRow {
+  display: flex;
+  max-width: 640px;
+  margin-bottom: 8px;
+}
+
+.lang {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-right: 0;
+  border-radius: 7px 0 0 7px;
+  background: var(--surf);
+  color: var(--ink-3);
+  font: 600 10.5px/1 "Geist Mono", ui-monospace, monospace;
+}
+
+.field {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 0 7px 7px 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 12px/1.5 "Geist Mono", ui-monospace, monospace;
+}
+
+.field::placeholder {
+  color: var(--ink-3);
+}
+
+.field:focus {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+/* The window line: what the list holds, and Show all while a window is chosen. */
+.windowRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 24px;
+  margin-bottom: 6px;
+}
+
+.windowText {
+  margin: 0;
+  color: var(--ink-3);
+  font: 11.5px/1.5 "Geist Mono", ui-monospace, monospace;
+}
+
+.windowText:empty {
+  display: none;
+}
+
+.loading {
+  color: var(--focus);
+  font: 11.5px/1.5 "Geist Mono", ui-monospace, monospace;
+}
+
+.showAll,
+.retry {
+  padding: 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.showAll {
+  border-color: color-mix(in srgb, var(--focus) 55%, var(--rule));
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
+}
+
+.showAll:hover,
+.retry:hover {
+  border-color: var(--focus);
+}
+
+.showAll:focus-visible,
+.retry:focus-visible,
+.field:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The list: M2's logs chart in a bordered well, at most 320 px tall. */
+.lines {
+  min-height: 30px;
+  padding: 4px 0;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surf);
+  box-sizing: content-box;
+}
+
+.note {
+  margin: 0;
+  padding: 14px 0 6px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--bad);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+}
+
+.failureReason {
+  margin: 0;
+  max-width: 80ch;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .section {
+    padding: 10px 10px 12px;
+  }
+}

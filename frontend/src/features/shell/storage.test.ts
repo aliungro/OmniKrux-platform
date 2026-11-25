@@ -145,3 +145,32 @@ it.each([undefined, null, [], "bad", {}, {tabs:null}, {tabs:"bad"}])("reports ma
  expect(parsed.workspace.audit.filters.cluster).toBe("east");
 });
 it("missing storage is normal",()=>expect(parseWorkspace(null).problem).toBeNull());
+
+it("old saved workspace loads without a notice", () => {
+  const saved = JSON.parse(raw([tab(kind)]));
+  expect(saved.monitoring).toBeUndefined();
+  const { workspace, problem } = parseWorkspace(JSON.stringify(saved));
+  expect(problem).toBeNull();
+  expect(workspace.kubernetes.tabs.map((t) => t.id)).toEqual(["a"]);
+  expect(workspace.monitoring.tabs).toHaveLength(1);
+  expect(workspace.monitoring.tabs[0].view).toEqual({ page: "home" });
+  expect(workspace.monitoring.active).toBe(workspace.monitoring.tabs[0].id);
+});
+it("monitoring tabs round-trip through storage", () => {
+  const ws = defaultWorkspace();
+  ws.app = "monitoring";
+  ws.monitoring = {
+    tabs: [
+      { id: "m1", view: { page: "project", id: "p1" }, back: [{ page: "home" }], forward: [{ page: "sources" }], scrollTop: 9 },
+      { id: "m2", view: { page: "setup", clusterId: "k1" }, back: [], forward: [], scrollTop: 0 },
+    ],
+    active: "m2",
+    closed: [{ tab: { id: "m3", view: { page: "group", id: "g1" }, back: [], forward: [], scrollTop: 0 }, closedAt: 5 }],
+  };
+  expect(parseWorkspace(serializeWorkspace(ws)).workspace).toEqual(ws);
+  const unreadable = JSON.parse(serializeWorkspace(ws));
+  unreadable.monitoring.tabs.push({ id: "m4", view: { page: "nope", id: "d" }, back: [], forward: [], scrollTop: 0 });
+  const parsed = parseWorkspace(JSON.stringify(unreadable));
+  expect(parsed.problem).toEqual({ text: "1 saved tab couldn't be read and was left out", reset: false });
+  expect(parsed.workspace.monitoring.tabs.map((t) => t.id)).toEqual(["m1", "m2"]);
+});

@@ -1,0 +1,129 @@
+/* What the cluster reviews did: a quiet tray at the foot of the workspace, one line per review.
+   The status shapes of the rule table (filled dot applied, hollow ring not applied yet, diamond
+   couldn't), so each line reads without colour too. */
+.tray {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  width: max-content;
+  max-width: min(52ch, calc(100% - 32px));
+  padding: 10px 10px 10px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf-2);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--bg) 70%, transparent);
+  animation: rise 160ms ease-out;
+}
+
+/* No lines: the status stays in the page (so the next line is announced) but takes no room. */
+.idle {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.lines {
+  min-width: 0;
+}
+
+.list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 9px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.shape {
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+}
+
+.line[data-tone="ok"] .shape {
+  background: var(--ok);
+}
+
+.line[data-tone="wait"] {
+  color: color-mix(in srgb, var(--warn) 45%, var(--ink));
+}
+
+.line[data-tone="wait"] .shape {
+  border: 2px solid var(--warn);
+}
+
+.line[data-tone="failed"] {
+  color: color-mix(in srgb, var(--warn) 55%, var(--ink));
+  font-weight: 600;
+}
+
+.line[data-tone="failed"] .shape {
+  border-radius: 2px;
+  background: var(--warn);
+  transform: translateY(-1px) rotate(45deg);
+}
+
+.dismiss {
+  padding: 3px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dismiss:hover {
+  border-color: color-mix(in srgb, var(--focus) 45%, var(--rule));
+  color: var(--ink);
+}
+
+.dismiss:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (max-width: 760px) {
+  .tray {
+    right: 16px;
+    left: 16px;
+    bottom: 16px;
+    width: auto;
+    max-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tray {
+    animation: none;
+  }
+}

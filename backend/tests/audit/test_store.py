@@ -1,12 +1,15 @@
 """The audit log on a real SQLite file: begin, finish, list, and rows a stopped console left."""
 
 import logging
+from typing import get_args
 
 import pytest
 from sqlalchemy import text
 
 from omnikrux.audit.store import (
     INTERRUPTED,
+    Action,
+    AppAuditEntry,
     AuditEntry,
     AuditLog,
     AuditUnavailable,
@@ -35,6 +38,11 @@ async def setup(tmp_path):
     )
     yield AuditLog(sessionmaker, registry), info, engine
     await engine.dispose()
+
+
+@pytest.fixture
+def audit_log(setup):
+    return setup[0]
 
 
 def entry(cluster_id: str, **overrides) -> AuditEntry:
@@ -209,3 +217,181 @@ async def test_finish_reports_whether_it_finished(setup):
     async with engine.begin() as conn:
         await conn.execute(text("DROP TABLE audit"))
     assert await audit.finish(other, "succeeded", "Scaled.") is False
+
+
+async def test_monitoring_entry_has_no_cluster(audit_log):
+    rid = await audit_log.begin_app(
+        AppAuditEntry(
+            "local",
+            "monitoring",
+            "source_add",
+            "source",
+            "Prometheus · prod-east",
+            {"type": "prometheus"},
+        )
+    )
+    await audit_log.finish(rid, "succeeded")
+    [rec] = (await audit_log.list()).records
+    assert (rec.app, rec.cluster_id, rec.cluster_name, rec.provider) == ("monitoring", "", "", "")
+    assert rec.namespace is None
+    assert (rec.action, rec.kind, rec.name, rec.outcome) == (
+        "source_add",
+        "source",
+        "Prometheus · prod-east",
+        "succeeded",
+    )
+    assert rec.details == {"type": "prometheus"}
+
+
+async def test_dashboard_actions_are_recorded(audit_log):
+    actions = ("dashboard_add", "dashboard_save", "dashboard_remove", "dashboard_restore")
+    assert set(actions) <= set(get_args(Action))
+    rid = await audit_log.begin_app(
+        AppAuditEntry(
+            "local", "monitoring", "dashboard_save", "dashboard", "API latency", {"version": 3}
+        )
+    )
+    await audit_log.finish(rid, "succeeded")
+    [rec] = (await audit_log.list(action="dashboard_save")).records
+    assert (rec.app, rec.action, rec.kind, rec.name, rec.outcome) == (
+        "monitoring",
+        "dashboard_save",
+        "dashboard",
+        "API latency",
+        "succeeded",
+    )
+    assert rec.details == {"version": 3}
+
+
+async def test_alert_actions_are_recorded(audit_log):
+    actions = {
+        "create",
+        "alert_rule_add",
+        "alert_rule_change",
+        "alert_rule_remove",
+        "contact_point_add",
+        "contact_point_change",
+        "contact_point_remove",
+        "contact_point_test",
+        "silence_add",
+        "silence_remove",
+        "loki_rule_write",
+        "loki_rule_remove",
+    }
+    assert actions <= set(get_args(Action))
+    rid = await audit_log.begin_app(
+        AppAuditEntry(
+            "local",
+            "monitoring",
+            "alert_rule_add",
+            "alert_rule",
+            "API latency high",
+            {"severity": "warning"},
+        )
+    )
+    await audit_log.finish(rid, "succeeded")
+    [rec] = (await audit_log.list(action="alert_rule_add")).records
+    assert (rec.app, rec.action, rec.kind, rec.name, rec.outcome) == (
+        "monitoring",
+        "alert_rule_add",
+        "alert_rule",
+        "API latency high",
+        "succeeded",
+    )
+    assert rec.details == {"severity": "warning"}
+
+
+async def test_transfer_actions_are_recorded(audit_log):
+    actions = {
+        "dashboard_import",
+        "dashboard_update",
+        "monitoring_export",
+        "grafana_add",
+        "grafana_change",
+        "grafana_remove",
+    }
+    assert actions <= set(get_args(Action))
+    entries = [
+        ("dashboard_import", "dashboard", "Node overview", {"from": "Grafana · kind"}),
+        ("grafana_add", "grafana", "Grafana · kind", {"reach": "url", "auth": "bearer"}),
+    ]
+    for action, kind, name, details in entries:
+        rid = await audit_log.begin_app(
+            AppAuditEntry("local", "monitoring", action, kind, name, details)
+        )
+        await audit_log.finish(rid, "succeeded")
+    for action, kind, name, details in entries:
+        [rec] = (await audit_log.list(action=action)).records
+        assert (rec.app, rec.action, rec.kind, rec.name, rec.outcome) == (
+            "monitoring",
+            action,
+            kind,
+            name,
+            "succeeded",
+        )
+        assert rec.details == details
+
+
+async def test_kubernetes_records_are_unchanged(setup):
+    audit, info, _ = setup
+    rid = await audit.begin(
+        entry(info.id, details={"summary": ["Scale from 1 to 2 replicas."]}, diff="-1\n+2")
+    )
+    await audit.finish(rid, "succeeded", "Scaled.")
+    [rec] = (await audit.list()).records
+    assert rec.app == "kubernetes"
+    assert rec.actor == "local"
+    assert rec.action == "scale"
+    assert rec.cluster_id == info.id
+    assert (rec.cluster_name, rec.provider) == ("prod-east", "onprem")
+    assert (rec.namespace, rec.kind, rec.name) == ("demo", "deployments.apps", "web")
+    assert (rec.outcome, rec.message) == ("succeeded", "Scaled.")
+    assert rec.diff == "-1\n+2"
+    assert rec.details == {"summary": ["Scale from 1 to 2 replicas."]}
+    assert rec.finished_at is not None
+
+
+async def test_cluster_filter_leaves_out_monitoring_entries(setup):
+    audit, info, _ = setup
+    kube = await audit.begin(entry(info.id))
+    mon = await audit.begin_app(
+        AppAuditEntry("local", "monitoring", "group_add", "group", "Production")
+    )
+    assert [r.id for r in (await audit.list(cluster_id=info.id)).records] == [kube]
+    assert [r.id for r in (await audit.list()).records] == [mon, kube]
+
+
+async def test_begin_app_without_audit_raises(setup):
+    audit, _, engine = setup
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE audit"))
+    with pytest.raises(AuditUnavailable):
+        await audit.begin_app(AppAuditEntry("local", "monitoring", "source_add", "source", "x"))
+
+
+async def test_migration_marks_existing_rows_as_kubernetes(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+
+    from omnikrux.db import MIGRATIONS_DIR
+
+    def migrate(conn, rev):
+        config = Config()
+        config.set_main_option("script_location", str(MIGRATIONS_DIR))
+        config.attributes["connection"] = conn
+        command.upgrade(config, rev)
+
+    engine = make_engine(Settings(data_dir=tmp_path, kubeconfig="", in_container=False).db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(migrate, "0005")
+        await conn.execute(
+            text(
+                "INSERT INTO audit (started_at, actor, action, cluster_id, cluster_name,"
+                " provider, namespace, kind, name, outcome) VALUES ('2026-11-07 10:00:00',"
+                " 'local', 'cordon', 'f', 'kind-dev', 'kind', NULL, 'nodes', 'worker', 'started')"
+            )
+        )
+        await conn.run_sync(migrate, "head")
+        app = (await conn.execute(text("SELECT app FROM audit"))).scalar_one()
+    await engine.dispose()
+    assert app == "kubernetes"

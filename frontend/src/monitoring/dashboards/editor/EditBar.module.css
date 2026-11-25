@@ -1,0 +1,229 @@
+/* The header in edit mode, the notices under it, and the Discard and Save conflict dialogs.
+   Territories tokens only. */
+
+.pill {
+  flex: none;
+  align-self: center;
+  padding: 1px 9px;
+  border: 1px solid color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--focus) 8%, transparent);
+  color: var(--focus);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.discard,
+.save {
+  padding: 4px 12px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.discard {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.discard:hover {
+  border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
+  color: var(--ink);
+}
+
+.save {
+  border: 1px solid transparent;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.save:hover {
+  background: color-mix(in srgb, var(--focus) 88%, var(--ink));
+}
+
+.discard[aria-disabled="true"],
+.save[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.discard:focus-visible,
+.save:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Why a save didn't go through: under the header, above the grid. */
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 14px;
+  margin: 10px 16px 0;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--rule));
+  border-left: 3px solid var(--bad);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 7%, var(--surf));
+}
+
+.notice[data-kind="conflict"],
+.notice[data-kind="json"] {
+  align-items: center;
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--rule));
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 7%, var(--surf));
+}
+
+.noticeText {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+/* The dashboard couldn't be read again: the page stays as last read (a failure, so rose). */
+.notice[data-kind="reread"] {
+  align-items: center;
+}
+
+.notice[data-kind="conflict"] .noticeLine,
+.notice[data-kind="json"] .noticeLine,
+.notice[data-kind="reread"] .noticeLine {
+  flex: 1 1 320px;
+}
+
+.noticeLine {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.problems {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.problem {
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.path {
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+}
+
+.noticeAction {
+  flex: none;
+  padding: 4px 11px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surf);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.noticeAction:hover {
+  border-color: var(--focus);
+}
+
+.noticeAction:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Dialogs, inside the shared dialog shell. */
+.dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 18px 20px 16px;
+}
+
+.review {
+  width: min(980px, calc(100vw - 32px));
+  padding: 18px 20px 16px;
+}
+
+.dialogTitle {
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.reviewNote {
+  margin: 0;
+  padding: 18px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.dialogError {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.secondary,
+.primary,
+.danger {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.danger {
+  border: 0;
+  background: var(--bad);
+  color: var(--bg);
+}
+
+.secondary[aria-disabled="true"],
+.primary[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.secondary:focus-visible,
+.primary:focus-visible,
+.danger:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

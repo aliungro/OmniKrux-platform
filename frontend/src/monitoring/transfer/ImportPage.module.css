@@ -1,0 +1,343 @@
+/* The Import page: what to import from, the check, and the imported list. The review has its own
+   module (ImportReview.module.css). Territories tokens only. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 880px;
+  box-sizing: border-box;
+  padding: 24px 28px 36px;
+}
+
+.top {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+/* The L1 import glyph, as the bar beside New dashboard draws it. */
+.mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--focus) 40%, var(--rule));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--focus) 9%, var(--surf));
+  color: var(--focus);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.title:focus-visible,
+.doneTitle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+
+.lead {
+  max-width: 64ch;
+  margin: 4px 0 0;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* --- What to import from ---------------------------------------------------------------------- */
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.label {
+  grid-column: 1 / -1;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf);
+  cursor: pointer;
+}
+
+.mode:hover {
+  border-color: color-mix(in srgb, var(--focus) 35%, var(--rule));
+}
+
+.mode[data-checked] {
+  border-color: color-mix(in srgb, var(--focus) 60%, transparent);
+  background: color-mix(in srgb, var(--focus) 7%, var(--surf));
+}
+
+.mode:has(:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.radio {
+  margin: 2px 0 0;
+  accent-color: var(--focus);
+}
+
+.radio:focus-visible {
+  outline: none;
+}
+
+.modeText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.modeTitle {
+  font-weight: 600;
+}
+
+.modeSub {
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.drop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  padding: 18px 16px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--focus) 3%, transparent);
+}
+
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.dropText {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.fileName {
+  flex-basis: 100%;
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.paste {
+  width: 100%;
+  min-height: 200px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.paste::placeholder {
+  color: var(--ink-3);
+}
+
+.paste:focus-visible,
+.select:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.grafana {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.select {
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+.connect {
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surf);
+}
+
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.drop .error {
+  flex-basis: 100%;
+}
+
+/* --- Buttons ---------------------------------------------------------------------------------- */
+
+.primary,
+.secondary,
+.quiet {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.quiet {
+  padding: 5px 10px;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.quiet:hover {
+  color: var(--ink);
+}
+
+.primary[aria-disabled="true"],
+.secondary[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.quiet:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* --- Imported --------------------------------------------------------------------------------- */
+
+.done {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--ok) 40%, var(--rule));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ok) 5%, var(--surf));
+}
+
+.doneTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.doneList {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doneRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.doneName {
+  flex: 1;
+  min-width: 0;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--warn);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 18px 16px 28px;
+  }
+
+  .modes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mode {
+    transition: border-color 120ms ease, background-color 120ms ease;
+  }
+}

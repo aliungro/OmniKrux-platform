@@ -1,0 +1,61 @@
+/* A link's label filter. Territories tokens only. */
+.field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.label {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 12.5px/1.4 "Geist Mono", ui-monospace, monospace;
+}
+
+/* A filter OmniKrux filled in reads as a suggestion until it is changed. */
+.field[data-origin="auto"] .input {
+  border-color: color-mix(in srgb, var(--focus) 35%, var(--rule));
+  background: color-mix(in srgb, var(--focus) 5%, var(--bg));
+}
+
+.input::placeholder {
+  color: var(--ink-3);
+}
+
+.input:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.input[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--bad) 70%, var(--rule));
+}
+
+.error,
+.reason {
+  grid-column: 2;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.error {
+  color: var(--bad);
+}
+
+.reason {
+  color: var(--ink-3);
+}

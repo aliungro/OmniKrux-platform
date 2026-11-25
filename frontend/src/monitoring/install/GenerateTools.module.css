@@ -1,0 +1,290 @@
+/* The generator for Docker hosts and servers: a form, the file it writes, what to do with it, and the
+   wait for the tools to answer. Territories tokens only. */
+.panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--surf);
+}
+
+.heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.lead {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 12px;
+  align-items: start;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field > label {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+.input::placeholder {
+  color: var(--ink-3);
+}
+
+.input:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--bad);
+}
+
+.mono {
+  resize: vertical;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+}
+
+.days {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.problem {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.primary,
+.secondary,
+.quiet {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.primary[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.quiet {
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.quiet:hover {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.quiet:focus-visible,
+.file:focus-visible,
+.waiting:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.result {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.fileBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fileName {
+  font: 600 12.5px/1.2 "Geist Mono", ui-monospace, monospace;
+  color: var(--ink-2);
+}
+
+.fileActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file {
+  max-height: 280px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 12px/1.55 "Geist Mono", ui-monospace, monospace;
+  white-space: pre;
+}
+
+.said {
+  min-height: 1em;
+  margin-top: -6px;
+  color: var(--ok);
+  font-size: 12.5px;
+}
+
+.steps {
+  display: grid;
+  gap: 6px;
+  max-width: 76ch;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.steps code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surf-2);
+  font: 12.5px "Geist Mono", ui-monospace, monospace;
+}
+
+/* The ports carry no sign-in: this step is marked, not just listed. */
+.warn {
+  padding: 6px 10px;
+  margin-left: -10px;
+  border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+
+.waiting {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.waiting[data-state="answered"] {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+.waitLine {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.tools {
+  display: grid;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 8px 0;
+}
+
+.tool + .tool {
+  border-top: 1px solid var(--rule);
+}
+
+.toolName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.chip {
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 20px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.chip[data-tone="ok"] {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  color: var(--ok);
+}
+
+@media (max-width: 560px) {
+  .pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

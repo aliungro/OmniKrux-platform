@@ -1,0 +1,137 @@
+/* Suggestions beside a new dashboard (D2): a 360 px rail of preview cards left of the grid; under
+   960 px it stacks above the grid. Territories tokens only. */
+.layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.slot {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 10px;
+  width: 360px;
+  max-height: calc(100vh - 120px);
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--surf);
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.heading {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.hide,
+.action {
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hide:hover,
+.action:hover {
+  border-color: var(--focus);
+}
+
+.hide:focus-visible,
+.action:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: block;
+  min-width: 0;
+}
+
+.line {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* Said to screen readers only, unless it is a refusal: that one is for everybody. */
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.refused {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--bad);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+  color: var(--bad);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+@media (max-width: 959px) {
+  .layout {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .rail {
+    position: static;
+    width: auto;
+    max-height: none;
+  }
+
+  .list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  }
+}

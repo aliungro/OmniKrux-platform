@@ -1,0 +1,612 @@
+/* The rule form (A2's details area), its sentence, the dry-run line and the attach dialog.
+   One strong element: the sentence, set a size up on the page's ground, its blanks lit in the
+   focus lavender as in the prototype. Everything around it stays quiet. Refusals are rose (as the
+   app's field errors), things to know before saving are amber. Territories tokens only; translucency
+   with color-mix. Motion only on the focus ring and the checking pulse, off under reduced motion. */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 760px;
+  padding: 14px 18px 0;
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+  border-radius: 4px;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.fields {
+  display: grid;
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.label,
+.sectionLabel {
+  padding: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.sectionLabel {
+  margin: 6px 0 0;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.input,
+.query {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.query {
+  min-height: 72px;
+  padding: 8px 10px;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.input[aria-invalid="true"],
+.query[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--bad) 60%, var(--rule));
+}
+
+.help {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.fieldError {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* --- the sentence ------------------------------------------------------------------------------ */
+
+.sentence {
+  display: grid;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.sentenceLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 7px;
+  margin: 0;
+  line-height: 2.1;
+}
+
+.sentenceLine + .sentenceLine {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.sentenceWord {
+  white-space: nowrap;
+}
+
+/* A blank of the sentence: lavender-edged, the value in full ink. */
+.blank,
+.toggle,
+.thresholdBox {
+  border: 1px solid color-mix(in srgb, var(--focus) 50%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--focus) 6%, transparent);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.7;
+}
+
+.blank {
+  appearance: none;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.blank option {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+.toggle {
+  display: inline-flex;
+  overflow: hidden;
+}
+
+.toggleOption {
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  line-height: 1.7;
+  cursor: pointer;
+}
+
+.toggleOption[aria-checked="true"] {
+  background: color-mix(in srgb, var(--focus) 24%, transparent);
+  color: var(--ink);
+}
+
+.thresholdBox {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 0 8px;
+}
+
+.thresholdBox[data-invalid] {
+  border-color: color-mix(in srgb, var(--bad) 70%, transparent);
+}
+
+.thresholdInput {
+  width: auto;
+  min-width: 3ch;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.thresholdInput:focus {
+  outline: none;
+}
+
+.thresholdBox:focus-within,
+.blank:focus-visible,
+.toggleOption:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.unit {
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+/* --- the dry run ------------------------------------------------------------------------------- */
+
+.dryRun {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 40%, transparent);
+  border-radius: 8px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.dryRun[data-tone="warn"] {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
+  color: var(--ink);
+}
+
+.dryRunText {
+  display: grid;
+  gap: 4px;
+}
+
+.dryRunLine {
+  margin: 0;
+}
+
+.dryRunLine[data-checking] {
+  color: var(--ink-3);
+  animation: checking 1.4s ease-in-out infinite;
+}
+
+@keyframes checking {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.dryRunProblems {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 14px;
+  color: var(--warn);
+  font-size: 12px;
+}
+
+.advice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0;
+  color: var(--ink);
+}
+
+.adviceButton,
+.barButton {
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, var(--focus) 55%, var(--rule));
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.adviceButton:hover,
+.barButton:hover {
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
+}
+
+.chartProblem {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed color-mix(in srgb, var(--warn) 40%, var(--rule));
+  border-radius: 8px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Things to know before saving: a source that may hold other clusters, a stale version. */
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--rule));
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.bar p {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+}
+
+/* --- details ----------------------------------------------------------------------------------- */
+
+.segmented {
+  display: inline-flex;
+  justify-self: start;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.segment {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px;
+  border-radius: 6px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.segment input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segment::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.segment[data-severity="critical"]::before { background: var(--bad); }
+.segment[data-severity="warning"]::before { background: var(--warn); }
+.segment[data-severity="info"]::before { background: var(--focus); }
+
+.segment[data-checked] {
+  background: var(--surf-2);
+  color: var(--ink);
+}
+
+.segment:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.checks {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.check {
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.check input {
+  accent-color: var(--focus);
+}
+
+.checkName {
+  color: var(--ink);
+}
+
+.checkSummary {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--focus) 40%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* --- where it runs ----------------------------------------------------------------------------- */
+
+.where {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.whereChoice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.whereChoice input {
+  margin: 2px 0 0;
+  accent-color: var(--focus);
+}
+
+.whereChoice[data-checked] {
+  border-color: color-mix(in srgb, var(--focus) 55%, var(--rule));
+  background: color-mix(in srgb, var(--focus) 6%, transparent);
+}
+
+.whereChoice[data-disabled] {
+  cursor: not-allowed;
+}
+
+.whereChoice[data-disabled] .whereTitle {
+  color: var(--ink-3);
+}
+
+.whereChoice:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.whereText,
+.whereLines {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.whereTitle {
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.whereChip {
+  justify-self: start;
+  padding: 2px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--ink-2);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+/* --- the foot ---------------------------------------------------------------------------------- */
+
+.foot {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: 8px;
+  margin: 4px -18px 0;
+  padding: 10px 18px 14px;
+  border-top: 1px solid var(--rule);
+  background: var(--surf);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.keyHint {
+  margin-right: auto;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.formError {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.primary,
+.secondary,
+.danger {
+  padding: 6px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--focus);
+  color: var(--bg);
+}
+
+.secondary {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+}
+
+.danger {
+  border: 0;
+  background: var(--bad);
+  color: var(--bg);
+}
+
+.primary[aria-disabled="true"],
+.secondary[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* --- dialogs ----------------------------------------------------------------------------------- */
+
+.dialog {
+  display: grid;
+  gap: 12px;
+  width: min(460px, calc(100vw - 32px));
+  padding: 18px 20px 16px;
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.dialogBody {
+  margin: 0;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.dialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* --- focus ------------------------------------------------------------------------------------- */
+
+.title:focus-visible,
+.input:focus-visible,
+.query:focus-visible,
+.primary:focus-visible,
+.secondary:focus-visible,
+.danger:focus-visible,
+.adviceButton:focus-visible,
+.barButton:focus-visible,
+.link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dryRunLine[data-checking] {
+    animation: none;
+  }
+}

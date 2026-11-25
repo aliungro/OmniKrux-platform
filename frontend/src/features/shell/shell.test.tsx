@@ -12,6 +12,8 @@ import { describeBody, container } from "../../test/describe";
 import type { Cluster, ResourceRow } from "../../api/types";
 import { FakeWebSocket } from "../logs/fakeWebSocket";
 import { FOLLOW_SETTLE_MS } from "../dock/follow";
+import type { MonitoringAppProps } from "../../monitoring/MonitoringApp";
+import { setMonitoringLeaveCheck, type MonitoringTabAction } from "../../monitoring/shell/tabState";
 // The dock tests' terminal: a helper textarea inside a .xterm root, as xterm draws it. Like xterm, it
 // listens for keys on its textarea, asks the custom key handler first, and types what that allows;
 // `xterm.stopsKeys` makes it stop the key there, as xterm (or an IME path) can.
@@ -48,6 +50,21 @@ vi.mock("../territories/ResourceRowView", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../territories/ResourceRowView")>();
   return { ...orig, ResourceRowView: (props: Parameters<typeof orig.ResourceRowView>[0]) => { rowRenders.count++; return orig.ResourceRowView(props); } };
 });
+// The Monitoring app as a probe: its heading, the tab's view, links that navigate the tab, and a
+// close button wired like the tab strip's.
+vi.mock("../../monitoring/MonitoringApp", async () => {
+  const { createElement: h } = await import("react");
+  return {
+    default: ({ nav, tabs, dispatchTabs }: MonitoringAppProps) => h("section", null,
+      h("h1", null, "Monitoring"),
+      h("p", { "data-testid": "monitoring-view" }, JSON.stringify(nav.view)),
+      h("button", { type: "button", onClick: () => nav.navigate({ page: "project", id: "p1" }, "push") }, "Open project p1"),
+      h("button", { type: "button", onClick: () => nav.navigate(() => ({ page: "group", id: "g1" }), "push") }, "Open group g1"),
+      h("button", { type: "button", onClick: () => nav.navigate({ page: "dashboard", id: "d1", tab: "dashboard", time: { from: "now-1h", to: "now" } }, "push") }, "Open dashboard d1"),
+      h("button", { type: "button", onClick: () => nav.navigate((v) => v.page === "dashboard" ? { ...v, time: { from: "now-6h", to: "now" } } : v, "replace") }, "Last 6 hours"),
+      h("button", { type: "button", onClick: () => dispatchTabs({ type: "closeTab", id: tabs.active }) }, "Close this Monitoring tab")),
+  };
+});
 vi.mock("@xterm/addon-fit", () => ({FitAddon:class { fit() {} }}));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 // The YAML editor as CodeMirror draws it: a contenteditable box.
@@ -75,15 +92,179 @@ beforeEach(()=>{
  vi.stubGlobal("WebSocket",FakeWebSocket);
  stubClusters([east]);
 });
-afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();});
+afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();setMonitoringLeaveCheck(null);});
 function renderShell(){return render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><Shell/></QueryClientProvider>);}
 it("lists the built apps and marks the current app", () => {
   render(<Rail app="kubernetes" onSelect={() => {}} />);
   const nav = screen.getByRole("navigation", { name: "Apps" });
-  expect(nav.querySelectorAll("button")).toHaveLength(3);
+  expect(nav.querySelectorAll("button")).toHaveLength(4);
   expect(screen.getByRole("button", { name: "Kubernetes" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("button", { name: "Monitoring" }).getAttribute("aria-keyshortcuts")).toBe("Alt+2");
   expect(screen.getByRole("button", { name: "Audit log" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Settings" })).toBeTruthy();
+});
+// Shell's lazy Monitoring component loads once per test file: this test must be the first to show it.
+it("the Monitoring view loads lazily", async () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  expect(screen.getByText("Loading Monitoring…")).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Monitoring" })).toBeNull();
+  expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
+  expect(screen.queryByText("Loading Monitoring…")).toBeNull();
+});
+const savedMonitoring = () => JSON.parse(localStorage.getItem("omnikrux.workspace") ?? "{}").monitoring as { tabs: { id: string }[]; active: string } | undefined;
+const monitoringView = () => JSON.parse(screen.getByTestId("monitoring-view").textContent ?? "null");
+it("Alt+2 opens Monitoring and Alt+1 returns to the same Kubernetes tab", async () => {
+  renderShell();
+  fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+  const kubeTabs = () => within(screen.getByRole("tablist", { name: "Kubernetes tabs" })).getAllByRole("tab");
+  fireEvent.click(kubeTabs()[0]);
+  expect(kubeTabs()[0].getAttribute("aria-selected")).toBe("true");
+  const rail = screen.getByRole("button", { name: "Monitoring" });
+  expect(rail.getAttribute("aria-keyshortcuts")).toBe("Alt+2");
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  expect(rail.getAttribute("aria-current")).toBe("page");
+  await screen.findByRole("heading", { name: "Monitoring" });
+  expect(screen.queryByRole("tablist", { name: "Kubernetes tabs" })).toBeNull();
+  expect(location.hash).toMatch(/^#\/monitoring\/.+/);
+  await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  fireEvent.keyDown(document.activeElement!, { key: "1", code: "Digit1", altKey: true });
+  expect(screen.getByRole("button", { name: "Kubernetes" }).getAttribute("aria-current")).toBe("page");
+  expect(kubeTabs()).toHaveLength(2);
+  expect(kubeTabs()[0].getAttribute("aria-selected")).toBe("true");
+  await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  expect(document.activeElement).not.toBeNull();
+});
+it("Alt+T and Alt+W manage Monitoring tabs while Monitoring is shown", async () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  await waitFor(() => expect(savedMonitoring()?.tabs).toHaveLength(1));
+  const first = savedMonitoring()!.active;
+  fireEvent.keyDown(document.body, { key: "t", code: "KeyT", altKey: true });
+  await waitFor(() => expect(savedMonitoring()?.tabs).toHaveLength(2));
+  const second = savedMonitoring()!.active;
+  expect(second).not.toBe(first);
+  expect(location.hash).toBe(`#/monitoring/${second}`);
+  fireEvent.keyDown(document.body, { key: "PageUp", code: "PageUp", altKey: true });
+  await waitFor(() => expect(savedMonitoring()?.active).toBe(first));
+  fireEvent.keyDown(document.body, { key: "PageDown", code: "PageDown", altKey: true });
+  await waitFor(() => expect(savedMonitoring()?.active).toBe(second));
+  fireEvent.keyDown(document.body, { key: "w", code: "KeyW", altKey: true });
+  await waitFor(() => expect(savedMonitoring()?.tabs.map((t) => t.id)).toEqual([first]));
+  expect(location.hash).toBe(`#/monitoring/${first}`);
+  await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  fireEvent.keyDown(document.body, { key: "1", code: "Digit1", altKey: true });
+  expect(within(screen.getByRole("tablist", { name: "Kubernetes tabs" })).getAllByRole("tab")).toHaveLength(1);
+});
+it("Back in Kubernetes is unaffected by Monitoring navigation", async () => {
+  renderShell();
+  fireEvent.click(await screen.findByRole("button", { name: /East/ }));
+  expect(screen.queryByRole("heading", { name: "Where do you want to look?" })).toBeNull();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  const back = () => screen.getByRole("button", { name: "Back" }) as HTMLButtonElement;
+  expect(back().disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Open project p1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open group g1" }));
+  expect(monitoringView()).toEqual({ page: "group", id: "g1" });
+  expect(back().disabled).toBe(false);
+  fireEvent.keyDown(document.body, { key: "ArrowLeft", code: "ArrowLeft", altKey: true });
+  expect(monitoringView()).toEqual({ page: "project", id: "p1" });
+  fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+  expect(monitoringView()).toEqual({ page: "group", id: "g1" });
+  // The browser's Back while Monitoring is shown steps the Monitoring tab, never the Kubernetes one.
+  act(() => { window.dispatchEvent(new PopStateEvent("popstate", { state: { omnikrux: history.state.omnikrux - 1 } })); });
+  expect(monitoringView()).toEqual({ page: "project", id: "p1" });
+  fireEvent.keyDown(document.body, { key: "1", code: "Digit1", altKey: true });
+  expect(screen.queryByRole("heading", { name: "Where do you want to look?" })).toBeNull();
+  expect(back().disabled).toBe(false);
+  fireEvent.keyDown(document.body, { key: "ArrowLeft", code: "ArrowLeft", altKey: true });
+  expect(screen.getByRole("heading", { name: "Where do you want to look?" })).toBeTruthy();
+  expect(back().disabled).toBe(true);
+});
+it("a replace that changes only a dashboard's time lands, and keeps the back history", async () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  fireEvent.click(screen.getByRole("button", { name: "Open project p1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open dashboard d1" }));
+  const entry = history.state.omnikrux;
+  fireEvent.click(screen.getByRole("button", { name: "Last 6 hours" }));
+  expect(monitoringView()).toEqual({ page: "dashboard", id: "d1", tab: "dashboard", time: { from: "now-6h", to: "now" } });
+  expect(history.state.omnikrux).toBe(entry);
+  // The same dashboard pushed again (its first time) is no new entry: it is the same view.
+  fireEvent.click(screen.getByRole("button", { name: "Open dashboard d1" }));
+  expect(monitoringView()).toEqual({ page: "dashboard", id: "d1", tab: "dashboard", time: { from: "now-6h", to: "now" } });
+  expect(history.state.omnikrux).toBe(entry);
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(monitoringView()).toEqual({ page: "project", id: "p1" });
+});
+it("Alt+W on a held Monitoring tab keeps it open", async () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  fireEvent.keyDown(document.body, { key: "t", code: "KeyT", altKey: true });
+  await waitFor(() => expect(savedMonitoring()?.tabs).toHaveLength(2));
+  await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  const asked: MonitoringTabAction[] = [];
+  setMonitoringLeaveCheck((action) => { asked.push(action); return action.type === "closeTab"; });
+  const active = savedMonitoring()!.active;
+  const before = document.activeElement;
+  fireEvent.keyDown(document.activeElement!, { key: "w", code: "KeyW", altKey: true });
+  expect(asked).toEqual([{ type: "closeTab", id: active }]);
+  // The tab strip's close button asks the same check.
+  fireEvent.click(screen.getByRole("button", { name: "Close this Monitoring tab" }));
+  expect(asked).toHaveLength(2);
+  await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  expect(savedMonitoring()?.tabs).toHaveLength(2);
+  expect(savedMonitoring()?.active).toBe(active);
+  // A held key leaves the keyboard exactly where it was: the app's question takes it, not the shell.
+  expect(document.activeElement).toBe(before);
+  expect(document.activeElement).not.toBe(document.body);
+  // Moving between tabs is never held.
+  fireEvent.keyDown(document.body, { key: "PageUp", code: "PageUp", altKey: true });
+  await waitFor(() => expect(savedMonitoring()?.active).not.toBe(active));
+  expect(asked).toHaveLength(2);
+  // Without a check the close goes through.
+  setMonitoringLeaveCheck(null);
+  fireEvent.keyDown(document.body, { key: "w", code: "KeyW", altKey: true });
+  await waitFor(() => expect(savedMonitoring()?.tabs).toHaveLength(1));
+});
+it("a held Monitoring navigation stays where it is", async () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  fireEvent.click(screen.getByRole("button", { name: "Open project p1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open dashboard d1" }));
+  const asked: string[] = [];
+  setMonitoringLeaveCheck((action) => { asked.push(action.type); return true; });
+  const entry = history.state.omnikrux;
+  fireEvent.click(screen.getByRole("button", { name: "Open group g1" }));
+  fireEvent.keyDown(document.body, { key: "ArrowLeft", code: "ArrowLeft", altKey: true });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(asked).toEqual(["navigate", "back", "back"]);
+  expect(monitoringView()).toEqual({ page: "dashboard", id: "d1", tab: "dashboard", time: { from: "now-1h", to: "now" } });
+  expect(history.state.omnikrux).toBe(entry);
+  // A view-state change on the same dashboard isn't a way out: it is never asked about.
+  fireEvent.click(screen.getByRole("button", { name: "Last 6 hours" }));
+  expect(asked).toHaveLength(3);
+  expect(monitoringView().time).toEqual({ from: "now-6h", to: "now" });
+  // Forward with nothing ahead has nowhere to go, so nothing is asked.
+  fireEvent.keyDown(document.body, { key: "ArrowRight", code: "ArrowRight", altKey: true });
+  expect(asked).toHaveLength(3);
+});
+it("Kubernetes Alt+W ignores the Monitoring check", async () => {
+  renderShell();
+  const asked = vi.fn(() => true);
+  setMonitoringLeaveCheck(asked);
+  fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+  const kubeTabs = () => within(screen.getByRole("tablist", { name: "Kubernetes tabs" })).getAllByRole("tab");
+  expect(kubeTabs()).toHaveLength(2);
+  fireEvent.keyDown(document.body, { key: "w", code: "KeyW", altKey: true });
+  expect(kubeTabs()).toHaveLength(1);
+  fireEvent.keyDown(document.body, { key: "ArrowLeft", code: "ArrowLeft", altKey: true });
+  expect(asked).not.toHaveBeenCalled();
 });
 it("opens Home, switches apps, and restores its workspace",()=>{
  renderShell();
@@ -940,6 +1121,21 @@ it("the lilac outline moves with the keyboard", async () => {
   filter.focus();
   await waitFor(() => expect(zonePane().hasAttribute("data-keyboard-zone")).toBe(false));
   expect(zoneDock().hasAttribute("data-keyboard-zone")).toBe(false);
+});
+
+it("/ still focuses Filter rows in Kubernetes after Monitoring", async () => {
+  await renderPods();
+  const filter = () => within(screen.getByRole("group", { name: "Filter rows" })).getByRole("textbox");
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  // Monitoring shows no Kubernetes filter, and its "/" leaves Kubernetes alone.
+  expect(screen.queryByRole("group", { name: "Filter rows" })).toBeNull();
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "1", code: "Digit1", altKey: true });
+  await waitFor(() => expect(screen.getByRole("group", { name: "Filter rows" })).toBeTruthy());
+  const main = screen.getByRole("main");
+  main.focus();
+  fireEvent.keyDown(main, { key: "/" });
+  expect(document.activeElement).toBe(filter());
 });
 
 it("a Home tab's pane has no keyboard zone outline", async () => {

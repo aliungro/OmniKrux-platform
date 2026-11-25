@@ -19,7 +19,7 @@ from omnikrux.kube.client import ClusterUnavailable
 from omnikrux.kube.connections import ClusterConnections, kube_error_message
 from omnikrux.main import create_app
 from tests.fakecloud import write_aws_cli_login, write_azure_cli_login
-from tests.fakekube import kubeconfig_for, status_body
+from tests.fakekube import TOKEN, kubeconfig_for, status_body
 from tests.watch.test_ws import RecordingWebSocket, watch
 
 
@@ -60,6 +60,19 @@ async def test_ws_api_builds_and_closes(fake_api):
         assert ws.configuration.host == fake_api.url
         assert not ws.rest_client.pool_manager.closed
     assert ws.rest_client.pool_manager.closed
+
+
+async def test_configuration_is_read_only(fake_api):
+    connections = ClusterConnections(FakeRegistry({"c1": kubeconfig_for(fake_api)}))
+    first = await connections.configuration("c1")
+    second = await connections.configuration("c1")
+    assert first is not second
+    assert first.host == second.host == fake_api.url
+    for cfg in (first, second):
+        assert TOKEN in cfg.api_key["BearerToken"]
+    assert connections._exec_tokens == {}
+    async with connections.api("c1") as api:
+        assert api.configuration.host == fake_api.url
 
 
 async def test_unknown_cluster_keyerror():

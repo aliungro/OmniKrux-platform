@@ -109,4 +109,165 @@ describe("shortcut registry", () => {
     expect(SHORTCUTS.some((s) => (s.id as string) === "closeLog")).toBe(false);
     expect(SHORTCUTS.some((s) => s.label.includes("Close the focused log"))).toBe(false);
   });
+
+  it("the apps label lists Monitoring", () => {
+    expect(SHORTCUTS.find((s) => s.id === "apps")?.label).toBe("Switch app (Kubernetes 1, Monitoring 2, Audit 8, Settings 9)");
+  });
+
+  it("help shows the Monitoring group only in Monitoring", () => {
+    expect(allGroups(undefined, "kubernetes").map(([t]) => t)).not.toContain("Monitoring");
+    expect(allGroups("pods").map(([t]) => t)).not.toContain("Monitoring");
+    const monitoring = allGroups(undefined, "monitoring").find(([t]) => t === "Monitoring")![1];
+    expect(monitoring.map((s) => [s.id, s.keys, s.label])).toEqual([
+      ["monitoringFind", ["/"], "Find a project, group or source"],
+      ["monitoringTree", ["↑ ↓", "← →", "Enter"], "In the sidebar: move, close or open a group, open the item"],
+      ["monitoringNewDashboard", ["N"], "New dashboard"],
+      ["monitoringImport", ["I"], "Import dashboards"],
+    ]);
+  });
+
+  it("I imports in Monitoring only", () => {
+    expect(pressed("monitoringImport", { ...base, key: "i" })).toBe(true);
+    expect(pressed("monitoringImport", { ...base, key: "I", shiftKey: true })).toBe(true);
+    expect(pressed("monitoringImport", { ...base, key: "i", ctrlKey: true })).toBe(false);
+    expect(pressed("monitoringImport", { ...base, key: "n" })).toBe(false);
+    expect(SHORTCUTS.find((s) => s.id === "monitoringImport")).toMatchObject({ scope: "monitoring", keys: ["I"], label: "Import dashboards" });
+    expect(allGroups(undefined, "kubernetes").flatMap(([, list]) => list.map((s) => s.id))).not.toContain("monitoringImport");
+    expect(allGroups(undefined, "monitoring").find(([t]) => t === "Monitoring")![1].map((s) => s.label)).toContain("Import dashboards");
+  });
+
+  it("the Dashboards group appears only in Monitoring", () => {
+    const titles = allGroups(undefined, "monitoring").map(([t]) => t);
+    const at = titles.indexOf("Monitoring");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(titles.slice(at, at + 3)).toEqual(["Monitoring", "Dashboards", "Explore"]);
+    for (const title of ["Monitoring", "Dashboards", "Explore"]) {
+      expect(allGroups().map(([t]) => t)).not.toContain(title);
+      expect(allGroups("pods", "kubernetes").map(([t]) => t)).not.toContain(title);
+    }
+    const dashboards = allGroups(undefined, "monitoring").find(([t]) => t === "Dashboards")![1];
+    expect(dashboards.map((s) => [s.id, s.keys, s.label])).toEqual([
+      ["dashboardEdit", ["e"], "Edit the dashboard"],
+      ["dashboardViews", ["1–3"], "Dashboard, JSON or Versions"],
+      ["dashboardTime", ["t"], "Pick the time range"],
+      ["dashboardRefresh", ["r"], "Refresh now"],
+      ["dashboardSave", ["Ctrl S"], "While editing (in fields too): save the dashboard"],
+      ["panelFocus", ["← → ↑ ↓"], "While editing: move between panels"],
+      ["panelMove", ["Shift ← → ↑ ↓"], "While editing: move the panel one step"],
+      ["panelResize", ["Ctrl Shift ← → ↑ ↓"], "While editing: make the panel narrower, wider, shorter or taller"],
+      ["panelSettings", ["Enter"], "While editing: open the panel's settings"],
+      ["panelAdd", ["a"], "While editing: add a panel (type what you want to see)"],
+      ["addPanelPick", ["↑ ↓", "Enter"], "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)"],
+      ["suggestionsFocus", ["s"], "While editing a new dashboard: go to the suggestions"],
+      ["panelRemove", ["Ctrl Del"], "While editing: remove the panel from the draft"],
+      ["panelLeave", ["Esc"], "Close the panel's settings, then go to Save dashboard"],
+      ["queryRun", ["Ctrl Enter"], "In a query: run it now; in the JSON: review the changes"],
+      ["chartCrosshair", ["← →"], "On a chart: move the crosshair; Esc hides it"],
+      ["tableSort", ["Enter"], "On a table column: sort by it"],
+      ["logLabels", ["Enter"], "On a log line: show its labels"],
+    ]);
+    expect(keysFor("dashboardSave", true)).toEqual(["⌘ S"]);
+    expect(keysFor("panelResize", true)).toEqual(["⌘ Shift ← → ↑ ↓"]);
+    expect(keysFor("panelRemove", true)).toEqual(["⌘ ⌫"]);
+    expect(keysFor("queryRun", true)).toEqual(["⌘ Enter"]);
+  });
+
+  it("the Alerts group appears after Explore", () => {
+    const titles = allGroups(undefined, "monitoring").map(([t]) => t);
+    const at = titles.indexOf("Monitoring");
+    expect(titles.slice(at, at + 4)).toEqual(["Monitoring", "Dashboards", "Explore", "Alerts"]);
+    expect(titles.filter((t) => t === "Alerts")).toHaveLength(1);
+    expect(allGroups().map(([t]) => t)).not.toContain("Alerts");
+    expect(allGroups("pods", "kubernetes").map(([t]) => t)).not.toContain("Alerts");
+    const alerts = allGroups(undefined, "monitoring").find(([t]) => t === "Alerts")![1];
+    expect(alerts.map((s) => [s.id, s.keys, s.label])).toEqual([
+      ["alertsViews", ["1–3"], "Rules, Silences or Contact points"],
+      ["alertsMove", ["↑ ↓"], "In the rule list: move and show the rule"],
+      ["alertSilence", ["s"], "Silence the selected alert"],
+      ["alertsDetails", ["Enter"], "In the rule list: go to the rule's details"],
+      ["alertsList", ["Esc"], "In the details: back to the rule list"],
+      ["alertsSave", ["Ctrl Enter"], "In a rule, silence or contact point form: save it"],
+    ]);
+    expect(keysFor("alertsSave", true)).toEqual(["⌘ Enter"]);
+    expect(pressed("alertSilence", { key: "s", ctrlKey: false, metaKey: false, altKey: false })).toBe(true);
+    expect(pressed("alertsViews", { key: "2", ctrlKey: false, metaKey: false, altKey: false })).toBe(true);
+  });
+
+  it("the Explore group appears only in Monitoring, after Dashboards", () => {
+    const titles = allGroups(undefined, "monitoring").map(([t]) => t);
+    const at = titles.indexOf("Dashboards");
+    expect(titles[at + 1]).toBe("Explore");
+    expect(titles.filter((t) => t === "Explore")).toHaveLength(1);
+    expect(allGroups().map(([t]) => t)).not.toContain("Explore");
+    expect(allGroups("pods", "kubernetes").map(([t]) => t)).not.toContain("Explore");
+    const explore = allGroups(undefined, "monitoring").find(([t]) => t === "Explore")![1];
+    expect(explore.map((s) => [s.id, s.keys, s.label])).toEqual([
+      ["exploreQuery", ["q"], "Go to the query"],
+      ["exploreBrowse", ["b"], "Go to the metric or log stream list"],
+      ["exploreLogs", ["l"], "Go to the log lines"],
+      ["exploreTime", ["t"], "Pick the time range"],
+      ["exploreRun", ["Ctrl Enter"], "In the query: run it now"],
+      ["exploreAdd", ["a"], "Add the query to a dashboard"],
+      ["exploreWindow", ["Shift ← →"], "On the chart: select a time window for the log lines"],
+      ["exploreShowAll", ["Esc"], "On the chart: show all log lines again"],
+    ]);
+    expect(keysFor("exploreRun", true)).toEqual(["⌘ Enter"]);
+  });
+
+  it("explore keys match only as listed", () => {
+    expect(pressed("exploreQuery", { ...base, key: "q" })).toBe(true);
+    expect(pressed("exploreQuery", { ...base, key: "q", ctrlKey: true })).toBe(false);
+    expect(pressed("exploreQuery", { ...base, key: "q", metaKey: true })).toBe(false);
+    expect(pressed("exploreQuery", { ...base, key: "q", altKey: true })).toBe(false);
+    expect(pressed("exploreWindow", { ...base, key: "ArrowLeft", shiftKey: true })).toBe(true);
+    expect(pressed("exploreWindow", { ...base, key: "ArrowRight", shiftKey: true })).toBe(true);
+    expect(pressed("exploreWindow", { ...base, key: "ArrowLeft" })).toBe(false);
+    expect(pressed("exploreWindow", { ...base, key: "ArrowUp", shiftKey: true })).toBe(false);
+    expect(pressed("exploreRun", { ...base, key: "Enter", ctrlKey: true })).toBe(true);
+    expect(pressed("exploreRun", { ...base, key: "Enter", metaKey: true })).toBe(true);
+    expect(pressed("exploreRun", { ...base, key: "Enter" })).toBe(false);
+    expect(pressed("exploreTime", { ...base, key: "t" })).toBe(true);
+    expect(pressed("exploreShowAll", { ...base, key: "Escape" })).toBe(true);
+    expect(pressed("exploreBrowse", { ...base, key: "b" })).toBe(true);
+    expect(pressed("exploreLogs", { ...base, key: "l" })).toBe(true);
+    expect(pressed("exploreAdd", { ...base, key: "a" })).toBe(true);
+    expect(pressed("suggestionsFocus", { ...base, key: "s" })).toBe(true);
+    expect(pressed("suggestionsFocus", { ...base, key: "s", ctrlKey: true })).toBe(false);
+    expect(pressed("addPanelPick", { ...base, key: "Enter" })).toBe(true);
+    expect(pressed("addPanelPick", { ...base, key: "ArrowDown" })).toBe(true);
+  });
+
+  it("panel resize needs Ctrl and Shift with an arrow", () => {
+    expect(pressed("panelResize", { ...base, key: "ArrowRight", ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(pressed("panelResize", { ...base, key: "ArrowUp", metaKey: true, shiftKey: true })).toBe(true);
+    expect(pressed("panelResize", { ...base, key: "ArrowRight", shiftKey: true })).toBe(false);
+    expect(pressed("panelResize", { ...base, key: "ArrowRight", ctrlKey: true })).toBe(false);
+    expect(pressed("panelMove", { ...base, key: "ArrowLeft", shiftKey: true })).toBe(true);
+    expect(pressed("panelMove", { ...base, key: "ArrowLeft" })).toBe(false);
+    expect(pressed("dashboardSave", { ...base, key: "s", ctrlKey: true })).toBe(true);
+    expect(pressed("dashboardSave", { ...base, key: "s", metaKey: true })).toBe(true);
+    expect(pressed("dashboardSave", { ...base, key: "s" })).toBe(false);
+    expect(pressed("queryRun", { ...base, key: "Enter", ctrlKey: true })).toBe(true);
+    expect(pressed("dashboardViews", { ...base, key: "3" })).toBe(true);
+    expect(pressed("dashboardViews", { ...base, key: "4" })).toBe(false);
+  });
+
+  it("new dashboard is n without Ctrl, Alt or Meta", () => {
+    expect(pressed("monitoringNewDashboard", { ...base, key: "n" })).toBe(true);
+    // Shift and Caps Lock give N, which matches as M1's letters do.
+    expect(pressed("monitoringNewDashboard", { ...base, key: "N" })).toBe(true);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "N", shiftKey: true })).toBe(true);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "n", ctrlKey: true })).toBe(false);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "n", altKey: true })).toBe(false);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "n", metaKey: true })).toBe(false);
+    expect(pressed("monitoringNewDashboard", { ...base, key: "N", ctrlKey: true, shiftKey: true })).toBe(false);
+  });
+
+  it("the sheet drops Filter rows while Monitoring is shown", () => {
+    const anywhere = (app?: Parameters<typeof allGroups>[1]) => allGroups(undefined, app).find(([t]) => t === "Anywhere")![1].map((s) => s.id);
+    expect(anywhere("monitoring")).not.toContain("filter");
+    expect(anywhere("monitoring")).toContain("help");
+    expect(anywhere("kubernetes")).toContain("filter");
+    expect(anywhere()).toContain("filter");
+  });
 });

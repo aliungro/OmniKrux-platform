@@ -1,0 +1,7061 @@
+[
+  {
+    "name": "minimal",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc"
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "full_every_type",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Everything",
+      "description": "One of each",
+      "time": {
+        "from": "now-1h",
+        "to": "now-5m"
+      },
+      "refresh": "30s",
+      "variables": [
+        {
+          "name": "namespace",
+          "label": "Namespace",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": "src-prom"
+          },
+          "labelName": "namespace",
+          "match": "up{job=\"x\"}",
+          "multi": true,
+          "includeAll": true,
+          "default": "all"
+        },
+        {
+          "name": "pod",
+          "label": "Pod",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": "src-prom"
+          },
+          "labelName": "pod",
+          "match": "kube_pod_info{namespace=~\"$namespace\"}",
+          "multi": false,
+          "includeAll": false,
+          "default": [
+            "web-1"
+          ]
+        }
+      ],
+      "panels": [
+        {
+          "id": "cpu",
+          "type": "timeseries",
+          "title": "CPU",
+          "description": "CPU by pod",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "rate(cpu{namespace=~\"$namespace\"}[$__rate_interval])",
+              "legend": "{{pod}}",
+              "hidden": false
+            },
+            {
+              "ref": "B",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": true
+            }
+          ],
+          "options": {
+            "unit": "percent",
+            "decimals": 2,
+            "thresholds": [
+              {
+                "value": 90,
+                "color": "bad"
+              },
+              {
+                "value": 70,
+                "color": "warn"
+              }
+            ],
+            "min": 0,
+            "max": 100,
+            "legend": "hidden",
+            "style": "stacked"
+          },
+          "alert": null
+        },
+        {
+          "id": "ready",
+          "type": "stat",
+          "title": "Ready",
+          "description": "",
+          "layout": {
+            "x": 12,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "sum(up)",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "ms",
+            "decimals": 0,
+            "thresholds": [],
+            "calc": "mean",
+            "sparkline": false
+          },
+          "alert": null
+        },
+        {
+          "id": "load",
+          "type": "gauge",
+          "title": "Load",
+          "description": "",
+          "layout": {
+            "x": 18,
+            "y": 0,
+            "w": 6,
+            "h": 6
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "load1",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "percentunit",
+            "decimals": 1,
+            "thresholds": [
+              {
+                "value": 0.5,
+                "color": "ok"
+              }
+            ],
+            "min": 0,
+            "max": 1,
+            "calc": "max"
+          },
+          "alert": null
+        },
+        {
+          "id": "mem",
+          "type": "bar",
+          "title": "Memory",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "mem",
+              "legend": "{{pod}}",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "bytes",
+            "decimals": null,
+            "thresholds": [],
+            "min": 0,
+            "legend": "hidden",
+            "orientation": "vertical"
+          },
+          "alert": null
+        },
+        {
+          "id": "pods",
+          "type": "table",
+          "title": "Pods",
+          "description": "",
+          "layout": {
+            "x": 12,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "kube_pod_info",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "columns": [
+              "pod",
+              "node"
+            ],
+            "sort": {
+              "column": "pod",
+              "descending": true
+            }
+          },
+          "alert": null
+        },
+        {
+          "id": "log",
+          "type": "logs",
+          "title": "Logs",
+          "description": "Errors",
+          "layout": {
+            "x": 0,
+            "y": 16,
+            "w": 24,
+            "h": 10
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": "src-loki"
+              },
+              "expr": "{app=\"web\"} |= \"error\"",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "limit": 500,
+            "wrap": false,
+            "order": "oldest"
+          },
+          "alert": null
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Everything",
+      "description": "One of each",
+      "time": {
+        "from": "now-1h",
+        "to": "now-5m"
+      },
+      "refresh": "30s",
+      "variables": [
+        {
+          "name": "namespace",
+          "label": "Namespace",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": "src-prom"
+          },
+          "labelName": "namespace",
+          "match": "up{job=\"x\"}",
+          "multi": true,
+          "includeAll": true,
+          "default": "all"
+        },
+        {
+          "name": "pod",
+          "label": "Pod",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": "src-prom"
+          },
+          "labelName": "pod",
+          "match": "kube_pod_info{namespace=~\"$namespace\"}",
+          "multi": false,
+          "includeAll": false,
+          "default": [
+            "web-1"
+          ]
+        }
+      ],
+      "panels": [
+        {
+          "id": "cpu",
+          "type": "timeseries",
+          "title": "CPU",
+          "description": "CPU by pod",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "rate(cpu{namespace=~\"$namespace\"}[$__rate_interval])",
+              "legend": "{{pod}}",
+              "hidden": false
+            },
+            {
+              "ref": "B",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": true
+            }
+          ],
+          "options": {
+            "unit": "percent",
+            "decimals": 2,
+            "thresholds": [
+              {
+                "value": 70,
+                "color": "warn"
+              },
+              {
+                "value": 90,
+                "color": "bad"
+              }
+            ],
+            "min": 0,
+            "max": 100,
+            "legend": "hidden",
+            "style": "stacked"
+          },
+          "alert": null
+        },
+        {
+          "id": "ready",
+          "type": "stat",
+          "title": "Ready",
+          "description": "",
+          "layout": {
+            "x": 12,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "sum(up)",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "ms",
+            "decimals": 0,
+            "thresholds": [],
+            "calc": "mean",
+            "sparkline": false
+          },
+          "alert": null
+        },
+        {
+          "id": "load",
+          "type": "gauge",
+          "title": "Load",
+          "description": "",
+          "layout": {
+            "x": 18,
+            "y": 0,
+            "w": 6,
+            "h": 6
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "load1",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "percentunit",
+            "decimals": 1,
+            "thresholds": [
+              {
+                "value": 0.5,
+                "color": "ok"
+              }
+            ],
+            "min": 0,
+            "max": 1,
+            "calc": "max"
+          },
+          "alert": null
+        },
+        {
+          "id": "mem",
+          "type": "bar",
+          "title": "Memory",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "mem",
+              "legend": "{{pod}}",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "bytes",
+            "decimals": null,
+            "thresholds": [],
+            "min": 0,
+            "legend": "hidden",
+            "orientation": "vertical"
+          },
+          "alert": null
+        },
+        {
+          "id": "pods",
+          "type": "table",
+          "title": "Pods",
+          "description": "",
+          "layout": {
+            "x": 12,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "src-prom"
+              },
+              "expr": "kube_pod_info",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "columns": [
+              "pod",
+              "node"
+            ],
+            "sort": {
+              "column": "pod",
+              "descending": true
+            }
+          },
+          "alert": null
+        },
+        {
+          "id": "log",
+          "type": "logs",
+          "title": "Logs",
+          "description": "Errors",
+          "layout": {
+            "x": 0,
+            "y": 16,
+            "w": 24,
+            "h": 10
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": "src-loki"
+              },
+              "expr": "{app=\"web\"} |= \"error\"",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "limit": 500,
+            "wrap": false,
+            "order": "oldest"
+          },
+          "alert": null
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "defaults_filled",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "  Spaced  ",
+      "panels": [
+        {
+          "id": "ts",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "st",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 12,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "ga",
+          "type": "gauge",
+          "title": "",
+          "layout": {
+            "x": 18,
+            "y": 0,
+            "w": 6,
+            "h": 6
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "ba",
+          "type": "bar",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "ta",
+          "type": "table",
+          "title": "",
+          "layout": {
+            "x": 12,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "lo",
+          "type": "logs",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 16,
+            "w": 24,
+            "h": 10
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "{a=\"b\"}"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Spaced",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "ts",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "min": null,
+            "max": null,
+            "legend": "bottom",
+            "style": "lines"
+          },
+          "alert": null
+        },
+        {
+          "id": "st",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 12,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": null
+        },
+        {
+          "id": "ga",
+          "type": "gauge",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 18,
+            "y": 0,
+            "w": 6,
+            "h": 6
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "min": 0,
+            "max": null,
+            "calc": "last"
+          },
+          "alert": null
+        },
+        {
+          "id": "ba",
+          "type": "bar",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "min": null,
+            "legend": "bottom",
+            "orientation": "horizontal"
+          },
+          "alert": null
+        },
+        {
+          "id": "ta",
+          "type": "table",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 12,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "columns": [],
+            "sort": null
+          },
+          "alert": null
+        },
+        {
+          "id": "lo",
+          "type": "logs",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 16,
+            "w": 24,
+            "h": 10
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "{a=\"b\"}",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "limit": 100,
+            "wrap": true,
+            "order": "newest"
+          },
+          "alert": null
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "wrong_schema_version",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 2,
+      "title": "Doc"
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "schemaVersion",
+        "message": "This OmniKrux reads dashboards with schemaVersion 1."
+      }
+    ]
+  },
+  {
+    "name": "missing_schema_version",
+    "owner": "project",
+    "input": {
+      "title": "A"
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "schemaVersion",
+        "message": "Required."
+      }
+    ]
+  },
+  {
+    "name": "unknown_top_field",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "zeta": 1,
+      "extra": 2,
+      "10": 3,
+      "2": 4
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "10",
+        "message": "Unknown field \"10\"."
+      },
+      {
+        "path": "2",
+        "message": "Unknown field \"2\"."
+      },
+      {
+        "path": "extra",
+        "message": "Unknown field \"extra\"."
+      },
+      {
+        "path": "zeta",
+        "message": "Unknown field \"zeta\"."
+      }
+    ]
+  },
+  {
+    "name": "unknown_option_for_type",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "min": 0,
+            "unit": "ms",
+            "bogus": 1
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].options.bogus",
+        "message": "Unknown field \"bogus\"."
+      },
+      {
+        "path": "panels[0].options.min",
+        "message": "Unknown field \"min\"."
+      }
+    ]
+  },
+  {
+    "name": "duplicate_panel_id",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-2",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 6,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 12,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[2].id",
+        "message": "Another panel already has the id \"p-1\"."
+      }
+    ]
+  },
+  {
+    "name": "overlap",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "b",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 6,
+            "y": 4,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[1].layout",
+        "message": "Panel \"b\" overlaps panel \"a\". Move one of them."
+      }
+    ]
+  },
+  {
+    "name": "touching_panels_do_not_overlap",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "b",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 12,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "c",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "a",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": null
+        },
+        {
+          "id": "b",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 12,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": null
+        },
+        {
+          "id": "c",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": null
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "off_grid",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 20,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "b",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 23,
+            "y": 10,
+            "w": 2,
+            "h": 41
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].layout",
+        "message": "x + w can't be more than 24 (the grid is 24 columns wide)."
+      },
+      {
+        "path": "panels[1].layout.x",
+        "message": "Use a whole number from 0 to 22."
+      },
+      {
+        "path": "panels[1].layout.h",
+        "message": "Use a whole number from 2 to 40."
+      }
+    ]
+  },
+  {
+    "name": "layout_not_whole_or_boolean",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0.5,
+            "y": -1,
+            "w": true,
+            "h": 3
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].layout.x",
+        "message": "Use a whole number from 0 to 22."
+      },
+      {
+        "path": "panels[0].layout.y",
+        "message": "Use a whole number from 0 to 999."
+      },
+      {
+        "path": "panels[0].layout.w",
+        "message": "Expected a number."
+      }
+    ]
+  },
+  {
+    "name": "logs_needs_one_loki_query",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "logs",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 24,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "b",
+          "type": "logs",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 4,
+            "w": 24,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "B",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "c",
+          "type": "logs",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 24,
+            "h": 4
+          },
+          "queries": []
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].queries",
+        "message": "A logs panel has exactly one Loki query."
+      },
+      {
+        "path": "panels[1].queries",
+        "message": "A logs panel has exactly one Loki query."
+      },
+      {
+        "path": "panels[2].queries",
+        "message": "A logs panel has exactly one Loki query."
+      }
+    ]
+  },
+  {
+    "name": "too_many_queries",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "B",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "C",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "D",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "E",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "F",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "G",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "H",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "I",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "J",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "K",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "b",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 6,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": []
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].queries",
+        "message": "A panel has 1 to 10 queries."
+      },
+      {
+        "path": "panels[1].queries",
+        "message": "A panel has 1 to 10 queries."
+      }
+    ]
+  },
+  {
+    "name": "query_ref_problems",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "a",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": "AB",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            },
+            {
+              "ref": 5,
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].queries[1].ref",
+        "message": "Use a capital letter A to Z, different for each query."
+      },
+      {
+        "path": "panels[0].queries[2].ref",
+        "message": "Use a capital letter A to Z, different for each query."
+      },
+      {
+        "path": "panels[0].queries[3].ref",
+        "message": "Use a capital letter A to Z, different for each query."
+      },
+      {
+        "path": "panels[0].queries[4].ref",
+        "message": "Expected text."
+      }
+    ]
+  },
+  {
+    "name": "query_text_limits",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": ""
+            },
+            {
+              "ref": "B",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "ref": "C",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].queries[0].expr",
+        "message": "Use 1 to 10000 characters."
+      },
+      {
+        "path": "panels[0].queries[1].expr",
+        "message": "Use 1 to 10000 characters."
+      },
+      {
+        "path": "panels[0].queries[2].legend",
+        "message": "Use at most 200 characters."
+      }
+    ]
+  },
+  {
+    "name": "undefined_variable",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{a=\"$nope\",b=\"${nope}\",c=\"$other\"}"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].queries[0].expr",
+        "message": "Uses $nope, which isn't a variable of this dashboard."
+      },
+      {
+        "path": "panels[0].queries[0].expr",
+        "message": "Uses $other, which isn't a variable of this dashboard."
+      }
+    ]
+  },
+  {
+    "name": "builtin_variables_allowed",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "ns",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": "src-prom"
+          },
+          "labelName": "namespace"
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "rate(x{n=\"${ns}\",m=~\"^a$|b\"}[$__rate_interval]) / $__interval + $__range"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [
+        {
+          "name": "ns",
+          "label": "ns",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": "src-prom"
+          },
+          "labelName": "namespace",
+          "match": "",
+          "multi": false,
+          "includeAll": false,
+          "default": []
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "rate(x{n=\"${ns}\",m=~\"^a$|b\"}[$__rate_interval]) / $__interval + $__range",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": null
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "variable_order",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "a",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l",
+          "match": "x{l=\"$b\"}"
+        },
+        {
+          "name": "b",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l",
+          "match": "x{l=\"$a\"}"
+        },
+        {
+          "name": "c",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l",
+          "match": "$c"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].match",
+        "message": "Uses $b, which comes after this variable. Move b before it."
+      },
+      {
+        "path": "variables[2].match",
+        "message": "Uses $c, which comes after this variable. Move c before it."
+      }
+    ]
+  },
+  {
+    "name": "variable_unknown_in_match",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "a",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l",
+          "match": "x{l=\"$zzz\"}"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].match",
+        "message": "Uses $zzz, which isn't a variable of this dashboard."
+      }
+    ]
+  },
+  {
+    "name": "all_without_include_all",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "a",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l",
+          "default": "all"
+        },
+        {
+          "name": "b",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l",
+          "default": [
+            "x",
+            "y"
+          ]
+        },
+        {
+          "name": "c",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l",
+          "default": [
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x",
+            "x"
+          ],
+          "multi": true
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].default",
+        "message": "\"all\" needs includeAll: true."
+      },
+      {
+        "path": "variables[1].default",
+        "message": "Only a multi-value variable can start with more than one value."
+      },
+      {
+        "path": "variables[2].default",
+        "message": "At most 100 values."
+      }
+    ]
+  },
+  {
+    "name": "variable_names",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "ok",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "ok",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "__x",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "1a",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": 5,
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[1].name",
+        "message": "Another variable is already named \"ok\"."
+      },
+      {
+        "path": "variables[2].name",
+        "message": "Use letters, digits and _, starting with a letter or _, at most 40 characters, not starting with __."
+      },
+      {
+        "path": "variables[3].name",
+        "message": "Use letters, digits and _, starting with a letter or _, at most 40 characters, not starting with __."
+      },
+      {
+        "path": "variables[4].name",
+        "message": "Use letters, digits and _, starting with a letter or _, at most 40 characters, not starting with __."
+      },
+      {
+        "path": "variables[5].name",
+        "message": "Expected text."
+      }
+    ]
+  },
+  {
+    "name": "variable_fields",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "a",
+          "type": "query",
+          "source": {
+            "type": "mysql"
+          },
+          "labelName": "9x",
+          "match": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+          "multi": "yes"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].type",
+        "message": "Use one of: labelValues."
+      },
+      {
+        "path": "variables[0].source.type",
+        "message": "Use \"prometheus\" or \"loki\"."
+      },
+      {
+        "path": "variables[0].labelName",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "variables[0].match",
+        "message": "Use at most 1000 characters."
+      },
+      {
+        "path": "variables[0].multi",
+        "message": "Expected true or false."
+      }
+    ]
+  },
+  {
+    "name": "group_with_source_id",
+    "owner": "group",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "a",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": "s1"
+          },
+          "labelName": "l"
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": "s1"
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].source.id",
+        "message": "In a group dashboard each project uses its own source, so \"id\" must be null."
+      },
+      {
+        "path": "panels[0].queries[0].source.id",
+        "message": "In a group dashboard each project uses its own source, so \"id\" must be null."
+      }
+    ]
+  },
+  {
+    "name": "group_with_null_source_ids",
+    "owner": "group",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": null
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "bad_time",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "yesterday",
+        "to": "now-5x",
+        "step": 1
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time.from",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      },
+      {
+        "path": "time.to",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      },
+      {
+        "path": "time.step",
+        "message": "Unknown field \"step\"."
+      }
+    ]
+  },
+  {
+    "name": "bad_absolute_time",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "2026-13-45T10:00:00Z",
+        "to": "2026-11-19 10:00:00"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time.from",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      },
+      {
+        "path": "time.to",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      }
+    ]
+  },
+  {
+    "name": "time_backwards",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "now",
+        "to": "now-1h"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time",
+        "message": "The start has to be before the end."
+      }
+    ]
+  },
+  {
+    "name": "time_equal",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "now-5m",
+        "to": "now-5m"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time",
+        "message": "The start has to be before the end."
+      }
+    ]
+  },
+  {
+    "name": "time_backwards_absolute",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "2026-11-19T10:00:00Z",
+        "to": "2026-11-19T09:00:00Z"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time",
+        "message": "The start has to be before the end."
+      }
+    ]
+  },
+  {
+    "name": "time_mixed_is_not_compared",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "now-1h",
+        "to": "2000-01-01T00:00:00Z"
+      }
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-1h",
+        "to": "2000-01-01T00:00:00Z"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "wrong_types_everywhere",
+    "owner": "project",
+    "input": {
+      "schemaVersion": "1",
+      "title": 5,
+      "description": [],
+      "time": "now",
+      "refresh": 3,
+      "variables": {},
+      "panels": "x"
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "schemaVersion",
+        "message": "This OmniKrux reads dashboards with schemaVersion 1."
+      },
+      {
+        "path": "title",
+        "message": "Expected text."
+      },
+      {
+        "path": "description",
+        "message": "Expected text."
+      },
+      {
+        "path": "time",
+        "message": "Expected an object."
+      },
+      {
+        "path": "refresh",
+        "message": "Use null or one of 10s, 30s, 1m, 5m, 15m, 1h."
+      },
+      {
+        "path": "variables",
+        "message": "Expected a list."
+      },
+      {
+        "path": "panels",
+        "message": "Expected a list."
+      }
+    ]
+  },
+  {
+    "name": "not_an_object",
+    "owner": "project",
+    "input": [
+      1,
+      2
+    ],
+    "normalized": null,
+    "problems": [
+      {
+        "path": "",
+        "message": "Expected an object."
+      }
+    ]
+  },
+  {
+    "name": "wrong_types_in_panel",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": 5,
+          "type": 3,
+          "title": [],
+          "description": 1,
+          "layout": "x",
+          "queries": {},
+          "options": [],
+          "alert": 1
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].id",
+        "message": "Expected text."
+      },
+      {
+        "path": "panels[0].type",
+        "message": "Expected text."
+      },
+      {
+        "path": "panels[0].title",
+        "message": "Expected text."
+      },
+      {
+        "path": "panels[0].description",
+        "message": "Expected text."
+      },
+      {
+        "path": "panels[0].layout",
+        "message": "Expected an object."
+      },
+      {
+        "path": "panels[0].queries",
+        "message": "Expected a list."
+      },
+      {
+        "path": "panels[0].alert",
+        "message": "Expected an object."
+      }
+    ]
+  },
+  {
+    "name": "panel_required_fields",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {}
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].id",
+        "message": "Required."
+      },
+      {
+        "path": "panels[0].type",
+        "message": "Required."
+      },
+      {
+        "path": "panels[0].title",
+        "message": "Required."
+      },
+      {
+        "path": "panels[0].layout",
+        "message": "Required."
+      },
+      {
+        "path": "panels[0].queries",
+        "message": "Required."
+      }
+    ]
+  },
+  {
+    "name": "panel_basics",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "Bad_Id",
+          "type": "pie",
+          "title": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "",
+          "type": "stat",
+          "title": "a\nb",
+          "layout": {
+            "x": 6,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].id",
+        "message": "Use 1 to 40 lower-case letters, digits or dashes, starting with a letter or digit."
+      },
+      {
+        "path": "panels[0].type",
+        "message": "Use one of: timeseries, stat, gauge, bar, table, logs."
+      },
+      {
+        "path": "panels[0].title",
+        "message": "Use at most 120 characters, without line breaks."
+      },
+      {
+        "path": "panels[1].id",
+        "message": "Use 1 to 40 lower-case letters, digits or dashes, starting with a letter or digit."
+      },
+      {
+        "path": "panels[1].title",
+        "message": "Use at most 120 characters, without line breaks."
+      }
+    ]
+  },
+  {
+    "name": "title_blank",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "   "
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "title",
+        "message": "Use 1 to 120 characters, without line breaks."
+      }
+    ]
+  },
+  {
+    "name": "title_line_break",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "a\nb"
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "title",
+        "message": "Use 1 to 120 characters, without line breaks."
+      }
+    ]
+  },
+  {
+    "name": "description_too_long",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "description",
+        "message": "Use at most 2000 characters."
+      }
+    ]
+  },
+  {
+    "name": "description_multiline_ok",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "two\nlines"
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "two\nlines",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "bad_option_values",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "unit": "furlongs",
+            "decimals": 7,
+            "thresholds": [
+              {
+                "value": 1,
+                "color": "red",
+                "x": 1
+              }
+            ],
+            "legend": "left",
+            "style": 1,
+            "min": "0"
+          }
+        },
+        {
+          "id": "b",
+          "type": "logs",
+          "title": "",
+          "layout": {
+            "x": 6,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "limit": 0,
+            "wrap": 1,
+            "order": "random"
+          }
+        },
+        {
+          "id": "c",
+          "type": "table",
+          "title": "",
+          "layout": {
+            "x": 12,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "columns": "pod",
+            "sort": {
+              "column": 3
+            }
+          }
+        },
+        {
+          "id": "d",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 18,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "calc": "median",
+            "sparkline": "yes",
+            "decimals": 1.5
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].options.unit",
+        "message": "Use one of: none, short, percent, percentunit, s, ms, bytes, Bps, reqps, cores."
+      },
+      {
+        "path": "panels[0].options.decimals",
+        "message": "Use null or a whole number from 0 to 6."
+      },
+      {
+        "path": "panels[0].options.thresholds[0].color",
+        "message": "Use ok, warn or bad."
+      },
+      {
+        "path": "panels[0].options.thresholds[0].x",
+        "message": "Unknown field \"x\"."
+      },
+      {
+        "path": "panels[0].options.min",
+        "message": "Expected a number."
+      },
+      {
+        "path": "panels[0].options.legend",
+        "message": "Use one of: bottom, hidden."
+      },
+      {
+        "path": "panels[0].options.style",
+        "message": "Expected text."
+      },
+      {
+        "path": "panels[1].options.limit",
+        "message": "Use a whole number from 1 to 1000."
+      },
+      {
+        "path": "panels[1].options.wrap",
+        "message": "Expected true or false."
+      },
+      {
+        "path": "panels[1].options.order",
+        "message": "Use one of: newest, oldest."
+      },
+      {
+        "path": "panels[2].options.columns",
+        "message": "Expected a list."
+      },
+      {
+        "path": "panels[2].options.sort.column",
+        "message": "Expected text."
+      },
+      {
+        "path": "panels[3].options.decimals",
+        "message": "Use null or a whole number from 0 to 6."
+      },
+      {
+        "path": "panels[3].options.calc",
+        "message": "Use one of: last, mean, max, min, sum."
+      },
+      {
+        "path": "panels[3].options.sparkline",
+        "message": "Expected true or false."
+      }
+    ]
+  },
+  {
+    "name": "threshold_problems",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "thresholds": [
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              },
+              {
+                "value": 1,
+                "color": "ok"
+              }
+            ]
+          }
+        },
+        {
+          "id": "b",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 6,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "thresholds": [
+              {
+                "color": "ok"
+              },
+              {
+                "value": "5",
+                "color": "warn"
+              },
+              7
+            ]
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].options.thresholds",
+        "message": "At most 10 thresholds."
+      },
+      {
+        "path": "panels[1].options.thresholds[0].value",
+        "message": "Required."
+      },
+      {
+        "path": "panels[1].options.thresholds[1].value",
+        "message": "Expected a number."
+      },
+      {
+        "path": "panels[1].options.thresholds[2]",
+        "message": "Expected an object."
+      }
+    ]
+  },
+  {
+    "name": "whole_floats_become_ints",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0.0,
+            "y": 1.0,
+            "w": 6.0,
+            "h": 4.0
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "decimals": 2.0,
+            "thresholds": [
+              {
+                "value": 5.0,
+                "color": "ok"
+              },
+              {
+                "value": 2.5,
+                "color": "warn"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 1,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": 2,
+            "thresholds": [
+              {
+                "value": 2.5,
+                "color": "warn"
+              },
+              {
+                "value": 5,
+                "color": "ok"
+              }
+            ],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": null
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "refresh_not_a_choice",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "refresh": "2m"
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "refresh",
+        "message": "Use null or one of 10s, 30s, 1m, 5m, 15m, 1h."
+      }
+    ]
+  },
+  {
+    "name": "refresh_given",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "refresh": "1h"
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": "1h",
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "too_many_panels",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-0",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 2,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-2",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 4,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-3",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 6,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-4",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 8,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-5",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 10,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-6",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 12,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-7",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 14,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-8",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 16,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-9",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 18,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-10",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 20,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-11",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 22,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-12",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 24,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-13",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 26,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-14",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 28,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-15",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 30,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-16",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 32,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-17",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 34,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-18",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 36,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-19",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 38,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-20",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 40,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-21",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 42,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-22",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 44,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-23",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 46,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-24",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 48,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-25",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 50,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-26",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 52,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-27",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 54,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-28",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 56,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-29",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 58,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-30",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 60,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-31",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 62,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-32",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 64,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-33",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 66,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-34",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 68,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-35",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 70,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-36",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 72,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-37",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 74,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-38",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 76,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-39",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 78,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-40",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 80,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-41",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 82,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-42",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 84,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-43",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 86,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-44",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 88,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-45",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 90,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-46",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 92,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-47",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 94,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-48",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 96,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-49",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 98,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-50",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 100,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-51",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 102,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-52",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 104,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-53",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 106,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-54",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 108,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-55",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 110,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-56",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 112,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-57",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 114,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-58",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 116,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-59",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 118,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-60",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 120,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-61",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 122,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-62",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 124,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-63",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 126,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-64",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 128,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-65",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 130,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-66",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 132,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-67",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 134,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-68",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 136,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-69",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 138,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-70",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 140,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-71",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 142,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-72",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 144,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-73",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 146,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-74",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 148,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-75",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 150,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-76",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 152,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-77",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 154,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-78",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 156,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-79",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 158,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-80",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 160,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-81",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 162,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-82",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 164,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-83",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 166,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-84",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 168,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-85",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 170,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-86",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 172,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-87",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 174,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-88",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 176,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-89",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 178,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-90",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 180,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-91",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 182,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-92",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 184,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-93",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 186,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-94",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 188,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-95",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 190,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-96",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 192,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-97",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 194,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-98",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 196,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-99",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 198,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        },
+        {
+          "id": "p-100",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 200,
+            "w": 24,
+            "h": 2
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels",
+        "message": "A dashboard has at most 100 panels."
+      }
+    ]
+  },
+  {
+    "name": "too_many_variables",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "v0",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v1",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v2",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v3",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v4",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v5",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v6",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v7",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v8",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v9",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v10",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v11",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v12",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v13",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v14",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v15",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v16",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v17",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v18",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v19",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        },
+        {
+          "name": "v20",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "l"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables",
+        "message": "A dashboard has at most 20 variables."
+      }
+    ]
+  },
+  {
+    "name": "source_not_object",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "a",
+          "type": "labelValues",
+          "source": "prom",
+          "labelName": "l"
+        }
+      ],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": null,
+              "expr": "up"
+            }
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].source",
+        "message": "Expected an object."
+      },
+      {
+        "path": "panels[0].queries[0].source",
+        "message": "Expected an object."
+      }
+    ]
+  },
+  {
+    "name": "unicode_text_counts_characters",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "description": "日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日"
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "description": "日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "absolute_time_year_zero",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "0000-01-01T00:00:00Z",
+        "to": "now"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time.from",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      }
+    ]
+  },
+  {
+    "name": "absolute_time_impossible_day",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "2026-02-30T10:00:00Z",
+        "to": "now"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time.from",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      }
+    ]
+  },
+  {
+    "name": "absolute_time_seconds_sixty",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "2026-02-28T10:00:60Z",
+        "to": "now"
+      }
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "time.from",
+        "message": "Use \"now\", \"now-<number><s|m|h|d|w>\", or a UTC time like 2026-11-19T10:00:00Z."
+      }
+    ]
+  },
+  {
+    "name": "absolute_time_leap_day_ok",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "time": {
+        "from": "2024-02-29T10:00:00Z",
+        "to": "2024-03-01T00:00:00Z"
+      }
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "2024-02-29T10:00:00Z",
+        "to": "2024-03-01T00:00:00Z"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "variable_multi_include_all_wrong_type_cascade",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "env",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus"
+          },
+          "labelName": "env",
+          "multi": "yes",
+          "includeAll": 1,
+          "default": [
+            "a",
+            "b"
+          ]
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].multi",
+        "message": "Expected true or false."
+      },
+      {
+        "path": "variables[0].includeAll",
+        "message": "Expected true or false."
+      },
+      {
+        "path": "variables[0].default",
+        "message": "Only a multi-value variable can start with more than one value."
+      }
+    ]
+  },
+  {
+    "name": "variable_all_default_with_wrong_include_all",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "variables": [
+        {
+          "name": "env",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus"
+          },
+          "labelName": "env",
+          "includeAll": "true",
+          "default": "all"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "variables[0].includeAll",
+        "message": "Expected true or false."
+      },
+      {
+        "path": "variables[0].default",
+        "message": "\"all\" needs includeAll: true."
+      }
+    ]
+  },
+  {
+    "name": "title_only_bom_is_kept",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "﻿"
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "﻿",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "title_leading_bom_is_kept",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "﻿abc"
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "﻿abc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "title_unicode_spaces_trimmed",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "  　x "
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "x",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": []
+    },
+    "problems": []
+  },
+  {
+    "name": "integer_beyond_double_range",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Huge",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "min": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+            "max": 9007199254740992
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].options.min",
+        "message": "Expected a finite number."
+      }
+    ]
+  },
+  {
+    "name": "alert_full",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "of": "total",
+            "op": "below",
+            "threshold": 2,
+            "for": "10m",
+            "every": "30s",
+            "severity": "critical",
+            "message": "p95 for {{route}} is {{value}}",
+            "notify": [
+              "abc123",
+              "ops-team"
+            ],
+            "engine": "tool",
+            "channel": {
+              "receiver": "ops",
+              "labels": {
+                "team": "platform"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "min": null,
+            "max": null,
+            "legend": "bottom",
+            "style": "lines"
+          },
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "of": "total",
+            "op": "below",
+            "threshold": 2,
+            "for": "10m",
+            "every": "30s",
+            "severity": "critical",
+            "message": "p95 for {{route}} is {{value}}",
+            "notify": [
+              "abc123",
+              "ops-team"
+            ],
+            "engine": "tool",
+            "channel": {
+              "receiver": "ops",
+              "labels": {
+                "team": "platform"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "alert_defaults",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "calc": "last",
+            "sparkline": true
+          },
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 0.3,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "alert_on_logs_panel",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "logs",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "{app=\"api\"}"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert",
+        "message": "A logs panel can't have an alert. Use a time series, stat, gauge or bar panel."
+      }
+    ]
+  },
+  {
+    "name": "alert_on_table_panel",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "table",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert",
+        "message": "A table panel can't have an alert. Use a time series, stat, gauge or bar panel."
+      }
+    ]
+  },
+  {
+    "name": "alert_unknown_query_ref",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "gauge",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "B",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "Use the ref of one of this panel's queries, like A."
+      }
+    ]
+  },
+  {
+    "name": "alert_channel_without_tool",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "bar",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3,
+            "channel": {
+              "receiver": "ops",
+              "labels": {}
+            }
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.channel",
+        "message": "A channel is only for alerts that run in the tool."
+      }
+    ]
+  },
+  {
+    "name": "alert_bad_fields",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "  ",
+            "query": "a",
+            "of": "sum",
+            "op": "over",
+            "threshold": "high",
+            "for": "25h",
+            "every": "10s",
+            "severity": "urgent",
+            "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "notify": [
+              "ok",
+              "ok",
+              "bad id",
+              5
+            ],
+            "engine": "cloud",
+            "channel": {
+              "receiver": "",
+              "labels": {
+                "1x": "a"
+              },
+              "extra": 1
+            },
+            "colour": "red"
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.name",
+        "message": "Use 1 to 120 characters, without line breaks."
+      },
+      {
+        "path": "panels[0].alert.query",
+        "message": "Use the ref of one of this panel's queries, like A."
+      },
+      {
+        "path": "panels[0].alert.of",
+        "message": "Use one of: each, total."
+      },
+      {
+        "path": "panels[0].alert.op",
+        "message": "Use one of: above, below."
+      },
+      {
+        "path": "panels[0].alert.threshold",
+        "message": "Expected a number."
+      },
+      {
+        "path": "panels[0].alert.for",
+        "message": "Use a duration from 0s to 24h, like 5m."
+      },
+      {
+        "path": "panels[0].alert.every",
+        "message": "Use 30s, 1m or 5m."
+      },
+      {
+        "path": "panels[0].alert.severity",
+        "message": "Use one of: critical, warning, info."
+      },
+      {
+        "path": "panels[0].alert.message",
+        "message": "Use at most 500 characters."
+      },
+      {
+        "path": "panels[0].alert.notify[1]",
+        "message": "Each contact point only once."
+      },
+      {
+        "path": "panels[0].alert.notify[2]",
+        "message": "Use a contact point id."
+      },
+      {
+        "path": "panels[0].alert.notify[3]",
+        "message": "Expected text."
+      },
+      {
+        "path": "panels[0].alert.engine",
+        "message": "Use one of: omnikrux, tool."
+      },
+      {
+        "path": "panels[0].alert.channel.receiver",
+        "message": "Use 1 to 200 characters."
+      },
+      {
+        "path": "panels[0].alert.channel.labels.1x",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "panels[0].alert.channel.extra",
+        "message": "Unknown field \"extra\"."
+      },
+      {
+        "path": "panels[0].alert.colour",
+        "message": "Unknown field \"colour\"."
+      }
+    ]
+  },
+  {
+    "name": "alert_loki_log_query",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "  {app=\"api\"} |= \"error\""
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "A Loki alert needs a metric query, like sum(count_over_time({app=\"api\"} |= \"error\" [5m]))."
+      }
+    ]
+  },
+  {
+    "name": "alert_uses_range",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "rate(x[$__range])"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "An alert can't use $__range; write the window into the query, like [5m]."
+      }
+    ]
+  },
+  {
+    "name": "alert_not_an_object",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": 5
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert",
+        "message": "Expected an object."
+      }
+    ]
+  },
+  {
+    "name": "alert_single_variable_without_default",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=\"$job\"}"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ],
+      "variables": [
+        {
+          "name": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "multi": false,
+          "includeAll": true,
+          "default": []
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "Uses $job, which has no default value. Alerts use each variable's default, so give it one."
+      }
+    ]
+  },
+  {
+    "name": "alert_unquoted_multi_variable",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up{job=~$job}"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ],
+      "variables": [
+        {
+          "name": "job",
+          "type": "labelValues",
+          "source": {
+            "type": "prometheus",
+            "id": null
+          },
+          "labelName": "job",
+          "multi": true,
+          "includeAll": true,
+          "default": "all"
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.query",
+        "message": "The value of $job can't be used here. Put $job inside double quotes in the query."
+      }
+    ]
+  },
+  {
+    "name": "alert_loki_metric_query",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "sum(count_over_time({app=\"api\"} |= \"error\" [5m]))"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3
+          }
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "loki",
+                "id": null
+              },
+              "expr": "sum(count_over_time({app=\"api\"} |= \"error\" [5m]))",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "min": null,
+            "max": null,
+            "legend": "bottom",
+            "style": "lines"
+          },
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "of": "each",
+            "op": "above",
+            "threshold": 0.3,
+            "for": "5m",
+            "every": "1m",
+            "severity": "warning",
+            "message": "",
+            "notify": [],
+            "engine": "omnikrux",
+            "channel": null
+          }
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "alert_channel_bad_labels",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3,
+            "engine": "tool",
+            "channel": {
+              "receiver": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+              "labels": {
+                "l0": "v",
+                "l1": "v",
+                "l2": "v",
+                "l3": "v",
+                "l4": "v",
+                "l5": "v",
+                "l6": "v",
+                "l7": "v",
+                "l8": "v",
+                "l9": "v",
+                "l10": "v"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.channel.receiver",
+        "message": "Use 1 to 200 characters."
+      },
+      {
+        "path": "panels[0].alert.channel.labels",
+        "message": "At most 10 labels."
+      }
+    ]
+  },
+  {
+    "name": "alert_too_many_notify",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3,
+            "notify": [
+              "c0",
+              "c1",
+              "c2",
+              "c3",
+              "c4",
+              "c5",
+              "c6",
+              "c7",
+              "c8",
+              "c9",
+              "c10"
+            ]
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.notify",
+        "message": "At most 10 contact points."
+      }
+    ]
+  },
+  {
+    "name": "alert_channel_label_name_order",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "p-1",
+          "type": "stat",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "alert": {
+            "name": "API latency high",
+            "query": "A",
+            "op": "above",
+            "threshold": 0.3,
+            "engine": "tool",
+            "channel": {
+              "receiver": "ops",
+              "labels": {
+                "b-1": "x",
+                "9": "x",
+                "a-1": "x",
+                "10": "x",
+                "ok": "x"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].alert.channel.labels.10",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "panels[0].alert.channel.labels.9",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "panels[0].alert.channel.labels.a-1",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      },
+      {
+        "path": "panels[0].alert.channel.labels.b-1",
+        "message": "Use a label name: letters, digits and _, not starting with a digit."
+      }
+    ]
+  }
+]

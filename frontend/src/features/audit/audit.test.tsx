@@ -35,7 +35,7 @@ const cluster = (id: string, name: string, provider: Cluster["provider"]): Clust
 const CLUSTERS = [cluster("c1", "prod-gke", "gke"), cluster("c2", "dev-aks", "aks")];
 
 const record = (id: number, over: Partial<AuditRecord> = {}): AuditRecord => ({
-  id, started_at: "2026-11-07T10:00:00Z", finished_at: "2026-11-07T10:00:01Z", actor: "local", action: "scale",
+  id, started_at: "2026-11-07T10:00:00Z", finished_at: "2026-11-07T10:00:01Z", actor: "local", action: "scale", app: "kubernetes",
   cluster_id: "c1", cluster_name: "prod-gke", provider: "gke", namespace: "payments", kind: "deployments.apps",
   name: `web-${id}`, outcome: "succeeded", message: "Scaled to 3 replicas.", diff: null, details: null, ...over,
 });
@@ -479,4 +479,114 @@ it("audit shows cluster and account verbs", async () => {
   }
   const connected = await screen.findByRole("row", { name: /Connected a cloud account/ });
   expect(within(connected).getByText("Cloud account")).toBeTruthy();
+});
+
+describe("monitoring entries", () => {
+  const monitoring = (over: Partial<AuditRecord> = {}) => record(7, {
+    app: "monitoring", action: "source_add", cluster_id: "", cluster_name: "", provider: "", namespace: null,
+    kind: "sources", name: "Prometheus main", message: null, ...over,
+  });
+
+  it("a monitoring entry reads as Monitoring", async () => {
+    serve(() => ({ records: [monitoring()], next_before: null }));
+    show();
+    const row = await screen.findByRole("row", { name: /Added a source/ });
+    expect(within(row).getAllByText("Monitoring")).toHaveLength(2);
+    expect(within(row).getByText("source")).toBeTruthy();
+    expect(within(row).getByText("Prometheus main")).toBeTruthy();
+    expect(within(row).queryByText("K8S")).toBeNull();
+  });
+
+  it("Kubernetes rows are unchanged", async () => {
+    serve(() => ({ records: [record(1, { app: "kubernetes" })], next_before: null }));
+    show();
+    const row = await screen.findByRole("row", { name: /web-1/ });
+    expect(within(row).getByText("GKE")).toBeTruthy();
+    expect(within(row).getByText("prod-gke / payments")).toBeTruthy();
+    expect(within(row).queryByText("Monitoring")).toBeNull();
+    expect(row.className).toMatch(/gke/);
+  });
+
+  it("audit shows dashboard actions in words", async () => {
+    serve(() => ({ records: [
+      monitoring({ id: 4, action: "dashboard_restore", kind: "dashboard", name: "API latency" }),
+      monitoring({ id: 3, action: "dashboard_remove", kind: "dashboard", name: "Errors" }),
+      monitoring({ id: 2, action: "dashboard_save", kind: "dashboard", name: "API latency" }),
+      monitoring({ id: 1, action: "dashboard_add", kind: "dashboard", name: "Errors" }),
+    ], next_before: null }));
+    show();
+    for (const [label, name] of [["Restored a dashboard version", "API latency"], ["Removed a dashboard", "Errors"],
+      ["Saved a dashboard", "API latency"], ["Added a dashboard", "Errors"]]) {
+      const row = await screen.findByRole("row", { name: new RegExp(label) });
+      expect(within(row).getByText("dashboard")).toBeTruthy();
+      expect(within(row).getByText(name)).toBeTruthy();
+    }
+    const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    for (const l of ["Added a dashboard", "Saved a dashboard", "Removed a dashboard", "Restored a dashboard version"]) expect(labels).toContain(l);
+  });
+
+  it("audit shows alert actions in words", async () => {
+    const pairs: [string, string, string][] = [
+      ["alert_rule_add", "alert_rule", "Added an alert rule"], ["alert_rule_change", "alert_rule", "Changed an alert rule"],
+      ["alert_rule_remove", "alert_rule", "Removed an alert rule"], ["contact_point_add", "contact_point", "Added a contact point"],
+      ["contact_point_change", "contact_point", "Changed a contact point"], ["contact_point_remove", "contact_point", "Removed a contact point"],
+      ["contact_point_test", "contact_point", "Sent a test message"], ["silence_add", "silence", "Added a silence"],
+      ["silence_remove", "silence", "Expired a silence"], ["loki_rule_write", "loki_rule", "Wrote a Loki rule"],
+      ["loki_rule_remove", "loki_rule", "Removed a Loki rule"],
+    ];
+    serve(() => ({ records: pairs.map(([action, kind], i) => monitoring({ id: i + 1, action, kind, name: `Thing ${i + 1}` })), next_before: null }));
+    show();
+    for (const [, , label] of pairs) expect(await screen.findByRole("row", { name: new RegExp(label) })).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    for (const [, , label] of pairs) expect(labels).toContain(label);
+  });
+
+  it("install and uninstall read in words", async () => {
+    serve(() => ({ records: [
+      record(2, { action: "uninstall", namespace: null, kind: "namespaces", name: "monitoring", cluster_name: "kind-dev", provider: "kind", message: null }),
+      record(1, { action: "install", namespace: null, kind: "namespaces", name: "monitoring", cluster_name: "kind-dev", provider: "kind", message: null }),
+    ], next_before: null }));
+    show();
+    expect(await screen.findByRole("row", { name: /Uninstalled/ })).toBeTruthy();
+    const installed = screen.getAllByRole("row").filter((r) => /Installed/.test(r.textContent ?? "") && !/Uninstalled/.test(r.textContent ?? ""));
+    expect(installed).toHaveLength(1);
+    expect(within(installed[0]).getByText("monitoring")).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    expect(labels.slice(labels.indexOf("Created"), labels.indexOf("Created") + 4)).toEqual(["Created", "Installed", "Uninstalled", "Deleted"]);
+  });
+
+  it("import and export entries read in words", async () => {
+    const rows: [string, string, string, string][] = [
+      ["dashboard_import", "dashboard", "Node overview", "Imported a dashboard"],
+      ["dashboard_update", "dashboard", "API latency", "Updated a dashboard from its source"],
+      ["monitoring_export", "project", "shop", "Exported from Monitoring"],
+      ["grafana_add", "grafana", "Team Grafana", "Connected a Grafana"],
+      ["grafana_change", "grafana", "Ops Grafana", "Changed a Grafana connection"],
+      ["grafana_remove", "grafana", "Old Grafana", "Removed a Grafana connection"],
+    ];
+    serve(() => ({ records: rows.map(([action, kind, name], i) => monitoring({ id: i + 1, action, kind, name })), next_before: null }));
+    show();
+    for (const [, kind, name, label] of rows) {
+      const row = await screen.findByRole("row", { name: new RegExp(label) });
+      expect(within(row).getByText(kind)).toBeTruthy();
+      expect(within(row).getByText(name)).toBeTruthy();
+    }
+    const exported = screen.getAllByRole("row").filter((r) => /Exported from Monitoring/.test(r.textContent ?? ""));
+    expect(exported).toHaveLength(1);
+    const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    for (const [, , , label] of rows) expect(labels).toContain(label);
+  });
+
+  it("the action filter offers the monitoring actions", async () => {
+    serve(() => ({ records: [record(1)], next_before: null }));
+    show();
+    const select = (await screen.findByLabelText("Action")) as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    for (const l of ["Added a source", "Changed a source", "Removed a source", "Added a project", "Changed a project",
+      "Removed a project", "Added a group", "Changed a group", "Removed a group"]) expect(labels).toContain(l);
+  });
 });

@@ -470,10 +470,37 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
     # Handlers join names into API paths: nothing but a Kubernetes name gets that far.
     if (problem := object_name_problem(target.name, target.namespace)) is not None:
         raise HTTPException(status_code=422, detail=problem)
-    actor = actor_of(request)
-    await _authorize(actor, body.action, target)
-    limit = MAX_OPEN_DELETE_PLANS if body.action == "delete" else None
-    if limit is not None and state.plans.open_count(actor, body.action) >= limit:
+    return await make_plan(
+        state,
+        actor=actor_of(request),
+        action=body.action,
+        handler=handler,
+        target=target,
+        params=body.params,
+        limit=MAX_OPEN_DELETE_PLANS if body.action == "delete" else None,
+    )
+
+
+async def make_plan(
+    state,
+    *,
+    actor: str,
+    action: str,
+    handler: ActionHandler,
+    target: Target,
+    params: dict,
+    limit: int | None = None,
+) -> PlanOut:
+    """Plan `action` on `target` with `handler` for `actor` and keep the plan (`state` is the
+    app's state, read now: its plan store, registry, catalog and connections).
+
+    `POST /api/actions/plan` calls it after its own checks of what the browser asked for. The
+    server calls it directly for changes it builds itself (with handlers that aren't in
+    `ACTIONS`, so the browser can never ask for them); the plan applies through the same
+    `POST /api/actions/{plan_id}/apply`, audit first. The caller has checked the target's name
+    (`object_name_problem`). `limit`: the most open plans of that action the actor may hold."""
+    await _authorize(actor, action, target)
+    if limit is not None and state.plans.open_count(actor, action) >= limit:
         raise HTTPException(status_code=429, detail=OPEN_DELETES_LIMIT)
     try:
         info = await state.registry.get(target.cluster_id)
@@ -494,17 +521,16 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
     async with AsyncExitStack() as stack:
         api = await _open_api(stack, state.connections, target.cluster_id)
         try:
-            params = copy.deepcopy(body.params)
-            planned = await handler.plan(api, spec, target, params, cluster=cluster)
+            planned = await handler.plan(api, spec, target, copy.deepcopy(params), cluster=cluster)
         except Exception as exc:
-            raise _failure(exc, body.action, spec, target) from exc
+            raise _failure(exc, action, spec, target) from exc
 
-    typed = needs_typed_confirmation(body.action, cluster.environment, spec.key, planned.typed)
+    typed = needs_typed_confirmation(action, cluster.environment, spec.key, planned.typed)
     warnings = list(planned.warnings)
     if cluster.environment == Environment.PRODUCTION and PRODUCTION not in warnings:
         warnings.insert(0, PRODUCTION)
     stored = StoredPlan(
-        action=body.action,
+        action=action,
         handler=handler,
         target=target,
         cluster=cluster,
@@ -520,7 +546,7 @@ async def plan_action(body: PlanIn, request: Request) -> PlanOut:
         raise HTTPException(status_code=429, detail=OPEN_DELETES_LIMIT)
     return PlanOut(
         plan_id=plan_id,
-        action=body.action,
+        action=action,
         target=target,
         kind=spec.kind,
         cluster=cluster,

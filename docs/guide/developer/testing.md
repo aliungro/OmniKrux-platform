@@ -40,7 +40,7 @@ npm run build
 
 ## Markers
 
-Two pytest markers are excluded from the default run. Both are registered in `backend/pyproject.toml`.
+Five pytest markers are registered in `backend/pyproject.toml`. `kind` and `cloud_live` are excluded from the default run; `mailpit`, `helm` and `compose` are not, but their tests skip themselves when what they need is absent.
 
 ### `kind`
 
@@ -51,6 +51,39 @@ Use them when you change how OmniKrux talks to a real API server: watches, actio
 ```bash
 bash ../scripts/dev-kind.sh
 python -m uv run --frozen pytest -q -m kind
+```
+
+The Monitoring install test, `tests/e2e/test_monitoring_install_kind.py`, uses a second kind cluster, so installing and uninstalling never touches the tools in `omnikrux-dev`. It is named `omnikrux-install` unless `OMNIKRUX_KIND_INSTALL_CLUSTER` names another (the context is `kind-<name>`). Without it the test skips with "The kind cluster omnikrux-install isn't running (see docs/guide/developer/testing.md)." Create it from the repository root with its own kubeconfig file, so your main kubeconfig's current context stays as it is:
+
+```bash
+kind create cluster --name omnikrux-install --config scripts/fixtures/kind-config.yaml --kubeconfig .tools/kube/install-config --wait 120s
+```
+
+The test also needs `omnikrux-dev`, the pinned Helm and charts (see `helm` below) and port 9911 free; the test leaves the tools installed in the second cluster's `monitoring` namespace. See [Monitoring](monitoring.md#the-install-on-kind) for what it checks. Remove the cluster with `kind delete cluster --name omnikrux-install` when you no longer need it.
+
+### `helm`
+
+Tests that run the pinned Helm (`backend/tests/monitoring/test_install_charts_helm.py`, and one in `test_install_helm.py`): they run it through OmniKrux's Helm runner, render each chart with OmniKrux's values and check the names, CRDs and settings the app relies on. They need the files from `scripts/dev-monitoring-tools.sh`, which puts Helm and the archives in `.tools/` and prints `OMNIKRUX_HELM_BINARY` and `OMNIKRUX_CHARTS_DIR` to set; the tests find them in `.tools/`. Without them they skip with "The pinned Helm and charts aren't in .tools/ (run scripts/dev-monitoring-tools.sh)." From `backend`:
+
+```bash
+bash ../scripts/dev-monitoring-tools.sh
+python -m uv run --frozen pytest -q -m helm tests/monitoring
+```
+
+### `compose`
+
+Tests that need Docker with `docker compose` (`backend/tests/monitoring/test_install_generate.py`): the docker-compose file OmniKrux writes for a Docker host must pass `docker compose config`. They only check the file and never start it. Without Docker they skip. From `backend`:
+
+```bash
+python -m uv run --frozen pytest -q -m compose tests/monitoring
+```
+
+### `mailpit`
+
+Tests that need [Mailpit](https://mailpit.axllent.org) on the machine: SMTP on `127.0.0.1:1025` and its API on `127.0.0.1:8025` (`backend/tests/monitoring/test_mailpit.py`). They skip when Mailpit isn't there, with "Mailpit isn't running on 127.0.0.1:1025 (see docs/guide/developer/monitoring.md)." The gate's `-m "not kind and not cloud_live"` does not exclude them, so while Mailpit runs locally they run in the gate too; they mail only 127.0.0.1 and empty Mailpit's inbox first. Start it with `docker run -d --name omnikrux-mailpit -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 axllent/mailpit:v1.33.1` and run them alone with:
+
+```bash
+python -m uv run --frozen pytest -q tests/monitoring/test_mailpit.py
 ```
 
 ### `cloud_live`

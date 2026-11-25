@@ -336,3 +336,69 @@ async def test_discovery_generated_from_resources(fake_api):
     assert status == 503 and json.loads(text)["code"] == 503
     status, _ = await get(fake_api, "/apis/apps/v1")
     assert status == 200
+
+
+async def test_storage_classes_are_listed(fake_api):
+    from tests.fakekube import storage_class
+
+    classes = fake_api.objects["storageclasses.storage.k8s.io"]
+    classes[("", "standard")] = storage_class("standard", True)
+    classes[("", "slow")] = storage_class("slow", False)
+    status, text = await get(fake_api, "/apis/storage.k8s.io/v1/storageclasses")
+    assert status == 200
+    items = {o["metadata"]["name"]: o for o in json.loads(text)["items"]}
+    assert set(items) == {"standard", "slow"}
+    assert items["standard"]["metadata"]["annotations"] == {
+        "storageclass.kubernetes.io/is-default-class": "true"
+    }
+    assert not items["slow"]["metadata"]["annotations"]
+    _, text = await get(fake_api, "/apis/storage.k8s.io/v1")
+    assert "storageclasses" in text
+
+
+async def test_helm_release_secret_decodes(fake_api):
+    import base64
+    import gzip
+
+    from tests.fakekube import helm_release_secret, prometheus_operator_deployment
+
+    def decode(secret):
+        packed = base64.b64decode(base64.b64decode(secret["data"]["release"]))
+        return json.loads(gzip.decompress(packed))
+
+    secret = helm_release_secret(
+        "monitoring", "kps", 2, "deployed", chart="kube-prometheus-stack", version="1.2.3"
+    )
+    labels = secret["metadata"]["labels"]
+    assert labels == {"owner": "helm", "name": "kps", "status": "deployed", "version": "2"}
+    release = decode(secret)
+    assert release["info"]["status"] == "deployed" and release["version"] == 2
+    assert release["info"]["last_deployed"]
+    assert release["chart"]["metadata"] == {
+        "name": "kube-prometheus-stack",
+        "version": "1.2.3",
+        "appVersion": "1.2.3",
+    }
+    assert release["config"]["omnikrux"]["managedBy"] == "omnikrux"
+    foreign = helm_release_secret(
+        "monitoring",
+        "kps",
+        1,
+        "failed",
+        chart="c",
+        version="1",
+        owner="other",
+        managed_by_omnikrux=False,
+    )
+    assert foreign["metadata"]["labels"]["owner"] == "other"
+    assert "omnikrux" not in decode(foreign)["config"]
+    fake_api.objects["secrets"][("monitoring", secret["metadata"]["name"])] = secret
+    fake_api.objects["deployments.apps"][("monitoring", "op")] = prometheus_operator_deployment(
+        "monitoring", "op", instance="kps"
+    )
+    status, text = await get(
+        fake_api, "/api/v1/namespaces/monitoring/secrets", labelSelector="owner=helm,name=kps"
+    )
+    assert status == 200 and len(json.loads(text)["items"]) == 1
+    status, _ = await get(fake_api, "/apis/apps/v1/namespaces/monitoring/deployments/op")
+    assert status == 200

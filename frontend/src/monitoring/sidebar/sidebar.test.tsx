@@ -1,0 +1,331 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { GroupOut } from "../api/types";
+import { readRecent, recordRecent } from "../home/recent";
+import { installFakeMonitoringApi } from "../test/fakeMonitoringApi";
+import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
+import { seedDashboard, spec } from "../test/dashboardSeeds";
+import { treeRows } from "./treeModel";
+
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+const group = (id: string, name: string, projectIds: string[]): GroupOut =>
+  ({ id, name, project_ids: projectIds, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+
+function seedTwo(fallback?: Parameters<typeof installFakeMonitoringApi>[1]) {
+  return installFakeMonitoringApi({
+    projects: [seedProject("p1", "A", "kubernetes", { id: "c1", provider: "aks" }), seedProject("p2", "B")],
+    groups: [group("g1", "Both", ["p1", "p2"])],
+  }, fallback);
+}
+
+const tree = () => screen.getByRole("tree", { name: "Projects and groups" });
+const rowTexts = () => [...tree().querySelectorAll<HTMLElement>("[data-row-kind]")].map((el) => `${el.dataset.rowKind}:${el.dataset.rowLabel}`);
+const activeTab = () => within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab").find((t) => t.getAttribute("aria-selected") === "true")!;
+const find = () => screen.getByRole("combobox", { name: "Find anything" }) as HTMLInputElement;
+
+describe("Monitoring sidebar", () => {
+  it("sidebar lists sections, groups and projects", async () => {
+    seedTwo();
+    renderMonitoringApp();
+    const nav = screen.getByRole("navigation", { name: "Monitoring" });
+    expect(within(nav).getByText("Monitoring")).toBeTruthy();
+    expect(within(nav).getByText("Alt 2")).toBeTruthy();
+    expect(find().getAttribute("placeholder")).toBe("Find anything");
+    await screen.findByRole("treeitem", { name: "Both" });
+    expect(rowTexts()).toEqual(["section:Groups", "group:Both", "section:Projects", "project:A", "project:B"]);
+    expect(screen.getByRole("button", { name: "Home" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "Explore" }).hasAttribute("aria-current")).toBe(false);
+    // The colour dot follows the cluster's provider; a project of your own is lilac.
+    const dot = (name: string) => screen.getByRole("treeitem", { name }).querySelector<HTMLElement>("[data-dot]")!.style.background;
+    expect(dot("A")).toBe("var(--aks)");
+    expect(dot("B")).toBe("var(--focus)");
+  });
+
+  it("shows the empty lines, the source count, and the + buttons open their pages", async () => {
+    installFakeMonitoringApi({ sources: [] });
+    renderMonitoringApp();
+    expect(await screen.findByText("Combine projects into a group with +")).toBeTruthy();
+    expect(screen.getByText("No projects yet")).toBeTruthy();
+    expect(within(screen.getByRole("button", { name: /^Sources/ })).getByText("0")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New project" }));
+    await waitFor(() => expect(activeTab().textContent).toContain("New project"));
+    fireEvent.click(screen.getByRole("button", { name: "New group" }));
+    await waitFor(() => expect(activeTab().textContent).toContain("New group"));
+  });
+
+  it("arrow keys move through the tree and → opens a group", async () => {
+    seedTwo();
+    renderMonitoringApp();
+    const groupRow = await screen.findByRole("treeitem", { name: "Both" });
+    expect(groupRow.tabIndex).toBe(0);
+    expect(screen.getByRole("treeitem", { name: "A" }).tabIndex).toBe(-1);
+    groupRow.focus();
+    expect(groupRow.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.keyDown(groupRow, { key: "ArrowRight" });
+    expect(await screen.findByRole("treeitem", { name: "Go to project A" })).toBeTruthy();
+    expect(screen.getByRole("treeitem", { name: "Go to project B" })).toBeTruthy();
+    expect(groupRow.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(groupRow);
+    expect(JSON.parse(localStorage.getItem("omnikrux.monitoring.sidebar") ?? "[]")).toEqual(["group:g1"]);
+    fireEvent.keyDown(groupRow, { key: "ArrowDown" });
+    const shortcut = screen.getByRole("treeitem", { name: "Go to project A" });
+    expect(document.activeElement).toBe(shortcut);
+    expect(shortcut.tabIndex).toBe(0);
+    fireEvent.keyDown(shortcut, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(groupRow);
+    fireEvent.keyDown(groupRow, { key: "ArrowLeft" });
+    expect(screen.queryByRole("treeitem", { name: "Go to project A" })).toBeNull();
+    expect(document.activeElement).toBe(groupRow);
+    // Down from the group skips the Projects heading; a project opens to its dashboards.
+    fireEvent.keyDown(groupRow, { key: "ArrowDown" });
+    const a = screen.getByRole("treeitem", { name: "A" });
+    expect(document.activeElement).toBe(a);
+    fireEvent.keyDown(a, { key: "ArrowRight" });
+    expect(screen.getByText("No dashboards yet")).toBeTruthy();
+    fireEvent.keyDown(a, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(groupRow);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a row removed under the keyboard hands it back to the tree", async () => {
+    const api = seedTwo();
+    const { client } = renderMonitoringApp();
+    const b = await screen.findByRole("treeitem", { name: "B" });
+    b.focus();
+    api.state.projects = api.state.projects.filter((p) => p.id !== "p2");
+    api.state.groups[0].project_ids = ["p1"];
+    await client.invalidateQueries();
+    await waitFor(() => expect(screen.queryByRole("treeitem", { name: "B" })).toBeNull());
+    await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("treeitem"));
+  });
+
+  it("Enter on a shortcut opens the project in the active tab", async () => {
+    seedTwo();
+    renderMonitoringApp();
+    const groupRow = await screen.findByRole("treeitem", { name: "Both" });
+    groupRow.focus();
+    fireEvent.keyDown(groupRow, { key: "ArrowRight" });
+    fireEvent.keyDown(groupRow, { key: "ArrowDown" });
+    const shortcut = screen.getByRole("treeitem", { name: "Go to project A" });
+    fireEvent.keyDown(shortcut, { key: "Enter" });
+    await waitFor(() => expect(activeTab().textContent).toContain("A"));
+    expect(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")).toHaveLength(1);
+    expect(readRecent().map((r) => `${r.kind}:${r.id}`)).toEqual(["project:p1"]);
+    // Ctrl+Enter opens the group in a new tab, and the group is remembered as recent too.
+    fireEvent.keyDown(groupRow, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")).toHaveLength(2));
+    await waitFor(() => expect(activeTab().textContent).toContain("Both"));
+    await waitFor(() => expect(readRecent().map((r) => `${r.kind}:${r.id}`)).toEqual(["group:g1", "project:p1"]));
+    // Ctrl+click on a project row opens a third tab.
+    fireEvent.click(screen.getByRole("treeitem", { name: "B" }), { ctrlKey: true });
+    await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")).toHaveLength(3));
+  });
+
+  it("switching to a tab or reloading doesn't reorder Recently opened", async () => {
+    seedTwo();
+    recordRecent({ kind: "group", id: "g1" }, 2);
+    recordRecent({ kind: "project", id: "p1" }, 1);
+    const before = () => readRecent().map((r) => `${r.kind}:${r.id}`);
+    expect(before()).toEqual(["group:g1", "project:p1"]);
+    // The active tab shows project A as the app loads: shown, not opened.
+    renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p1" }, { page: "group", id: "g1" }) });
+    await screen.findByRole("treeitem", { name: "Both" });
+    const strip = within(screen.getByRole("tablist", { name: "Monitoring tabs" }));
+    await waitFor(() => expect(strip.getAllByRole("tab")[0].textContent).toContain("A"));
+    fireEvent.click(strip.getAllByRole("tab")[1]);
+    fireEvent.click(strip.getAllByRole("tab")[0]);
+    await waitFor(() => expect(activeTab().textContent).toContain("A"));
+    expect(before()).toEqual(["group:g1", "project:p1"]);
+    // Opening it from the tree does record it.
+    fireEvent.click(screen.getByRole("treeitem", { name: "A" }));
+    expect(before()).toEqual(["project:p1", "group:g1"]);
+  });
+
+  it("slash focuses Find and Enter opens the top hit", async () => {
+    seedTwo();
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Both" });
+    // Home's own search takes the keyboard as it opens; "/" is for when it is elsewhere.
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: "/" });
+    expect(document.activeElement).toBe(find());
+    fireEvent.change(find(), { target: { value: "bo" } });
+    const list = screen.getByRole("listbox", { name: "Find results" });
+    expect(within(list).getAllByRole("option")[0].textContent).toContain("Both");
+    expect(find().getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(find(), { key: "Enter" });
+    await waitFor(() => expect(activeTab().textContent).toContain("Both"));
+    expect(find().value).toBe("");
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    // "/" typed into another field is that field's: Find doesn't take the keyboard.
+    for (const tag of ["input", "textarea"] as const) {
+      const field = document.body.appendChild(document.createElement(tag));
+      field.focus();
+      fireEvent.keyDown(field, { key: "/" });
+      expect(document.activeElement).toBe(field);
+      field.remove();
+    }
+  });
+
+  it("Esc in Find clears, then returns to main", async () => {
+    seedTwo();
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Both" });
+    find().focus();
+    fireEvent.change(find(), { target: { value: "A" } });
+    fireEvent.keyDown(find(), { key: "Escape" });
+    expect(find().value).toBe("");
+    expect(document.activeElement).toBe(find());
+    fireEvent.keyDown(find(), { key: "Escape" });
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+  });
+
+  it("Find subtitles name the cluster, not its id", async () => {
+    seedTwo(async (url) => new Response(JSON.stringify(url === "/api/clusters" ? [{ id: "c1", name: "East cluster", provider: "aks" }] : []), {
+      status: 200, headers: { "content-type": "application/json" },
+    }));
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Both" });
+    find().focus();
+    fireEvent.change(find(), { target: { value: "A" } });
+    await waitFor(() => expect(screen.getByRole("option", { name: /^A/ }).textContent).toContain("Kubernetes · East cluster"));
+  });
+
+  it("treeRows lays out the sections", () => {
+    const out = treeRows({
+      projects: [{ id: "p1", name: "A", kind: "custom", cluster_id: null, color: "custom", dashboards: [] }],
+      groups: [{ id: "g1", name: "G", project_ids: ["p1"], dashboards: [] }],
+      source_count: 0,
+    }, new Set(["group:g1", "project:p1"]));
+    expect(out.map((r) => [r.kind, r.level, r.label])).toEqual([
+      ["section", 0, "Groups"], ["group", 0, "G"], ["shortcut", 1, "A"],
+      ["section", 0, "Projects"], ["project", 0, "A"], ["empty", 1, "No dashboards yet"],
+    ]);
+  });
+  it("tree lists dashboards then ready-made views", async () => {
+    const A = { kind: "project" as const, id: "p1", name: "A" };
+    const BOTH = { kind: "group" as const, id: "g1", name: "Both" };
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "A"), seedProject("p2", "B")],
+      groups: [group("g1", "Both", ["p1", "p2"])],
+      dashboards: {
+        d1: seedDashboard("d1", A, spec("Zeta", [])),
+        d2: seedDashboard("d2", A, spec("Alpha", [])),
+        d3: seedDashboard("d3", BOTH, spec("Overview", [])),
+        "ready:p1:nodes": seedDashboard("ready:p1:nodes", A, spec("Node health", []), true),
+      },
+      readyMade: { p1: [{ key: "nodes", id: "ready:p1:nodes", title: "Node health", description: "", missing: [], notes: [], checked: true, check_message: null }] },
+    });
+    localStorage.setItem("omnikrux.monitoring.sidebar", JSON.stringify(["group:g1", "project:p1", "project:p2"]));
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Overview" });
+    expect(rowTexts()).toEqual([
+      "section:Groups", "group:Both", "shortcut:A", "shortcut:B", "dashboard:Overview",
+      "section:Projects", "project:A", "dashboard:Alpha", "dashboard:Zeta", "dashboard:Node health",
+      "project:B", "empty:No dashboards yet",
+    ]);
+    const ready = screen.getByRole("treeitem", { name: "Node health, ready-made" });
+    expect(within(ready).getByText("ready-made")).toBeTruthy();
+    expect(within(screen.getByRole("treeitem", { name: "Alpha" })).queryByText("ready-made")).toBeNull();
+    // Enter opens the dashboard in this tab; its row is the current page.
+    const alpha = screen.getByRole("treeitem", { name: "Alpha" });
+    alpha.focus();
+    fireEvent.keyDown(alpha, { key: "Enter" });
+    await waitFor(() => expect(activeTab().textContent).toContain("Alpha"));
+    await waitFor(() => expect(screen.getByRole("treeitem", { name: "Alpha" }).getAttribute("aria-current")).toBe("page"));
+    expect(screen.getByRole("treeitem", { name: "Zeta" }).hasAttribute("aria-current")).toBe(false);
+    // A group's dashboard opens from the group too; ← goes back to the group.
+    const overview = screen.getByRole("treeitem", { name: "Overview" });
+    overview.focus();
+    fireEvent.keyDown(overview, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(screen.getByRole("treeitem", { name: "Both" }));
+    fireEvent.click(overview);
+    await waitFor(() => expect(activeTab().textContent).toContain("Overview"));
+    await waitFor(() => expect(screen.getByRole("treeitem", { name: "Overview" }).getAttribute("aria-current")).toBe("page"));
+  });
+
+  it("treeRows gives dashboard rows their view and ready-made flag", () => {
+    const out = treeRows({
+      projects: [{ id: "p1", name: "A", kind: "custom", cluster_id: null, color: "custom", dashboards: [
+        { id: "ready:p1:nodes", title: "Node health", ready_made: true }, { id: "d1", title: "Mine", ready_made: false },
+      ] }],
+      groups: [{ id: "g1", name: "G", project_ids: ["p1"], dashboards: [{ id: "d2", title: "Shared", ready_made: false }] }],
+      source_count: 0,
+    }, new Set(["group:g1", "project:p1"]));
+    expect(out.filter((r) => r.kind === "dashboard").map((r) => [r.label, r.view, r.readyMade])).toEqual([
+      ["Shared", { page: "dashboard", id: "d2" }, false],
+      ["Mine", { page: "dashboard", id: "d1" }, false],
+      ["Node health", { page: "dashboard", id: "ready:p1:nodes" }, true],
+    ]);
+  });
+
+  it("the sidebar Alerts item counts firing alerts", async () => {
+    const api = seedTwo();
+    api.state.overview = { ...api.state.overview, counts: { ...api.state.overview.counts, rules: 4, firing: 3 } };
+    renderMonitoringApp();
+    const item = await screen.findByRole("button", { name: "Alerts, 3 firing" });
+    expect(item.textContent).toContain("3");
+  });
+
+  it("the sidebar Alerts item has no count when nothing fires", async () => {
+    seedTwo();
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Both" });
+    const item = screen.getByRole("button", { name: "Alerts" });
+    expect(item.textContent).toBe("Alerts");
+  });
+
+  it("the sidebar shows no count when the overview can't be read", async () => {
+    const api = seedTwo();
+    api.state.overview = { ...api.state.overview, counts: { ...api.state.overview.counts, firing: 3 } };
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      String(url).includes("/alerts/overview") ? Promise.resolve(new Response("{}", { status: 500 })) : real(url, init));
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Both" });
+    expect(screen.getByRole("button", { name: "Alerts" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /firing/ })).toBeNull();
+  });
+
+  it("the Import icon opens Import for the current project", async () => {
+    seedTwo();
+    const app = renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p2" }) });
+    await screen.findByRole("treeitem", { name: "Both" });
+    const icon = screen.getByRole("button", { name: "Import" });
+    expect(icon.hasAttribute("aria-disabled")).toBe(false);
+    expect(icon.getAttribute("title")).toBe("Import dashboards (I)");
+    expect(icon.getAttribute("aria-keyshortcuts")).toBe("i");
+    // Ctrl+click: a new tab, for the open project; this one stays.
+    fireEvent.click(icon, { ctrlKey: true });
+    await waitFor(() => expect(app.current().tabs).toHaveLength(2));
+    expect(app.current().tabs[1].view).toEqual({ page: "import", target: { kind: "project", id: "p2" } });
+    fireEvent.click(within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")[0]);
+    await waitFor(() => expect(app.current().active).toBe("start0"));
+    expect(app.current().tabs[0].view).toEqual({ page: "project", id: "p2" });
+    // A click: in the active tab.
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "import", target: { kind: "project", id: "p2" } }));
+    expect(app.current().tabs[0].back).toContainEqual({ page: "project", id: "p2" });
+    expect(app.current().tabs).toHaveLength(2);
+  });
+
+  it("the Import icon on the Import page keeps its target", async () => {
+    seedTwo();
+    const app = renderMonitoringApp({ tabs: tabsWith({ page: "import", target: { kind: "group", id: "g1" } }) });
+    await screen.findByRole("treeitem", { name: "Both" });
+    fireEvent.click(screen.getByRole("button", { name: "Import" }), { ctrlKey: true });
+    await waitFor(() => expect(app.current().tabs).toHaveLength(2));
+    expect(app.current().tabs[1].view).toEqual({ page: "import", target: { kind: "group", id: "g1" } });
+    // New dashboards from here go there too.
+    expect(screen.getByText("Both", { selector: "b" })).toBeTruthy();
+  });
+
+  it("the Import icon stays on with no project", async () => {
+    installFakeMonitoringApi({ projects: [] });
+    const app = renderMonitoringApp();
+    expect(await screen.findByText("Set up a project first.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "import" }));
+  });
+});

@@ -1,0 +1,139 @@
+/* Edit mode on the panel grid: tile handles, the drop target and "+ Add panel" (the settings beside
+   the grid are SidePanel.module.css). Territories tokens only. */
+
+/* ⋮⋮ in the tile's header: the place to pick it up. */
+.grab {
+  flex: none;
+  margin-left: auto;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: -0.12em;
+  line-height: 1.4;
+  cursor: grab;
+  touch-action: none;
+}
+
+.grab:hover {
+  color: var(--focus);
+}
+
+.grab:active {
+  cursor: grabbing;
+}
+
+/* The corner: a small right angle drawn by two borders. */
+.corner {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.corner::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--ink-3);
+  border-bottom: 2px solid var(--ink-3);
+  border-bottom-right-radius: 2px;
+}
+
+.corner:hover::after {
+  border-color: var(--focus);
+}
+
+.grab:focus-visible,
+.corner:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Where the panel lands, snapped to the cells. */
+.target {
+  grid-column: var(--col);
+  grid-row: var(--row);
+  z-index: 0;
+  border: 1.5px dashed var(--focus);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--focus) 7%, transparent);
+  pointer-events: none;
+}
+
+.add {
+  grid-column: var(--col);
+  grid-row: var(--row);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 45%, transparent);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.add:hover {
+  border-color: var(--focus);
+  background: color-mix(in srgb, var(--focus) 6%, transparent);
+}
+
+.add:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.addMark {
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.addText {
+  line-height: 1;
+}
+
+/* Said to screen readers only. */
+.live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 719px) {
+  .add,
+  .target {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    min-height: 72px;
+  }
+
+  .target {
+    display: none;
+  }
+}

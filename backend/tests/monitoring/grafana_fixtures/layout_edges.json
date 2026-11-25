@@ -1,0 +1,90 @@
+{
+  "title": "Edges",
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "id": 65,
+      "type": "stat",
+      "title": "Panel A",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom-main"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up"
+        }
+      ]
+    },
+    {
+      "id": 66,
+      "type": "stat",
+      "title": "Panel B",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom-main"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up"
+        }
+      ]
+    },
+    {
+      "id": 67,
+      "type": "stat",
+      "title": "Panel C",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom-main"
+      },
+      "gridPos": {
+        "x": 23,
+        "y": 0,
+        "w": 4,
+        "h": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up"
+        }
+      ]
+    },
+    {
+      "id": 68,
+      "type": "stat",
+      "title": "Panel D",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom-main"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 2000,
+        "w": 1,
+        "h": 50
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up"
+        }
+      ]
+    }
+  ]
+}

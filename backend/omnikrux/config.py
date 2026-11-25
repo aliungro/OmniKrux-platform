@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     oci_dir: Path | None = None
     cloud_endpoints: Annotated[str | None, NoDecode] = None
     cloud_discovery_seconds: int = 600
+    # OMNIKRUX_ALERT_ENGINE: false turns off OmniKrux's own alert checks (rules that run in
+    # Prometheus or Loki keep running there).
+    alert_engine: bool = True
+    # OMNIKRUX_HELM_BINARY: the pinned Helm the monitoring installs run (the image sets it).
+    # Unset: `helm` on PATH.
+    helm_binary: Path | None = None
+    # OMNIKRUX_CHARTS_DIR: the folder holding the pinned chart archives (the image sets it).
+    charts_dir: Path | None = None
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod
