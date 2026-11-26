@@ -207,8 +207,14 @@ function holdsWhere(x: SourceOut): boolean {
   const part = (x.reach === "cluster" ? x.service ?? "" : hostOf(x.url)).toLowerCase();
   return part !== "" && name.includes(part);
 }
-/** An option of the source picker: the name, and where the source is only when the name doesn't say. */
-const optionWords = (x: SourceOut) => (holdsWhere(x) ? x.name : `${x.name} · ${whereLabel(x)}`);
+/** An option of the source picker: the name, and where the source is only when the name doesn't
+ * say; a part of where the name already holds (its cluster, as setup names sources) isn't said again. */
+function optionWords(x: SourceOut): string {
+  if (holdsWhere(x)) return x.name;
+  const name = x.name.toLowerCase();
+  const parts = whereLabel(x).split(" · ").filter((p) => p !== "" && !name.includes(p.toLowerCase()));
+  return parts.length > 0 ? `${x.name} · ${parts.join(" · ")}` : x.name;
+}
 
 /** Pick a saved source that is not linked yet and give it a filter (suggested where OmniKrux can tell). */
 function ExistingPanel({ project, onClose, onLinked, onAct }: { project: ProjectOut; onClose(): void; onLinked(): void; onAct(): void }) {

@@ -1005,8 +1005,10 @@ describe("Setup and project links", () => {
     const b = source("s2", "http://other.example:9090", { url: "http://other.example:9090" });
     const mine = inCluster("s3", "Local");
     const far = inCluster("s4", "Far", { cluster_id: "c9", cluster_name: "Other" });
+    // Named after its cluster (as setup names it): the cluster isn't said twice.
+    const named = inCluster("s5", "Prometheus · Dev");
     installFakeMonitoringApi({
-      sources: [a, b, mine, far], projects: [project("p1", "Dev", [], { kind: "kubernetes", cluster_id: "c1" })],
+      sources: [a, b, mine, far, named], projects: [project("p1", "Dev", [], { kind: "kubernetes", cluster_id: "c1" })],
     }, fallback);
     open("p1");
     await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
@@ -1014,7 +1016,7 @@ describe("Setup and project links", () => {
     const options = within(picker).getAllByRole("option").map((o) => o.textContent);
     expect(options).toEqual([
       "Choose a source…", "Prom · http://prom.example:9090", "http://other.example:9090", "Local · Dev · monitoring/prometheus-server",
-      "Far · Other · monitoring/prometheus-server",
+      "Prometheus · Dev · monitoring/prometheus-server", "Far · Other · monitoring/prometheus-server",
     ]);
     const group = within(picker).getByRole("group", { name: "Other clusters" });
     expect(within(group).getAllByRole("option").map((o) => o.textContent)).toEqual(["Far · Other · monitoring/prometheus-server"]);
