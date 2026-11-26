@@ -18,9 +18,10 @@ function binaryStep(raw: number): number {
 
 /**
  * Ticks that cover `[min, max]` on round numbers, about `count` of them: 1-2-5 steps, except that
- * a byte axis steps in powers of two.
+ * a byte axis steps in powers of two. `whole`: the values are counts (or shown without decimals), so
+ * the step is at least 1 and every tick is a whole number (a rounded half step would print a false label).
  */
-export function niceTicks(min: number, max: number, count: number, unit?: string): number[] {
+export function niceTicks(min: number, max: number, count: number, unit?: string, whole = false): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
   if (max < min) [min, max] = [max, min];
   if (max === min) {
@@ -33,13 +34,14 @@ export function niceTicks(min: number, max: number, count: number, unit?: string
   const range = max - min;
   if (!Number.isFinite(range) || !(range > 0)) return two();
   const raw = range / Math.max(1, count - 1);
-  const step = raw > 0 ? (unit === "bytes" || unit === "Bps" ? binaryStep(raw) : niceStep(raw)) : 0;
+  const fine = raw > 0 ? (unit === "bytes" || unit === "Bps" ? binaryStep(raw) : niceStep(raw)) : 0;
+  const step = whole && fine > 0 ? Math.max(1, Math.round(fine)) : fine;
   if (!(step > 0) || !Number.isFinite(step)) return two();
   const first = Math.floor(clean(min / step));
   const last = Math.ceil(clean(max / step));
   if (!Number.isFinite(first) || !Number.isFinite(last) || last - first > 1000 || !Number.isFinite(Math.max(Math.abs(first), Math.abs(last)) * step)) return two();
   const out: number[] = [];
-  for (let i = first; i <= last; i++) out.push(clean(i * step));
+  for (let i = first; i <= last; i++) out.push(whole ? Math.round(i * step) : clean(i * step));
   return out;
 }
 

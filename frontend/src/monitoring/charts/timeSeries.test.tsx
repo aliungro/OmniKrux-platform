@@ -70,6 +70,13 @@ describe("buildFrame and drawTimeSeries", () => {
     expect(calls.filter((c) => c.name === "setLineDash" && (c.args[0] as number[]).length > 0)).toHaveLength(1);
   });
 
+  it("a whole-number bar chart (Restarts) labels its axis with whole numbers only", () => {
+    const opts = { ...options, thresholds: [], style: "bars", unit: "short", decimals: 0 } as TimeseriesOptions;
+    const frame = buildFrame([series("a", [1, 2, 1])], opts, SIZE, RANGE, new Set());
+    expect(frame.yTicks.every(Number.isInteger)).toBe(true);
+    expect(new Set(frame.yLabels).size).toBe(frame.yLabels.length);
+  });
+
   it("the threshold band is drawn on the firing side", () => {
     // A recorder that keeps the paint state at each call.
     const record = () => {

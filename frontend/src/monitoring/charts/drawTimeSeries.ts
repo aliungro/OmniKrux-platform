@@ -214,7 +214,7 @@ export function buildFrame(
   const plotH = Math.max(1, labels ? size.height - TOP - BOTTOM : size.height - 2 * BARE);
 
   /** The y domain, its ticks and labels for a data extent. */
-  const domainFor = (extMin: number, extMax: number) => {
+  const domainFor = (extMin: number, extMax: number, wholeData = false) => {
     if (extMin === Infinity) {
       extMin = limit ?? 0;
       extMax = limit === null ? 1 : limit + Math.max(1, Math.abs(limit));
@@ -226,7 +226,9 @@ export function buildFrame(
     if (filled && minOpt === null) extMin = Math.min(0, extMin);
     const eMin = minOpt ?? extMin;
     const eMax = maxOpt ?? Math.max(extMax, eMin);
-    const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4, opts.unit);
+    // Shown without decimals, or bars of whole counts: ticks step in whole numbers so no label is rounded.
+    const whole = opts.decimals === 0 || wholeData;
+    const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4, opts.unit, whole);
     const lo = minOpt ?? ticks[0];
     let hi = maxOpt ?? ticks[ticks.length - 1];
     if (!(hi > lo)) hi = lo + 1;
@@ -247,9 +249,11 @@ export function buildFrame(
     // width follows from the labels.
     const up = new Map<number, number>();
     const down = new Map<number, number>();
+    let wholeData = true;
     for (const s of visible) {
       for (const [t, v] of s.points) {
         if (v === null || v === 0 || t < range.start || t > range.end) continue;
+        if (!Number.isInteger(v)) wholeData = false;
         const sums = v > 0 ? up : down;
         sums.set(t, (sums.get(t) ?? 0) + v);
       }
@@ -258,7 +262,7 @@ export function buildFrame(
     let dMax = 0;
     for (const v of down.values()) dMin = Math.min(dMin, v);
     for (const v of up.values()) dMax = Math.max(dMax, v);
-    dom = domainFor(dMin, dMax);
+    dom = domainFor(dMin, dMax, wholeData);
     left = dom.left;
     columns = colsFor(left);
     allValues = valuesFor(columns);

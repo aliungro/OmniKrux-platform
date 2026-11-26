@@ -83,6 +83,18 @@ describe("axes people read", () => {
   });
 });
 
+describe("whole-number axes", () => {
+  it("counts step in whole numbers, so every label is true", () => {
+    expect(niceTicks(0, 2, 5, "short", true)).toEqual([0, 1, 2]);
+    expect(niceTicks(0, 1, 5, "short", true)).toEqual([0, 1]);
+    expect(niceTicks(2, 2, 5, "short", true).every(Number.isInteger)).toBe(true);
+    // Larger ranges keep their 1-2-5 steps.
+    expect(niceTicks(0, 40, 5, "short", true)).toEqual([0, 10, 20, 30, 40]);
+    // Without the flag half steps stay.
+    expect(niceTicks(0, 2, 5, "short")).toEqual([0, 0.5, 1, 1.5, 2]);
+  });
+});
+
 describe("second-level time labels", () => {
   it("marks under a minute apart print their seconds, and ranges of 15 s still get three", () => {
     const start = Math.ceil(1_700_000_003 / 60) * 60 + 7;
