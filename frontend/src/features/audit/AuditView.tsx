@@ -11,7 +11,7 @@ import { MAX_COLUMN_WIDTH, useColumnWidths } from "../tables/columnWidths";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { Status } from "../territories/Status";
 import { formatAgo } from "../territories/model";
-import { ACTION_LABELS, actionLabel, diffKind, messageOf, outcomeOf, whatOf } from "./labels";
+import { ACTION_LABELS, actionLabel, changeOf, diffKind, messageOf, outcomeOf, whatOf } from "./labels";
 import { auditQueryKey, useAudit, type AuditFilters } from "./useAudit";
 import pc from "../territories/provider.module.css";
 import s from "./AuditView.module.css";
@@ -105,8 +105,7 @@ const AuditRow = memo(function AuditRow({
       <span role="gridcell" className={`${s.cell} ${s.where}`}>
         {monitoring ? (
           <>
-            <span className={s.badge}>Monitoring</span>
-            <span className={s.ellipsis}>Monitoring</span>
+            <span className={s.badge} aria-label="Monitoring">Monitoring</span>
           </>
         ) : (
           <>
@@ -150,7 +149,11 @@ function Detail({ record }: { record: AuditRecord }) {
           )}
         </div>
       ) : (
-        <p className={s.none}>This record has no diff: it did not change a stored object.</p>
+        <p className={s.none}>
+          {record.app === "monitoring"
+            ? (changeOf(record) ?? "Nothing stored to compare. The details below say what changed.")
+            : "This record has no diff: it did not change a stored object."}
+        </p>
       )}
       {details && <pre className={s.json} aria-label="Details">{details}</pre>}
     </div>

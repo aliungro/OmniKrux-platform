@@ -634,7 +634,11 @@ async def rename_project(id: str, body: ProjectPatch, request: Request) -> Proje
     if name == project.name:
         return await _project_out(request, project)
     record = await begin_change(
-        request, "project_change", "project", name, {"renamed_from": project.name}
+        request,
+        "project_change",
+        "project",
+        project.name,
+        {"renamed_to": name, "change": f"Renamed to {name}."},
     )
     try:
         renamed = await services.projects.rename(id, name)
@@ -659,8 +663,22 @@ async def link_source(id: str, source_id: str, body: LinkIn, request: Request) -
     project = await _project(services, id)
     source = await _source(services, source_id)
     text = render_matchers(matchers)
+    if any(link.source_id == source_id for link in project.links):
+        change = (
+            f"Set the filter on {source.name} to {text}."
+            if text
+            else f"Removed the filter on {source.name}."
+        )
+    elif text:
+        change = f"Linked {source.name} with the filter {text}."
+    else:
+        change = f"Linked {source.name} with no filter."
     record = await begin_change(
-        request, "project_change", "project", project.name, {"linked": source.name, "filter": text}
+        request,
+        "project_change",
+        "project",
+        project.name,
+        {"linked": source.name, "filter": text, "change": change},
     )
     try:
         link = await services.projects.link(id, source_id, matchers, body.origin)
@@ -687,7 +705,11 @@ async def unlink_source(id: str, source_id: str, request: Request) -> Response:
         raise _gone(NOT_LINKED)
     source = await _source(services, source_id)
     record = await begin_change(
-        request, "project_change", "project", project.name, {"unlinked": source.name}
+        request,
+        "project_change",
+        "project",
+        project.name,
+        {"unlinked": source.name, "change": f"Unlinked {source.name}."},
     )
     try:
         await services.projects.unlink(id, source_id)
@@ -853,12 +875,13 @@ async def change_group(id: str, body: GroupPatch, request: Request) -> GroupOut:
     name = checked_name(body.name) if body.name is not None else None
     details: dict = {}
     if name is not None and name != group.name:
-        details["renamed_from"] = group.name
+        details["renamed_to"] = name
+        details["change"] = f"Renamed to {name}."
     if body.project_ids is not None:
         details["projects"] = _chosen(names, body.project_ids)
     if not details:
         return _group_out(group, names)
-    record = await begin_change(request, "group_change", "group", name or group.name, details)
+    record = await begin_change(request, "group_change", "group", group.name, details)
     try:
         updated = await services.groups.update(id, name=name, project_ids=body.project_ids)
     except NameTaken as exc:

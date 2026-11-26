@@ -883,6 +883,41 @@ it("evicts the removed cluster from the shared cache before the next registry re
   await act(async () => registryRefresh?.(json([])));
 });
 
+it("the removal review names Monitoring projects and sources that use the cluster", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit = {}) => {
+    if (path === "/api/cloud/logins") return json(logins);
+    if (path === "/api/cloud/accounts" || path === "/api/cloud/discovered") return json([]);
+    if (path === "/api/clusters") return json([fileCluster]);
+    if (path === "/api/settings") return json(envSettings);
+    if (path === `/api/monitoring/clusters/${fileCluster.id}/uses` && !init.method) return json({ projects: ["Shop"], sources: ["Metrics", "Logs"] });
+    throw new Error(`Unexpected request to ${path}`);
+  }));
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: `Remove ${fileCluster.name}` }));
+  const dialog = within(await screen.findByRole("alertdialog"));
+  expect(await dialog.findByText("Monitoring uses this cluster: 1 project (Shop) and 2 sources (Metrics, Logs). They stay, but their data can't be read until the cluster is added again.")).toBeTruthy();
+});
+
+it("the removal review is unchanged when Monitoring doesn't use the cluster", async () => {
+  const uses = vi.fn(() => json({ projects: [], sources: [] }));
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init: RequestInit = {}) => {
+    if (path === "/api/cloud/logins") return json(logins);
+    if (path === "/api/cloud/accounts" || path === "/api/cloud/discovered") return json([]);
+    if (path === "/api/clusters") return json([fileCluster]);
+    if (path === "/api/settings") return json(envSettings);
+    if (path.startsWith("/api/monitoring/clusters/") && !init.method) return uses();
+    throw new Error(`Unexpected request to ${path}`);
+  }));
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: `Remove ${fileCluster.name}` }));
+  const dialog = within(await screen.findByRole("alertdialog"));
+  await waitFor(() => expect(uses).toHaveBeenCalled());
+  expect(dialog.queryByText(/Monitoring uses this cluster/)).toBeNull();
+  expect(dialog.getByText(/This doesn't change the cluster/)).toBeTruthy();
+});
+
 it("import kubeconfig shows the server's conflict message", async () => {
   const detail = "The kubeconfig already has a different cluster with that context.";
   const kubeconfig = "apiVersion: v1\nkind: Config\n";

@@ -75,9 +75,25 @@ async def test_link_filter_is_validated_and_editable(monitoring_app):
 
     changes = [r for r in await monitoring_records(http) if r["action"] == "project_change"]
     assert [(r["name"], r["details"], r["outcome"]) for r in changes] == [
-        ("Shop", {"linked": "Metrics", "filter": 'cluster="prod"'}, "succeeded"),
-        ("Shop", {"linked": "Metrics", "filter": 'cluster="dev"'}, "succeeded"),
-        ("Shop", {"unlinked": "Metrics"}, "succeeded"),
+        (
+            "Shop",
+            {
+                "linked": "Metrics",
+                "filter": 'cluster="prod"',
+                "change": 'Linked Metrics with the filter cluster="prod".',
+            },
+            "succeeded",
+        ),
+        (
+            "Shop",
+            {
+                "linked": "Metrics",
+                "filter": 'cluster="dev"',
+                "change": 'Set the filter on Metrics to cluster="dev".',
+            },
+            "succeeded",
+        ),
+        ("Shop", {"unlinked": "Metrics", "change": "Unlinked Metrics."}, "succeeded"),
     ]
 
 
@@ -143,8 +159,8 @@ async def test_rename_project(monitoring_app):
     assert renamed.status_code == 200 and renamed.json()["name"] == "Store"
     changes = [r for r in await monitoring_records(http) if r["action"] == "project_change"]
     assert [(r["name"], r["outcome"], r["details"]) for r in changes] == [
-        ("Billing", "failed", {"renamed_from": "Shop"}),
-        ("Store", "succeeded", {"renamed_from": "Shop"}),
+        ("Shop", "failed", {"renamed_to": "Billing", "change": "Renamed to Billing."}),
+        ("Shop", "succeeded", {"renamed_to": "Store", "change": "Renamed to Store."}),
     ]
 
 
@@ -247,9 +263,9 @@ async def test_monitoring_audit_records_name_the_object(monitoring_app):
         ("source_add", "source", "Own"),
         ("project_change", "project", "Shop"),
         ("project_change", "project", "Shop"),
-        ("project_change", "project", "Store"),
+        ("project_change", "project", "Shop"),
         ("group_add", "group", "Ops"),
-        ("group_change", "group", "Platform"),
+        ("group_change", "group", "Ops"),
         ("group_remove", "group", "Platform"),
         ("project_remove", "project", "Store"),
         ("source_remove", "source", "Own"),
@@ -529,3 +545,66 @@ async def test_project_delete_removes_its_silences(monitoring_app):
             {"where": "OmniKrux", "matchers": ours["matchers"], "removed_with_project": "Shop"},
         )
     ]
+
+
+async def test_link_audit_says_what_changed(monitoring_app):
+    http, _ = monitoring_app
+    shop = await set_up(http, "Shop")
+    source = await add_source(http, "Metrics")
+    url = f"{API}/projects/{shop['id']}/sources/{source['id']}"
+    assert (await http.put(url, json={"filter": ""})).status_code == 200
+    assert (await http.put(url, json={"filter": 'a="b"'})).status_code == 200
+    assert (await http.put(url, json={"filter": ""})).status_code == 200
+    changes = [r for r in await monitoring_records(http) if r["action"] == "project_change"]
+    assert [r["details"]["change"] for r in changes] == [
+        "Linked Metrics with no filter.",
+        'Set the filter on Metrics to a="b".',
+        "Removed the filter on Metrics.",
+    ]
+
+
+async def test_a_refused_rename_names_the_project_being_renamed(monitoring_app):
+    http, _ = monitoring_app
+    shop = await set_up(http, "Shop")
+    await set_up(http, "Billing")
+    refused = await http.patch(f"{API}/projects/{shop['id']}", json={"name": "Billing"})
+    assert refused.status_code == 409
+    [record] = [r for r in await monitoring_records(http) if r["action"] == "project_change"]
+    assert (record["name"], record["outcome"]) == ("Shop", "failed")
+    assert record["details"]["change"] == "Renamed to Billing."
+
+
+async def test_cluster_uses_lists_projects_and_sources(monitoring_app, kube_cluster):
+    http, _ = monitoring_app
+    empty = await http.get(f"{API}/clusters/{kube_cluster}/uses")
+    assert empty.json() == {"projects": [], "sources": []}
+    await set_up(http, "Zed", kind="kubernetes", cluster_id=kube_cluster)
+    await set_up(http, "Apps", kind="kubernetes", cluster_id=kube_cluster)
+    await set_up(http, "Elsewhere")
+    for name in ("Inside b", "Inside a"):
+        made = await http.post(
+            f"{API}/sources",
+            json={
+                "type": "prometheus",
+                "reach": "cluster",
+                "cluster_id": kube_cluster,
+                "namespace": "monitoring",
+                "service": "prometheus-server",
+                "port": "80",
+                "name": name,
+            },
+        )
+        assert made.status_code == 201, made.text
+    await add_source(http, "Outside")
+    uses = await http.get(f"{API}/clusters/{kube_cluster}/uses")
+    assert uses.json() == {"projects": ["Apps", "Zed"], "sources": ["Inside a", "Inside b"]}
+    other = await http.get(f"{API}/clusters/nope/uses")
+    assert other.json() == {"projects": [], "sources": []}
+
+
+async def test_cluster_uses_refuses_cross_origin(monitoring_app, kube_cluster):
+    http, _ = monitoring_app
+    refused = await http.get(
+        f"{API}/clusters/{kube_cluster}/uses", headers={"Origin": "http://evil.example"}
+    )
+    assert refused.status_code == 403

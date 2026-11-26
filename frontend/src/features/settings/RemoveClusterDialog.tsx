@@ -6,6 +6,7 @@ import type { Cluster, Provider } from "../../api/types";
 import { removeCluster } from "../../api/useClusters";
 import { DialogShell } from "../dock/ConfirmDialog";
 import c from "../dock/ConfirmDialog.module.css";
+import { MonitoringClusterUses } from "../../monitoring/settings/ClusterUses";
 import { ProviderBadge } from "../territories/ProviderBadge";
 import s from "./CloudSettings.module.css";
 
@@ -53,6 +54,7 @@ export function RemoveClusterDialog({ cluster, location, onClose, focusAfterRemo
   return <SettingsRemovalDialog provider={cluster.provider} title={`Remove ${cluster.name} from OmniKrux?`}
     onRemove={() => removeCluster(client, cluster.id)} onClose={onClose} focusAfterRemoval={focusAfterRemoval}>
     <p>{location}</p>
+    <MonitoringClusterUses clusterId={cluster.id} />
     <p>This doesn't change the cluster. Its port-forwards stop and its sessions close.</p>
     {cluster.source === "file" && <p>It's in your kubeconfig file, so it comes back on the next start unless you remove its context there.</p>}
   </SettingsRemovalDialog>;

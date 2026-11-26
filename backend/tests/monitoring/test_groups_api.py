@@ -87,9 +87,19 @@ async def test_change_group_name_and_members(monitoring_app):
     assert [(r["action"], r["name"], r["outcome"], r["details"]) for r in groups] == [
         ("group_add", "Ops", "succeeded", {"projects": ["Shop"]}),
         ("group_add", "Taken", "succeeded", {"projects": []}),
-        ("group_change", "Platform", "succeeded", {"renamed_from": "Ops"}),
+        (
+            "group_change",
+            "Ops",
+            "succeeded",
+            {"renamed_to": "Platform", "change": "Renamed to Platform."},
+        ),
         ("group_change", "Platform", "succeeded", {"projects": ["Billing"]}),
-        ("group_change", "Taken", "failed", {"renamed_from": "Platform"}),
+        (
+            "group_change",
+            "Platform",
+            "failed",
+            {"renamed_to": "Taken", "change": "Renamed to Taken."},
+        ),
     ]
 
 
@@ -277,3 +287,20 @@ async def test_group_store_rechecks_the_review_inside_the_delete(monitoring_app)
     done = await services.groups.delete(ops["id"], fresh.token, services.dashboards)
     assert [d.title for d in done.dashboards] == ["Overview"]
     assert (await http.get(f"{API}/dashboards/{made['id']}")).status_code == 404
+
+
+async def test_group_rename_audit_names_the_group_before(monitoring_app):
+    http, _ = monitoring_app
+    ops = await add_group(http, "Ops", [])
+    await add_group(http, "Taken", [])
+    assert (
+        await http.patch(f"{API}/groups/{ops['id']}", json={"name": "Platform"})
+    ).status_code == 200
+    assert (
+        await http.patch(f"{API}/groups/{ops['id']}", json={"name": "Taken"})
+    ).status_code == 409
+    changes = [r for r in await monitoring_records(http) if r["action"] == "group_change"]
+    assert [(r["name"], r["outcome"], r["details"]["change"]) for r in changes] == [
+        ("Ops", "succeeded", "Renamed to Platform."),
+        ("Platform", "failed", "Renamed to Taken."),
+    ]

@@ -65,6 +65,12 @@ export function actionLabel(action: string): string {
   return words === "" ? "Unknown action" : words[0].toUpperCase() + words.slice(1);
 }
 
+/** What Monitoring's records act on, in words (the record's kind key is the object in the singular). */
+export const MONITORING_KINDS: Record<string, string> = {
+  source: "Source", project: "Project", group: "Group", dashboard: "Dashboard", alert_rule: "Alert rule",
+  contact_point: "Contact point", silence: "Silence", loki_rule: "Loki rule", grafana: "Grafana connection",
+};
+
 /** The kind key as one thing: "deployments.apps" -> "deployment". */
 export function kindWord(key: string): string {
   const base = key.split(".")[0];
@@ -77,13 +83,26 @@ export function kindWord(key: string): string {
  * What the row acted on. A node shell is a pod of the audit (its kind is `pods`), but the thing
  * that was opened is the node, which the record keeps in its details.
  */
-export function whatOf(r: Pick<AuditRecord, "action" | "kind" | "name" | "details">): { kind: string | null; name: string } {
+export function whatOf(r: Pick<AuditRecord, "app" | "action" | "kind" | "name" | "details">): { kind: string | null; name: string } {
   if (r.kind === "cloud-account") return { kind: "Cloud account", name: r.name ?? "" };
   if (r.action === "node_shell") {
     const node = r.details?.node;
     if (typeof node === "string" && node !== "") return { kind: null, name: `Node ${node}` };
   }
+  if (r.app === "monitoring") {
+    const word = MONITORING_KINDS[r.kind] ?? MONITORING_KINDS[kindWord(r.kind)];
+    if (word !== undefined) return { kind: word, name: r.name ?? "" };
+  }
   return { kind: kindWord(r.kind), name: r.name ?? "" };
+}
+
+/** The sentence Monitoring wrote for a record that has no diff, or null when it wrote none. */
+export function changeOf(r: Pick<AuditRecord, "app" | "details">): string | null {
+  if (r.app !== "monitoring") return null;
+  const { change, handed_to: handedTo } = r.details ?? {};
+  if (typeof change === "string" && change !== "") return change;
+  if (typeof handedTo === "string" && handedTo !== "") return `Its imported dashboards were handed to ${handedTo}.`;
+  return null;
 }
 
 /**
