@@ -186,6 +186,15 @@ describe("monitoring tab state", () => {
     expect(parse({ page: "alerts" })).toEqual({ page: "alerts" });
   });
 
+  it("an alerts view asked to silence an alert keeps only valid ids", () => {
+    const parse = (v: unknown) => parseMonitoringTabs({ tabs: [{ id: "a", view: v }], active: "a" }).tabs.tabs[0].view;
+    const asked = { page: "alerts", tab: "silences", silence: { rule: "r1", target: "t1" } };
+    expect(parse(asked)).toEqual(asked);
+    expect(parse({ page: "alerts", tab: "silences", silence: { rule: "r1" } })).toEqual({ page: "alerts", tab: "silences" });
+    expect(parse({ page: "alerts", silence: { rule: "r1", target: 5 } })).toEqual({ page: "alerts" });
+    expect(parse({ page: "alerts", silence: "r1" })).toEqual({ page: "alerts" });
+  });
+
   it("alerts views are the same place whatever their tab or rule", () => {
     expect(sameMonitoringView({ page: "alerts", tab: "rules" }, { page: "alerts", rule: "r1" })).toBe(true);
     expect(equalMonitoringView({ page: "alerts", tab: "rules" }, { page: "alerts", rule: "r1" })).toBe(false);

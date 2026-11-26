@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import k from "../../features/chrome/key.module.css";
+import { loudFiring } from "../alerts/api";
 import { useFreshOverview } from "../home/FiringSection";
 import type { TreeColor, TreeOut } from "../api/types";
 import { focusHeadingOnArrival } from "../dashboards/create/arrival";
@@ -77,7 +78,8 @@ const ICONS: Record<"home" | "explore" | "alerts" | "sources", ReactNode> = {
 };
 
 export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeave, owner, onNewDashboard, findInput, drawer }: Props) {
-  const firing = useFreshOverview()?.counts.firing ?? 0;
+  const counts = useFreshOverview()?.counts;
+  const firing = counts ? loudFiring(counts) : 0;
   const [expanded, setExpanded] = useState(readExpanded);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const refs = useRef(new Map<string, HTMLElement>());

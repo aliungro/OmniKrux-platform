@@ -286,6 +286,8 @@ export interface ProjectDeleteReviewOut {
   cluster_rules?: { id: string; name: string }[];
   /** The monitoring tools OmniKrux installed in the project's cluster: they stay. Left out when none. */
   tools_stay?: { cluster_id: string; cluster_name: string; namespace: string };
+  /** Its OmniKrux silences (an equality matcher on its name): they go with it. Left out when none. */
+  silences?: { id: string; matchers: string }[];
 }
 
 /** A dashboard an owner's deletion takes with it. */

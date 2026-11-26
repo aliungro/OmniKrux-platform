@@ -436,6 +436,21 @@ describe("Project delete review", () => {
     expect(within(dialog).getByRole("button", { name: "Delete project" }).getAttribute("aria-disabled")).toBeNull();
   });
 
+  it("project delete lists its silences", async () => {
+    const user = userEvent.setup();
+    const api = withEverything();
+    const silence = (id: string, matchers: string) => ({
+      id, where: { kind: "omnikrux" as const, source_id: null, source_name: null }, matchers, starts_at: T, ends_at: "2999-01-01T00:00:00Z",
+      comment: "Deploy", created_by: "ali", state: "active" as const, affects: 0,
+    });
+    api.state.silences = [silence("x1", 'alertname="Slow",project="Dev"'), silence("x2", 'project="Stage"')];
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText('Its silences go too: alertname="Slow",project="Dev".')).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("project delete waits for cluster rules", async () => {
     const user = userEvent.setup();
     const api = withEverything(async (url: string) => json(url === "/api/clusters" ? [{ id: "c1", name: "kind-dev", provider: "kind", state: "ready" }] : []));

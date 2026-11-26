@@ -337,7 +337,7 @@ async def test_changed_contacts_since_review_are_refused(
     plan = (await sync(http, installed_cluster.cluster_id))["plan"]
     changed = await http.patch(
         f"{CONTACT_POINTS}/{env.cp_id}",
-        json={"secrets": {"webhook_url": "https://hooks.slack.example.test/services/NEW-SECRET"}},
+        json={"secrets": {"webhook_url": "https://hooks.slack.com/services/NEW-SECRET"}},
     )
     assert changed.status_code == 200, changed.text
     refused = await apply(http, plan)
@@ -477,7 +477,7 @@ async def test_patching_a_contact_point_reports_a_contacts_change(
     assert renamed.json()["name"] == "Ops hook 2"
     changed = await http.patch(
         f"{CONTACT_POINTS}/{env.cp_id}",
-        json={"secrets": {"webhook_url": "https://hooks.slack.example.test/services/OTHER"}},
+        json={"secrets": {"webhook_url": "https://hooks.slack.com/services/OTHER"}},
     )
     assert changed.status_code == 200, changed.text
     body = changed.json()

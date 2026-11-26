@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { alertsKeys, type FiringOut, type OverviewOut } from "../alerts/api";
+import { alertsKeys, type FiringOut, type OverviewOut, type RuleOut } from "../alerts/api";
 import type { GroupOut, HealthOut, LinkOut, ProjectOut, SourceOut } from "../api/types";
 import { healthSummary } from "./MonitoringHome";
 import { recordRecent } from "./recent";
@@ -152,6 +152,30 @@ describe("Monitoring Home", () => {
     expect(within(rows[1]).queryByText("Silenced")).toBeNull();
     // Still firing: the count is unchanged.
     expect(screen.getByRole("button", { name: "Alerts, 2 firing" })).toBeTruthy();
+  });
+
+  it("Silence on Home opens the prefilled form", async () => {
+    const crashing: RuleOut = {
+      id: "r1", name: "PodCrashLooping", scope: { kind: "project", id: "p1", name: "Dev cluster" }, source_type: "prometheus", source_id: null,
+      expr: "up", condition: { of: "each", op: "above", threshold: 5, for: "5m", every: "1m" }, severity: "critical", message: "",
+      contact_points: [], engine: "omnikrux", channel: null, paused: false, origin: "page", panel: null, state: "firing", firing_since: T,
+      targets: [{
+        id: "t1", project_id: "p1", project_name: "Dev cluster", engine: "omnikrux", tool: null, where: "checked by OmniKrux", engine_note: null,
+        state: "firing", state_since: T, last_eval_at: T, message: null, eval_expr: "up", rule_text: "up > 5", tool_state: null, tool_message: null,
+        leaving: false, instances: [],
+      }],
+      removing: false, version: 1, created_at: T, updated_at: T,
+    };
+    seedHealthy({ rules: [crashing], overview: overviewOf({ firing: [firingRow()] }, { firing: 1 }) });
+    const app = renderMonitoringApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Silence PodCrashLooping" }));
+    const matchers = (await screen.findByLabelText("Matchers")) as HTMLInputElement;
+    expect(matchers.value).toBe('alertname="PodCrashLooping",project="Dev cluster"');
+    expect(screen.getByRole("form", { name: "New silence" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Comment")));
+    expect(document.activeElement).not.toBe(document.body);
+    // Asked once: the view keeps only the Silences tab, so going back or reloading doesn't ask again.
+    await waitFor(() => expect(app.current().tabs.find((t) => t.view.page === "alerts")?.view).toEqual({ page: "alerts", tab: "silences" }));
   });
 
   it("Silence on a firing row opens the Silences view", async () => {

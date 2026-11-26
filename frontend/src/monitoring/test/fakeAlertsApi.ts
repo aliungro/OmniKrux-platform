@@ -4,7 +4,7 @@
 // changed elsewhere, a review that went stale). Not a model of the backend.
 import type {
   AlertChangeOut, CapabilityOut, ChannelsOut, ContactPointOut, DryRunOut, HistoryOut, OverviewOut, PanelAlertStateOut,
-  RuleIn, RuleOut, SilenceOut, SyncOut,
+  RuleIn, RuleOut, SilenceOut, SilenceProblemOut, SyncOut,
 } from "../alerts/api";
 
 /** A seeded refusal. */
@@ -19,6 +19,8 @@ export interface FakeAlertsState {
   history: Record<string, HistoryOut[]>;
   contactPoints: ContactPointOut[];
   silences: SilenceOut[];
+  /** What the silences list says about Alertmanagers it couldn't read. */
+  silenceProblems: SilenceProblemOut[];
   overview: OverviewOut;
   /** By dashboard id, then panel id. */
   panelStates: Record<string, Record<string, PanelAlertStateOut>>;
@@ -52,6 +54,7 @@ const REVIEW_CHANGED = "Something changed since the review. Review it again.";
 const TOOL_RULE = "This rule runs in the tool, which keeps checking it. Silence it instead.";
 const SENT = "Sent. Check that the test message arrived.";
 const NEEDS_ALERTMANAGER = "Say which Alertmanager holds the silence.";
+const STILL_ACTIVE = "Expire it first.";
 const changedElsewhere = (current: number) =>
   `This rule was changed somewhere else since you opened it (version ${current}). Open it again.`;
 
@@ -61,6 +64,7 @@ export function emptyAlertsState(): FakeAlertsState {
     history: {},
     contactPoints: [],
     silences: [],
+    silenceProblems: [],
     overview: {
       counts: { rules: 0, firing: 0, pending: 0, cant_check: 0, not_applied: 0 },
       firing: [],
@@ -69,7 +73,7 @@ export function emptyAlertsState(): FakeAlertsState {
       engine: { enabled: true, running: true, last_tick_at: NOW, rules: 0, behind: 0, note: "" },
     },
     panelStates: {},
-    dryRun: { start: 0, end: 21600, step: 60, fired: 0, firing_now: false, periods: [], projects: [], candidates: [], took_ms: 1 },
+    dryRun: { start: 0, end: 21600, step: 60, fired: 0, firing_now: false, holding_now: false, periods: [], projects: [], candidates: [], took_ms: 1 },
     capabilities: [],
     channels: {},
     syncAnswers: {},
@@ -244,7 +248,7 @@ export function alertsRoute(
 
   // --- silences
   if (a === "silences") {
-    if (is("GET", "silences")) return json({ silences: state.silences, problems: [] });
+    if (is("GET", "silences")) return json({ silences: state.silences, problems: state.silenceProblems });
     const where = body.where as { kind?: string; source_id?: string } | undefined;
     const needsSource = where?.kind === "alertmanager" && !where.source_id;
     if (is("POST", "silences", "preview")) {
@@ -263,6 +267,11 @@ export function alertsRoute(
     if (method === "DELETE" && seg.length === 3) {
       const found = state.silences.find((s) => s.id === c && s.where.kind === b);
       if (!found) return coded(404, "not_found", SILENCE_GONE);
+      if (query.get("expired") === "1") {
+        if (found.state !== "expired") return coded(409, "still_active", STILL_ACTIVE);
+        state.silences = state.silences.filter((s) => s !== found);
+        return new Response(null, { status: 204 });
+      }
       found.state = "expired";
       return new Response(null, { status: 204 });
     }

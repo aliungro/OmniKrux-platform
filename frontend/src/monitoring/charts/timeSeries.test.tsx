@@ -106,7 +106,7 @@ describe("buildFrame and drawTimeSeries", () => {
       expect(dashed[0].strokeStyle).toBe("color(--bad)");
       const fills = calls.filter((c) => c.name === "fill");
       expect(fills).toHaveLength(1);
-      expect(fills[0]).toMatchObject({ fillStyle: "color(--bad)", globalAlpha: 0.07 });
+      expect(fills[0]).toMatchObject({ fillStyle: "color(--bad)", globalAlpha: 0.04 });
       // The rect filled is the one just before the fill: above the line for "above", below it for "below".
       const at = calls.indexOf(fills[0]);
       const rect = calls.slice(0, at).reverse().find((c) => c.name === "rect")!.args as number[];

@@ -11,6 +11,7 @@ import type { CatalogOut } from "../catalog/api";
 import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut, WhyEmptyOut } from "../dashboards/api";
 import { emptyTransferState, transferRoute, type FakeTransferState } from "./fakeTransferApi";
 import { alertsRoute, emptyAlertsState, type FakeAlertsState, type FakeRefusal } from "./fakeAlertsApi";
+import { splitMatchers } from "../alerts/silences/when";
 import type { Plan } from "../../api/types";
 import type { ContactsSyncOut, GeneratedOut, InstallPlanOut, InstallStatusOut, ProbeResultOut, ToolsOut } from "../install/api";
 import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem, type VariableSpec } from "../dashboards/schema";
@@ -199,6 +200,9 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
       ...(lists.cluster_rules?.length ? { cluster_rules: lists.cluster_rules } : {}),
     };
   };
+  /** A project's OmniKrux silences: those with the equality matcher `project="{name}"`. */
+  const silencesOf = (name: string) =>
+    state.silences.filter((x) => x.where.kind === "omnikrux" && splitMatchers(x.matchers).includes(`project=${JSON.stringify(name)}`));
   const usedBy = (sourceId: string) => state.projects.filter((p) => p.links.some((l) => l.source_id === sourceId)).map((p) => ({ id: p.id, name: p.name }));
   const refreshUsedBy = () => state.sources.forEach((s) => { s.used_by = usedBy(s.id); });
   const groupOut = (g: GroupOut): GroupOut => ({ ...g, project_ids: byName(g.project_ids) });
@@ -637,6 +641,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
           dashboards: refsOf("project", p.id),
           token: TOKEN,
           ...ownerRuleLists(p.id),
+          ...(silencesOf(p.name).length ? { silences: silencesOf(p.name).map((x) => ({ id: x.id, matchers: x.matchers })) } : {}),
           // The tools OmniKrux installed in the project's cluster stay (from the seeded status).
           ...(() => {
             const st = p.cluster_id ? state.install.status[p.cluster_id] : undefined;
@@ -648,6 +653,8 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
         if (query.get("token") !== TOKEN) return refuse(REVIEW_CHANGED, 409);
         const { removed } = split();
         state.sources = state.sources.filter((s) => !removed.includes(s));
+        const gone = new Set(silencesOf(p.name));
+        state.silences = state.silences.filter((x) => !gone.has(x));
         state.projects = state.projects.filter((x) => x.id !== b);
         dropOwned("project", b);
         state.groups.forEach((g) => { g.project_ids = g.project_ids.filter((id) => id !== b); });

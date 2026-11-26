@@ -467,3 +467,65 @@ async def test_link_names_the_cluster_a_source_runs_in(monitoring_app, kube_clus
         "Inside": kube_cluster,
         "Outside": None,
     }
+
+
+async def add_silence(http, matchers: str) -> dict:
+    from datetime import timedelta
+
+    from omnikrux.monitoring.models import now
+
+    made = await http.post(
+        f"{API}/alerts/silences",
+        json={
+            "where": {"kind": "omnikrux"},
+            "matchers": matchers,
+            "ends_at": (now() + timedelta(hours=1)).isoformat(),
+            "comment": "Deploying",
+        },
+    )
+    assert made.status_code == 201, made.text
+    return made.json()
+
+
+async def test_project_delete_review_lists_silences(monitoring_app):
+    http, _ = monitoring_app
+    shop = await set_up(http, "Shop")
+    ours = await add_silence(http, 'alertname="API down",project="Shop"')
+    await add_silence(http, 'alertname="API down",project=~"Shop"')
+    await add_silence(http, 'project="Shopping"')
+    review_url = f"{API}/projects/{shop['id']}/delete-review"
+    review = (await http.get(review_url)).json()
+    assert review["silences"] == [
+        {"id": ours["id"], "matchers": 'alertname="API down",project="Shop"'}
+    ]
+    # A new silence of the project changes the review: the old token no longer deletes.
+    await add_silence(http, 'project="Shop"')
+    stale = await http.delete(f"{API}/projects/{shop['id']}", params={"token": review["token"]})
+    assert stale.status_code == 409
+    assert len((await http.get(review_url)).json()["silences"]) == 2
+    # A project without silences reads as it always did.
+    other = await set_up(http, "Billing")
+    plain = (await http.get(f"{API}/projects/{other['id']}/delete-review")).json()
+    assert "silences" not in plain
+
+
+async def test_project_delete_removes_its_silences(monitoring_app):
+    http, _ = monitoring_app
+    shop = await set_up(http, "Shop")
+    ours = await add_silence(http, 'alertname="API down",project="Shop"')
+    kept = await add_silence(http, 'project="Billing"')
+    review = (await http.get(f"{API}/projects/{shop['id']}/delete-review")).json()
+    gone = await http.delete(f"{API}/projects/{shop['id']}", params={"token": review["token"]})
+    assert gone.status_code == 204, gone.text
+    left = (await http.get(f"{API}/alerts/silences")).json()["silences"]
+    assert [s["id"] for s in left] == [kept["id"]]
+
+    records = await monitoring_records(http)
+    removes = [r for r in records if r["action"] == "silence_remove"]
+    assert [(r["name"], r["outcome"], r["details"]) for r in removes] == [
+        (
+            ours["matchers"],
+            "succeeded",
+            {"where": "OmniKrux", "matchers": ours["matchers"], "removed_with_project": "Shop"},
+        )
+    ]

@@ -210,8 +210,10 @@ async def test_alertmanager_refusals_pass_through_without_secrets(
     listed = (await http.get(SILENCES)).json()
     assert listed["problems"] == [
         {
+            "source_id": where["source_id"],
             "source_name": "Main AM",
             "message": "Main AM answered HTTP 500. Try again, or check the tool.",
+            "unreachable": False,
         }
     ]
     texts = [r.text, str(listed), (await http.get("/api/audit")).text]
@@ -320,3 +322,82 @@ async def test_silence_routes_refuse_cross_origin(monitoring_app):
     ):
         r = await http.request(method, path, headers=evil, json=silence_body())
         assert r.status_code == 403, (method, path)
+
+
+async def test_an_expired_silence_can_be_removed(monitoring_app):
+    http, _ = monitoring_app
+    made = (await http.post(SILENCES, json=silence_body())).json()
+    ended = await http.delete(f"{SILENCES}/omnikrux/{made['id']}")
+    assert ended.status_code == 204, ended.text
+
+    gone = await http.delete(f"{SILENCES}/omnikrux/{made['id']}", params={"expired": "1"})
+    assert gone.status_code == 204, gone.text
+    assert (await http.get(SILENCES)).json()["silences"] == []
+    again = await http.delete(f"{SILENCES}/omnikrux/{made['id']}", params={"expired": "1"})
+    assert refusal(again) == (404, "not_found", "That silence no longer exists.")
+
+    records = [
+        (r["action"], r["outcome"], r["details"])
+        for r in await monitoring_records(http)
+        if r["action"] == "silence_remove"
+    ]
+    assert records[-1] == (
+        "silence_remove",
+        "succeeded",
+        {
+            "where": "OmniKrux",
+            "matchers": 'alertname="API latency high"',
+            "removed_expired": True,
+            "change": 'Removed the expired silence alertname="API latency high".',
+        },
+    )
+
+
+async def test_an_active_silence_is_not_removed(monitoring_app):
+    http, _ = monitoring_app
+    made = (await http.post(SILENCES, json=silence_body())).json()
+    kept = await http.delete(f"{SILENCES}/omnikrux/{made['id']}", params={"expired": "1"})
+    assert refusal(kept) == (409, "still_active", "Expire it first.")
+    [listed] = (await http.get(SILENCES)).json()["silences"]
+    assert (listed["id"], listed["state"]) == (made["id"], "active")
+    assert not [r for r in await monitoring_records(http) if r["action"] == "silence_remove"]
+
+
+async def test_an_unreachable_alertmanager_is_named_in_its_problem(monitoring_app, linked_project):
+    http, _ = monitoring_app
+    am = await link_alertmanager(http, linked_project.project_id, closed_port_url(), name="Gone AM")
+    [problem] = (await http.get(SILENCES)).json()["problems"]
+    assert (problem["source_id"], problem["unreachable"]) == (am["id"], True)
+
+
+async def test_silenced_rules_leave_the_firing_count(monitoring_app, linked_project):
+    http, app = monitoring_app
+    alerts = app.state.monitoring.alerts
+    rule = (await add_rule(http, rule_body(linked_project.project_id)))["rule"]
+    target_id = rule["targets"][0]["id"]
+    moment = now()
+
+    def instance(route: str, silenced: bool) -> InstanceRecord:
+        labels = {"alertname": "API latency high", "route": route}
+        return InstanceRecord(
+            target_id=target_id,
+            fingerprint=fingerprint(labels),
+            labels=labels,
+            state="firing",
+            active_since=moment,
+            fired_at=moment,
+            value=1.0,
+            last_notified_at=None,
+            silenced=silenced,
+        )
+
+    await alerts.replace_instances(target_id, [instance("/a", True), instance("/b", False)])
+    await alerts.set_eval(
+        target_id, state="firing", message=None, at=moment, next_eval_at=None, failures=0
+    )
+    counts = (await http.get(f"{API}/alerts/overview")).json()["counts"]
+    assert (counts["firing"], counts["firing_unsilenced"]) == (1, 1)
+
+    await alerts.replace_instances(target_id, [instance("/a", True), instance("/b", True)])
+    counts = (await http.get(f"{API}/alerts/overview")).json()["counts"]
+    assert (counts["firing"], counts["firing_unsilenced"]) == (1, 0)

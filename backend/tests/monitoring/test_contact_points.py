@@ -70,7 +70,7 @@ def rule(name: str, *contact_point_ids: str) -> RuleSpec:
 async def test_contact_point_secrets_are_write_only(monitoring_app, fake_webhook, caplog):
     caplog.set_level(logging.DEBUG)
     http, app = monitoring_app
-    url = f"{fake_webhook.url}/T000/B000/XXXX-SECRET-1"
+    url = "https://hooks.slack.com/services/T000/B000/XXXX-SECRET-1"
     out = (
         await http.post(
             BASE,
@@ -108,8 +108,8 @@ async def test_send_a_test_reaches_the_receiver(monitoring_app, fake_webhook):
     created = await add(
         http,
         {
-            "name": "Slack #ops",
-            "type": "slack",
+            "name": "Teams #ops",
+            "type": "teams",
             "secrets": {"webhook_url": f"{fake_webhook.url}/T000/B000/XXXX"},
         },
     )
@@ -118,12 +118,13 @@ async def test_send_a_test_reaches_the_receiver(monitoring_app, fake_webhook):
     assert tested.json() == {"ok": True, "message": "Sent. Check that the test message arrived."}
     [request] = fake_webhook.requests
     assert request.path == "/T000/B000/XXXX"
-    assert request.json["text"] == "OmniKrux test message"
+    card = request.json["attachments"][0]["content"]
+    assert card["body"][0]["text"] == "OmniKrux test message"
 
     [listed] = (await http.get(BASE)).json()
     assert listed["last_delivery"]["ok"] is True and listed["last_delivery"]["message"] is None
     records = [r for r in await monitoring_records(http) if r["action"] == "contact_point_test"]
-    assert [(r["name"], r["outcome"]) for r in records] == [("Slack #ops", "succeeded")]
+    assert [(r["name"], r["outcome"]) for r in records] == [("Teams #ops", "succeeded")]
 
 
 async def test_send_a_test_of_an_unsaved_contact_point(monitoring_app, fake_webhook):
@@ -330,7 +331,7 @@ async def test_email_settings_merge_and_summary(monitoring_app):
 
 async def test_names_are_unique(monitoring_app, fake_webhook):
     http, _ = monitoring_app
-    body = {"name": "Ops", "type": "slack", "secrets": {"webhook_url": f"{fake_webhook.url}/s"}}
+    body = {"name": "Ops", "type": "teams", "secrets": {"webhook_url": f"{fake_webhook.url}/s"}}
     await add(http, body)
     taken = await http.post(BASE, json=body)
     assert taken.status_code == 409
@@ -367,7 +368,7 @@ async def test_names_are_unique(monitoring_app, fake_webhook):
         ),
         (
             {"name": "S", "type": "slack", "secrets": {"webhook_url": "not a url SECRET-U"}},
-            "Use an http or https address.",
+            "Use a Slack webhook address that starts with https://hooks.slack.com/.",
         ),
         (
             {"name": "W", "type": "webhook", "secrets": {"url": "http://u:SECRET-U@x.test/"}},
@@ -446,7 +447,7 @@ async def test_email_validation_copy(monitoring_app, body, detail):
 async def test_delete_review_lists_rules_and_stale_token(monitoring_app, fake_webhook):
     http, app = monitoring_app
     alerts = app.state.monitoring.alerts
-    body = {"type": "slack", "secrets": {"webhook_url": f"{fake_webhook.url}/s"}}
+    body = {"type": "teams", "secrets": {"webhook_url": f"{fake_webhook.url}/s"}}
     ops = await add(http, {"name": "Ops", **body})
     other = await add(http, {"name": "Other", **body})
     cpu = await alerts.create_rule(rule("CPU high", ops["id"], other["id"]))
@@ -508,7 +509,7 @@ async def test_contact_point_routes_refuse_cross_origin(monitoring_app):
 
 async def test_unreadable_secrets_are_kept_and_refused(stores, tmp_path):
     store = stores.contact_points
-    saved = await store.create("Ops", "slack", {}, {"webhook_url": "http://x.test/SECRET-K"})
+    saved = await store.create("Ops", "teams", {}, {"webhook_url": "http://x.test/SECRET-K"})
     other_key = ContactPointStore(stores.sessionmaker, SecretBox(Fernet.generate_key()))
 
     unreadable = await other_key.get(saved.id)
@@ -536,7 +537,7 @@ async def test_store_misses_are_unknown(stores):
         await store.delete("nope")
     with pytest.raises(UnknownContactPoint):
         await store.record_delivery("nope", True, None, datetime.now(UTC))
-    saved = await store.create("Ops", "slack", {}, {"webhook_url": "http://x.test/s"})
+    saved = await store.create("Ops", "teams", {}, {"webhook_url": "http://x.test/s"})
     with pytest.raises(ReviewChanged):
         await store.delete(saved.id, "stale")
     assert await store.delete(saved.id) == []
@@ -724,13 +725,16 @@ async def test_webhook_address_change_needs_the_bearer_token(monitoring_app, fak
 
 async def test_slack_and_teams_addresses_change_freely(monitoring_app, fake_webhook):
     http, _ = monitoring_app
-    for type in ("slack", "teams"):
+    for type, first, second in (
+        ("slack", "https://hooks.slack.com/services/a", "https://hooks.slack.com/services/b"),
+        ("teams", f"{fake_webhook.url}/a", "https://elsewhere.example.test/b"),
+    ):
         created = await add(
             http,
-            {"name": type, "type": type, "secrets": {"webhook_url": f"{fake_webhook.url}/a"}},
+            {"name": type, "type": type, "secrets": {"webhook_url": first}},
         )
         changed = await http.patch(
             f"{BASE}/{created['id']}",
-            json={"secrets": {"webhook_url": "https://elsewhere.example.test/b"}},
+            json={"secrets": {"webhook_url": second}},
         )
         assert changed.status_code == 200, type

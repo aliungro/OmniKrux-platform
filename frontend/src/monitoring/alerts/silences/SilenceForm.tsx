@@ -11,7 +11,7 @@ import { useProjects } from "../../api/hooks";
 import { validFilter } from "../../projects/FilterField";
 import {
   alertsKeys, previewSilence, useChannels, useCreateSilence,
-  type AlertRequestError, type RuleOut, type SilenceIn, type SilencePreviewOut, type TargetOut,
+  type AlertRequestError, type RuleOut, type SilenceIn, type SilencePreviewOut, type SilenceProblemOut, type TargetOut,
 } from "../api";
 import { DiscardDialog, useLeaveGuard, type LeaveRef } from "../leave";
 import s from "./Silences.module.css";
@@ -74,10 +74,15 @@ export const plural = (n: number) => `${n} alert${n === 1 ? "" : "s"}`;
 export const previewWords = (p: SilencePreviewOut) =>
   `Silences ${plural(p.affects)} now${p.rules.length > 0 ? `: ${p.rules.join(", ")}` : ""}.`;
 
-export function SilenceForm({ prefill, onDone, leaveRef, tabId }: {
+/** An Alertmanager the list couldn't reach: offered, but not to be picked. */
+export const unreachableWords = (name: string) => `${name} (can't be reached)`;
+
+export function SilenceForm({ prefill, onDone, leaveRef, tabId, problems = [] }: {
   prefill?: SilencePrefill;
   onDone(): void;
   leaveRef?: LeaveRef;
+  /** What the list found wrong with Alertmanagers: one that didn't answer can't hold a new silence now. */
+  problems?: readonly SilenceProblemOut[];
   /** The Monitoring tab the form is in: its other ways out ask while the form has changes. */
   tabId?: string;
 }) {
@@ -124,7 +129,10 @@ export function SilenceForm({ prefill, onDone, leaveRef, tabId }: {
     wantsProjectAm
       ? { key: "omnikrux", label: "OmniKrux", hint: `${prefill?.tool ?? "its tool"} rules are silenced in their Alertmanager`, off: true }
       : { key: "omnikrux", label: "OmniKrux", hint: "for rules checked by OmniKrux", off: false },
-    ...[...managers].map(([key, label]) => ({ key, label, hint: "for rules that run in Prometheus or Loki", off: false })),
+    ...[...managers].map(([key, label]) => {
+      const down = problems.some((p) => p.unreachable && p.source_id === key);
+      return { key, label: down ? unreachableWords(label) : label, hint: "for rules that run in Prometheus or Loki", off: down };
+    }),
   ];
 
   const firstOn = places.find((p) => !p.off)?.key;

@@ -78,6 +78,9 @@ function stateWords(rule: RuleOut, now: number): string {
   if (state === "waiting" && message?.startsWith(text)) return message;
   if (since) text += ` for ${durationWords(secondsSince(since, now))}`;
   if (state === "firing") {
+    // Where it fires: the project (a group rule's first place that fires).
+    const where = active.find((t) => t.state === "firing")?.project_name ?? (rule.scope.kind === "project" ? rule.scope.name : null);
+    if (where) text += ` in ${where}`;
     const instance = active.flatMap((t) => t.instances).find((i) => i.state === "firing");
     const labels = labelsText(instance?.labels);
     if (labels) text += ` · ${labels}`;
@@ -398,10 +401,11 @@ export function RuleDetails({ rule, now, headingRef, onOpen, onDeleted, onEscape
             {rule.panel.panel_title} on {rule.panel.dashboard_title}
           </button>
         ))}
-        {fact("Checked", checkedWords(rule))}
+        {/* Before its first check the state says so: no check time beside it. */}
+        {state !== "waiting" && fact("Checked", checkedWords(rule))}
       </dl>
 
-      <pre className={s.query}>{shownTarget?.rule_text || rule.expr}</pre>
+      <pre className={s.query}>{(shownTarget?.rule_text || rule.expr).trim()}</pre>
 
       {group && rule.targets.length > 0 && (
         <table className={s.perProject} aria-label="Per project">

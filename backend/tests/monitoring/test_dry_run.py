@@ -675,3 +675,29 @@ def test_replay_agrees_with_the_live_checks():
         series = Series(labels={"case": str(case)}, points=points)
         _, periods = replay([series], cond, start, end)
         assert periods == _folded(series, cond, start, end), case
+
+
+async def test_dry_run_says_when_for_has_not_passed(
+    monitoring_app, fake_prometheus, linked_project
+):
+    http, _ = monitoring_app
+    end = window_end()
+    # Above the threshold for the last 3 minutes only: the condition holds, its 10 min haven't passed.
+    points = six_hours(end - 3 * 60, end + 60)
+    fake_prometheus.results['errors_ratio{cluster="a"}'] = matrix(({"route": "/a"}, points))
+    r = await http.post(DRY_RUN, json=body(linked_project.project_id, **{"for": "10m"}))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert (out["fired"], out["firing_now"], out["holding_now"]) == (0, False, True)
+
+    # Once it fires, it is firing now, not holding.
+    r = await http.post(DRY_RUN, json=body(linked_project.project_id, **{"for": "1m"}))
+    out = r.json()
+    assert (out["firing_now"], out["holding_now"]) == (True, False)
+
+    # Quiet at the end: neither.
+    fake_prometheus.results['errors_ratio{cluster="a"}'] = matrix(
+        ({"route": "/a"}, six_hours(end - 3 * HOUR, end - 3 * HOUR + 60))
+    )
+    r = await http.post(DRY_RUN, json=body(linked_project.project_id, **{"for": "10m"}))
+    assert (r.json()["firing_now"], r.json()["holding_now"]) == (False, False)

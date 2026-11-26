@@ -20,12 +20,15 @@ export const NO_POINTS = "No contact points yet. Add one to be told when an aler
 type Open = { mode: "new" } | { mode: "edit"; id: string };
 type Test = { state: "sending" } | { state: "done"; ok: boolean; text: string };
 
-export const usedByWords = (n: number) => (n === 0 ? "Not used yet" : `Used by ${n} rule${n === 1 ? "" : "s"}`);
+export const usedByWords = (n: number) => (n === 0 ? "No rule uses it" : `Used by ${n} rule${n === 1 ? "" : "s"}`);
 
-function lastWords(p: ContactPointOut, now: number): { text: string; failed: boolean } | null {
+/** The last delivery in a few words. After a test sent from this row, its answer is shown under the
+ * row, so the line only says when (`Last test hh:mm`): an answer is never shown twice. */
+function lastWords(p: ContactPointOut, now: number, tested: boolean): { text: string; failed: boolean } | null {
   const d = p.last_delivery;
   if (!d) return null;
   const when = whenShort(d.at, now);
+  if (tested) return { text: `Last test ${when}`, failed: !d.ok };
   return d.ok
     ? { text: `Last sent ${when}`, failed: false }
     : { text: `Last send failed ${when}${d.message ? `: ${d.message}` : ""}`, failed: true };
@@ -104,8 +107,8 @@ export function ContactPointsTab({ leaveRef, tabId }: { leaveRef: LeaveRef; tabI
               </li>
             );
           }
-          const last = lastWords(p, now);
           const t = tests[p.id];
+          const last = lastWords(p, now, t?.state === "done");
           return (
             <li key={p.id} className={s.item}>
               <div className={s.main}>

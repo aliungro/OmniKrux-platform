@@ -9,10 +9,9 @@ import s from "./RuleForm.module.css";
 
 export const OMNIKRUX_HELP = "Needs OmniKrux running. Works with any source.";
 
-/** One project's line under "In the tool". */
+/** One project's line under "In the tool": the source it runs in, by name. */
 export function capabilityWords(c: CapabilityOut): string {
-  if (c.tool === "prometheus_rule") return `In Prometheus (${c.project_name}), fires even when OmniKrux is off`;
-  if (c.tool === "loki_ruler") return `In Loki (${c.project_name}), fires even when OmniKrux is off`;
+  if (c.tool !== null) return `In ${c.source_name ?? (c.tool === "loki_ruler" ? "Loki" : "Prometheus")}: fires even when OmniKrux is off.`;
   return `${c.project_name}: checked by OmniKrux instead.${c.reason ? ` ${c.reason}` : ""}`;
 }
 
@@ -49,8 +48,9 @@ export function WhereItRuns({ engine, capabilities, onChange, waiting }: WhereIt
           <span id={`${id}-tool`} className={s.whereLines}>
             {waiting ? <span className={s.help}>{waiting}</span>
               : toolOff ? (firstReason && <span className={s.help}>{firstReason}</span>)
-              : capabilities.map((c) => (
-                <span key={c.project_id} className={c.tool ? s.whereChip : s.help}>{capabilityWords(c)}</span>
+              // Projects that run it in the same source say so once.
+              : [...new Map(capabilities.map((c) => [capabilityWords(c), c])).entries()].map(([words, c]) => (
+                <span key={words} className={c.tool ? s.whereChip : s.help}>{words}</span>
               ))}
           </span>
         </span>

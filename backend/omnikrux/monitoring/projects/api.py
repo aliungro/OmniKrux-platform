@@ -185,6 +185,11 @@ class ToolsStayRefOut(BaseModel):
     namespace: str
 
 
+class SilenceRefOut(BaseModel):
+    id: str
+    matchers: str
+
+
 class ProjectDeleteReviewOut(BaseModel):
     """`alert_rules` and `cluster_rules` are left out of the answer when empty (read them as
     `[]`), and `tools_stay` when there are none, as they are left out of the token: a review
@@ -204,6 +209,8 @@ class ProjectDeleteReviewOut(BaseModel):
     cluster_rules: list[RuleRefOut] = []
     # The monitoring tools OmniKrux installed in the project's cluster: they stay installed.
     tools_stay: ToolsStayRefOut | None = None
+    # Its OmniKrux silences (`project="{name}"`): they go with it.
+    silences: list[SilenceRefOut] = []
 
 
 class GroupDeleteReviewOut(BaseModel):
@@ -431,6 +438,7 @@ def _review_out(review: ProjectDeleteReview) -> ProjectDeleteReviewOut:
             if review.tools_stay is not None
             else None
         ),
+        silences=[SilenceRefOut(id=x.id, matchers=x.matchers) for x in review.silences],
     )
 
 
@@ -748,6 +756,20 @@ async def remove_project(id: str, token: str, request: Request) -> Response:
             )
         await _begin_dashboard_removes(request, records, "project", review.name, review.dashboards)
         await _begin_rule_removes(request, records, "project", review.name, review.alert_rules)
+        for silence in review.silences:
+            records.append(
+                await begin_change(
+                    request,
+                    "silence_remove",
+                    "silence",
+                    silence.matchers,
+                    {
+                        "where": "OmniKrux",
+                        "matchers": silence.matchers,
+                        "removed_with_project": review.name,
+                    },
+                )
+            )
     except HTTPException as exc:
         await _finish_all(request, records, False, str(exc.detail))
         raise

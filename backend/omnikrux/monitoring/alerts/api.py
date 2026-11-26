@@ -57,6 +57,7 @@ from omnikrux.monitoring.alerts.silences import (
     NewSilence,
     Silence,
     SilenceInvalid,
+    SilenceStillActive,
     ToolSilence,
     UnknownSilence,
     check_silence,
@@ -414,6 +415,8 @@ class EngineOut(BaseModel):
 class CountsOut(BaseModel):
     rules: int
     firing: int
+    # Rules firing somewhere a silence doesn't mute every firing instance: what the badges count.
+    firing_unsilenced: int
     pending: int
     cant_check: int
     not_applied: int
@@ -1639,7 +1642,14 @@ async def overview(request: Request) -> OverviewOut:
     for target in await alerts.targets():
         by_rule.setdefault(target.rule_id, []).append(target)
     names = await _names(services, contact_points=False)
-    counts = {"rules": len(rules), "firing": 0, "pending": 0, "cant_check": 0, "not_applied": 0}
+    counts = {
+        "rules": len(rules),
+        "firing": 0,
+        "firing_unsilenced": 0,
+        "pending": 0,
+        "cant_check": 0,
+        "not_applied": 0,
+    }
     firing: list[FiringOut] = []
     by_project: dict[str, int] = {}
     by_group: dict[str, int] = {}
@@ -1650,6 +1660,7 @@ async def overview(request: Request) -> OverviewOut:
             counts[state] += 1
         elif state in ("unreachable", "error"):
             counts["cant_check"] += 1
+        loud = False
         for target in targets:
             if target.leaving or shown_state(target, rule) != "firing":
                 continue
@@ -1657,6 +1668,7 @@ async def overview(request: Request) -> OverviewOut:
             since = min(
                 (i.fired_at or i.active_since for i in instances), default=target.state_since
             )
+            muted = sum(1 for i in instances if i.silenced)
             firing.append(
                 FiringOut(
                     rule_id=rule.id,
@@ -1667,14 +1679,17 @@ async def overview(request: Request) -> OverviewOut:
                     severity=rule.severity,
                     since=since,
                     instances=len(instances),
-                    silenced=sum(1 for i in instances if i.silenced),
+                    silenced=muted,
                     summary=firing_summary(rule, instances, since, moment),
                     where=where(target),
                 )
             )
+            loud = loud or muted < len(instances)
             by_project[target.project_id] = by_project.get(target.project_id, 0) + 1
             if rule.scope_kind == "group":
                 by_group[rule.scope_id] = by_group.get(rule.scope_id, 0) + 1
+        if loud:
+            counts["firing_unsilenced"] += 1
     firing.sort(key=lambda f: (_SEVERITY_ORDER[f.severity], f.since, f.rule_name, f.project_name))
     status = services.engine.status(moment)
     return OverviewOut(
@@ -1891,6 +1906,8 @@ async def dry_run_route(body: DryRunIn, request: Request) -> DryRunOut:
 SILENCE_GONE = "That silence no longer exists."
 ALERTMANAGER_GONE = "That Alertmanager no longer exists."
 NEEDS_ALERTMANAGER = "Say which Alertmanager holds the silence."
+STILL_ACTIVE = "Expire it first."
+REMOVED_EXPIRED = "Removed the expired silence {matchers}."
 WHERE_OMNIKRUX_WORDS = "OmniKrux"
 WHERE_ALERTMANAGER_WORDS = "Alertmanager · {source}"
 EXPIRED_FOR = 24 * 3600
@@ -1940,8 +1957,11 @@ class SilenceOut(BaseModel):
 
 
 class SilenceProblemOut(BaseModel):
+    source_id: str
     source_name: str
     message: str
+    # It gave no answer at all: a new silence can't be written there now.
+    unreachable: bool
 
 
 class SilencesOut(BaseModel):
@@ -2093,7 +2113,14 @@ async def list_silences(request: Request) -> SilencesOut:
         managers, await asyncio.gather(*(read(m) for m in managers)), strict=True
     ):
         if isinstance(held, AlertmanagerFailed):
-            problems.append(SilenceProblemOut(source_name=source.name, message=held.message))
+            problems.append(
+                SilenceProblemOut(
+                    source_id=source.id,
+                    source_name=source.name,
+                    message=held.message,
+                    unreachable=held.unreachable,
+                )
+            )
             continue
         out += [_tool_out(s, source) for s in held if s.state != "expired" or s.ends_at >= since]
     out.sort(key=lambda s: (s.starts_at, s.id), reverse=True)
@@ -2196,16 +2223,56 @@ async def add_silence(body: SilenceIn, request: Request) -> SilenceOut:
     )
 
 
+async def _remove_expired(request: Request, id: str) -> Response:
+    services = _services(request)
+    try:
+        held = await services.silences.get(id)
+    except UnknownSilence:
+        raise _silence_error(404, "not_found", SILENCE_GONE) from None
+    if held.active_at(now_utc()) or held.starts_at > now_utc():
+        raise _silence_error(409, "still_active", STILL_ACTIVE)
+    text = matchers_text(held.matchers)
+    record = await begin_change(
+        request,
+        "silence_remove",
+        "silence",
+        text,
+        {
+            "where": WHERE_OMNIKRUX_WORDS,
+            "matchers": text,
+            "removed_expired": True,
+            "change": REMOVED_EXPIRED.format(matchers=text),
+        },
+    )
+    try:
+        await services.silences.remove_ended(id, now_utc())
+    except UnknownSilence:
+        await finish_change(request, record, False, SILENCE_GONE)
+        raise _silence_error(404, "not_found", SILENCE_GONE) from None
+    except SilenceStillActive:
+        await finish_change(request, record, False, STILL_ACTIVE)
+        raise _silence_error(409, "still_active", STILL_ACTIVE) from None
+    except Exception:
+        await finish_change(request, record, False, NOT_REMOVED_SILENCE)
+        raise
+    await finish_change(request, record, True)
+    return Response(status_code=204)
+
+
 @router.delete("/silences/{kind}/{id}", status_code=204)
 async def remove_silence(
     kind: Literal["omnikrux", "alertmanager"],
     id: str,
     request: Request,
     source_id: str | None = None,
+    expired: bool = False,
 ) -> Response:
     """End a silence now: OmniKrux's is expired (it stays listed for a day), an Alertmanager's is
-    expired there. Its audit record is written first."""
+    expired there. With `expired`, an OmniKrux silence that has already ended is removed from the
+    list (409 `still_active` while it hasn't). Its audit record is written first."""
     services = _services(request)
+    if kind == "omnikrux" and expired:
+        return await _remove_expired(request, id)
     if kind == "omnikrux":
         try:
             held = await services.silences.get(id)

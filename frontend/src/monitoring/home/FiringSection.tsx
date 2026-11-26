@@ -39,7 +39,9 @@ function FiringRow({ row, project, onOpen }: { row: FiringOut; project: ProjectO
       <span className={s.chip} data-quiet="">{row.where}</span>
       <span className={s.firingActions}>
         <button type="button" className={s.small} aria-label={`Silence ${row.rule_name}`}
-          onClick={(e) => onOpen({ page: "alerts", tab: "silences" }, e.ctrlKey || e.metaKey)}>Silence</button>
+          onClick={(e) => onOpen({ page: "alerts", tab: "silences", silence: { rule: row.rule_id, target: row.target_id } }, e.ctrlKey || e.metaKey)}>
+          Silence
+        </button>
         <button type="button" className={s.small} aria-label={`Open ${row.rule_name}`}
           onClick={(e) => onOpen(rule, e.ctrlKey || e.metaKey)}>Open</button>
       </span>

@@ -107,6 +107,9 @@ export function RuleDetailsFields({
         </div>
       </fieldset>
 
+      {/* Notify and Channel take turns in one slot of a fixed least height: switching where the rule
+          runs doesn't move the fields below. */}
+      <div className={s.notifySlot} data-notify-slot="">
       {showNotify && (
         <fieldset className={s.field} aria-describedby={described("contact_point_ids", installedHelp ? `${id}-installed` : undefined)}>
           <legend className={s.label}>Notify</legend>
@@ -124,7 +127,7 @@ export function RuleDetailsFields({
                 {contactPoints.map((cp, i) => (
                   <li key={cp.id}>
                     <label className={s.check}>
-                      <input ref={i === 0 ? refs.notify : undefined} type="checkbox" checked={value.notify.includes(cp.id)}
+                      <input ref={i === 0 ? refs.notify : undefined} type="checkbox" aria-label={cp.name} checked={value.notify.includes(cp.id)}
                         onChange={(e) => toggle(cp.id, e.target.checked)} />
                       <span className={s.checkName}>{cp.name}</span>
                       <span className={s.checkSummary}>{cp.summary}</span>
@@ -158,6 +161,7 @@ export function RuleDetailsFields({
           {err("channel") && <p id={`${id}-channel-e`} className={s.fieldError}>{err("channel")}</p>}
         </div>
       )}
+      </div>
 
       <div className={s.field}>
         <label htmlFor={`${id}-message`} className={s.label}>Message</label>

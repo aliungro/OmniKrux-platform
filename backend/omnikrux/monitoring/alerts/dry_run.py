@@ -311,6 +311,8 @@ class DryRunOut(BaseModel):
     step: int
     fired: int  # rule-level periods, every project merged
     firing_now: bool
+    # Not firing now, but a series breaches at the last point: its `for` hasn't passed yet.
+    holding_now: bool
     periods: list[PeriodOut]
     projects: list[DryRunProjectOut]
     candidates: list[CandidateOut]
@@ -488,6 +490,16 @@ def _periods(periods: list[tuple[float, float, bool]]) -> list[PeriodOut]:
     return [PeriodOut(start=a, end=b, ongoing=o) for a, b, o in periods]
 
 
+def _holds_at_end(series: Sequence[Series], cond: Condition, end: float) -> bool:
+    """Whether a series breaches at the window's last point (its `for` may not have passed)."""
+    last_point = end - cond.every_seconds / 2
+    for s in series:
+        latest = max((p for p in s.points if p[0] <= end), key=lambda p: p[0], default=None)
+        if latest is not None and latest[0] >= last_point and breaches(latest[1], cond):
+            return True
+    return False
+
+
 def _replay_all(
     reads: list[_Read],
     body: DryRunIn,
@@ -495,9 +507,10 @@ def _replay_all(
     start: float,
     end: float,
     lookback: float,
-) -> tuple[list[DryRunProjectOut], list[tuple[float, float, bool]], list[CandidateOut]]:
-    """The CPU part: every project's replay, the merged periods, and each candidate's count.
-    ReplayTooLong when it takes longer than `REPLAY_SECONDS`."""
+) -> tuple[list[DryRunProjectOut], list[tuple[float, float, bool]], list[CandidateOut], bool]:
+    """The CPU part: every project's replay, the merged periods, each candidate's count, and
+    whether the condition holds at the last point. ReplayTooLong when it takes longer than
+    `REPLAY_SECONDS`."""
     deadline = time.monotonic() + REPLAY_SECONDS
     projects: list[DryRunProjectOut] = []
     every_period: list[tuple[float, float, bool]] = []
@@ -550,7 +563,8 @@ def _replay_all(
                     replay(read.series, other, start, end, lookback=lookback, deadline=deadline)[1]
                 )
         candidates.append(CandidateOut(threshold=threshold, fired=len(_merged(found))))
-    return projects, merged, candidates
+    holding = any(_holds_at_end(r.series, cond, end) for r in reads if r.series is not None)
+    return projects, merged, candidates, holding
 
 
 async def dry_run(services: MonitoringServices, body: DryRunIn, now: float) -> DryRunOut:
@@ -583,17 +597,19 @@ async def dry_run(services: MonitoringServices, body: DryRunIn, now: float) -> D
         raise DryRunRefused(502, first.code, first.message)
 
     try:
-        projects, merged, candidates = await asyncio.to_thread(
+        projects, merged, candidates, holding = await asyncio.to_thread(
             _replay_all, reads, body, cond, start, end, start - since
         )
     except ReplayTooLong:
         raise DryRunRefused(504, "timeout", REPLAY_TOO_LONG) from None
+    firing = any(o for _, _, o in merged)
     return DryRunOut(
         start=start,
         end=end,
         step=every,
         fired=len(merged),
-        firing_now=any(o for _, _, o in merged),
+        firing_now=firing,
+        holding_now=holding and not firing,
         periods=_periods(merged),
         projects=projects,
         candidates=candidates,

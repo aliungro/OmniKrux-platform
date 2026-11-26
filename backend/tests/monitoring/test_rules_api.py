@@ -213,6 +213,7 @@ async def test_group_rule_fans_out_per_project(monitoring_app, linked_project):
     assert overview["counts"] == {
         "rules": 1,
         "firing": 0,
+        "firing_unsilenced": 0,
         "pending": 0,
         "cant_check": 1,
         "not_applied": 0,

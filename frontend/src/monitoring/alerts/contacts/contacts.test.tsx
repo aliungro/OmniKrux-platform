@@ -43,7 +43,7 @@ describe("contact points", () => {
     expect(rows[0].textContent).toContain("Used by 2 rules");
     expect(rows[0].textContent).toMatch(/Last sent \d\d:\d\d/);
     expect(rows[1].textContent).toContain("Email");
-    expect(rows[1].textContent).toContain("Not used yet");
+    expect(rows[1].textContent).toContain("No rule uses it");
     const failed = within(rows[1]).getByText(/Last send failed \d\d:\d\d: Mail server refused the sign-in\./);
     expect(failed.getAttribute("data-failed")).toBe("true");
     expect(rows[2].textContent).toContain("PagerDuty");
@@ -202,6 +202,56 @@ describe("contact points", () => {
     const ask = await screen.findByRole("alertdialog", { name: "Discard this contact point?" });
     await user.click(within(ask).getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(screen.queryByRole("form")).toBeNull());
+  });
+
+  it("the email error clears when the address changes", async () => {
+    const user = userEvent.setup();
+    open();
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      String(url).endsWith("/contact-points/test") && init?.method === "POST"
+        ? Promise.resolve(json({ detail: "Use addresses like ops@example.test." }, 422))
+        : real(url, init));
+    await user.click(await screen.findByRole("button", { name: "Add a contact point" }));
+    await user.selectOptions(await screen.findByLabelText("Type"), "email");
+    await user.type(screen.getByLabelText("Name"), "Mail");
+    await user.type(screen.getByLabelText("Mail server"), "smtp.example.test");
+    await user.type(screen.getByLabelText("From"), "alerts@example.test");
+    const to = screen.getByLabelText("To");
+    await user.type(to, "ops@example");
+    await user.click(screen.getByRole("button", { name: "Send a test" }));
+    expect(await screen.findByText("Use addresses like ops@example.test.")).toBeTruthy();
+    await user.type(to, ".test");
+    expect(screen.queryByText("Use addresses like ops@example.test.")).toBeNull();
+    expect(document.activeElement).toBe(to);
+  });
+
+  it("a wrong address is said under its field, and the list says when the last test went", async () => {
+    const user = userEvent.setup();
+    const slackWords = "Use a Slack webhook address that starts with https://hooks.slack.com/.";
+    const { api } = open({ contactPoints: [point({ last_delivery: { at: new Date().toISOString(), ok: false, message: "Ops hook answered HTTP 405." } })] });
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      String(url).endsWith("/contact-points") && init?.method === "POST"
+        ? Promise.resolve(json({ detail: slackWords }, 422))
+        : real(url, init));
+    // A test's answer shows once: in the row's line, not again in the list's last delivery.
+    const row = (await screen.findByText("Ops hook")).closest("li")!;
+    expect(row.textContent).toContain("No rule uses it");
+    expect(row.textContent).toContain("Ops hook answered HTTP 405.");
+    await user.click(within(row).getByRole("button", { name: "Send a test to Ops hook" }));
+    await waitFor(() => expect(within(row).getByRole("status").textContent).toBe("Sent. Check that the test message arrived."));
+    await waitFor(() => expect(row.textContent).toMatch(/No rule uses it · Last test \d\d:\d\d/));
+    expect(api.requests.length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Add a contact point" }));
+    await user.type(await screen.findByLabelText("Name"), "Team Slack");
+    const field = screen.getByLabelText("Webhook address");
+    await user.type(field, "http://example.com/not-slack");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    const error = await screen.findByText(slackWords);
+    expect(field.getAttribute("aria-describedby")).toContain(error.id);
+    expect(document.activeElement).toBe(field);
   });
 
   it("delete lists the rules that lose it and opens on its action", async () => {

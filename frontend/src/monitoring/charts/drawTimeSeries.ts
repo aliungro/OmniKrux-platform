@@ -34,8 +34,9 @@ const MARK_ORDER: ChartMark["tone"][] = ["info", "warn", "error"];
 const MARK_W = 2;
 const MARK_H = 6;
 const MARK_ALPHA = 0.85;
-/** The firing side of an alert band: rose, barely there, so the series stay readable over it. */
-const BAND_ALPHA = 0.07;
+/** The firing side of an alert band: rose, barely there (lighter than a filled area), so the series
+ * stay readable over it even when it covers the whole plot. */
+const BAND_ALPHA = 0.04;
 const BAND_LINE = 1.2;
 
 export interface FrameSize {

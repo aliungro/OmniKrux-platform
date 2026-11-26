@@ -13,10 +13,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { pageKey, pressed } from "../../../features/chrome/shortcuts";
 import type { MonitoringPageProps } from "../../MonitoringApp";
+import { useMonitoringTree } from "../../api/hooks";
+import { currentOwner } from "../../dashboards/create/currentOwner";
+import { readRecent } from "../../home/recent";
 import { keyboardIsFree } from "../../pages/Gone";
 import type { AlertsView, MonitoringView } from "../../shell/tabState";
 import {
-  alertsKeys, listRules, refreshAlerts, useAlertOverview,
+  alertsKeys, listRules, loudFiring, refreshAlerts, useAlertOverview,
   type AlertChangeOut, type AlertRequestError, type OverviewOut, type RuleChangeOut, type RuleOut,
 } from "../api";
 import { ContactPointsTab } from "../contacts/ContactPointsTab";
@@ -45,6 +48,7 @@ const REFETCH_MS = 15_000;
 const NARROW_QUERY = "(max-width: 719px)";
 export const NO_RULES = "No alert rules yet. Make one here, or from a panel's Alert tab.";
 const RULE_GONE = "That alert rule no longer exists. Pick another from the list.";
+export const NOT_FIRING_NOW = "That alert isn't firing any more, so there's nothing to prefill.";
 
 /** Keys the page takes: outside fields, dialogs, menus and pickers (the rule list is fine). */
 function pageKeyHere(e: globalThis.KeyboardEvent): boolean {
@@ -78,6 +82,8 @@ export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
   // Silence, asked from a rule: the Silences view opens its form prefilled, once.
   const [silenceAsk, setSilenceAsk] = useState<SilenceAsk | null>(null);
   const takeSilenceAsk = useCallback(() => setSilenceAsk(null), []);
+  // Said in the Silences view when the alert asked about (from Home) stopped firing.
+  const [silenceNote, setSilenceNote] = useState<string | null>(null);
 
   // The view as last written: a second write before the tab re-renders builds on the first.
   const navRef = useRef(nav);
@@ -95,6 +101,24 @@ export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
     navRef.current.navigate(next, "replace");
   }, []);
   const open = useCallback((v: MonitoringView) => navRef.current.navigate(v, "push"), []);
+
+  // Silence, asked from Home: the alert's place is prefilled once (as the rule details do), then the
+  // view drops the ask, so Back or a reload never asks again. An alert that stopped firing says so.
+  const asked = alerts.silence;
+  const askedRules = useQuery<RuleOut[], AlertRequestError>({
+    queryKey: alertsKeys.rules(), queryFn: ({ signal }) => listRules(undefined, signal), retry: false, enabled: asked !== undefined,
+  });
+  useEffect(() => {
+    if (!asked || (askedRules.data === undefined && !askedRules.isError)) return;
+    const r = askedRules.data?.find((x) => x.id === asked.rule);
+    const t = r?.targets.find((x) => x.id === asked.target && !x.leaving);
+    if (r && t && t.state === "firing") {
+      setSilenceNote(null);
+      setSilenceAsk((a) => ({ n: (a?.n ?? 0) + 1, prefill: silencePrefill(r, t) }));
+    } else if (askedRules.data) setSilenceNote(NOT_FIRING_NOW);
+    write({ tab: "silences" });
+  }, [asked, askedRules.data, askedRules.isError, write]);
+  useEffect(() => { if (tab !== "silences") setSilenceNote(null); }, [tab]);
 
   // The heading takes the keyboard when the page opens (unless the user is busy elsewhere).
   useEffect(() => { if (keyboardIsFree()) heading.current?.focus({ preventScroll: true }); }, []);
@@ -144,7 +168,7 @@ export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
     showTab(next.id, true);
   };
 
-  const firing = overview.data?.counts.firing ?? 0;
+  const firing = overview.data ? loudFiring(overview.data.counts) : 0;
   // The overview's last good read, when a later one failed: kept, and said to be old.
   const overviewStaleAt = overview.isError && overview.data ? overview.dataUpdatedAt : null;
   return (
@@ -190,7 +214,7 @@ export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
               write({ tab: "silences" });
             }} />
         ) : tab === "silences" ? (
-          <SilencesTab ask={silenceAsk} onAskTaken={takeSilenceAsk} leaveRef={leaveForm} tabId={tabId} />
+          <SilencesTab ask={silenceAsk} onAskTaken={takeSilenceAsk} leaveRef={leaveForm} tabId={tabId} note={silenceNote} />
         ) : (
           <ContactPointsTab leaveRef={leaveForm} tabId={tabId} />
         )}
@@ -233,6 +257,7 @@ function RulesView({
 }: RulesViewProps) {
   const client = useQueryClient();
   const reviews = useToolReviews();
+  const tree = useMonitoringTree();
   const detailsId = useId();
   const narrow = useNarrow();
   const rules = useQuery<RuleOut[], AlertRequestError>({
@@ -398,11 +423,12 @@ function RulesView({
     reviews.enqueue(changes, { focus: restore.current });
   };
 
-  // New alert rule: for the shown rule's project or group, else the first.
+  // New alert rule: for the owner new dashboards go to (the sidebar's), else the first project by name.
   useEffect(() => {
     if (newAsk === null) return;
     onNewTaken();
-    openForm({ mode: "new", ...(rule ? { scope: { kind: rule.scope.kind, id: rule.scope.id } } : {}) });
+    const owner = tree.data ? currentOwner(alerts, tree.data, readRecent()) : null;
+    openForm({ mode: "new", ...(owner ? { scope: { kind: owner.kind, id: owner.id } } : {}) });
     // Once per press: `newAsk` is a new number each time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newAsk]);

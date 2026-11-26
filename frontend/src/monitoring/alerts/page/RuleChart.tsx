@@ -29,6 +29,21 @@ const FAILED = "The rule's query didn't answer. Try again in a moment.";
 
 const sourceWords = (type: SourceType) => (type === "loki" ? "Loki" : "Prometheus-compatible");
 
+/** Headroom over the highest of the values and the threshold, so a line never sits on the top edge. */
+const HEADROOM = 1.1;
+
+/**
+ * The panel with its y range topped at `max(highest value, threshold) × 1.1` (when that is above
+ * zero), so the threshold and the series stay inside the plot, clear of its border.
+ */
+export function withHeadroom(panel: PanelSpec, data: PanelData, threshold: number): PanelSpec {
+  if (panel.type !== "timeseries") return panel;
+  let top = Number.isFinite(threshold) ? threshold : -Infinity;
+  for (const series of data.series) for (const [, v] of series.points) if (v !== null && Number.isFinite(v) && v > top) top = v;
+  if (!(top > 0)) return panel;
+  return { ...panel, options: { ...panel.options, max: top * HEADROOM } };
+}
+
 /** One project's query of the chart. */
 export interface ChartItem {
   ref: string;
@@ -138,6 +153,10 @@ export function ThresholdChart({ input, op, threshold, caption, emptyWords, wind
   const shown = last.current?.key === queriesKey ? last.current : null;
 
   const band = useMemo(() => ({ op, threshold, queryRef: input.items[0]?.ref ?? "A" }), [op, threshold, input.items]);
+  const shownPanel = shown?.panel;
+  const shownData = shown?.data;
+  const drawn = useMemo(
+    () => (shownPanel && shownData ? withHeadroom(shownPanel, shownData, threshold) : null), [shownPanel, shownData, threshold]);
 
   let body;
   if (projects.isError && !projects.data) body = <p className={s.chartWords} data-tone="warn">{FAILED}</p>;
@@ -153,7 +172,7 @@ export function ThresholdChart({ input, op, threshold, caption, emptyWords, wind
       <>
         <div className={s.chartBox}>
           <Suspense fallback={<p className={s.chartWords} role="status">Loading…</p>}>
-            <ChartView panel={shown.panel} data={shown.data} range={shown.range} animate={false} changeId={0} alert={band} />
+            <ChartView panel={drawn ?? shown.panel} data={shown.data} range={shown.range} animate={false} changeId={0} alert={band} />
           </Suspense>
         </div>
         {shown.data.state === "empty" && <p className={s.chartWords}>The query found no series in {windowWords}.</p>}

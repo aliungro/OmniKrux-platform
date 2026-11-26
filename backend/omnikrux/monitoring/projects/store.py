@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnikrux.clusters.models import ClusterRecord
+from omnikrux.monitoring.alerts.silences import delete_silences, matchers_text, project_silences
 from omnikrux.monitoring.alerts.store import AlertStore
 from omnikrux.monitoring.dashboards.store import DashboardStore
 from omnikrux.monitoring.models import (
@@ -49,6 +50,7 @@ from omnikrux.monitoring.projects.types import (
     ProjectRef,
     ReviewChanged,
     RulesInCluster,
+    SilenceRef,
     SourceDeleteReview,
     SourceRef,
     ToolsStayRef,
@@ -402,6 +404,10 @@ class ProjectStore:
             alert_rules=alert_rules,
             cluster_rules=cluster_rules,
             tools_stay=await self._tools_stay(session, project.cluster_id, installs),
+            silences=tuple(
+                SilenceRef(s.id, matchers_text(s.matchers))
+                for s in await project_silences(session, project.name, now())
+            ),
         )
         return _sealed(review)
 
@@ -450,6 +456,7 @@ class ProjectStore:
                 raise RulesInCluster(review.cluster_rules)
             await self._alerts(alerts).delete_owned("project", id, session=session)
             await self._dashboards(dashboards).delete_owned("project", id, session=session)
+            await delete_silences(session, [s.id for s in review.silences])
             for source in review.sources_removed:
                 await sources.delete(source.id, session=session)
             if review.sources_kept:

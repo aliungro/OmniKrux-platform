@@ -193,3 +193,12 @@ def test_worst():
     assert worst(["ok", "pending", "unreachable"]) == "unreachable" and worst([]) == "ok"
     assert worst(["paused", "ok"]) == "ok"
     assert STATE_ORDER[0] == "firing" and STATE_ORDER[-1] == "paused"
+
+
+def test_rule_query_is_wrapped_without_stray_lines():
+    typed = "\n\n  count(up == 1)\n\n   \n  # still up\n\n"
+    each = Condition("each", "above", 0.0, 0, 60)
+    assert condition_expr(typed, each) == "(count(up == 1)\n  # still up\n) > 0"
+    assert condition_expr("count(up == 1)\n\n\n", each) == "(count(up == 1)\n) > 0"
+    assert eval_expr("\n sum(x)\n\n", "total") == "sum(sum(x)\n)"
+    assert eval_expr("\n sum(x)\n\n", "each") == "sum(x)"

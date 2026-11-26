@@ -6,7 +6,8 @@
 import { useEffect, useRef } from "react";
 import { failure } from "../../../api/http";
 import type { DryRunIn, DryRunOut, Op } from "../api";
-import { dryRunSentence, numberText } from "../format";
+import { dryRunSentence, durationWords, numberText } from "../format";
+import { parseDuration } from "../limits";
 import { useRuleDryRun } from "./useRuleDryRun";
 import s from "./RuleForm.module.css";
 
@@ -38,10 +39,14 @@ export function adviceFor(out: DryRunOut, op: Op, threshold: number): { threshol
   return calmerThreshold(out, op, threshold);
 }
 
+/** Said when the condition holds at the last point but its `for` hasn't passed: it isn't firing yet. */
+export const holdsWords = (forText: string) => `Its condition holds now; it fires after ${durationWords(parseDuration(forText) ?? 0)}.`;
+
 /** The line's words for a finished run. */
 export function dryRunWords(out: DryRunOut, body: DryRunIn, now: number): string {
-  if (body.scope.kind !== "group") return dryRunSentence(out, now);
-  return dryRunSentence(out, now, undefined, out.projects.filter((p) => p.error === null).length);
+  const words = body.scope.kind !== "group" ? dryRunSentence(out, now)
+    : dryRunSentence(out, now, undefined, out.projects.filter((p) => p.error === null).length);
+  return out.holding_now && !out.firing_now ? `${words} ${holdsWords(body.for)}` : words;
 }
 
 export interface DryRunLineProps {

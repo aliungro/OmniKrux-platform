@@ -118,6 +118,14 @@ class ToolsStayRef:
 
 
 @dataclass(frozen=True)
+class SilenceRef:
+    """An OmniKrux silence of the project (`project="{name}"`), by its matchers."""
+
+    id: str
+    matchers: str
+
+
+@dataclass(frozen=True)
 class ProjectDeleteReview:
     project_id: str
     name: str
@@ -134,6 +142,8 @@ class ProjectDeleteReview:
     cluster_rules: tuple[RuleRef, ...] = ()
     # The tools OmniKrux installed in the project's cluster, which stay (None: none there).
     tools_stay: ToolsStayRef | None = None
+    # Its OmniKrux silences (equality matcher on its name): they go with it.
+    silences: tuple[SilenceRef, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -163,11 +173,11 @@ class SourceDeleteReview:
 
 def review_token(review_without_token: dict) -> str:
     """A fingerprint of what a review shows: it changes whenever the review would. An empty
-    `dashboards`, `alert_rules` or `cluster_rules` list, and no `tools_stay`, stay out of it, so a
-    review without them keeps the fingerprint it had before owners had dashboards, alert rules
-    and installed tools."""
+    `dashboards`, `alert_rules`, `cluster_rules` or `silences` list, and no `tools_stay`, stay out
+    of it, so a review without them keeps the fingerprint it had before owners had dashboards,
+    alert rules, installed tools and silences."""
     fields = dict(review_without_token)
-    for key in ("dashboards", "alert_rules", "cluster_rules", "tools_stay"):
+    for key in ("dashboards", "alert_rules", "cluster_rules", "tools_stay", "silences"):
         if key in fields and not fields[key]:
             del fields[key]
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()

@@ -224,16 +224,24 @@ def _number_text(value: float) -> str:
     return text.removesuffix(".0")
 
 
+def tidy_query(expr: str) -> str:
+    """The query as it is wrapped: without the blank space around it or blank lines inside it,
+    so a rule written over a few lines reads as one in its tool (`(count(up)\n) > 0`)."""
+    return "\n".join(line for line in expr.strip().splitlines() if line.strip())
+
+
 def condition_expr(expr: str, cond: Condition) -> str:
     """The rule's condition. A line feed ends the operand, so a `#` comment at the end of the
     query can't swallow what the wrapper adds after it."""
     sign = ">" if cond.op == "above" else "<"
-    left = f"sum({expr}\n)" if cond.of == "total" else f"({expr}\n)"
+    text = tidy_query(expr)
+    left = f"sum({text}\n)" if cond.of == "total" else f"({text}\n)"
     return f"{left} {sign} {_number_text(cond.threshold)}"
 
 
 def eval_expr(expr: str, of: Of) -> str:
-    return f"sum({expr}\n)" if of == "total" else expr
+    text = tidy_query(expr)
+    return f"sum({text}\n)" if of == "total" else text
 
 
 def is_log_query(expr: str) -> bool:
