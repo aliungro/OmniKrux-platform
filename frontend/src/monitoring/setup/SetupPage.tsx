@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { failure, HttpError } from "../../api/http";
 import type { Cluster } from "../../api/types";
 import { useClusters } from "../../api/useClusters";
-import { setupProject, suggestFilter } from "../api/client";
-import { invalidateMonitoring, useDiscovery, useProjects, useSourceHealth, useSources } from "../api/hooks";
+import { discover, setupProject, suggestFilter } from "../api/client";
+import { discoveryKey, invalidateMonitoring, useDiscovery, useProjects, useSourceHealth, useSources } from "../api/hooks";
 import type { FoundTool, ProjectKind, ProjectOut, SourceIn, SourceOut, SuggestIn } from "../api/types";
 import { readyViewTitles, readyViewsPhrase } from "../dashboards/readyViews";
 import { useToolReviews } from "../alerts/reviews/useToolReviews";
@@ -295,9 +295,25 @@ interface StepProps {
   heading: RefObject<HTMLHeadingElement | null>;
 }
 
+/** How long a look inside a cluster, asked for its chip, stands before it is asked again. */
+const REACH_FRESH_MS = 60_000;
+
 function KindStep({ draft, setDraft, heading, clusters, onOpenSettings }: StepProps & { clusters: ReturnType<typeof useClusters>; onOpenSettings(): void }) {
   const ids = useId();
   const list = clusters.data;
+  // A cluster no app is watching has no state in the clusters list: Monitoring's own look inside
+  // it (the one the next step reads) says whether it can be reached. Only its "can't reach" words
+  // mark a chip; any other answer, or none yet, says nothing new.
+  const unknown = draft.kind === "kubernetes" ? (list ?? []).filter((c) => c.state !== "ready" && c.state !== "error") : [];
+  const looks = useQueries({
+    queries: unknown.map((c) => ({ queryKey: discoveryKey(c.id), queryFn: () => discover(c.id), staleTime: REACH_FRESH_MS, retry: false })),
+  });
+  const unreachable = new Map<string, string>();
+  unknown.forEach((c, i) => {
+    const look = looks[i]?.data;
+    if (look?.state === "error" && look.message?.startsWith(`OmniKrux can't reach ${c.name}.`)) unreachable.set(c.id, look.message);
+  });
+  const downWhy = (c: Cluster): string | null => (c.state === "error" ? (c.message ?? "") : unreachable.get(c.id) ?? null);
   return (
     <>
       <h2 id={`${ids}-h`} ref={heading} tabIndex={-1} className={s.stepTitle}>What to monitor</h2>
@@ -337,10 +353,10 @@ function KindStep({ draft, setDraft, heading, clusters, onOpenSettings }: StepPr
                 <label key={c.id} className={s.cluster}>
                   <input type="radio" name={`${ids}-cluster`} className={s.radio} checked={draft.clusterId === c.id}
                     onChange={() => setDraft((d) => retarget(d, "kubernetes", c.id))} />
-                  <i className={s.dot} data-down={c.state === "error" ? "" : undefined}
-                    style={c.state === "error" ? undefined : { background: c.provider in DOT ? DOT[c.provider] : DOT.custom }} aria-hidden="true" />
-                  <span className={s.clusterName} title={c.state === "error" ? c.message ?? undefined : undefined}>
-                    {c.state === "error" ? `${c.name} · Can't be reached` : c.name}
+                  <i className={s.dot} data-down={downWhy(c) !== null ? "" : undefined}
+                    style={downWhy(c) !== null ? undefined : { background: c.provider in DOT ? DOT[c.provider] : DOT.custom }} aria-hidden="true" />
+                  <span className={s.clusterName} title={downWhy(c) || undefined}>
+                    {downWhy(c) !== null ? `${c.name} · Can't be reached` : c.name}
                   </span>
                 </label>
               ))}

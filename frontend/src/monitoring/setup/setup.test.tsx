@@ -988,6 +988,25 @@ describe("Setup and project links", () => {
     expect(continueButton().disabled).toBe(false);
   });
 
+  it("a cluster no app is watching is looked at, and says so when it can't be reached", async () => {
+    // The shell knows nothing about either cluster (no app watches them): setup asks Monitoring's
+    // own look inside each, and only its "can't reach" words mark a chip.
+    const user = userEvent.setup();
+    installFakeMonitoringApi({
+      discovery: {
+        c1: { ...found(), state: "error", message: `OmniKrux can't reach ${CLUSTER}. Check that the cluster is running, then try again.` },
+        c2: { ...found(), cluster_id: "c2", cluster_name: "prod-east", state: "error", message: "Not allowed to list services." },
+      },
+    }, async (url: string) => json(url === "/api/clusters"
+      ? [{ id: "c1", name: CLUSTER, provider: "kind", state: "unknown", message: null }, { id: "c2", name: "prod-east", provider: "aks", state: "unknown", message: null }] : []));
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await user.click(await screen.findByRole("radio", { name: /A Kubernetes cluster/ }));
+    expect(await screen.findByRole("radio", { name: `${CLUSTER} · Can't be reached` })).toBeTruthy();
+    // Another failure (not reaching it) says nothing new here.
+    expect(screen.getByRole("radio", { name: "prod-east" })).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("the stepper's notes carry their full text as a title", async () => {
     install();
     startFromCluster();
