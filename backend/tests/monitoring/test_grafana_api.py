@@ -5,6 +5,8 @@ write is audited; a Grafana that can't be read says why in plain words."""
 import logging
 from datetime import datetime
 
+import pytest
+
 from omnikrux.monitoring.sources import messages
 from omnikrux.monitoring.transfer.api import (
     BASIC_NEEDS,
@@ -16,6 +18,7 @@ from omnikrux.monitoring.transfer.api import (
     TOKEN_NEEDED,
 )
 from omnikrux.monitoring.transfer.grafana_client import NOT_GRAFANA, SIGN_IN_CLUSTER, SIGN_IN_URL
+from omnikrux.monitoring.transfer.grafana_store import HandOverChanged
 from omnikrux.monitoring.transfer.origins import OriginRecord
 from tests.monitoring.conftest import GRAFANA_TOKEN
 from tests.monitoring.fakes import Basic, Bearer, grafana_answer
@@ -561,3 +564,55 @@ async def test_a_hand_over_is_audited_and_never_dangles(
     await services.grafana.delete(second["id"], hand_over_to="gone-already")
     left = await services.origins.get(did)
     assert left is not None and left.grafana_id is None
+
+
+async def test_removal_names_a_hand_over_only_when_dashboards_moved(
+    monitoring_app, fake_grafana_auth
+):
+    http, _ = monitoring_app
+    first = await add(http, by_url(fake_grafana_auth.url, name="Ops"))
+    await add(http, by_url(fake_grafana_auth.url, name="Lab"))
+    # Another connection reaches the same Grafana, but nothing was imported: nothing is handed over.
+    assert (await http.delete(f"{GRAFANA}/{first['id']}")).status_code == 204
+    [record] = [r for r in await monitoring_records(http) if r["action"] == "grafana_remove"]
+    assert record["details"] == {"dashboards_imported": 0}
+
+
+async def test_a_promised_hand_over_that_can_no_longer_happen_changes_nothing(
+    monitoring_app, fake_grafana_auth, linked_project
+):
+    http, app = monitoring_app
+    services = app.state.monitoring
+    first = await add(http, by_url(fake_grafana_auth.url, name="Ops"))
+    made = await http.post(
+        f"{API}/dashboards",
+        json={
+            "owner_kind": "project",
+            "owner_id": linked_project.project_id,
+            "spec": {"schemaVersion": 1, "title": "Imported", "panels": []},
+        },
+    )
+    did = made.json()["id"]
+    await services.origins.record(
+        OriginRecord(
+            dashboard_id=did,
+            kind="grafana",
+            via="grafana",
+            label="Ops",
+            grafana_id=first["id"],
+            grafana_uid="api",
+            grafana_version=1,
+            export_id=None,
+            source_title="api",
+            mapping={},
+            digest="d",
+            imported_at=datetime.fromisoformat(first["created_at"]),
+            imported_version=1,
+        )
+    )
+    # The store's own re-check finds the receiver gone: with the hand-over promised, it refuses.
+    with pytest.raises(HandOverChanged):
+        await services.grafana.delete(first["id"], hand_over_to="gone-already", promised=True)
+    kept = await services.origins.get(did)
+    assert kept is not None and kept.grafana_id == first["id"]
+    assert await services.grafana.get(first["id"]) is not None

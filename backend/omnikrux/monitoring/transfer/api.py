@@ -47,6 +47,7 @@ from omnikrux.monitoring.transfer.grafana_store import (
     GrafanaChange,
     GrafanaConfig,
     GrafanaSecrets,
+    HandOverChanged,
     NewGrafana,
     UnknownGrafana,
     same_grafana,
@@ -168,6 +169,10 @@ CLUSTER_NO_SIGN_IN = (
 TOKEN_NEEDED = "A service account token is needed."
 BASIC_NEEDS = "Basic sign-in needs a user name and a password."
 GRAFANA_NOT_SAVED = "The Grafana connection couldn't be saved. Try again."
+HAND_OVER_CHANGED = (
+    "Another connection to this Grafana changed while this one was being removed. "
+    "Nothing was removed: try again."
+)
 
 
 class GrafanaAuthIn(_Body):
@@ -598,7 +603,9 @@ async def remove_grafana(id: str, request: Request) -> Response:
     services = _services(request)
     old = await _stored(services, id)
     imported = len(await services.origins.from_grafana(id))
-    other = await _other_reaching(services, old)
+    # Only something imported can be handed over; the store re-checks the receiver in its own
+    # transaction and, since the record says so, refuses a hand-over that can't happen any more.
+    other = await _other_reaching(services, old) if imported > 0 else None
     record = await begin_change(
         request,
         "grafana_remove",
@@ -607,7 +614,12 @@ async def remove_grafana(id: str, request: Request) -> Response:
         {"dashboards_imported": imported} | ({"handed_to": other.name} if other else {}),
     )
     try:
-        await services.grafana.delete(id, hand_over_to=other.id if other else None)
+        await services.grafana.delete(
+            id, hand_over_to=other.id if other else None, promised=other is not None
+        )
+    except HandOverChanged:
+        await finish_change(request, record, False, HAND_OVER_CHANGED)
+        raise transfer_error(TransferError(409, "changed", HAND_OVER_CHANGED)) from None
     except UnknownGrafana:
         await finish_change(request, record, False, GRAFANA_GONE)
         raise _gone() from None

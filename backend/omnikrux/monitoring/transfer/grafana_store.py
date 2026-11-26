@@ -27,6 +27,11 @@ GrafanaAuth = Literal["none", "basic", "bearer"]
 AUTH_SECRET = {"basic": "password", "bearer": "token"}
 
 
+class HandOverChanged(Exception):
+    """A removal whose audit record names a hand-over that can no longer happen (the receiver
+    went or changed, or nothing is left to move): nothing was changed."""
+
+
 class UnknownGrafana(KeyError):
     pass
 
@@ -304,10 +309,14 @@ class GrafanaStore:
             await _flush(session, row.name)
             return self._config(row)
 
-    async def delete(self, id: str, *, hand_over_to: str | None = None) -> None:
+    async def delete(
+        self, id: str, *, hand_over_to: str | None = None, promised: bool = False
+    ) -> None:
         """Remove the connection; the dashboards imported through it stay, and their origins
         forget it or, with `hand_over_to`, read from that connection and name it (same
         transaction, and only while it still exists and reaches the same Grafana).
+        `promised`: the audit record already says they were handed over, so a hand-over that
+        can't happen any more (or moves nothing) raises HandOverChanged and changes nothing.
         UnknownGrafana."""
         async with self._sessionmaker.begin() as session:
             old = await session.get(GrafanaRow, id)
@@ -318,15 +327,19 @@ class GrafanaStore:
                 receiver.id != id and same_grafana(self._config(old), self._config(receiver))
             ):
                 receiver = None
+            if promised and receiver is None:
+                raise HandOverChanged(id)
             await session.delete(old)
             values: dict = {"grafana_id": receiver.id if receiver else None}
             if receiver is not None:
                 values["label"] = receiver.name
-            await session.execute(
+            moved = await session.execute(
                 update(DashboardOriginRow)
                 .where(DashboardOriginRow.grafana_id == id)
                 .values(**values)
             )
+            if promised and moved.rowcount == 0:
+                raise HandOverChanged(id)
 
 
 async def _row(session: AsyncSession, id: str) -> GrafanaRow:
