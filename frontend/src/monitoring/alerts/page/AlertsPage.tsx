@@ -102,22 +102,34 @@ export default function AlertsPage({ view, nav, tabId }: MonitoringPageProps) {
   }, []);
   const open = useCallback((v: MonitoringView) => navRef.current.navigate(v, "push"), []);
 
-  // Silence, asked from Home: the alert's place is prefilled once (as the rule details do), then the
-  // view drops the ask, so Back or a reload never asks again. An alert that stopped firing says so.
+  // Silence, asked from Home: decided on a read of the rules made for this ask (never on a list read
+  // earlier, which may be out of date). The alert's place is prefilled once (as the rule details
+  // do), or it says it stopped firing; then the view drops the ask, so Back or a reload never asks
+  // again. A read that fails drops the ask and says nothing new.
+  const client = useQueryClient();
   const asked = alerts.silence;
-  const askedRules = useQuery<RuleOut[], AlertRequestError>({
-    queryKey: alertsKeys.rules(), queryFn: ({ signal }) => listRules(undefined, signal), retry: false, enabled: asked !== undefined,
-  });
+  const askedKey = asked ? `${asked.rule}\n${asked.target}` : null;
   useEffect(() => {
-    if (!asked || (askedRules.data === undefined && !askedRules.isError)) return;
-    const r = askedRules.data?.find((x) => x.id === asked.rule);
-    const t = r?.targets.find((x) => x.id === asked.target && !x.leaving);
-    if (r && t && t.state === "firing") {
-      setSilenceNote(null);
-      setSilenceAsk((a) => ({ n: (a?.n ?? 0) + 1, prefill: silencePrefill(r, t) }));
-    } else if (askedRules.data) setSilenceNote(NOT_FIRING_NOW);
-    write({ tab: "silences" });
-  }, [asked, askedRules.data, askedRules.isError, write]);
+    if (!asked) return;
+    let live = true;
+    void client.fetchQuery<RuleOut[], AlertRequestError>({
+      queryKey: alertsKeys.rules(), queryFn: ({ signal }) => listRules(undefined, signal), staleTime: 0, retry: false,
+    }).then((rules) => {
+      if (!live) return;
+      const r = rules.find((x) => x.id === asked.rule);
+      const t = r?.targets.find((x) => x.id === asked.target && !x.leaving);
+      if (r && t && t.state === "firing") {
+        setSilenceNote(null);
+        setSilenceAsk((a) => ({ n: (a?.n ?? 0) + 1, prefill: silencePrefill(r, t) }));
+      } else setSilenceNote(NOT_FIRING_NOW);
+      write({ tab: "silences" });
+    }, () => {
+      if (live) write({ tab: "silences" });
+    });
+    return () => { live = false; };
+    // Once per ask: `askedKey` names it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askedKey]);
   useEffect(() => { if (tab !== "silences") setSilenceNote(null); }, [tab]);
 
   // The heading takes the keyboard when the page opens (unless the user is busy elsewhere).

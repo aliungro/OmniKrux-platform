@@ -11,6 +11,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import select, update
 
+from omnikrux.monitoring.alerts.contact_points import types as types_module
 from omnikrux.monitoring.alerts.contact_points.export import (
     ReceiverExport,
     SecretRuleRefused,
@@ -738,3 +739,25 @@ async def test_slack_and_teams_addresses_change_freely(monitoring_app, fake_webh
             json={"secrets": {"webhook_url": second}},
         )
         assert changed.status_code == 200, type
+
+
+async def test_a_stored_slack_address_that_isnt_slack_is_said(monitoring_app, monkeypatch):
+    """A Slack contact point saved before Slack addresses were checked keeps working; its row
+    says the address needs changing, and nothing else changes."""
+    http, app = monitoring_app
+    store = app.state.monitoring.contact_points
+    with monkeypatch.context() as m:
+        m.setattr(types_module, "SLACK_PREFIX", "http://")
+        old = await store.create("Old Slack", "slack", {}, {"webhook_url": "http://x.test/s"})
+    good = await add(
+        http,
+        {"name": "Slack", "type": "slack", "secrets": {"webhook_url": "https://hooks.slack.com/s"}},
+    )
+    listed = {p["name"]: p for p in (await http.get(BASE)).json()}
+    assert listed["Old Slack"]["problem"] == types_module.SLACK_ADDRESS
+    assert listed["Slack"]["problem"] is None and good["problem"] is None
+    assert "x.test" not in str(listed)
+    # A name-only change keeps the stored address (and the words).
+    renamed = await http.patch(f"{BASE}/{old.id}", json={"name": "Old Slack 2"})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["problem"] == types_module.SLACK_ADDRESS

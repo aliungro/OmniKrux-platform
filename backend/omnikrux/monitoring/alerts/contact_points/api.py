@@ -27,6 +27,7 @@ from omnikrux.monitoring.alerts.contact_points.types import (
     SecretNeeded,
     UnknownContactPoint,
     resolve,
+    stored_problem,
     summary_of,
 )
 from omnikrux.monitoring.alerts.store import RuleRef
@@ -94,6 +95,8 @@ class ContactPointOut(BaseModel):
     last_delivery: DeliveryOut | None
     created_at: datetime
     updated_at: datetime
+    # What is wrong with the stored address, in words (a Slack address that isn't Slack's).
+    problem: str | None = None
 
 
 class ContactPointChangedOut(ContactPointOut):
@@ -187,6 +190,7 @@ def _out(cp: ContactPoint, used_by: list[RuleRef]) -> ContactPointOut:
         last_delivery=last,
         created_at=cp.created_at,
         updated_at=cp.updated_at,
+        problem=stored_problem(cp),
     )
 
 

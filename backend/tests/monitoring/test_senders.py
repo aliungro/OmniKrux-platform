@@ -576,3 +576,19 @@ async def test_an_html_answer_is_not_shown(senders):
         with pytest.raises(DeliveryFailed) as failed:
             await senders.send(hook, notice_for_test("Hook"))
     assert failed.value.message == "Hook answered HTTP 400: no_team"
+
+
+async def test_more_html_answers_are_not_shown(senders):
+    pages = (
+        "﻿<!DOCTYPE html><html><body>Nope</body></html>".encode(),
+        b'<?xml version="1.0" encoding="utf-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">x',
+        b"<head><title>Error</title></head>",
+        b"  <body><h1>405 Not Allowed</h1></body>",
+        b"<!-- served by nginx -->\n<html>x</html>",
+    )
+    for page in pages:
+        async with _serve(_Answer(405, page), None) as server:
+            hook = cp("webhook", name="Hook", secrets={"url": f"{server.url}/in"})
+            with pytest.raises(DeliveryFailed) as failed:
+                await senders.send(hook, notice_for_test("Hook"))
+        assert failed.value.message == "Hook answered HTTP 405.", page

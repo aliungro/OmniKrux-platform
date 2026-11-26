@@ -210,6 +210,15 @@ def _has_control(text: str) -> bool:
     return any(unicodedata.category(c) == "Cc" for c in text)
 
 
+def stored_problem(cp: ContactPoint) -> str | None:
+    """What is wrong with a stored contact point's address, in words (never the address): a
+    Slack one saved before Slack addresses were checked still sends, but says it needs changing."""
+    url = (
+        cp.secrets.get("webhook_url") if cp.type == "slack" and not cp.secrets_unreadable else None
+    )
+    return SLACK_ADDRESS if url and not url.startswith(SLACK_PREFIX) else None
+
+
 def checked_name(name: object) -> str:
     if not isinstance(name, str):
         raise ContactPointInvalid(NAME_RULE)

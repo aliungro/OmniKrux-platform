@@ -106,6 +106,19 @@ describe("contact points", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit Ops hook 2" }));
   });
 
+  it("a stored Slack address that isn't Slack's says so on its row and in its form", async () => {
+    const user = userEvent.setup();
+    const words = "Use a Slack webhook address that starts with https://hooks.slack.com/.";
+    open({ contactPoints: [point({ type: "slack", name: "Old Slack", secrets_set: ["webhook_url"], summary: "Slack webhook", problem: words })] });
+    const row = (await screen.findByText("Old Slack")).closest("li")!;
+    expect(within(row).getByText(words)).toBeTruthy();
+    await user.click(within(row).getByRole("button", { name: "Edit Old Slack" }));
+    const field = await screen.findByLabelText("Webhook address");
+    const said = screen.getByText(words);
+    expect(field.getAttribute("aria-describedby")).toContain(said.id);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("Edit on another row asks before it drops what is typed", async () => {
     const user = userEvent.setup();
     open({ contactPoints: [point(), point({ id: "c2", name: "Spare" })] });

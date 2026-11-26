@@ -15,7 +15,9 @@ from omnikrux.monitoring.alerts.rule_expr import (
     parse_duration,
     render_message,
     rule_expr,
+    same_query_text,
     substitute,
+    tidy_query,
     to_prometheus_template,
 )
 from omnikrux.monitoring.alerts.types import STATE_ORDER, Condition, worst
@@ -202,3 +204,18 @@ def test_rule_query_is_wrapped_without_stray_lines():
     assert condition_expr("count(up == 1)\n\n\n", each) == "(count(up == 1)\n) > 0"
     assert eval_expr("\n sum(x)\n\n", "total") == "sum(sum(x)\n)"
     assert eval_expr("\n sum(x)\n\n", "each") == "sum(x)"
+
+
+def test_a_raw_string_keeps_its_blank_lines():
+    each = Condition("each", "above", 0.0, 0, 60)
+    typed = '\n\nup{path=~`a\n\n  \nb`}\n\n# "`" in a comment\n\n'
+    assert condition_expr(typed, each) == '(up{path=~`a\n\n  \nb`}\n# "`" in a comment\n) > 0'
+    assert tidy_query('x{a="`"}\n\ny') == 'x{a="`"}\ny'
+
+
+def test_a_stored_text_is_the_same_query_whatever_its_spacing():
+    assert same_query_text("(\n  count(up == 1)\n\n\n) > 0", "(count(up == 1)\n) > 0")
+    assert same_query_text("(up # a note\n) > 0", "(up  # a note\n\n) > 0")
+    assert not same_query_text('(up{a="x  y"}\n) > 0', '(up{a="x y"}\n) > 0')
+    assert not same_query_text("(a or b\n) > 0", "(aorb\n) > 0")
+    assert not same_query_text("(up\n) > 0", "(up\n) > 1")

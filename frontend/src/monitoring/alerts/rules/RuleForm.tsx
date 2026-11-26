@@ -236,10 +236,10 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
   const staleRef = useRef<HTMLButtonElement>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
 
-  // The form opens with the keyboard on its first field (For; Name when editing a rule): at once, and
-  // again once the effects of what it replaced have run (a dialog closing as it opens gives the
-  // keyboard back to where it was asked from).
-  const firstRef = initial ? nameRef : ownerRef;
+  // The form opens with the keyboard on its first field (For), new or edited: at once, and again
+  // once the effects of what it replaced have run (a dialog closing as it opens gives the keyboard
+  // back to where it was asked from).
+  const firstRef = ownerRef;
   useLayoutEffect(() => { firstRef.current?.focus({ preventScroll: true }); }, [firstRef]);
   useEffect(() => {
     const el = document.activeElement;

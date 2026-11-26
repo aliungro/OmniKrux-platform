@@ -333,6 +333,8 @@ export interface ContactPointOut {
   summary: string;
   used_by: RuleRefOut[];
   last_delivery: { at: string; ok: boolean; message: string | null } | null;
+  /** What is wrong with the stored address, in words (a Slack address that isn't Slack's); it still sends. */
+  problem?: string | null;
   created_at: string;
   updated_at: string;
 }

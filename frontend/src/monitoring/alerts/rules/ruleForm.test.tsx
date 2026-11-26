@@ -162,7 +162,8 @@ describe("the rule form", () => {
     await user.click(screen.getByRole("button", { name: "Edit rule" }));
     await waitFor(() => expect(screen.getByRole("heading", { level: 2, name: 'Edit "LatencyHigh"' })).toBeTruthy());
     const name = screen.getByLabelText("Name") as HTMLInputElement;
-    expect(document.activeElement).toBe(name);
+    // Edit starts on the first field too.
+    expect(document.activeElement).toBe(screen.getByLabelText("For"));
     expect(name.value).toBe("LatencyHigh");
     // Saved somewhere else meanwhile.
     api.state.rules[0] = { ...api.state.rules[0], name: "Latency too high", version: 2 };
@@ -174,7 +175,7 @@ describe("the rule form", () => {
     await waitFor(() => expect(document.activeElement).toBe(again));
     await user.click(again);
     await waitFor(() => expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Latency too high"));
-    expect(document.activeElement).toBe(screen.getByLabelText("Name"));
+    expect(document.activeElement).toBe(screen.getByLabelText("For"));
     expect(screen.queryByText(/changed somewhere else/)).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: 'Edit "Latency too high"' })).toBeTruthy();
   });

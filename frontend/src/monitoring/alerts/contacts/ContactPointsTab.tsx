@@ -120,6 +120,7 @@ export function ContactPointsTab({ leaveRef, tabId }: { leaveRef: LeaveRef; tabI
                 {usedByWords(p.used_by.length)}
                 {last && <> · <span className={s.last} data-failed={last.failed || undefined}>{last.text}</span></>}
               </p>
+              {p.problem && <p className={s.stored} data-tone="warn">{p.problem}</p>}
               <div className={s.buttons}>
                 <button type="button" className={s.small} aria-label={`Send a test to ${p.name}`} aria-disabled={t?.state === "sending" || undefined}
                   onClick={() => void test(p)}>

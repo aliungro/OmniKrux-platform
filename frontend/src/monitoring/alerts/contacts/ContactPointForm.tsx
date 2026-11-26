@@ -243,7 +243,9 @@ export function ContactPointForm({ initial, onDone, leaveRef, tabId }: ContactPo
     const id = `${ids}-${key}`;
     const saved = stored.includes(spec.key);
     const hint = saved ? `${id}-h` : undefined;
-    const describedBy = [hint, err(key) ? `${id}-e` : undefined].filter(Boolean).join(" ") || undefined;
+    // The stored address's problem (a Slack address that isn't Slack's), until a new one is typed.
+    const problem = saved && spec.key === ADDRESS_SECRET[type] && !(secrets[spec.key] ?? "") ? initial?.problem ?? null : null;
+    const describedBy = [hint, problem ? `${id}-p` : undefined, err(key) ? `${id}-e` : undefined].filter(Boolean).join(" ") || undefined;
     return (
       <div className={s.field} key={spec.key}>
         <label className={s.label} htmlFor={id}>{spec.label}</label>
@@ -251,6 +253,7 @@ export function ContactPointForm({ initial, onDone, leaveRef, tabId }: ContactPo
           value={secrets[spec.key] ?? ""} aria-invalid={err(key) ? true : undefined} aria-describedby={describedBy} disabled={removed[spec.key] || undefined}
           onChange={(e) => { setSecrets((cur) => ({ ...cur, [spec.key]: e.target.value })); forget(); }} />
         {saved && <span id={`${id}-h`} className={s.hint}>{removed[spec.key] ? `The saved ${spec.noun} is removed when you save.` : KEEP_HINT}</span>}
+        {problem && <span id={`${id}-p`} className={s.stored} data-tone="warn">{problem}</span>}
         {saved && !spec.required && (
           <label className={s.check}>
             <input type="checkbox" checked={!!removed[spec.key]}

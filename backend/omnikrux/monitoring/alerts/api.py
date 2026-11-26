@@ -1684,7 +1684,8 @@ async def overview(request: Request) -> OverviewOut:
                     where=where(target),
                 )
             )
-            loud = loud or muted < len(instances)
+            # A firing target without a firing row can't be shown muted: it counts.
+            loud = loud or not instances or muted < len(instances)
             by_project[target.project_id] = by_project.get(target.project_id, 0) + 1
             if rule.scope_kind == "group":
                 by_group[rule.scope_id] = by_group.get(rule.scope_id, 0) + 1
@@ -1907,6 +1908,10 @@ SILENCE_GONE = "That silence no longer exists."
 ALERTMANAGER_GONE = "That Alertmanager no longer exists."
 NEEDS_ALERTMANAGER = "Say which Alertmanager holds the silence."
 STILL_ACTIVE = "Expire it first."
+NOT_REMOVABLE = (
+    "Only an OmniKrux silence that has ended can be removed. "
+    "An Alertmanager keeps its own expired silences."
+)
 REMOVED_EXPIRED = "Removed the expired silence {matchers}."
 WHERE_OMNIKRUX_WORDS = "OmniKrux"
 WHERE_ALERTMANAGER_WORDS = "Alertmanager · {source}"
@@ -2229,7 +2234,9 @@ async def _remove_expired(request: Request, id: str) -> Response:
         held = await services.silences.get(id)
     except UnknownSilence:
         raise _silence_error(404, "not_found", SILENCE_GONE) from None
-    if held.active_at(now_utc()) or held.starts_at > now_utc():
+    # The store's rule: one that hasn't ended (active, or still to start) is expired first. One
+    # expired before its start has ended, though its start is still ahead.
+    if held.ended_at > now_utc():
         raise _silence_error(409, "still_active", STILL_ACTIVE)
     text = matchers_text(held.matchers)
     record = await begin_change(
@@ -2271,6 +2278,8 @@ async def remove_silence(
     expired there. With `expired`, an OmniKrux silence that has already ended is removed from the
     list (409 `still_active` while it hasn't). Its audit record is written first."""
     services = _services(request)
+    if expired and kind != "omnikrux":
+        raise _silence_error(400, "bad_request", NOT_REMOVABLE)
     if kind == "omnikrux" and expired:
         return await _remove_expired(request, id)
     if kind == "omnikrux":

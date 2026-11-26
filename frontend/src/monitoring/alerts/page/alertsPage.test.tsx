@@ -595,6 +595,20 @@ describe("the Alerts page", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("a silence ask is decided on a fresh read, not on an older list", async () => {
+    const quiet = rule("r1", "PodCrashLooping", dev);
+    const { api, app } = open({ rules: [quiet, nodes, latency], overview: overview([]) });
+    // The list read earlier says it isn't firing; it has started firing since.
+    await waitFor(() => expect(options().length).toBeGreaterThan(0));
+    api.state.rules = [crash, nodes, latency];
+    app.navigate({ page: "alerts", tab: "silences", silence: { rule: "r1", target: "t-r1" } }, "replace");
+    const matchers = (await screen.findByLabelText("Matchers")) as HTMLInputElement;
+    expect(matchers.value).toBe('alertname="PodCrashLooping",project="kind-omnikrux-dev"');
+    expect(screen.queryByText("That alert isn't firing any more, so there's nothing to prefill.")).toBeNull();
+    await waitFor(() => expect(view(app)).toEqual({ page: "alerts", tab: "silences" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("silenced alerts leave the counts", async () => {
     const muted = { ...overview([{ ...firing(crash, 12), instances: 1, silenced: 1 }]) };
     open({ overview: { ...muted, counts: { ...muted.counts, firing: 1, firing_unsilenced: 0 } } });

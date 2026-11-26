@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import smtplib
 import socket
 import ssl
@@ -171,10 +172,19 @@ def _detail(text: str, secrets: Iterable[str], *, cut: bool = False) -> str:
     return _one_line(scrub_text(scrub(text, secrets)))[:DETAIL_CHARS]
 
 
+_PAGE_START = re.compile(
+    r"(?:<\?xml[^>]*>\s*)?(?:<!--.*?-->\s*)*<(?:!doctype|html|head|body)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _looks_like_html(text: str, content_type: str) -> bool:
-    """A web page, not an answer meant for a person to read: never shown."""
-    head = text.lstrip()[:15].casefold()
-    return "html" in content_type.casefold() or head.startswith(("<!doctype", "<html"))
+    """A web page, not an answer meant for a person to read: never shown. Read from its type, or
+    its start: a byte-order mark and white space, then maybe an XML declaration and comments,
+    then a doctype or an html, head or body tag."""
+    if "html" in content_type.casefold():
+        return True
+    return _PAGE_START.match(text[:2048].lstrip("\ufeff \t\r\n")) is not None
 
 
 def _seconds() -> str:

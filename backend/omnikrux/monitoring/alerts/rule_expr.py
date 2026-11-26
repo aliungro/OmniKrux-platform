@@ -224,10 +224,85 @@ def _number_text(value: float) -> str:
     return text.removesuffix(".0")
 
 
+def _in_raw_after(line: str, inside: bool) -> bool:
+    """Whether a backtick raw string is still open at the end of `line` (open at its start when
+    `inside`). Double and single quotes end on their line; `#` outside quotes starts a comment."""
+    quote: str | None = "`" if inside else None
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if quote == "`":
+            if c == "`":
+                quote = None
+        elif quote is not None:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c == "#":
+            break
+        elif c in "\"'`":
+            quote = c
+        i += 1
+    return quote == "`"
+
+
 def tidy_query(expr: str) -> str:
     """The query as it is wrapped: without the blank space around it or blank lines inside it,
-    so a rule written over a few lines reads as one in its tool (`(count(up)\n) > 0`)."""
-    return "\n".join(line for line in expr.strip().splitlines() if line.strip())
+    so a rule written over a few lines reads as one in its tool (`(count(up)\n) > 0`). A blank
+    line inside a backtick raw string is part of its value and stays."""
+    out: list[str] = []
+    inside = False
+    for line in expr.strip().split("\n"):
+        if inside or line.strip():
+            out.append(line)
+        inside = _in_raw_after(line, inside)
+    return "\n".join(out)
+
+
+def _word(c: str) -> bool:
+    return c.isalnum() or c in "_:."
+
+
+def query_shape(text: str) -> str:
+    """The text with its spacing made plain: white space outside strings and comments dropped,
+    except one space between two word characters (`a or b` stays apart from `aorb`). Strings and
+    comments are kept as written; a comment still ends its line."""
+    out: list[str] = []
+    space = False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\r\n":
+            space = True
+            i += 1
+            continue
+        if c == "#":
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            out.append(text[i:end].rstrip() + "\n")
+            space = False
+            i = end
+            continue
+        if c in "\"'`":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if c != "`" and text[j] == "\\" else 1
+            token = text[i : j + 1]
+        else:
+            token = c
+        if space and out and _word(out[-1][-1]) and _word(token[0]):
+            out.append(" ")
+        space = False
+        out.append(token)
+        i += len(token)
+    return "".join(out)
+
+
+def same_query_text(a: str, b: str) -> bool:
+    """Whether two rule texts are the same query, whatever their spacing (a text stored before
+    queries were tidied, and the same query tidied)."""
+    return a == b or query_shape(a) == query_shape(b)
 
 
 def condition_expr(expr: str, cond: Condition) -> str:
