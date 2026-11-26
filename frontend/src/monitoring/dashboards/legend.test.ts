@@ -37,6 +37,46 @@ describe("seriesNames", () => {
     expect(seriesNames([{ x: "1" }, { x: "1", y: "2" }])).toEqual(["", "y=2"]);
   });
 
+  it("cAdvisor series lead with namespace and pod, never with a cgroup path", () => {
+    const cadvisor = (over: Record<string, string>) => ({
+      __name__: "container_cpu_usage_seconds_total", instance: "omnikrux-dev-control-plane", job: "kubelet",
+      kubernetes_io_hostname: "omnikrux-dev-control-plane", beta_kubernetes_io_arch: "amd64", ...over,
+    });
+    const sets = [
+      cadvisor({ namespace: "demo", pod: "logger", container: "helper", id: "/kubelet.slice/kubelet-kubepods.slice/pod1/c1", image: "busybox:1", name: "c1" }),
+      cadvisor({ namespace: "demo", pod: "logger", container: "main", id: "/kubelet.slice/kubelet-kubepods.slice/pod1/c2", image: "busybox:1", name: "c2" }),
+      cadvisor({ namespace: "shop", pod: "web-1", container: "web", id: "/kubelet.slice/kubelet-kubepods.slice/pod2/c3", image: "nginx:1", name: "c3" }),
+    ];
+    expect(seriesNames(sets)).toEqual([
+      "namespace=demo, pod=logger, container=helper",
+      "namespace=demo, pod=logger, container=main",
+      "namespace=shop, pod=web-1, container=web",
+    ]);
+    // The root cgroup has no Pod: the series is told apart by what it has, without its path.
+    const root = cadvisor({ id: "/" });
+    const named = seriesNames([...sets, root]);
+    expect(named.every((n) => !n.includes("id="))).toBe(true);
+    expect(named[0].startsWith("namespace=demo, pod=logger")).toBe(true);
+  });
+
+  it("noisy labels are said only when nothing else tells the series apart", () => {
+    const sets = [
+      { namespace: "demo", pod: "a", id: "/x/1", container_id: "c1", uid: "u1" },
+      { namespace: "demo", pod: "a", id: "/x/2", container_id: "c2", uid: "u2" },
+    ];
+    expect(seriesNames(sets).every((n) => n.includes("id=/x/"))).toBe(true);
+    expect(new Set(seriesNames(sets)).size).toBe(2);
+    // Two nodes: instance, job and node are preferred in that order, and k8s_* labels too.
+    expect(seriesNames([
+      { node: "n1", instance: "10.0.0.1:9100", zone: "a" },
+      { node: "n2", instance: "10.0.0.2:9100", zone: "b" },
+    ])).toEqual(["instance=10.0.0.1:9100, node=n1", "instance=10.0.0.2:9100, node=n2"]);
+    expect(seriesNames([
+      { k8s_namespace_name: "demo", k8s_pod_name: "a", image: "x:1" },
+      { k8s_namespace_name: "demo", k8s_pod_name: "b", image: "x:2" },
+    ])).toEqual(["k8s_pod_name=a", "k8s_pod_name=b"]);
+  });
+
   it("a single series keeps its metric name", () => {
     expect(seriesNames([{ __name__: "up", job: "api" }])).toEqual(["up"]);
     expect(seriesNames([{ job: "api" }])).toEqual([""]);
