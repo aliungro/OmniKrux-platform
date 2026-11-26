@@ -65,6 +65,13 @@ export function actionLabel(action: string): string {
   return words === "" ? "Unknown action" : words[0].toUpperCase() + words.slice(1);
 }
 
+/** A record's action in words: Monitoring's removal of an already expired silence shares its
+ * action with expiring one, and says what it did (its details say so). */
+export function recordActionLabel(r: Pick<AuditRecord, "app" | "action" | "details">): string {
+  if (r.app === "monitoring" && r.action === "silence_remove" && r.details?.removed_expired === true) return "Removed an expired silence";
+  return actionLabel(r.action);
+}
+
 /** What Monitoring's records act on, in words (the record's kind key is the object in the singular). */
 export const MONITORING_KINDS: Record<string, string> = {
   source: "Source", project: "Project", group: "Group", dashboard: "Dashboard", alert_rule: "Alert rule",

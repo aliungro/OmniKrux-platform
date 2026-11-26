@@ -11,7 +11,7 @@ import { MAX_COLUMN_WIDTH, useColumnWidths } from "../tables/columnWidths";
 import { ProviderBadge, knownProvider } from "../territories/ProviderBadge";
 import { Status } from "../territories/Status";
 import { formatAgo } from "../territories/model";
-import { ACTION_LABELS, actionLabel, changeOf, diffKind, messageOf, outcomeOf, whatOf } from "./labels";
+import { ACTION_LABELS, changeOf, diffKind, messageOf, outcomeOf, recordActionLabel, whatOf } from "./labels";
 import { auditQueryKey, useAudit, type AuditFilters } from "./useAudit";
 import pc from "../territories/provider.module.css";
 import s from "./AuditView.module.css";
@@ -101,7 +101,7 @@ const AuditRow = memo(function AuditRow({
         {localTime(record.started_at, TIME)}
       </span>
       <span role="gridcell" className={s.cell}>{record.actor}</span>
-      <span role="gridcell" className={`${s.cell} ${s.action}`}>{actionLabel(record.action)}</span>
+      <span role="gridcell" className={`${s.cell} ${s.action}`}>{recordActionLabel(record)}</span>
       <span role="gridcell" className={`${s.cell} ${s.where}`}>
         {monitoring ? (
           <>

@@ -572,6 +572,18 @@ describe("monitoring entries", () => {
     for (const [, , label] of pairs) expect(labels).toContain(label);
   });
 
+  it("removing an expired silence has its own words", async () => {
+    serve(() => ({ records: [
+      monitoring({ id: 2, action: "silence_remove", kind: "silence", name: 'alertname="a"', details: { removed_expired: true, matchers: 'alertname="a"' } }),
+      monitoring({ id: 1, action: "silence_remove", kind: "silence", name: 'alertname="b"', details: { matchers: 'alertname="b"' } }),
+    ], next_before: null }));
+    show();
+    const removed = await screen.findByRole("row", { name: /Removed an expired silence/ });
+    expect(within(removed).getByText('alertname="a"')).toBeTruthy();
+    const expired = screen.getByRole("row", { name: /Expired a silence/ });
+    expect(within(expired).getByText('alertname="b"')).toBeTruthy();
+  });
+
   it("install and uninstall read in words", async () => {
     serve(() => ({ records: [
       record(2, { action: "uninstall", namespace: null, kind: "namespaces", name: "monitoring", cluster_name: "kind-dev", provider: "kind", message: null }),
