@@ -447,3 +447,16 @@ async def test_query_route_uses_the_plain_words(monitoring_app, linked_project, 
         "bad_query",
         "The query doesn't read at line 1, column 5: a bracket is never closed.",
     )
+
+    # A project whose link has no filter sends the user's own text too: the position stays.
+    link = await http.put(
+        f"/api/monitoring/projects/{linked_project.project_id}/sources/{linked_project.source_id}",
+        json={"filter": ""},
+    )
+    assert link.status_code == 200, link.text
+    r = await http.post(QUERY, json={**body, "query": "sum(up"})
+    assert error(r) == (
+        400,
+        "bad_query",
+        "The query doesn't read at line 1, column 5: a bracket is never closed.",
+    )

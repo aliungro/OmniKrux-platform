@@ -237,7 +237,9 @@ async def run_query(services: MonitoringServices, req: QueryRequest) -> QueryRes
     except SourceUnreachable as exc:
         raise transport_error(exc) from None
     except QueryRejected as exc:
-        raise _rejected(connector, exc, req.project_id is not None) from None
+        # Only text the filter changed loses its position: a link without a filter sends the
+        # user's own text, so the tool's line and column are theirs.
+        raise _rejected(connector, exc, sent != req.query) from None
     took_ms = int((time.perf_counter() - began) * 1000)
 
     return QueryResponse(
