@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useClusters } from "../api/useClusters";
 import type { TabNav } from "../features/shell/browserHistory";
 import type { AppTabs } from "../features/shell/workspace";
@@ -76,6 +76,23 @@ export interface MonitoringPageProps {
 
 /** Ctrl K and the top bar's box in Monitoring (Shell sends it; the same literal there). */
 const MONITORING_FIND_EVENT = "omnikrux:monitoring-find";
+
+/** Up to this width the sidebar folds into a drawer (the same width as the stylesheet's). */
+const NARROW_QUERY = "(max-width: 760px)";
+
+/** Whether the window is narrow enough for the drawer, following it as it changes. */
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => (typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false));
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(NARROW_QUERY);
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, []);
+  return narrow;
+}
 
 type Page = MonitoringView["page"];
 
@@ -398,7 +415,80 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     if (newTab) openInNewTab(v);
     else pageNav.navigate(v, "push");
   }, [pageNav, openInNewTab]);
-  const leave = useCallback(() => focusMainFrom(root.current), []);
+  // --- The narrow window's drawer: Projects and pages -------------------------------------------
+  // Up to 760 px the sidebar folds away behind the bar's button and the page takes the full height.
+  // Opened, it lies over the page from the left. Choosing a row or a page closes it and the keyboard
+  // goes to the page; Esc, a click outside or Find's Esc close it and the keyboard goes back to the
+  // button; the keyboard leaving it any other way closes it where the keyboard went.
+  const narrow = useNarrow();
+  const drawerId = useId();
+  const drawerButton = useRef<HTMLButtonElement>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Read by handlers that run before a render (Find's choose calls open, then leave).
+  const drawerShown = useRef(false);
+  drawerShown.current = narrow && drawerOpen;
+  const drawerFocus = useRef<"find" | "first" | null>(null);
+  const navOf = useCallback(() => document.getElementById(drawerId), [drawerId]);
+  const openDrawer = useCallback((focus: "find" | "first") => {
+    drawerFocus.current = focus;
+    drawerShown.current = true;
+    setDrawerOpen(true);
+  }, []);
+  /** Closes the drawer; the keyboard goes to the button, to the page, or stays where it went. */
+  const closeDrawer = useCallback((to: "button" | "page" | "stay") => {
+    if (!drawerShown.current) return;
+    drawerShown.current = false;
+    drawerFocus.current = null;
+    // The keyboard first, so it never sits in the drawer as it is hidden.
+    if (to === "button") drawerButton.current?.focus();
+    else if (to === "page") focusMainFrom(root.current);
+    setDrawerOpen(false);
+  }, []);
+  // Wide again: the sidebar is back in its column, and a later fold starts closed.
+  useEffect(() => { if (!narrow) setDrawerOpen(false); }, [narrow]);
+  // Folding with the keyboard in the sidebar (the window narrowed): it goes to the button.
+  useLayoutEffect(() => {
+    if (!narrow || drawerOpen) return;
+    const active = document.activeElement;
+    if (active && navOf()?.contains(active)) drawerButton.current?.focus();
+  }, [narrow, drawerOpen, navOf]);
+  // Opened: the keyboard goes in, to Find or to the open page's row (else the tree's row, else a page).
+  useLayoutEffect(() => {
+    const focus = drawerFocus.current;
+    if (!narrow || !drawerOpen || focus === null) return;
+    drawerFocus.current = null;
+    if (focus === "find") {
+      findInput.current?.focus();
+      return;
+    }
+    const nav = navOf();
+    (nav?.querySelector<HTMLElement>('[role="treeitem"][aria-current="page"]')
+      ?? nav?.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]')
+      ?? nav?.querySelector<HTMLElement>('button[aria-current="page"]')
+      ?? nav?.querySelector<HTMLElement>("button"))?.focus();
+  }, [narrow, drawerOpen, navOf]);
+  // A click outside closes it (the scrim takes the press, so nothing behind it is clicked too).
+  useEffect(() => {
+    if (!narrow || !drawerOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const at = e.target as Node | null;
+      if (!at || navOf()?.contains(at) || drawerButton.current?.contains(at)) return;
+      closeDrawer("button");
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [narrow, drawerOpen, closeDrawer, navOf]);
+
+  const leave = useCallback(() => {
+    // Find's Esc in the drawer: it closes, back to its button.
+    if (drawerShown.current) closeDrawer("button");
+    else focusMainFrom(root.current);
+  }, [closeDrawer]);
+  // A row, a page or Find's answer chosen in the drawer: it closes and the keyboard goes to the page.
+  const openFromSidebar = useCallback((v: MonitoringView, newTab: boolean) => {
+    closeDrawer("page");
+    open(v, newTab);
+  }, [open, closeDrawer]);
 
   // --- New dashboard: the L1 bar, N, and the current project's or group's + in the tree --------
   // `view` changes whenever something is opened (and Recently opened with it), so the owner follows.
@@ -407,9 +497,12 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   const [creating, setCreating] = useState<{ owner: Owner | null } | null>(null);
   const createFrom = useRef<HTMLElement | null>(null);
   const newDashboard = useCallback((o: Owner | null, from: HTMLElement | null) => {
-    createFrom.current = from ?? root.current?.closest("main") ?? null;
+    // From the drawer: it closes, and the dialog gives the keyboard back to the drawer's button.
+    const fromDrawer = drawerShown.current && from !== null && navOf()?.contains(from) === true;
+    createFrom.current = (fromDrawer ? drawerButton.current : from) ?? root.current?.closest("main") ?? null;
+    if (fromDrawer) closeDrawer("stay");
     setCreating({ owner: o });
-  }, []);
+  }, [closeDrawer, navOf]);
   // N anywhere in Monitoring, outside a field, a dialog, a menu or edit mode.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -439,10 +532,14 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
 
   // --- Find: "/", Ctrl K and the top bar's box (MONITORING_FIND_EVENT) -------------------------
   const findInput = useRef<HTMLInputElement>(null);
-  // The one way to Find. T22's folded sidebar drawer opens here first, before the field takes the keyboard.
+  // The one way to Find. A folded sidebar opens first, and the field takes the keyboard once shown.
   const openFind = useCallback(() => {
+    if (narrow && !drawerShown.current) {
+      openDrawer("find");
+      return;
+    }
     findInput.current?.focus();
-  }, []);
+  }, [narrow, openDrawer]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!pressed("monitoringFind", e) || !pageKey(e)) return;
@@ -485,14 +582,31 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   }, []);
   const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView, leaveDeleted, setTabTitle };
   return (
-    <div ref={root} className={s.app}>
+    <div ref={root} className={s.app} data-narrow={narrow || undefined}>
       {/* Install, uninstall and contact-point reviews, one at a time; around the tool review queue,
           which hands it the contact points' review (F21). */}
       <InstallReviewHost place={`${tabs.active}:${view.page}`}>
       {/* Cluster reviews of tool-run alert rules, one at a time, for every page of the app. */}
       <ToolReviewHost place={`${tabs.active}:${view.page}`}>
+        {narrow && (
+          <div className={s.drawerBar}>
+            <button ref={drawerButton} type="button" className={s.drawerButton} aria-expanded={drawerOpen} aria-controls={drawerId}
+              onClick={() => (drawerShown.current ? closeDrawer("button") : openDrawer("first"))}>
+              <svg className={s.drawerIcon} viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+                <path d="M6 2.75v10.5M3.25 5.75h1.25M3.25 8h1.25M3.25 10.25h1.25" />
+              </svg>
+              Projects and pages
+            </button>
+          </div>
+        )}
         <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
-          index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} findInput={findInput} />
+          index={index} onOpen={openFromSidebar} onLeave={leave} owner={owner} onNewDashboard={newDashboard} findInput={findInput}
+          drawer={narrow ? {
+            id: drawerId, open: drawerOpen, onEscape: () => closeDrawer("button"),
+            onFocusOut: (to) => { if (!drawerButton.current?.contains(to)) closeDrawer("stay"); },
+          } : undefined} />
+        {narrow && drawerOpen && <div className={s.scrim} data-drawer-scrim="" aria-hidden="true" />}
         <div className={s.work}>
           <MonitoringTabs tabs={tabs} labelFor={tabLabel} colorFor={names.color}
             onActivate={(id) => dispatchTabs({ type: "activateTab", id })}

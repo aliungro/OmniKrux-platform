@@ -2,7 +2,7 @@
 // goes into the draft at once (`updatePanel`), so the JSON and the panel agree; the panel's frame
 // redraws in place, and its queries run once the typing stops (D1). The settings end with Duplicate
 // panel and Remove panel (the grid does both, and says where the keyboard goes).
-import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ALERT_PANEL_TYPES } from "../../alerts/limits";
 import { RecommendationBar } from "../../build/RecommendationBar";
 import { useOwnerCatalog } from "../../catalog/merge";
@@ -66,6 +66,43 @@ export interface SidePanelProps {
   onRemove?(): void;
 }
 
+/**
+ * The settings as a sheet: from below the dashboard header to the bottom of the page area (the
+ * Monitoring page's scroll area, not the window), so the header's Discard and Save stay in view and
+ * the last line is never under the status bar. Written as `--sheet-top` (the header's height, where
+ * the sticky settings stop) and `--sheet-h` (from where the settings show to the page's bottom);
+ * the stylesheet decides where they apply (the settings overlay) and the wide column uses them as
+ * its limits. Placed again on every scroll and resize of the page or its header.
+ */
+function useSheet(side: RefObject<HTMLElement | null>, shown: boolean) {
+  useLayoutEffect(() => {
+    const el = side.current;
+    const page = el?.closest<HTMLElement>("[data-monitoring-page]");
+    if (!el || !page) return;
+    const header = () => page.querySelector<HTMLElement>(":scope > section > header");
+    const place = () => {
+      const area = page.getBoundingClientRect();
+      const head = header();
+      const below = head ? head.getBoundingClientRect().bottom : area.top;
+      const from = Math.max(el.getBoundingClientRect().top, below);
+      el.style.setProperty("--sheet-top", `${Math.max(0, Math.round(below - area.top))}px`);
+      el.style.setProperty("--sheet-h", `${Math.max(0, Math.round(area.bottom - from))}px`);
+    };
+    place();
+    page.addEventListener("scroll", place, { passive: true });
+    window.addEventListener("resize", place);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    ro?.observe(page);
+    const head = header();
+    if (head) ro?.observe(head);
+    return () => {
+      page.removeEventListener("scroll", place);
+      window.removeEventListener("resize", place);
+      ro?.disconnect();
+    };
+  }, [side, shown]);
+}
+
 export function SidePanel({
   state, dispatch, owner, ownerKind, panelData, live = null, initialFocus = "tab", seq = 0, onClose, saveProblems, onOpenRule,
   onDuplicate, onRemove,
@@ -73,7 +110,9 @@ export function SidePanel({
   const base = useId();
   const tabs = useRef<Partial<Record<SideTab, HTMLButtonElement | null>>>({});
   const body = useRef<HTMLDivElement>(null);
+  const side = useRef<HTMLElement>(null);
   const panel = state.draft.panels.find((p) => p.id === state.selected);
+  useSheet(side, panel !== undefined);
   const tab = state.sideTab;
   const { catalog } = useOwnerCatalog(owner);
 
@@ -133,7 +172,7 @@ export function SidePanel({
     update(apply);
   };
   return (
-    <aside className={s.side} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>
+    <aside ref={side} className={s.side} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>
       <div className={s.head}>
         <h2 className={s.title}>{panelName(panel)}</h2>
         <button type="button" className={s.close} aria-label="Close panel settings" onClick={onClose}>

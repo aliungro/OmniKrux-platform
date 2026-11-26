@@ -1,16 +1,22 @@
 /* Charts: the plot, its crosshair and tooltip, and the legend. Territories tokens only. */
+
+/* The plot layer (canvas, axes, legend) clips to the chart's box, with room for a focus ring; the
+   tooltip is not in it (it is fixed on the page), so a short panel never cuts it. */
 .chart {
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
   min-height: 0;
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
+/* Shrinks with its panel: a short plot draws no labels (drawTimeSeries) rather than spill. */
 .plotWrap {
   position: relative;
   flex: 1 1 auto;
-  min-height: 72px;
+  min-height: 0;
 }
 
 .plot {
@@ -51,11 +57,14 @@
   user-select: none;
 }
 
+/* On the page, above the panels, their scroll areas and a chart's own popover (a tip shows only
+   while its chart is hovered or focused, so nothing above it can hide that chart); placed against
+   the window. */
 .tip {
-  position: absolute;
-  z-index: 2;
+  position: fixed;
+  z-index: 55;
   min-width: 120px;
-  max-width: min(320px, 70%);
+  max-width: min(320px, calc(100vw - 16px));
   box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--rule);

@@ -106,11 +106,19 @@ export interface TimeSeriesFrame {
   bars?: FrameBar[];
   /** The visible series drawn at full strength over the others (dimmed to `HIGHLIGHT_DIM`), or null. */
   highlight: string | null;
+  /** False on a short plot: no axis labels, and the plot takes the whole box but a small margin. */
+  labels: boolean;
 }
 
 const TOP = 8;
 const RIGHT = 14;
 const BOTTOM = 22;
+/** A plot shorter than this (with room for its labels) draws none: they would cover the lines. */
+export const SHORT_PLOT = 48;
+/** The margin round a plot with no labels, so a line at the edge isn't cut in half. */
+const BARE = 3;
+/** Whether a canvas this tall leaves a plot of at least `SHORT_PLOT` once its labels have room. */
+export const roomForLabels = (height: number) => height - TOP - BOTTOM >= SHORT_PLOT;
 const CHAR_W = 6.6; // Geist Mono at 11px
 export const FONT = '11px "Geist Mono", ui-monospace, monospace';
 const BREAK_AFTER = 3; // a hole wider than this many steps is a gap, not a slope
@@ -198,7 +206,11 @@ export function buildFrame(
   const filled = opts.style !== "lines";
   const stacked = opts.style === "stacked";
   const barStyle = opts.style === "bars";
-  const plotH = Math.max(1, size.height - TOP - BOTTOM);
+  // A short plot gives its label room back to the lines (the panel's text alternative still says it all).
+  const labels = roomForLabels(size.height);
+  const top = labels ? TOP : BARE;
+  const right = labels ? RIGHT : BARE;
+  const plotH = Math.max(1, labels ? size.height - TOP - BOTTOM : size.height - 2 * BARE);
 
   /** The y domain, its ticks and labels for a data extent. */
   const domainFor = (extMin: number, extMax: number) => {
@@ -219,10 +231,10 @@ export function buildFrame(
     if (!(hi > lo)) hi = lo + 1;
     const yTicks = ticks.filter((t) => t >= lo - 1e-9 && t <= hi + 1e-9);
     const yLabels = yTicks.map((t) => formatValue(t, opts.unit, opts.decimals));
-    const left = Math.ceil(yLabels.reduce((m, l) => Math.max(m, l.length), 1) * CHAR_W) + 14;
+    const left = labels ? Math.ceil(yLabels.reduce((m, l) => Math.max(m, l.length), 1) * CHAR_W) + 14 : BARE;
     return { lo, hi, yTicks, yLabels, left };
   };
-  const colsFor = (left: number) => Math.max(1, Math.floor(Math.max(1, size.width - left - RIGHT)));
+  const colsFor = (left: number) => Math.max(1, Math.floor(Math.max(1, size.width - left - right)));
   const valuesFor = (cols: number) => visible.map((s) => columnValues(s, range.start, range.end, cols));
 
   let dom: ReturnType<typeof domainFor>;
@@ -268,7 +280,7 @@ export function buildFrame(
   } else {
     // The extent is the tallest column sum as drawn, and the columns depend on the width, which
     // depends on the labels: settle them together (two or three passes), so no band is clipped.
-    left = 56;
+    left = labels ? 56 : BARE;
     for (let pass = 0; ; pass++) {
       columns = colsFor(left);
       allValues = valuesFor(columns);
@@ -293,7 +305,7 @@ export function buildFrame(
     }
   }
   const { lo, hi, yTicks, yLabels } = dom;
-  const plot = { x: left, y: TOP, w: Math.max(1, size.width - left - RIGHT), h: plotH };
+  const plot = { x: left, y: top, w: Math.max(1, size.width - left - right), h: plotH };
   const yOf = (v: number) => plot.h - ((v - lo) / (hi - lo)) * plot.h;
 
   const out: FrameSeries[] = [];
@@ -357,12 +369,13 @@ export function buildFrame(
     yTicks,
     yLabels,
     yPositions: yTicks.map(yOf),
-    xTicks: timeTicks(range.start, range.end, Math.max(2, Math.floor(plot.w / 90))),
+    xTicks: labels ? timeTicks(range.start, range.end, Math.max(2, Math.floor(plot.w / 90))) : [],
     thresholds,
     alert: limit !== null && alert ? { op: alert.op, threshold: limit, y: yOf(limit), color: "--bad" } : null,
     baseline: yOf(Math.min(hi, Math.max(lo, 0))),
     ...(bars ? { bars } : {}),
     highlight: highlight !== null && visible.some((s) => s.key === highlight) ? highlight : null,
+    labels,
   };
 }
 
@@ -394,6 +407,7 @@ export function drawTimeSeries(
     const y = plot.y + frame.yPositions[i];
     ctx.fillStyle = colorOf("--rule");
     ctx.fillRect(plot.x, Math.round(y) - 0.5, plot.w, 1);
+    if (!frame.labels) continue;
     ctx.fillStyle = colorOf("--ink-3");
     ctx.fillText(frame.yLabels[i], plot.x - 8, y);
   }

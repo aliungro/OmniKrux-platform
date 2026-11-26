@@ -680,3 +680,31 @@
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+
+/* --- narrow windows ---------------------------------------------------------------------------- */
+
+/* A phone-wide page (Monitoring's sidebar is a drawer by then): the bars and the details give their
+   side padding back to the content, and a fact's name column narrows, so nothing runs past the
+   window's edge. */
+@media (max-width: 640px) {
+  .bar {
+    padding: 9px 12px;
+  }
+
+  .engineNote {
+    padding-inline: 12px;
+  }
+
+  .details {
+    padding: 12px 12px 24px;
+  }
+
+  .fact {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .toolBar p {
+    min-width: 0;
+  }
+}

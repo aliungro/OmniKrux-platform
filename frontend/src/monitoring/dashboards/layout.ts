@@ -2,11 +2,16 @@
 // that did not move keeps its object identity, so callers can tell which panel an edit touched.
 
 import { DEFAULT_SIZES, GRID_COLUMNS } from "./schema";
-import type { DashboardSpec, Layout, PanelSpec } from "./schema";
+import type { DashboardSpec, Layout, PanelSpec, PanelType } from "./schema";
 
 const MIN_W = 2;
-const MIN_H = 2;
 const MAX_H = 40;
+/**
+ * The shortest each panel type can be made, in rows: a chart keeps room for its plot, a table for
+ * a row under its head. Moves, the corner resize, the keyboard's shrink and new panels stop here; a
+ * stored panel that is shorter keeps its height until it is moved or resized itself.
+ */
+export const MIN_HEIGHTS: Readonly<Record<PanelType, number>> = { timeseries: 4, bar: 4, logs: 4, table: 3, gauge: 3, stat: 2 };
 
 export type Dir = "left" | "right" | "up" | "down";
 type DistributiveOmit<T, K extends string> = T extends unknown ? Omit<T, K> : never;
@@ -36,9 +41,10 @@ export function compact(panels: PanelSpec[]): PanelSpec[] {
   return placed;
 }
 
-function clamp(to: Layout): Layout {
+/** `to` inside the grid, at least `minH` rows tall (the panel type's minimum). */
+function clamp(to: Layout, minH: number): Layout {
   const w = Math.min(GRID_COLUMNS, Math.max(MIN_W, Math.round(to.w)));
-  const h = Math.min(MAX_H, Math.max(MIN_H, Math.round(to.h)));
+  const h = Math.min(MAX_H, Math.max(minH, Math.round(to.h)));
   const x = Math.min(GRID_COLUMNS - w, Math.max(0, Math.round(to.x)));
   const y = Math.max(0, Math.round(to.y));
   return { x, y, w, h };
@@ -46,7 +52,8 @@ function clamp(to: Layout): Layout {
 
 /** Put a panel at `to` (clamped), push whatever it covers down below it, then compact. */
 export function placePanel(panels: PanelSpec[], id: string, to: Layout): PanelSpec[] {
-  const target = clamp(to);
+  const type = panels.find((p) => p.id === id)?.type;
+  const target = clamp(to, type ? MIN_HEIGHTS[type] : MIN_HEIGHTS.stat);
   let list = panels.map((p) => (p.id === id ? withLayout(p, target) : p));
   const queue: string[] = [id];
   while (queue.length > 0) {
@@ -100,7 +107,8 @@ export function grow(panels: PanelSpec[], id: string, dir: Dir): PanelSpec[] {
   if (dir === "right") next = { ...l, w: Math.min(l.w + 1, GRID_COLUMNS - l.x) };
   else if (dir === "left") next = { ...l, w: Math.max(l.w - 1, MIN_W) };
   else if (dir === "down") next = { ...l, h: Math.min(l.h + 1, MAX_H) };
-  else next = { ...l, h: Math.max(l.h - 1, MIN_H) };
+  // Shrinking stops at the type's minimum (a stored panel already below it stays as it is).
+  else if (l.h > MIN_HEIGHTS[p.type]) next = { ...l, h: l.h - 1 };
   return same(l, next) ? panels : placePanel(panels, id, next);
 }
 
@@ -119,7 +127,7 @@ export function freeSpot(panels: PanelSpec[], w: number, h: number): { x: number
 export function appendPanel(spec: DashboardSpec, panel: NewPanel): DashboardSpec {
   const size = DEFAULT_SIZES[panel.type];
   const w = Math.min(GRID_COLUMNS, Math.max(MIN_W, panel.layout?.w ?? size.w));
-  const h = Math.min(MAX_H, Math.max(MIN_H, panel.layout?.h ?? size.h));
+  const h = Math.min(MAX_H, Math.max(MIN_HEIGHTS[panel.type], panel.layout?.h ?? size.h));
   const spot =
     panel.layout?.x !== undefined && panel.layout?.y !== undefined
       ? {

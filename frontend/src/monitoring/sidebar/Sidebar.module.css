@@ -9,6 +9,37 @@
   line-height: 1.45;
 }
 
+/* The sidebar's own display would otherwise show a folded drawer. */
+.sidebar[hidden] {
+  display: none;
+}
+
+/* A narrow window: the sidebar as a drawer over the page, from the left, below the bar
+   (MonitoringApp's --drawer-bar-h), as wide as it is in a wide window but never wider than the window. */
+.drawer {
+  position: absolute;
+  top: var(--drawer-bar-h, 0);
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  width: min(320px, 100vw);
+  box-sizing: border-box;
+  box-shadow: 14px 0 36px color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .drawer:not([hidden]) {
+    animation: drawer-in 160ms ease-out;
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+}
+
 .head {
   display: flex;
   align-items: center;

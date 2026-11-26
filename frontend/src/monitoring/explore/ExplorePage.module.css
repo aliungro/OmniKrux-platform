@@ -450,9 +450,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* Folded under the header: tall enough to browse, never the whole of a short window. */
   .browse {
     position: static;
-    height: 60vh;
+    height: min(60vh, 520px);
     min-height: 0;
     border-right: 0;
     border-bottom: 1px solid var(--rule);

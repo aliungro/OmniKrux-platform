@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GroupOut } from "../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
@@ -430,5 +432,43 @@ describe("Opening the settings", () => {
     await openSettings();
     const source = within(settings()).getByRole("combobox", { name: "Source" }) as HTMLSelectElement;
     expect(source.title).toBe(source.selectedOptions[0].textContent);
+  });
+});
+
+describe("Narrow settings", () => {
+  const rect = (top: number, bottom: number) =>
+    ({ top, bottom, left: 0, right: 700, width: 700, height: bottom - top, x: 0, y: top, toJSON() {} }) as DOMRect;
+
+  it("narrow settings start below the dashboard header", async () => {
+    // The page area is 100–700 in the window; the dashboard header ends at 160; the settings sit at
+    // 300 (the page is scrolled to its top, so the header and the variables bar are above them).
+    let asideTop = 300;
+    const real = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.matches("[data-monitoring-page]")) return rect(100, 700);
+      if (this.matches("[data-monitoring-page] > section > header")) return rect(100, 160);
+      if (this.matches('aside[aria-label="Panel settings"]')) return rect(asideTop, asideTop + 200);
+      return real.call(this);
+    });
+    await openSettings();
+    const aside = settings();
+    // From below the header to the bottom of the page area (not the window): Discard and Save, in
+    // the header, stay in view, and the last line is never under the status bar.
+    await waitFor(() => expect(aside.style.getPropertyValue("--sheet-top")).toBe("60px"));
+    expect(aside.style.getPropertyValue("--sheet-h")).toBe("400px");
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    // Scrolled until the settings meet the header: the sheet grows to reach the page's bottom.
+    asideTop = 160;
+    const page = document.querySelector("[data-monitoring-page]") as HTMLElement;
+    act(() => { fireEvent.scroll(page); });
+    expect(aside.style.getPropertyValue("--sheet-h")).toBe("540px");
+    notBody();
+    // The settings overlay is one state (the grid frame's query, which every viewport under 960 px
+    // meets), drawn as this sheet.
+    const css = readFileSync(join(process.cwd(), "src", "monitoring", "dashboards", "editor", "SidePanel.module.css"), "utf8");
+    const overlay = css.slice(css.indexOf("@container (max-width: 1093px)"));
+    expect(overlay).toMatch(/top: var\(--sheet-top/);
+    expect(overlay).toMatch(/height: var\(--sheet-h/);
+    expect(css).not.toMatch(/@media \(max-width: 959px\)/);
   });
 });

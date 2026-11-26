@@ -311,19 +311,25 @@
   margin-top: 4px;
 }
 
+/* Nothing a panel draws leaves its tile: the body clips (a focus ring keeps its few pixels, inside
+   the tile's padding). The chart's tooltip is fixed on the page, outside this clip. */
 .body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
+/* The note takes the body's room and is the size its reason is clamped to (below). */
 .note {
   flex: 1;
   display: grid;
   place-items: center;
-  min-height: 40px;
+  min-height: 0;
+  container-type: size;
 }
 
 .noteText {
@@ -348,6 +354,28 @@
   line-height: 1.45;
   text-wrap: pretty;
   overflow-wrap: anywhere;
+}
+
+/* A short tile clamps the reason to the whole lines it has room for (18 px each), never half a line. */
+@container (max-height: 75px) {
+  .noteReason {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+}
+
+@container (max-height: 57px) {
+  .noteReason {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+}
+
+@container (max-height: 39px) {
+  .noteReason {
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+  }
 }
 
 .failure {

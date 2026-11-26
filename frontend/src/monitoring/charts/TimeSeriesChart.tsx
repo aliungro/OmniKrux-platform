@@ -4,6 +4,10 @@
 // values and counts the rest, and is placed inside the window; hovering or focusing a legend item
 // highlights its series (the others dim, no colour changes).
 //
+// Nothing is drawn outside the chart's box: the plot layer (canvas, axes, legend) clips, a short
+// plot draws no axis labels and no legend, and the tooltip lives on the page itself (a portal,
+// placed against the window), so a short panel never cuts it.
+//
 // With `onSelect` (Explore only) a window can be chosen: drag across the plot, or Shift+arrows from
 // the crosshair; the band stays drawn over the full range, and log line `marks` tick the bottom.
 // Without it no pointer handler is bound at all: dashboards get M2's chart unchanged.
@@ -12,9 +16,10 @@ import {
   useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent, type MouseEvent, type PointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import type { ChartSeries } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
-import { buildFrame, drawTimeSeries, type AlertBand, type ChartMark, type ChartRange, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
+import { buildFrame, drawTimeSeries, roomForLabels, type AlertBand, type ChartMark, type ChartRange, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
 import { resolveToken, seriesColors } from "./colors";
 import Legend from "./Legend";
 import { placeTip, tipRows } from "./tooltip";
@@ -57,6 +62,8 @@ const NO_MARKS: readonly ChartMark[] = [];
 const CLICK_PX = 4;
 /** Shift+arrows select once the keys rest this long. */
 const KEY_SELECT_MS = 300;
+/** The most a legend takes under the plot (two rows and its margin). */
+const LEGEND_ROOM = 52;
 
 /** The spacing of the samples (their median gap), so a window snaps to the data's own step. */
 function sampleStep(samples: number[]): number {
@@ -130,10 +137,13 @@ export default function TimeSeriesChart({
   panel, series, range, animate, changeId, editId, selection = null, onSelect, marks = NO_MARKS as ChartMark[], step: runStep, alert = null,
 }: TimeSeriesChartProps) {
   const opts = panel.options;
+  const rootRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawn = useRef<Drawn | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  // The whole chart's height (plot and legend), which the legend's presence doesn't change: 0 until measured.
+  const [boxHeight, setBoxHeight] = useState(0);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(NO_HIDDEN);
   const [cursor, setCursor] = useState<number | null>(null);
   const [highlighted, setHighlighted] = useState<string | null>(null);
@@ -142,26 +152,38 @@ export default function TimeSeriesChart({
   const reduced = usePrefersReducedMotion();
   const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
 
-  // Size from the box, not the window.
+  // Size from the box, not the window. The chart's own height decides whether a legend fits under
+  // the plot; it is read apart from the plot's, so the legend coming or going can't flip it back.
   useLayoutEffect(() => {
     const el = plotRef.current;
-    if (!el) return;
+    const root = rootRef.current;
+    if (!el || !root) return;
     const apply = (w: number, h: number) => {
       const width = Math.max(0, Math.floor(w));
       const height = Math.max(0, Math.floor(h));
       setSize((s) => (s.width === width && s.height === height ? s : { width, height }));
     };
+    const applyBox = (h: number) => setBoxHeight(Math.max(0, Math.floor(h)));
     if (typeof ResizeObserver === "undefined") {
       const r = el.getBoundingClientRect();
       apply(r.width, r.height);
+      applyBox(root.getBoundingClientRect().height);
       return;
     }
     const ro = new ResizeObserver((entries) => {
       const box = entries[entries.length - 1]?.contentRect;
       if (box) apply(box.width, box.height);
     });
+    const rootRo = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.contentRect;
+      if (box) applyBox(box.height);
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    rootRo.observe(root);
+    return () => {
+      ro.disconnect();
+      rootRo.disconnect();
+    };
   }, []);
 
   // The same tokens the frame draws with, for the tooltip and the legend.
@@ -412,22 +434,38 @@ export default function TimeSeriesChart({
   }
 
   // Placed after it is measured, before the browser paints (no frame in the wrong place): right of
-  // the crosshair unless the window ends there, and never past the window's top or bottom.
+  // the crosshair unless the window ends there, and never past the window's top or bottom. The tip
+  // is fixed on the page, so the box's own place in the window is added to placeTip's answer, and a
+  // scroll or resize under a shown tip places it again.
   const tipX = tip?.x ?? null;
   const tipTop = frame?.plot.y ?? 0;
-  useLayoutEffect(() => {
+  const placeNow = useRef<() => void>(() => {});
+  placeNow.current = () => {
     const el = tipRef.current;
     const wrap = wrapRef.current;
     if (!el || !wrap || tipX === null) return;
+    const box = wrap.getBoundingClientRect();
     const place = placeTip(
       { x: tipX, y: tipTop + 4 },
       { width: el.offsetWidth, height: el.offsetHeight },
-      wrap.getBoundingClientRect(),
+      box,
       { width: window.innerWidth, height: window.innerHeight },
     );
-    el.style.left = `${place.left}px`;
-    el.style.top = `${place.top}px`;
-  });
+    el.style.left = `${place.left + box.left}px`;
+    el.style.top = `${place.top + box.top}px`;
+  };
+  useLayoutEffect(() => placeNow.current());
+  const tipShown = tipX !== null;
+  useEffect(() => {
+    if (!tipShown) return;
+    const again = () => placeNow.current();
+    window.addEventListener("scroll", again, { capture: true, passive: true });
+    window.addEventListener("resize", again);
+    return () => {
+      window.removeEventListener("scroll", again, { capture: true });
+      window.removeEventListener("resize", again);
+    };
+  }, [tipShown]);
 
   const solo = (key: string) => setHidden(() => {
     const onlyThis = visible.length === 1 && visible[0].key === key;
@@ -460,8 +498,38 @@ export default function TimeSeriesChart({
     }
   }
 
+  // A legend only where the plot keeps room for its labels above it (not measured yet: as asked).
+  const showLegend = opts.legend === "bottom" && series.length > 0 && (boxHeight === 0 || roomForLabels(boxHeight - LEGEND_ROOM));
+  // Without its legend nothing could show a hidden series again or end a highlight: the chart
+  // draws every series, as its text alternative says.
+  useEffect(() => {
+    if (showLegend) return;
+    setHidden((h) => (h.size === 0 ? h : NO_HIDDEN));
+    setHighlighted(null);
+  }, [showLegend]);
+
+  const tipBox = (
+    <div ref={tipRef} role="status" className={styles.tip}>
+      {tip ? (
+        <>
+          <p className={styles.tipTime}>{tip.time}</p>
+          <ul className={styles.tipList}>
+            {tip.rows.map((r) => (
+              <li key={r.key} className={r.key === lit ? `${styles.tipRow} ${styles.tipLit}` : styles.tipRow}>
+                <span className={styles.swatch} style={{ background: `var(${r.color})` }} aria-hidden="true" />
+                <span className={styles.tipName} title={r.name}>{r.name}</span>
+                <span className={styles.tipValue}>{r.text}</span>
+              </li>
+            ))}
+          </ul>
+          {tip.more > 0 ? <p className={styles.tipMore}>and {tip.more} more</p> : null}
+        </>
+      ) : null}
+    </div>
+  );
+
   return (
-    <div className={styles.chart}>
+    <div ref={rootRef} className={styles.chart}>
       <div ref={wrapRef} className={styles.plotWrap}>
         <div
           ref={plotRef}
@@ -496,25 +564,9 @@ export default function TimeSeriesChart({
             <div className={styles.crosshair} style={{ left: tip.x, top: frame.plot.y, height: frame.plot.h }} aria-hidden="true" />
           ) : null}
         </div>
-        <div ref={tipRef} role="status" className={styles.tip}>
-          {tip ? (
-            <>
-              <p className={styles.tipTime}>{tip.time}</p>
-              <ul className={styles.tipList}>
-                {tip.rows.map((r) => (
-                  <li key={r.key} className={r.key === lit ? `${styles.tipRow} ${styles.tipLit}` : styles.tipRow}>
-                    <span className={styles.swatch} style={{ background: `var(${r.color})` }} aria-hidden="true" />
-                    <span className={styles.tipName} title={r.name}>{r.name}</span>
-                    <span className={styles.tipValue}>{r.text}</span>
-                  </li>
-                ))}
-              </ul>
-              {tip.more > 0 ? <p className={styles.tipMore}>and {tip.more} more</p> : null}
-            </>
-          ) : null}
-        </div>
       </div>
-      {opts.legend === "bottom" && series.length > 0 ? (
+      {typeof document === "undefined" ? tipBox : createPortal(tipBox, document.body)}
+      {showLegend ? (
         <Legend
           items={legendItems}
           hidden={hidden}

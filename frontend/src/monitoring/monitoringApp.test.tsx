@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Shell } from "../features/shell/Shell";
 import { defaultWorkspace } from "../features/shell/workspace";
@@ -123,3 +123,108 @@ describe("Find from the shell", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 });
+
+describe("Narrow windows", () => {
+  /** A window 760 px wide or less: Monitoring's own narrow query matches. */
+  const narrow = () => vi.stubGlobal("matchMedia", (q: string) => ({
+    matches: q.includes("760px"), media: q, addEventListener() {}, removeEventListener() {},
+  }));
+  const notBody = () => expect(document.activeElement).not.toBe(document.body);
+  const toggle = () => screen.getByRole("button", { name: "Projects and pages" });
+  const drawer = () => screen.queryByRole("navigation", { name: "Monitoring" });
+  const page = () => document.querySelector("[data-monitoring-page]") as HTMLElement;
+
+  it("under 760 px the sidebar folds into a drawer", async () => {
+    narrow();
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Shop")] });
+    renderMonitoringApp();
+    // Folded: the bar's button, and the page below takes the rest of the height.
+    const button = toggle();
+    expect(drawer()).toBeNull();
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    const nav = document.getElementById(button.getAttribute("aria-controls")!)!;
+    expect(nav.tagName).toBe("NAV");
+    expect(nav.hidden).toBe(true);
+    // Opened from the button: the keyboard goes into the drawer.
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(drawer()).toBe(nav);
+    expect(nav.contains(document.activeElement)).toBe(true);
+    // The button folds it again, and keeps the keyboard.
+    button.focus();
+    fireEvent.click(button);
+    expect(drawer()).toBeNull();
+    expect(document.activeElement).toBe(button);
+    // "/" opens it with Find focused; Esc in an empty Find folds it back to the button.
+    screen.getByRole("main").focus();
+    fireEvent.keyDown(document.body, { key: "/" });
+    const find = screen.getByRole("combobox", { name: "Find anything" });
+    expect(drawer()).toBe(nav);
+    expect(document.activeElement).toBe(find);
+    fireEvent.keyDown(find, { key: "Escape" });
+    expect(drawer()).toBeNull();
+    expect(document.activeElement).toBe(button);
+    // Ctrl K and the top bar's box (the shell's Find event) do the same.
+    screen.getByRole("main").focus();
+    act(() => { window.dispatchEvent(new Event("omnikrux:monitoring-find")); });
+    expect(drawer()).toBe(nav);
+    expect(document.activeElement).toBe(find);
+    notBody();
+  });
+
+  it("a wide window keeps the sidebar and has no drawer button", () => {
+    installFakeMonitoringApi();
+    renderMonitoringApp();
+    expect(drawer()).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Projects and pages" })).toBeNull();
+  });
+
+  it("choosing a row closes the drawer and keeps the keyboard on the page", async () => {
+    narrow();
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Shop")] });
+    renderMonitoringApp();
+    fireEvent.click(toggle());
+    const shop = await screen.findByRole("treeitem", { name: "Shop" });
+    shop.focus();
+    fireEvent.keyDown(shop, { key: "Enter" });
+    await waitFor(() => expect(tabs()[0].textContent).toContain("Shop"));
+    expect(drawer()).toBeNull();
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    const active = document.activeElement as HTMLElement;
+    expect(active === screen.getByRole("main") || page().contains(active)).toBe(true);
+    notBody();
+    // A page link in the drawer (Alerts) does the same.
+    fireEvent.click(toggle());
+    fireEvent.click(screen.getByRole("button", { name: "Alerts" }));
+    expect(drawer()).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Alerts", level: 1 })).toBeTruthy();
+    notBody();
+  });
+
+  it("Esc closes the drawer and returns to its button", async () => {
+    narrow();
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Shop")] });
+    renderMonitoringApp();
+    fireEvent.click(toggle());
+    const shop = await screen.findByRole("treeitem", { name: "Shop" });
+    shop.focus();
+    fireEvent.keyDown(shop, { key: "Escape" });
+    expect(drawer()).toBeNull();
+    expect(document.activeElement).toBe(toggle());
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    // A click outside (on the page behind it) closes it the same way.
+    fireEvent.click(toggle());
+    expect(drawer()).toBeTruthy();
+    fireEvent.pointerDown(document.querySelector("[data-drawer-scrim]") as HTMLElement);
+    expect(drawer()).toBeNull();
+    expect(document.activeElement).toBe(toggle());
+    // The keyboard leaving the drawer (Tab past its end) folds it, wherever the keyboard went.
+    fireEvent.click(toggle());
+    const inside = document.activeElement as HTMLElement;
+    expect(drawer()!.contains(inside)).toBe(true);
+    act(() => screen.getByRole("main").focus());
+    expect(drawer()).toBeNull();
+    notBody();
+  });
+});
+

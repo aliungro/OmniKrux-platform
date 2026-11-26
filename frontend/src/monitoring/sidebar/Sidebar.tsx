@@ -31,6 +31,11 @@ interface Props {
   onNewDashboard(owner: Owner | null, from: HTMLElement): void;
   /** Find's field, for MonitoringApp's `openFind`. */
   findInput: RefObject<HTMLInputElement | null>;
+  /**
+   * A narrow window: the sidebar is a drawer, shown only while `open`. Esc in it (when nothing in it
+   * took the key) and the keyboard moving out of it close it.
+   */
+  drawer?: { id: string; open: boolean; onEscape(): void; onFocusOut(to: Element): void };
 }
 
 const FOCUSABLE = new Set<TreeRow["kind"]>(["group", "project", "shortcut", "dashboard"]);
@@ -71,7 +76,7 @@ const ICONS: Record<"home" | "explore" | "alerts" | "sources", ReactNode> = {
   sources: <><ellipse cx="8" cy="4" rx="5" ry="1.75" /><path d="M3 4v8c0 .97 2.24 1.75 5 1.75s5-.78 5-1.75V4M3 8c0 .97 2.24 1.75 5 1.75S13 8.97 13 8" /></>,
 };
 
-export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeave, owner, onNewDashboard, findInput }: Props) {
+export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeave, owner, onNewDashboard, findInput, drawer }: Props) {
   const firing = useFreshOverview()?.counts.firing ?? 0;
   const [expanded, setExpanded] = useState(readExpanded);
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -237,7 +242,22 @@ export function Sidebar({ view, tree, treeFailed, onRetry, index, onOpen, onLeav
   };
 
   return (
-    <nav className={s.sidebar} aria-label="Monitoring">
+    <nav
+      id={drawer?.id}
+      className={drawer ? `${s.sidebar} ${s.drawer}` : s.sidebar}
+      aria-label="Monitoring"
+      hidden={drawer ? !drawer.open : undefined}
+      onKeyDown={drawer ? (e) => {
+        if (e.key !== "Escape" || e.defaultPrevented) return;
+        e.preventDefault();
+        e.stopPropagation();
+        drawer.onEscape();
+      } : undefined}
+      onBlur={drawer ? (e) => {
+        const to = e.relatedTarget;
+        if (drawer.open && to instanceof Element && !e.currentTarget.contains(to)) drawer.onFocusOut(to);
+      } : undefined}
+    >
       <div className={s.head}>
         <span className={s.title}>Monitoring</span>
         <span className={k.k} aria-hidden="true">Alt 2</span>

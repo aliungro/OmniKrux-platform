@@ -251,14 +251,14 @@ describe("buildFrame and drawTimeSeries", () => {
 
 // --- the component ----------------------------------------------------------------------------
 
-function stubBrowser(reduced = false) {
+function stubBrowser(reduced = false, size: { width: number; height: number } = SIZE) {
   const ctx = recorder();
   vi.stubGlobal("matchMedia", (q: string) => ({
     matches: reduced && q.includes("reduce"), addEventListener() {}, removeEventListener() {},
   }));
   vi.stubGlobal("ResizeObserver", class {
     constructor(private cb: (e: unknown[]) => void) {}
-    observe() { this.cb([{ contentRect: { width: SIZE.width, height: SIZE.height } }]); }
+    observe() { this.cb([{ contentRect: { width: size.width, height: size.height } }]); }
     disconnect() {}
     unobserve() {}
   });
@@ -672,6 +672,75 @@ describe("ChartView time series", () => {
       stubBrowser();
       render(<ChartView {...base({ panel: panelOf({ legend: "hidden" }) })} />);
       expect(screen.queryByRole("button", { name: /^a$/ })).toBeNull();
+    });
+  });
+
+  describe("room to draw", () => {
+    it("a short plot draws no axis labels or legend", () => {
+      // The frame: under 48 px of plot there are no labels to draw.
+      const opts = panelOf().options as TimeseriesOptions;
+      const data = [series("a", [1, 2, 3]), series("b", [3, 2, 1])];
+      const short = buildFrame(data, opts, { width: 400, height: 60, dpr: 1 }, RANGE, new Set());
+      expect(short.labels).toBe(false);
+      expect(short.plot.h).toBeLessThan(60);
+      expect(short.plot.y + short.plot.h).toBeLessThanOrEqual(60);
+      const rec = recorder();
+      drawTimeSeries(rec.ctx, short, (token) => token);
+      expect(rec.calls.filter((c) => c.name === "fillText")).toHaveLength(0);
+      expect(rec.calls.filter((c) => c.name === "stroke" && c.lineWidth === 1.5)).toHaveLength(2);
+      const tall = buildFrame(data, opts, SIZE, RANGE, new Set());
+      expect(tall.labels).toBe(true);
+      const full = recorder();
+      drawTimeSeries(full.ctx, tall, (token) => token);
+      expect(full.calls.filter((c) => c.name === "fillText").length).toBeGreaterThan(0);
+
+      // The panel: a short chart drops the legend and draws no text on its canvas.
+      const { calls } = stubBrowser(false, { width: 400, height: 60 });
+      render(<ChartView {...base()} />);
+      expect(calls.filter((c) => c.name === "stroke" && c.lineWidth === 1.5)).toHaveLength(2);
+      expect(calls.filter((c) => c.name === "fillText")).toHaveLength(0);
+      expect(screen.queryByRole("list", { name: "Series" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^a$/ })).toBeNull();
+      // The text alternative still names every series.
+      expect(screen.getByRole("img").getAttribute("aria-label")).toContain("2 series");
+    });
+
+    it("a tall chart keeps its legend", () => {
+      stubBrowser();
+      render(<ChartView {...base()} />);
+      expect(screen.getByRole("list", { name: "Series" })).toBeTruthy();
+    });
+
+    it("a short panel's tooltip is not cut", () => {
+      stubBrowser(false, { width: 400, height: 60 });
+      const { container } = render(<ChartView {...base()} />);
+      const chart = screen.getByRole("img");
+      // The plot layer is what clips; the tip lives outside every clip, on the page itself.
+      const tip = screen.getByRole("status");
+      expect(container.contains(tip)).toBe(false);
+      expect(tip.parentElement).toBe(document.body);
+      // Placed against the window: the box's own place on the page is added to placeTip's answer.
+      const wrap = chart.parentElement as HTMLElement;
+      vi.spyOn(wrap, "getBoundingClientRect").mockReturnValue({ left: 300, top: 200, right: 700, bottom: 260, width: 400, height: 60, x: 300, y: 200, toJSON() {} } as DOMRect);
+      vi.stubGlobal("innerWidth", 1280);
+      vi.stubGlobal("innerHeight", 800);
+      act(() => chart.focus());
+      fireEvent.keyDown(chart, { key: "ArrowRight" });
+      expect(tip.textContent).toContain(formatTooltipTime(START + 60));
+      expect(Number.parseFloat(tip.style.left)).toBeGreaterThanOrEqual(300);
+      expect(Number.parseFloat(tip.style.top)).toBeGreaterThanOrEqual(200);
+      expect(document.activeElement).toBe(chart);
+      fireEvent.keyDown(chart, { key: "Escape" });
+      expect(tip.textContent).toBe("");
+      expect(document.activeElement).toBe(chart);
+    });
+
+    it("the tooltip goes with its chart", () => {
+      stubBrowser();
+      const { unmount } = render(<ChartView {...base()} />);
+      expect(screen.getByRole("status")).toBeTruthy();
+      unmount();
+      expect(screen.queryByRole("status")).toBeNull();
     });
   });
 });
