@@ -320,6 +320,8 @@ export function usePanelData(
   refreshMs: number | null,
   enabled: boolean,
   editId = 0,
+  /** The range is one fixed window (it ends at an absolute time): moving it is a new question. */
+  fixedWindow = false,
 ): PanelDataResult {
   const key = panelRunKey(run);
   // The edit count each key was first seen with: its fetch began then. Later option-only edits
@@ -355,8 +357,9 @@ export function usePanelData(
   // What was shown last, for this dashboard's panel only (another panel's data is never kept).
   const owner = JSON.stringify([dashboardId, panel.id]);
   const last = useRef<Shown | null>(null);
-  // The question without its window's position: the queries and how long a range they span.
-  const asked = JSON.stringify([run.requests.map(withoutWindow), run.range.end - run.range.start, run.step]);
+  // The question without a sliding window's position: the queries and how long a range they span (a
+  // fixed window's own start and end).
+  const asked = JSON.stringify([run.requests.map(withoutWindow), fixedWindow ? [run.range.start, run.range.end] : run.range.end - run.range.start, run.step]);
 
   const answers = query.status === "success" ? query.data : undefined;
   const merged = useMemo(

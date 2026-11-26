@@ -213,6 +213,44 @@ describe("Dashboard page", () => {
     notBody();
   });
 
+  it("moving a custom window of the same length dims the old result, and a plain refresh doesn't", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", time: { from: "2026-11-24T10:00:00Z", to: "2026-11-24T12:00:00Z" } }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const panelEl = () => document.querySelector<HTMLElement>('[data-panel-id="p-1"]')!;
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
+    await user.click(screen.getByRole("button", { name: /^24 Nov/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Custom range…" }));
+    const from = screen.getByLabelText("From");
+    await user.clear(from);
+    await user.type(from, "2026-11-25T10:00:00Z");
+    const to = screen.getByLabelText("To");
+    await user.clear(to);
+    await user.type(to, "2026-11-25T12:00:00Z");
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(panelEl().dataset.stale).toBe("true"));
+    expect(panelEl().getAttribute("aria-busy")).toBe("true");
+    act(() => held.open());
+    await waitFor(() => expect(panelEl().dataset.stale).toBeUndefined());
+  });
+
+  it("a plain refresh of a relative range never dims", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const panelEl = () => document.querySelector<HTMLElement>('[data-panel-id="p-1"]')!;
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
+    await user.click(screen.getByRole("button", { name: "Refresh now" }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(panelEl().dataset.stale).toBeUndefined();
+    expect(panelEl().getAttribute("aria-busy")).toBeNull();
+    act(() => held.open());
+  });
+
   it("a custom range checks its fields and keeps the menu open", async () => {
     const user = userEvent.setup();
     shop();

@@ -148,7 +148,7 @@ export interface DashboardContext {
   variables: VariableState[];
   projects: { all: ProjectRef[]; selected: VarValue } | null;
   /** The time range in seconds, from `now`. */
-  range: { start: number; end: number };
+  range: { start: number; end: number; fixed?: boolean };
   time: TimeSpec;
   /** Milliseconds; advances on refresh, on each auto-refresh tick and on time changes. */
   now: number;
@@ -224,8 +224,12 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     const now = Math.max(Date.now(), clock.now + 1);
     setClock({ key: timeKey, now, valuesNow: now, seq: clock.seq });
   }
-  const rangeAt = (seconds: number) =>
-    resolveTime({ from: time.from, to: time.to }, seconds) ?? resolveTime(spec.time, seconds) ?? { start: seconds - 21600, end: seconds };
+  // `fixed`: the range ends at an absolute time, so it is one window; a relative one only slides with "now".
+  const fixed = !time.to.startsWith("now");
+  const rangeAt = (seconds: number) => ({
+    ...(resolveTime({ from: time.from, to: time.to }, seconds) ?? resolveTime(spec.time, seconds) ?? { start: seconds - 21600, end: seconds }),
+    fixed,
+  });
   const nowSeconds = Math.floor(clock.now / 1000);
   const valuesSeconds = Math.floor(clock.valuesNow / 1000);
   // Only these inputs matter: the range is the same object until "now" or the time range moves.

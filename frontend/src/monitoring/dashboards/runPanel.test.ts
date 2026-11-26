@@ -299,6 +299,44 @@ describe("usePanelData", () => {
     expect(result.current.fetching).toBe(false);
   });
 
+  it("a range change dims the old result: a moved fixed window does, a sliding one doesn't", async () => {
+    installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
+    const client = new QueryClient();
+    type P = { run: PanelRun; fixed: boolean; panel: PanelSpec };
+    const { result, rerender } = renderHook(({ run, fixed, panel: p }: P) => usePanelData("d1", p, run, null, true, 0, fixed), {
+      wrapper: wrapper(client), initialProps: { run: at(0), fixed: true, panel } as P,
+    });
+    // First load: nothing earlier to show, so nothing is dimmed (the panel says it is loading).
+    expect(result.current.data).toBeNull();
+    expect(result.current.stale).toBe(false);
+    await waitFor(() => expect(result.current.data?.state).toBe("ready"));
+    expect(result.current.stale).toBe(false);
+
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => { await held; return inner(...args); }));
+    // The same length, another window (yesterday to today, as a custom range): not the last answer.
+    rerender({ run: at(86400), fixed: true, panel });
+    await waitFor(() => expect(result.current.fetching).toBe(true));
+    expect(result.current.stale).toBe(true);
+    expect(result.current.data?.series).toHaveLength(1);
+    await act(async () => release());
+    await waitFor(() => expect(result.current.stale).toBe(false));
+
+    // A relative range only slides with now: a plain refresh never dims.
+    rerender({ run: at(86400), fixed: false, panel });
+    await waitFor(() => expect(result.current.stale).toBe(false));
+    const slow = new Promise<void>(() => {});
+    vi.stubGlobal("fetch", vi.fn(async () => { await slow; return new Response("{}"); }));
+    rerender({ run: at(86460), fixed: false, panel });
+    await waitFor(() => expect(result.current.fetching).toBe(true));
+    expect(result.current.stale).toBe(false);
+    // A changed query is another question.
+    rerender({ run: buildPanelRun({ panel: ts("sum(up)"), owner: project(projA), vars: {}, range: { start: 86460, end: 90060 }, ownerName: "projA" }), fixed: false, panel: ts("sum(up)") });
+    await waitFor(() => expect(result.current.stale).toBe(true));
+  });
+
   it("a refetch of the same window that fails never shows the old series", async () => {
     installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
     const client = new QueryClient();

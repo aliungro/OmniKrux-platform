@@ -26,7 +26,7 @@ interface Props {
   owner: DashboardOwner | null;
   ownerName: string;
   vars: ResolvedVars;
-  range: { start: number; end: number };
+  range: { start: number; end: number; fixed?: boolean };
   waiting: boolean;
   /** Why it can't run (a variable it uses has no values): said as its failure, and nothing is sent. */
   blocked: string | null;
@@ -167,7 +167,7 @@ export const PanelFrame = memo(function PanelFrame({
     [runPanel, owner, vars, range, ownerName],
   );
   const run = useStableRun(built);
-  const ran = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting && blocked === null, changeId);
+  const ran = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting && blocked === null, changeId, range.fixed === true);
   const result = useMemo<PanelDataResult>(
     () => (blocked === null || waiting ? ran : { ...ran, data: blockedData(blocked), fetching: false, stale: false, updatedAt: null, failedAt: null }),
     [ran, blocked, waiting],

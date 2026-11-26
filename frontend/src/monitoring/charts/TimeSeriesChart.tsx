@@ -427,8 +427,10 @@ export default function TimeSeriesChart({
     const t = samples[at];
     const tolerance = barStyle ? step / 2 : samples.length > 1 ? ((samples[samples.length - 1] - samples[0]) / (samples.length - 1)) * 1.5 : Infinity;
     const { shown, more } = tipRows(visible.map((s) => ({ s, value: valueAt(s.points, t, tolerance) })));
+    // One unit for the whole tooltip, from its largest value.
+    const largest = Math.max(0, ...shown.map(({ value }) => (value === null || !Number.isFinite(value) ? 0 : Math.abs(value))));
     const rows = shown.map(({ s, value }): TipRow => ({
-      key: s.key, name: s.name, color: colors.get(s.key) as string, value, text: formatValue(value, opts.unit, opts.decimals),
+      key: s.key, name: s.name, color: colors.get(s.key) as string, value, text: formatValue(value, opts.unit, opts.decimals, largest),
     }));
     tip = { x: frame.plot.x + ((t - range.start) / span) * frame.plot.w, time: formatTooltipTime(t), rows, more };
   }

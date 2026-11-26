@@ -230,7 +230,7 @@ export function buildFrame(
     let hi = maxOpt ?? ticks[ticks.length - 1];
     if (!(hi > lo)) hi = lo + 1;
     const yTicks = ticks.filter((t) => t >= lo - 1e-9 && t <= hi + 1e-9);
-    const yLabels = yTicks.map((t) => formatValue(t, opts.unit, opts.decimals));
+    const yLabels = yTicks.map((t) => formatValue(t, opts.unit, opts.decimals, Math.max(0, ...yTicks.map(Math.abs))));
     const left = labels ? Math.ceil(yLabels.reduce((m, l) => Math.max(m, l.length), 1) * CHAR_W) + 14 : BARE;
     return { lo, hi, yTicks, yLabels, left };
   };
@@ -415,10 +415,11 @@ export function drawTimeSeries(
   const span = range.end - range.start;
   ctx.textBaseline = "top";
   ctx.fillStyle = colorOf("--ink-3");
+  const gap = frame.xTicks.length > 1 ? frame.xTicks[1] - frame.xTicks[0] : 60;
   for (const t of frame.xTicks) {
     const x = plot.x + ((t - range.start) / span) * plot.w;
     ctx.textAlign = x < plot.x + 18 ? "left" : x > plot.x + plot.w - 18 ? "right" : "center";
-    ctx.fillText(formatTimeTick(t, span), x, plot.y + plot.h + 7);
+    ctx.fillText(formatTimeTick(t, span, gap), x, plot.y + plot.h + 7);
   }
 
   ctx.save();

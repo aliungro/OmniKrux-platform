@@ -74,11 +74,29 @@ describe("axes people read", () => {
   });
 
   it("there are at least three time labels across any range", () => {
-    for (const range of [45, 90, 150, 400, 4000, 90000, 2 * 86400, 3 * 86400 + 5000, 9 * 86400, 400 * 86400]) {
+    for (const range of [6, 15, 45, 90, 150, 400, 4000, 90000, 2 * 86400, 3 * 86400 + 5000, 9 * 86400, 400 * 86400]) {
       for (const count of [2, 3, 6]) {
         const start = 1_700_000_123;
         expect(timeTicks(start, start + range, count).length, `${range}s / ${count}`).toBeGreaterThanOrEqual(3);
       }
     }
+  });
+});
+
+describe("second-level time labels", () => {
+  it("marks under a minute apart print their seconds, and ranges of 15 s still get three", () => {
+    const start = Math.ceil(1_700_000_003 / 60) * 60 + 7;
+    const ticks = timeTicks(start, start + 15, 4);
+    expect(ticks.length).toBeGreaterThanOrEqual(3);
+    const gap = ticks[1] - ticks[0];
+    expect(gap).toBeLessThan(60);
+    const labels = ticks.map((t) => formatTimeTick(t, 15, gap));
+    expect(new Set(labels).size).toBe(labels.length);
+    for (const l of labels) expect(l).toMatch(/^\d\d:\d\d:\d\d$/);
+    // A 30 s step over a few minutes too, while minute marks stay HH:MM.
+    const mid = timeTicks(start, start + 150, 4);
+    expect(mid[1] - mid[0]).toBeLessThan(60);
+    expect(formatTimeTick(mid[0], 150, mid[1] - mid[0])).toMatch(/:\d\d:\d\d$/);
+    expect(formatTimeTick(ticks[0], 3600, 300)).toMatch(/^\d\d:\d\d$/);
   });
 });

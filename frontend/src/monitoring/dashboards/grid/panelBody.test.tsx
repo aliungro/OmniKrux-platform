@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import type { GroupOut } from "../../api/types";
@@ -188,5 +190,13 @@ describe("A log query in a chart panel", () => {
     await open();
     expect(await within(frame("p-1")).findByText(SAYS)).toBeTruthy();
     expect(asked(api)).toHaveLength(0);
+  });
+});
+
+describe("the loading line under reduced motion", () => {
+  it("reduced motion keeps the line still", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/monitoring/dashboards/grid/DashboardGrid.module.css"), "utf8");
+    const block = /@media \(prefers-reduced-motion: reduce\) \{\s*\.progress::after \{([^}]*)\}/.exec(css);
+    expect(block?.[1]).toMatch(/animation: none/);
   });
 });

@@ -16,7 +16,7 @@ interface Props {
   owner: DashboardOwner | null;
   ownerName: string;
   vars: ResolvedVars;
-  range: { start: number; end: number };
+  range: { start: number; end: number; fixed?: boolean };
   waiting(panel: PanelSpec): boolean;
   /** Why a panel can't run (a variable it uses has no values), else null. */
   blocked(panel: PanelSpec): string | null;

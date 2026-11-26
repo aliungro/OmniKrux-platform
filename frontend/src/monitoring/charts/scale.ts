@@ -43,7 +43,7 @@ export function niceTicks(min: number, max: number, count: number, unit?: string
   return out;
 }
 
-const INTERVALS = [10, 30, 60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400];
+const INTERVALS = [1, 2, 5, 10, 30, 60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400];
 const DAY = 86400;
 
 /** The labels an axis always has across any range. */
@@ -84,9 +84,11 @@ export function timeTicks(start: number, end: number, count: number): number[] {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const two = (n: number) => String(n).padStart(2, "0");
 
-/** `HH:MM` under 2 days, `D Mon HH:MM` up to 7 days, `D Mon` beyond; local time. */
-export function formatTimeTick(t: number, rangeSeconds: number): string {
+/** `HH:MM` under 2 days (`HH:MM:SS` for marks under a minute apart), `D Mon HH:MM` up to 7 days, `D Mon` beyond; local time. */
+export function formatTimeTick(t: number, rangeSeconds: number, intervalSeconds = 60): string {
   const d = new Date(t * 1000);
+  // Marks closer than a minute need their seconds to read apart.
+  if (intervalSeconds < 60 && rangeSeconds < 2 * DAY) return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
   const day = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
   const clock = `${two(d.getHours())}:${two(d.getMinutes())}`;
   if (rangeSeconds < 2 * DAY) return clock;
