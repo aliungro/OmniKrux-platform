@@ -155,10 +155,12 @@
   outline-offset: 2px;
 }
 
+/* The columns of the Query tab never grow past the sheet: a long query wraps or scrolls inside its box. */
 .rows {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 /* A field with its label above it (Source, Title, Description). */
@@ -167,6 +169,7 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-width: 0;
 }
 
 .fieldLabel {
@@ -199,6 +202,7 @@
 .input,
 .select,
 .source {
+  box-sizing: border-box;
   min-width: 0;
   width: 100%;
   padding: 5px 8px;
@@ -211,6 +215,7 @@
 }
 
 .text {
+  box-sizing: border-box;
   width: 100%;
   resize: vertical;
 }
@@ -274,12 +279,14 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .query {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .query[data-hidden] .code {
@@ -299,7 +306,10 @@
 }
 
 .code {
+  box-sizing: border-box;
+  min-width: 0;
   width: 100%;
+  max-width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--rule);
   border-radius: 8px;
@@ -346,7 +356,9 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
   padding-top: 2px;
+  overflow-wrap: anywhere;
 }
 
 .runLine {

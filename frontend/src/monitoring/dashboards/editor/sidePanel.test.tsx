@@ -475,3 +475,24 @@ describe("Narrow settings", () => {
     expect(css).not.toMatch(/@media \(max-width: 959px\)/);
   });
 });
+
+describe("Panel settings width", () => {
+  // jsdom lays nothing out: the rules that keep the query box inside the sheet are checked as
+  // written (the browser confirms the box ends inside the column at 1280 and 700 px).
+  const css = readFileSync(join(process.cwd(), "src", "monitoring", "dashboards", "editor", "SidePanel.module.css"), "utf8");
+  const rule = (selector: string) => {
+    const at = css.search(new RegExp(`(^|\n)${selector.replace(".", "\.")} \{`));
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf("}", at));
+  };
+
+  it("the query box and the fields around it never grow past the sheet", () => {
+    for (const selector of [".code", ".input,\n.select,\n.source"]) {
+      const r = selector.startsWith(".code") ? rule(".code") : css.slice(css.indexOf(selector), css.indexOf("}", css.indexOf(selector)));
+      expect(r, selector).toMatch(/box-sizing: border-box/);
+      expect(r, selector).toMatch(/min-width: 0/);
+      expect(r, selector).toMatch(/width: 100%/);
+    }
+    for (const selector of [".rows", ".queries", ".query", ".run"]) expect(rule(selector), selector).toMatch(/min-width: 0/);
+  });
+});
