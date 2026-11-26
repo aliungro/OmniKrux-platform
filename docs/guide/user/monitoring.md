@@ -135,7 +135,7 @@ An empty panel says why only when OmniKrux proved it, always for **this project*
 - A stream with lines in the range that the rest of the query drops.
 - A range whose step is longer than the query's window: "This range's step is {step}, longer than the query's window [{window}], so most points are skipped. Use [$__rate_interval] instead."
 
-A check that fails, takes more than ten seconds or can't read the source's secrets says nothing new: the panel keeps **No data in this time range.** The same words appear under a query in the panel's settings (by the same rule as the panel: a window shorter than the step is said before any other reason, so the settings never say "Try a longer range." where the panel names the window), in Explore, and for the log lines. A log query in a chart panel shows a note with **Switch to a logs panel** instead (a draft edit; **Discard** undoes it).
+A check that fails, takes more than ten seconds or can't read the source's secrets says nothing new: the panel keeps **No data in this time range.** The same words appear under a query in the panel's settings (by the same rule as the panel: a window shorter than the step is said before any other reason, so the settings never say "Try a longer range." where the panel names the window), in Explore, and for the log lines. A log query in a chart panel shows a note with **Switch to a logs panel** instead (a draft edit; **Discard** undoes it). A logs panel reads one query, so when the panel has others the note names the ones the switch removes ("A logs panel reads one query: switching removes query A (Undo brings it back).").
 
 ### Edit a dashboard
 
