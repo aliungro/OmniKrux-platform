@@ -1041,6 +1041,23 @@ describe("Setup and project links", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("moving to another project in the same tab starts its page afresh", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const spare = source("s2", "Spare");
+    installFakeMonitoringApi({ sources: [prom, spare], projects: [project("p1", "Dev", [link(prom)]), project("p2", "Stage", [link(prom)])] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
+    await screen.findByRole("combobox", { name: "Source" });
+    await user.type(screen.getByRole("textbox", { name: "Filter for Prom" }), 'job="dev-only"');
+    // The sidebar opens the other project in this tab: nothing typed for Dev shows on Stage.
+    await user.click(await screen.findByRole("treeitem", { name: "Stage" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Stage" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Source" })).toBeNull();
+    expect((screen.getByRole("textbox", { name: "Filter for Prom" }) as HTMLInputElement).value).toBe("");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("the Unlink note goes with the next action", async () => {
     const user = userEvent.setup();
     const prom = source("s1", "Prom");

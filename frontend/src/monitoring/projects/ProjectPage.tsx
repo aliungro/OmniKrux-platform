@@ -318,7 +318,14 @@ function ExistingPanel({ project, onClose, onLinked, onAct }: { project: Project
   );
 }
 
-export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDeleted }: MonitoringPageProps) {
+/** One page per project: another project opened in the same tab starts afresh (no form, filter
+ * draft, review or note of the one before it shows on it). */
+export default function ProjectPage(props: MonitoringPageProps) {
+  const id = props.view.page === "project" ? props.view.id : "";
+  return <ProjectPageBody key={id} {...props} />;
+}
+
+function ProjectPageBody({ view, tabId, nav, openInNewTab, leaveDeleted }: MonitoringPageProps) {
   const id = view.page === "project" ? view.id : "";
   const client = useQueryClient();
   const projectQuery = useProject(id);
