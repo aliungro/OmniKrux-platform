@@ -349,6 +349,15 @@ describe("A log query in a chart panel", () => {
     expect(document.activeElement).toBe(within(settings()).getByRole("textbox", { name: /^Query/ }));
   });
 
+  it("the note says which queries the switch removes", async () => {
+    const mixed = lokiPanel("p-1", "Mixed", RATE, 0);
+    mixed.queries.push({ ref: "B", source: { type: "loki", id: null }, expr: LOGS, legend: "", hidden: false });
+    mixed.queries.push({ ref: "C", source: { type: "loki", id: null }, expr: RATE, legend: "", hidden: false });
+    await openSettings(lokiShop([mixed]));
+    expect(note()!.textContent).toContain("A logs panel reads one query: switching removes queries A and C (Undo brings them back).");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("the switch is refused while the JSON doesn't apply", async () => {
     const { user } = await openSettings(lokiShop([lokiPanel("p-1", "Lines", LOGS, 0)]));
     await user.click(screen.getByRole("tab", { name: "JSON" }));

@@ -6,7 +6,7 @@ import { pressed } from "../../../features/chrome/shortcuts";
 import { isQueryable } from "../../sources/sourceLabels";
 import { usePanelEmptyWords } from "../emptyReason";
 import { PANEL_COPY } from "../grid/PanelState";
-import { isLokiLogQuery, LOG_QUERY_IN_CHART, logQueryFirst, logQueryInChart, SWITCH_TO_LOGS } from "../logQueries";
+import { isLokiLogQuery, LOG_QUERY_IN_CHART, logQueryFirst, logQueryInChart, SWITCH_TO_LOGS, switchRemoves } from "../logQueries";
 import type { DashboardOwner, PanelData } from "../runPanel";
 import { MAX_QUERIES, type OwnerKind, type PanelSpec, type QuerySpec, type SourceRef } from "../schema";
 import { changeType } from "./ChartTab";
@@ -140,6 +140,7 @@ export function QueryTab({ panel, update, owner, ownerKind, data, live, jsonPend
       {logsInChart && (
         <div className={s.warning} role="note">
           <p className={s.warningText}>{LOG_QUERY_IN_CHART}</p>
+          {switchRemoves(panel) && <p className={s.warningText}>{switchRemoves(panel)}</p>}
           <button type="button" className={s.warningAction} onClick={switchToLogs}>{SWITCH_TO_LOGS}</button>
           {refused && <p key={refused.attempt} className={s.warningRefused} role="alert">{refused.text}</p>}
         </div>
