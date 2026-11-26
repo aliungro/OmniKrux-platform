@@ -43,7 +43,9 @@ export function textLanguage(expr: string): Language | null {
  */
 export function useLanguageHold(source: Pick<LinkOut, "source_type"> | null, expr: string) {
   const language = source ? languageOf(source.source_type) : null;
-  const [state, setState] = useState<{ held: Held | null; seen: Language | null }>({ held: null, seen: language });
+  // `seen` starts empty: the first source the page shows is judged too (a view or tab that opens
+  // with a text in the other language).
+  const [state, setState] = useState<{ held: Held | null; seen: Language | null }>({ held: null, seen: null });
   // The text a trail chip brought with its own source: it fits that source, so it is never held.
   const brought = useRef<string | null>(null);
 
@@ -54,6 +56,11 @@ export function useLanguageHold(source: Pick<LinkOut, "source_type"> | null, exp
     if (state.seen !== null) {
       if (held !== null && held.from === language) held = null;
       else if (held === null && expr.trim() !== "" && brought.current !== expr) held = { expr, from: state.seen };
+    } else if (held === null && brought.current !== expr) {
+      // Opening: the text came from a stored view, not from a source of its own. It is held only
+      // when it can't be read in the source's language (a bare selector reads in both).
+      const from = textLanguage(expr);
+      if (from !== null && from !== language) held = { expr, from };
     }
     next = { held, seen: language };
   } else if (state.held !== null && state.held.expr !== expr) {

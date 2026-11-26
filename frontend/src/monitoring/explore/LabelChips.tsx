@@ -98,8 +98,9 @@ export interface LabelChipsProps {
   known: Record<string, string[]> | null;
   /** Metrics: where and for which metric to read values. */
   read: { projectId: string; sourceId: string; metric: BrowseMetric; start: number; end: number } | null;
-  onSplit(label: string | null): void;
-  onOnly(label: string, value: string | null): void;
+  /** `keyed`: picked with the keyboard (Enter or Space), an explicit run; a mouse click isn't. */
+  onSplit(label: string | null, keyed?: boolean): void;
+  onOnly(label: string, value: string | null, keyed?: boolean): void;
 }
 
 type Values = { values: string[]; loading: boolean; error: string | null };
@@ -207,7 +208,7 @@ export function LabelChips({ builder, labels, loki, known, read, onSplit, onOnly
           <span className={s.label} aria-hidden="true">Split by</span>
           <span className={s.set} data-set={"\u0000split"}>
             {splitShown.map((l) => (
-              <button key={l} type="button" className={s.chip} title={l} aria-pressed={live && builder.split === l} onClick={() => onSplit(l)}>{l}</button>
+              <button key={l} type="button" className={s.chip} title={l} aria-pressed={live && builder.split === l} onClick={(e) => onSplit(l, e.detail === 0)}>{l}</button>
             ))}
             {!splitOpen && splitLabels.length > SHOWN_VALUES && (
               <button type="button" className={`${s.chip} ${s.more}`} data-more="" aria-expanded="false" onClick={() => open("\u0000split")}>
@@ -233,10 +234,10 @@ export function LabelChips({ builder, labels, loki, known, read, onSplit, onOnly
                 <span key={label} className={s.set} data-label={label} data-set={label}>
                   {shown.map((v) => (
                     <button key={v} type="button" className={s.chip} title={`${label}=${v}`} aria-pressed={live && chosen === v}
-                      onClick={() => {
+                      onClick={(e) => {
                         // A value shown only because it was chosen has no chip once it is off.
                         if (live && chosen === v && !first.includes(v)) keepFocusIn(label, wide);
-                        onOnly(label, v);
+                        onOnly(label, v, e.detail === 0);
                       }}>{`${label}=${v}`}</button>
                   ))}
                   {!wide && !all && values.length > SHOWN_VALUES && (

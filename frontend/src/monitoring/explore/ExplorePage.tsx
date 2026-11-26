@@ -352,7 +352,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
       : []),
     [catalog, browseMode, source?.source_id],
   );
-  const applyBuilder = (action: BuilderAction) => {
+  /** `keyed`: a chip picked with the keyboard is an explicit run, kept on its answer like Ctrl+Enter. */
+  const applyBuilder = (action: BuilderAction, keyed = false) => {
     const next = builderReducer(builder, action);
     const text = builderQuery(next, metrics, streams);
     // A name the writers refuse leaves the text alone.
@@ -368,6 +369,10 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     // The same text again has nothing to run.
     if (text === expr) return;
     setExpr(text);
+    if (keyed && source) {
+      const logs = source.source_type === "loki" && !isLogQlMetric(text);
+      explicit.current = { expr: text, sourceId: source.source_id, after: logs ? lines.runId : state.runId, logs };
+    }
     runNow();
   };
   // The chips follow the text: a hand edit detaches them, and their own query typed again attaches them.
@@ -733,8 +738,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
             <QueryBar ref={queryField} expr={expr} language={language} onChange={onType} onRun={runExplicitly} onLeave={leaveQuery} />
             {chipsShown && (
               <LabelChips key={pickSeq} builder={builder} labels={chipLabels} loki={lokiLabels} known={known} read={read}
-                onSplit={(label) => applyBuilder({ type: "split", label })}
-                onOnly={(label, value) => applyBuilder({ type: "only", label, value })} />
+                onSplit={(label, keyed) => applyBuilder({ type: "split", label }, keyed)}
+                onOnly={(label, value, keyed) => applyBuilder({ type: "only", label, value }, keyed)} />
             )}
             <MetaLine state={state} expr={expr} kind={kind} lines={kind === "logs" ? lines : undefined} missing={kind === "logs" ? null : missingMetric} />
             {/* The live region is always there (empty while nothing is held), so the note is read when it comes. */}

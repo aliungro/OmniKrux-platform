@@ -462,6 +462,37 @@ describe("Explore", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("a view that opens with a query in the other language is held", async () => {
+    const HELD = "This query is PromQL, and l1 name reads LogQL, so it wasn't run. Write a LogQL query, or pick a Prometheus-compatible source.";
+    const api = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("s1"), linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: "rate(http_requests_total[5m])" });
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    expect(batches(api)).toHaveLength(0);
+    expect(document.activeElement).not.toBe(document.body);
+    // The way on works from the keyboard: pick the source of its language, and it runs there.
+    await user.keyboard("q");
+    expect(document.activeElement).toBe(query());
+    fireEvent.change(screen.getByRole("combobox", { name: "Source" }), { target: { value: "s1" } });
+    await screen.findByText("chart 1");
+    expect(batches(api).at(-1)?.queries[0]).toMatchObject({ query: "rate(http_requests_total[5m])", source_id: "s1" });
+    expect(screen.queryByText(HELD)).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    cleanup();
+    // A selector both languages read opens as it is.
+    const again = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    await waitFor(() => expect(batches(again).length).toBeGreaterThan(0));
+    expect(screen.queryByText(/^This query is/)).toBeNull();
+  });
+
   it("a project switch keeps a Loki source", async () => {
     const api = installFakeMonitoringApi({
       projects: [

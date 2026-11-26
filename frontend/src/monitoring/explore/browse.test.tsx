@@ -10,6 +10,7 @@ import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMo
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import type { ExploreView } from "../shell/tabState";
 import { windowWords } from "./BrowseList";
+import { readTrail } from "./trailStore";
 
 vi.mock("../charts", async () => {
   const { createElement } = await import("react");
@@ -267,6 +268,26 @@ describe("Browse metrics and log streams", () => {
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(within(only).getByRole("button", { name: "namespace=demo" }));
   });
+
+  it("a chip picked with Enter is kept even when empty; a clicked one only when it settles with data", async () => {
+    prom(promCatalog(), { queryAnswers: new Proxy({} as never, { get: () => ({ result_type: "matrix", series: [], took_ms: 3 }) }) });
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "http_requests_total");
+    const keyed = 'sum by (route) (rate(http_requests_total{status="500"}[$__rate_interval]))';
+    const chip = await screen.findByRole("button", { name: "status=500" });
+    chip.focus();
+    await user.keyboard("{Enter}");
+    expect(query().value).toBe(keyed);
+    // An explicit run: kept on its answer, empty as it is.
+    await waitFor(() => expect(readTrail("p1").map((e) => e.expr)).toEqual([keyed]));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "status=500" }));
+    // A click is not explicit: an empty answer, left alone past the pause, isn't kept.
+    await user.click(screen.getByRole("button", { name: "status=404" }));
+    expect(query().value).toContain('status="404"');
+    await new Promise((r) => setTimeout(r, 2300));
+    expect(readTrail("p1").map((e) => e.expr)).toEqual([keyed]);
+  }, 10000);
 
   it("chips keep their order after an Only", async () => {
     const api = prom(catalogOf("p1", source("s1", {
