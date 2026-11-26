@@ -526,7 +526,12 @@ def test_skipped_panels_leave_no_hole():
     """A panel the converter drops doesn't leave a gap: the panels below float up."""
     from omnikrux.monitoring.transfer.grafana.layout import compact
 
-    bad = stat_panel(2, type="graph", targets=[], gridPos={"x": 0, "y": 2, "w": 24, "h": 6})
+    # The validator itself refuses this one (a legend over 400 characters), after layout.
+    bad = stat_panel(
+        2,
+        gridPos={"x": 0, "y": 2, "w": 24, "h": 6},
+        targets=[{"refId": "A", "expr": "up", "legendFormat": "l" * 400}],
+    )
     low = stat_panel(3, gridPos={"x": 0, "y": 8, "w": 24, "h": 2})
     c = convert_grafana(
         {
@@ -536,8 +541,9 @@ def test_skipped_panels_leave_no_hole():
         GrafanaContext(),
         key="d-1",
     )
+    assert any(s.where == 'Panel "S2"' and s.what == "The whole panel" for s in c.skipped)
     ys = [(p["title"], p["layout"]["y"]) for p in c.doc["panels"]]
-    assert ys[0] == ("S1", 0) and all(y <= 2 for _, y in ys[1:])  # no empty rows between
+    assert ys == [("S1", 0), ("S3", 2)]  # no empty rows between
     moved = compact(
         [
             {"layout": {"x": 0, "y": 0, "w": 24, "h": 2}},

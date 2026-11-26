@@ -43,6 +43,12 @@ export function grafanaWhere(g: GrafanaOut | GrafanaIn, clusterName?: string): s
   return `${cluster} · ${g.namespace ?? ""}/${g.service ?? ""}:${g.port ?? ""}`;
 }
 
+/** Where a row says a connection is: the cluster is left out when the connection's name already holds it. */
+export function rowWhere(g: GrafanaOut): string {
+  if (g.reach === "cluster" && g.cluster_name && g.name.includes(g.cluster_name)) return `${g.namespace ?? ""}/${g.service ?? ""}:${g.port ?? ""}`;
+  return grafanaWhere(g);
+}
+
 /** A connection in a list of choices: its name, then where. A cluster's name is in the connection's own name, so only the service follows. */
 export function connectionLabel(g: GrafanaOut): string {
   if (g.reach === "url") return `${g.name} · ${g.url ?? ""}`;

@@ -213,7 +213,7 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
     setTesting(true);
     try {
       // As entered; a rename that leans on the stored secret tests the saved connection.
-      const out = initial && leansOnStored ? await testGrafana(initial.id) : await testNewGrafana(built.body);
+      const out = initial && leansOnStored ? await testGrafana(initial.id) : await testNewGrafana(built.body, initial?.id);
       if (run === testRun.current) setResult({ ...testWords(out), ...(out.ok && out.same_as ? { same: out.same_as } : {}) });
     } catch (err) {
       if (run === testRun.current) setResult({ ok: false, text: failure(err, "test again") });

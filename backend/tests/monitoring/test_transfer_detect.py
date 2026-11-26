@@ -71,3 +71,19 @@ def test_schema_version_two_and_empty_panels():
     )
     assert detect_format({"schemaVersion": 39, "title": "A", "panels": []})[0] == "grafana"
     assert detect_format({"schemaVersion": 2, "title": "A", "panels": [1]})[0] == "grafana"
+
+
+def test_json_words_do_not_depend_on_one_python_message():
+    from omnikrux.monitoring.transfer.detect import plain_json_words
+
+    needs_quotes = "a property name needs double quotes"
+    assert plain_json_words("Expecting property name enclosed in double quotes") == needs_quotes
+    assert plain_json_words("Illegal trailing comma before end of object") == needs_quotes
+    assert plain_json_words("Expecting ',' delimiter") == "it doesn't read as JSON"
+
+
+def test_text_without_a_position_keeps_its_next_step():
+    for text in ('{"a": NaN}', "[" * 100_000):
+        with pytest.raises(TransferError) as e:
+            parse_import_text(text)
+        assert e.value.message.endswith("Check that the whole file or text was copied.")

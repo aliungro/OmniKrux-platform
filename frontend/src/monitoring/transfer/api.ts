@@ -405,7 +405,9 @@ export const listGrafana = (signal?: AbortSignal) => request<GrafanaOut[]>("GET"
 export const createGrafana = (body: GrafanaIn) => request<GrafanaOut>("POST", "/grafana", body);
 export const updateGrafana = (id: string, body: GrafanaPatch) => request<GrafanaOut>("PATCH", `/grafana/${enc(id)}`, body);
 export const deleteGrafana = (id: string) => request<void>("DELETE", `/grafana/${enc(id)}`);
-export const testNewGrafana = (body: GrafanaIn) => request<GrafanaTestOut>("POST", "/grafana/test", body);
+/** `editing`: the saved connection this form edits, so its own settings never count as "another connection". */
+export const testNewGrafana = (body: GrafanaIn, editing?: string) =>
+  request<GrafanaTestOut>("POST", editing ? `/grafana/test?editing=${enc(editing)}` : "/grafana/test", body);
 export const testGrafana = (id: string) => request<GrafanaTestOut>("POST", `/grafana/${enc(id)}/test`);
 export const grafanaDashboards = (id: string, signal?: AbortSignal) =>
   request<GrafanaDashboardsOut>("GET", `/grafana/${enc(id)}/dashboards`, undefined, signal);

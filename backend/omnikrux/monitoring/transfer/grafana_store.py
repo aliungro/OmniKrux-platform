@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, get_args
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -110,13 +110,17 @@ def same_grafana(a: GrafanaConfig, b: GrafanaConfig) -> bool:
         return False
     if a.cluster is not None and b.cluster is not None:
         x, y = a.cluster, b.cluster
-        return (x.cluster_id, x.namespace, x.service, x.port) == (
+        if (x.cluster_id, x.namespace, x.service, x.port, x.scheme) != (
             y.cluster_id,
             y.namespace,
             y.service,
             y.port,
-        )
-    return _same_url(a.url, b.url) and a.path_prefix.strip("/") == b.path_prefix.strip("/")
+            y.scheme,
+        ):
+            return False
+    elif not _same_url(a.url, b.url):
+        return False
+    return a.path_prefix.strip("/") == b.path_prefix.strip("/")
 
 
 class GrafanaStore:
@@ -302,18 +306,26 @@ class GrafanaStore:
 
     async def delete(self, id: str, *, hand_over_to: str | None = None) -> None:
         """Remove the connection; the dashboards imported through it stay, and their origins
-        forget it or, with `hand_over_to`, read from that connection (same transaction).
+        forget it or, with `hand_over_to`, read from that connection and name it (same
+        transaction, and only while it still exists and reaches the same Grafana).
         UnknownGrafana."""
         async with self._sessionmaker.begin() as session:
-            removed = await session.scalar(
-                delete(GrafanaRow).where(GrafanaRow.id == id).returning(GrafanaRow.id)
-            )
-            if removed is None:
+            old = await session.get(GrafanaRow, id)
+            if old is None:
                 raise UnknownGrafana(id)
+            receiver = await session.get(GrafanaRow, hand_over_to) if hand_over_to else None
+            if receiver is not None and not (
+                receiver.id != id and same_grafana(self._config(old), self._config(receiver))
+            ):
+                receiver = None
+            await session.delete(old)
+            values: dict = {"grafana_id": receiver.id if receiver else None}
+            if receiver is not None:
+                values["label"] = receiver.name
             await session.execute(
                 update(DashboardOriginRow)
                 .where(DashboardOriginRow.grafana_id == id)
-                .values(grafana_id=hand_over_to)
+                .values(**values)
             )
 
 

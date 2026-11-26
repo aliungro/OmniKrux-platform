@@ -170,7 +170,7 @@ describe("Grafana connections on the Sources page", () => {
     expect(within(dialog).queryByText(why)).toBeNull();
     await user.click(test);
     expect(await within(dialog).findByText("Connected · Grafana 11.0.0 · 0 dashboards")).toBeTruthy();
-    const sent = api.requests.filter((r) => r.url === "/api/monitoring/grafana/test");
+    const sent = api.requests.filter((r) => r.url.startsWith("/api/monitoring/grafana/test"));
     expect(sent).toHaveLength(1);
     expect((sent[0].body as { url: string }).url).toBe("http://other.example.invalid:3000");
   });
@@ -193,7 +193,7 @@ describe("Grafana connections on the Sources page", () => {
     const real = globalThis.fetch;
     let release = () => {};
     vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
-      if (String(url) === "/api/monitoring/grafana/test") await new Promise<void>((r) => { release = r; });
+      if (String(url).startsWith("/api/monitoring/grafana/test")) await new Promise<void>((r) => { release = r; });
       return real(url, init);
     });
     open();
@@ -541,6 +541,33 @@ describe("Grafana connections, words", () => {
     const ask = screen.getByRole("alertdialog", { name: "Remove the connection Main?" });
     expect(within(ask).getByText("Dashboards imported from it can update from Lab instead.")).toBeTruthy();
     expect(within(ask).queryByText(/pick their file/)).toBeNull();
+  });
+
+  it("testing an edit tells the server which connection it is", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({
+      transfer: { grafana: [grafana("g1", "Ops", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "grafana", port: "80" })] },
+    }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Ops" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Ops" });
+    await user.click(within(dialog).getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(api.requests.some((r) => r.url.startsWith("/api/monitoring/grafana/test"))).toBe(true));
+    expect(api.requests.find((r) => r.url.startsWith("/api/monitoring/grafana/test"))?.url).toBe("/api/monitoring/grafana/test?editing=g1");
+  });
+
+  it("a row names the cluster once", async () => {
+    installFakeMonitoringApi({
+      transfer: {
+        grafana: [
+          grafana("g1", "Grafana · dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "grafana", port: "80" }),
+          grafana("g2", "Ops", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "grafana", port: "3000" }),
+        ],
+      },
+    }, fallback);
+    open();
+    expect(await screen.findByText("monitoring/grafana:80")).toBeTruthy();
+    expect(screen.getByText("dev · monitoring/grafana:3000")).toBeTruthy();
   });
 
 });

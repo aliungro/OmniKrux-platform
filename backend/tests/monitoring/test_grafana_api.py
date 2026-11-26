@@ -468,3 +468,96 @@ async def test_removing_a_connection_names_the_other(
     [left] = (await http.get(GRAFANA)).json()
     assert left["same_as"] is None and left["dashboards_imported"] == 1
     assert (await http.post(f"{GRAFANA}/{left['id']}/test")).json()["same_as"] is None
+
+
+async def test_testing_an_edit_never_names_itself(monitoring_app, fake_grafana_auth):
+    http, _ = monitoring_app
+    ops = await add(http, by_url(fake_grafana_auth.url, name="Ops"))
+    body = by_url(fake_grafana_auth.url)
+    plain = (await http.post(f"{GRAFANA}/test", json=body)).json()
+    assert plain["same_as"] == "Ops"  # a new connection: Ops is the other
+    editing = (await http.post(f"{GRAFANA}/test?editing={ops['id']}", json=body)).json()
+    assert editing["ok"] is True and editing["same_as"] is None
+    await add(http, by_url(fake_grafana_auth.url, name="Lab"))
+    again = (await http.post(f"{GRAFANA}/test?editing={ops['id']}", json=body)).json()
+    assert again["same_as"] == "Lab"
+
+
+def test_same_grafana_compares_scheme_and_prefix_too():
+    from dataclasses import replace
+
+    from omnikrux.monitoring.sources.types import ClusterTarget
+    from omnikrux.monitoring.transfer.grafana_store import (
+        GrafanaConfig,
+        GrafanaSecrets,
+        same_grafana,
+    )
+
+    at = datetime(2026, 11, 1)
+    base = GrafanaConfig(
+        id="a",
+        name="A",
+        reach="cluster",
+        url=None,
+        cluster=ClusterTarget("c1", "monitoring", "grafana", "80", "http"),
+        path_prefix="",
+        auth_type="none",
+        username=None,
+        secrets=GrafanaSecrets(),
+        created_at=at,
+        updated_at=at,
+    )
+    assert same_grafana(base, replace(base, id="b"))
+    tls = replace(base, id="b", cluster=ClusterTarget("c1", "monitoring", "grafana", "80", "https"))
+    assert not same_grafana(base, tls)
+    assert not same_grafana(base, replace(base, id="b", path_prefix="/grafana"))
+    assert same_grafana(base, replace(base, id="b", path_prefix="/"))
+
+
+async def test_a_hand_over_is_audited_and_never_dangles(
+    monitoring_app, fake_grafana_auth, linked_project
+):
+    http, app = monitoring_app
+    services = app.state.monitoring
+    first = await add(http, by_url(fake_grafana_auth.url, name="Ops"))
+    second = await add(http, by_url(fake_grafana_auth.url, name="Lab"))
+    made = await http.post(
+        f"{API}/dashboards",
+        json={
+            "owner_kind": "project",
+            "owner_id": linked_project.project_id,
+            "spec": {"schemaVersion": 1, "title": "Imported", "panels": []},
+        },
+    )
+    did = made.json()["id"]
+
+    async def origin(grafana_id: str):
+        await services.origins.record(
+            OriginRecord(
+                dashboard_id=did,
+                kind="grafana",
+                via="grafana",
+                label="Ops",
+                grafana_id=grafana_id,
+                grafana_uid="api",
+                grafana_version=1,
+                export_id=None,
+                source_title="api",
+                mapping={},
+                digest="d",
+                imported_at=datetime.fromisoformat(first["created_at"]),
+                imported_version=1,
+            )
+        )
+
+    await origin(first["id"])
+    assert (await http.delete(f"{GRAFANA}/{first['id']}")).status_code == 204
+    [record] = [r for r in await monitoring_records(http) if r["action"] == "grafana_remove"]
+    assert record["details"] == {"dashboards_imported": 1, "handed_to": "Lab"}
+    moved = await services.origins.get(did)
+    assert moved is not None and (moved.grafana_id, moved.label) == (second["id"], "Lab")
+    # A receiver that is gone by the time of the removal: the origin forgets, nothing dangles.
+    await origin(second["id"])
+    await services.grafana.delete(second["id"], hand_over_to="gone-already")
+    left = await services.origins.get(did)
+    assert left is not None and left.grafana_id is None

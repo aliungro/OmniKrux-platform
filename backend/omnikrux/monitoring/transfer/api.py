@@ -411,13 +411,18 @@ async def _details(registry: ClusterRegistry, cfg: GrafanaConfig) -> dict:
 
 
 async def _other_reaching(
-    services: MonitoringServices, cfg: GrafanaConfig, others: list[GrafanaConfig] | None = None
+    services: MonitoringServices,
+    cfg: GrafanaConfig,
+    others: list[GrafanaConfig] | None = None,
+    *,
+    editing: str | None = None,
 ) -> GrafanaConfig | None:
-    """The oldest other saved connection reaching the same Grafana as `cfg`."""
+    """The oldest other saved connection reaching the same Grafana as `cfg` (never `cfg` itself,
+    nor the connection being edited when `cfg` is its unsaved form)."""
     found = [
         g
         for g in (await services.grafana.list() if others is None else others)
-        if g.id != cfg.id and same_grafana(g, cfg)
+        if g.id not in (cfg.id, editing) and same_grafana(g, cfg)
     ]
     return min(found, key=lambda g: (g.created_at, g.id), default=None)
 
@@ -593,10 +598,14 @@ async def remove_grafana(id: str, request: Request) -> Response:
     services = _services(request)
     old = await _stored(services, id)
     imported = len(await services.origins.from_grafana(id))
-    record = await begin_change(
-        request, "grafana_remove", "grafana", old.name, {"dashboards_imported": imported}
-    )
     other = await _other_reaching(services, old)
+    record = await begin_change(
+        request,
+        "grafana_remove",
+        "grafana",
+        old.name,
+        {"dashboards_imported": imported} | ({"handed_to": other.name} if other else {}),
+    )
     try:
         await services.grafana.delete(id, hand_over_to=other.id if other else None)
     except UnknownGrafana:
@@ -610,7 +619,9 @@ async def remove_grafana(id: str, request: Request) -> Response:
     return Response(status_code=204)
 
 
-async def _test(services: MonitoringServices, cfg: GrafanaConfig) -> GrafanaTestOut:
+async def _test(
+    services: MonitoringServices, cfg: GrafanaConfig, editing: str | None = None
+) -> GrafanaTestOut:
     """Its health, then its dashboards: a Grafana whose dashboards can't be listed can't be
     imported from, so the test says why."""
     client = services.grafana_client
@@ -625,7 +636,7 @@ async def _test(services: MonitoringServices, cfg: GrafanaConfig) -> GrafanaTest
         return GrafanaTestOut(
             ok=False, version=health.version, message=exc.message, dashboards=None
         )
-    other = await _other_reaching(services, cfg)
+    other = await _other_reaching(services, cfg, editing=editing)
     return GrafanaTestOut(
         ok=True,
         version=health.version,
@@ -640,7 +651,7 @@ async def test_unsaved_grafana(request: Request) -> GrafanaTestOut:
     """Test a connection as entered; nothing is stored and nothing is audited."""
     body = await read_body(request, GrafanaIn)
     cfg = await grafana_config_from_in(body, _registry(request))
-    return await _test(_services(request), cfg)
+    return await _test(_services(request), cfg, request.query_params.get("editing"))
 
 
 @router.post("/grafana/{id}/test")
