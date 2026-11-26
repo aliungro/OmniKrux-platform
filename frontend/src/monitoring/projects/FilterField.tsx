@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId } from "react";
 import type { FilterOrigin } from "../api/types";
 import { filterMatchesNothing, useFilterCheck } from "./useFilterCheck";
 import s from "./FilterField.module.css";
@@ -66,12 +66,16 @@ export interface FilterFieldProps {
   forName?: string;
   /** The saved source this filter applies to: asked, once the filter settles, whether anything matches it. */
   check?: { sourceId: string; sourceName: string };
+  /** Told whether the "matches nothing" line shows, so nothing beside it says otherwise. */
+  onNothing?(nothing: boolean): void;
 }
 
 /** A link's label filter: filled in by OmniKrux where it can tell, always editable. */
-export function FilterField({ value, origin, reason, onChange, forName, check }: FilterFieldProps) {
+export function FilterField({ value, origin, reason, onChange, forName, check, onNothing }: FilterFieldProps) {
   const id = useId();
   const nothing = useFilterCheck(check?.sourceId, value);
+  const shown = nothing && check !== undefined;
+  useEffect(() => { onNothing?.(shown); }, [onNothing, shown]);
   const problem = validFilter(value);
   const described = [problem ? `${id}-e` : null, reason ? `${id}-r` : null].filter(Boolean).join(" ") || undefined;
   return (
@@ -91,7 +95,7 @@ export function FilterField({ value, origin, reason, onChange, forName, check }:
         onChange={(e) => onChange(e.target.value, "user")}
       />
       {problem && <span id={`${id}-e`} className={s.error}>{problem}</span>}
-      {nothing && check && <span className={s.nothing} role="status">{filterMatchesNothing(check.sourceName)}</span>}
+      {shown && <span className={s.nothing} role="status">{filterMatchesNothing(check.sourceName)}</span>}
       {reason && <span id={`${id}-r`} className={s.reason}>{reason}</span>}
     </div>
   );

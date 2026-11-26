@@ -86,6 +86,8 @@ function LinkRow({ project, link, health, onUnlinked, onAct }: {
   // Which filter a Check data answer belongs to: editing or saving the filter starts a new one, and
   // an answer for an older one is dropped.
   const checkRound = useRef(0);
+  // The filter field says nothing matches the text in it.
+  const [nothing, setNothing] = useState(false);
   const forgetCheck = () => { checkRound.current += 1; setCheck(null); };
   // "Filter saved." goes after a while.
   useEffect(() => {
@@ -165,7 +167,7 @@ function LinkRow({ project, link, health, onUnlinked, onAct }: {
         </div>
         <div className={s.filterLine}>
           <FilterField value={value} origin={draft === null ? link.filter_origin : "user"} reason={null} forName={link.source_name}
-            check={isQueryable(link.source_type) ? { sourceId: link.source_id, sourceName: link.source_name } : undefined}
+            check={isQueryable(link.source_type) ? { sourceId: link.source_id, sourceName: link.source_name } : undefined} onNothing={setNothing}
             onChange={(v) => { setDraft(v); setSaved(false); forgetCheck(); }} />
           <button type="button" className={s.secondary} aria-label={`Save filter for ${link.source_name}`}
             aria-disabled={!dirty || invalid || saving || undefined} onClick={() => void save()}>
@@ -184,7 +186,10 @@ function LinkRow({ project, link, health, onUnlinked, onAct }: {
             aria-disabled={unlinking || undefined} onClick={() => void unlink()}>Unlink</button>
         </div>
         {saved && !dirty && <p className={s.ok} role="status">Filter saved.</p>}
-        {check && check !== "busy" && <p className={check.warn ? s.warn : check.ok ? s.ok : s.bad} role={check.ok ? "status" : "alert"}>{check.text}</p>}
+        {/* One honest answer: while the filter's own line says nothing matches, no count says otherwise. */}
+        {check && check !== "busy" && !(nothing && check.ok && !check.warn) && (
+          <p className={check.warn ? s.warn : check.ok ? s.ok : s.bad} role={check.ok ? "status" : "alert"}>{check.text}</p>
+        )}
         {problem && <p className={s.bad} role="alert">{problem}</p>}
       </div>
     </li>

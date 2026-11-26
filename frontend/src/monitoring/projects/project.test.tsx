@@ -950,6 +950,26 @@ describe("Setup and project links", () => {
     expect(screen.queryByText(/matches this filter/)).toBeNull();
   });
 
+  it("while the filter matches nothing, Check data shows no green count beside it", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom)])],
+      filterChecks: { s1: { matches: false, message: null } },
+      fields: { s1: { metrics: [{ name: "up", type: null, help: null, unit: null }], labels: ["a"], truncated: false } },
+    }, fallback);
+    open("p1");
+    await user.type(await screen.findByRole("textbox", { name: "Filter for Prom" }), 'namespace="nope-ns"');
+    await screen.findByText("Nothing in Prom matches this filter. Check the label names and values.", {}, { timeout: 3000 });
+    await user.click(screen.getByRole("button", { name: "Check data for Prom" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check data for Prom" }).textContent).toBe("Check data"));
+    await new Promise((r) => setTimeout(r, 50));
+    // One honest answer: the amber line, not a green count of the saved filter beside it.
+    expect(screen.getByText("Nothing in Prom matches this filter. Check the label names and values.")).toBeTruthy();
+    expect(screen.queryByText("1 metric and 1 label visible to this project")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("a filter the source can't answer for says nothing new", async () => {
     const user = userEvent.setup();
     const prom = source("s1", "Prom");
