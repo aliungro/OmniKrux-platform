@@ -261,3 +261,20 @@ describe("Narrow windows", () => {
   });
 });
 
+
+describe("The drawer's width", () => {
+  // jsdom lays nothing out: the rule is checked as written (the browser confirms the drawer ends
+  // inside a 375 px window, after the app rail, with no sideways page scroll).
+  it("is never wider than the space it opens in, borders included", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const css = readFileSync(join(process.cwd(), "src", "monitoring", "sidebar", "Sidebar.module.css"), "utf8");
+    const at = css.indexOf("\n.drawer {");
+    const rule = css.slice(at, css.indexOf("}", at));
+    // 100% of the app's box (the window less the app rail), not of the window.
+    expect(rule).toMatch(/width: min\(320px, 100%\)/);
+    expect(rule).toMatch(/max-width: 100%/);
+    expect(rule).toMatch(/box-sizing: border-box/);
+    expect(rule).toMatch(/overflow-x: hidden/);
+  });
+});

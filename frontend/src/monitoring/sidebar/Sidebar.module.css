@@ -15,15 +15,19 @@
 }
 
 /* A narrow window: the sidebar as a drawer over the page, from the left, below the bar
-   (MonitoringApp's --drawer-bar-h), as wide as it is in a wide window but never wider than the window. */
+   (MonitoringApp's --drawer-bar-h), as wide as it is in a wide window but never wider than the
+   space it opens in: 100% is the app's box (the window less the app rail), border included, and
+   nothing inside can push it wider. */
 .drawer {
   position: absolute;
   top: var(--drawer-bar-h, 0);
   bottom: 0;
   left: 0;
   z-index: 20;
-  width: min(320px, 100vw);
+  width: min(320px, 100%);
+  max-width: 100%;
   box-sizing: border-box;
+  overflow-x: hidden;
   box-shadow: 14px 0 36px color-mix(in srgb, var(--bg) 65%, transparent);
 }
 
