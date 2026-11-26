@@ -57,9 +57,9 @@
   user-select: none;
 }
 
-/* On the page, above the panels, their scroll areas and a chart's own popover (a tip shows only
-   while its chart is hovered or focused, so nothing above it can hide that chart); placed against
-   the window. */
+/* On the page, above the panels, their scroll areas and a chart's own popover. A tip shows only
+   while its chart is hovered or focused and in view (it goes on blur, mouse leave, Esc, and when
+   the chart scrolls out of the window or the page area); placed against the window. */
 .tip {
   position: fixed;
   z-index: 55;

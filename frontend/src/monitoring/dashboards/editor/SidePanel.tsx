@@ -71,8 +71,8 @@ export interface SidePanelProps {
  * Monitoring page's scroll area, not the window), so the header's Discard and Save stay in view and
  * the last line is never under the status bar. Written as `--sheet-top` (the header's height, where
  * the sticky settings stop) and `--sheet-h` (from where the settings show to the page's bottom);
- * the stylesheet decides where they apply (the settings overlay) and the wide column uses them as
- * its limits. Placed again on every scroll and resize of the page or its header.
+ * the stylesheet uses them only in the settings overlay (the wide column keeps its own limits).
+ * Placed again, once a frame, on scrolls and resizes of the page or its header.
  */
 function useSheet(side: RefObject<HTMLElement | null>, shown: boolean) {
   useLayoutEffect(() => {
@@ -89,15 +89,26 @@ function useSheet(side: RefObject<HTMLElement | null>, shown: boolean) {
       el.style.setProperty("--sheet-h", `${Math.max(0, Math.round(area.bottom - from))}px`);
     };
     place();
-    page.addEventListener("scroll", place, { passive: true });
-    window.addEventListener("resize", place);
-    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    // At most once a frame: each placing reads three boxes.
+    let frame: number | null = null;
+    const later = () => {
+      if (typeof requestAnimationFrame !== "function") return place();
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        place();
+      });
+    };
+    page.addEventListener("scroll", later, { passive: true });
+    window.addEventListener("resize", later);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(later);
     ro?.observe(page);
     const head = header();
     if (head) ro?.observe(head);
     return () => {
-      page.removeEventListener("scroll", place);
-      window.removeEventListener("resize", place);
+      if (frame !== null) cancelAnimationFrame(frame);
+      page.removeEventListener("scroll", later);
+      window.removeEventListener("resize", later);
       ro?.disconnect();
     };
   }, [side, shown]);

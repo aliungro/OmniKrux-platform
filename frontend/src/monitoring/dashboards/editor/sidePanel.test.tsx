@@ -461,7 +461,8 @@ describe("Narrow settings", () => {
     asideTop = 160;
     const page = document.querySelector("[data-monitoring-page]") as HTMLElement;
     act(() => { fireEvent.scroll(page); });
-    expect(aside.style.getPropertyValue("--sheet-h")).toBe("540px");
+    // Placed again on the next frame.
+    await waitFor(() => expect(aside.style.getPropertyValue("--sheet-h")).toBe("540px"));
     notBody();
     // The settings overlay is one state (the grid frame's query, which every viewport under 960 px
     // meets), drawn as this sheet.
@@ -469,6 +470,8 @@ describe("Narrow settings", () => {
     const overlay = css.slice(css.indexOf("@container (max-width: 1093px)"));
     expect(overlay).toMatch(/top: var\(--sheet-top/);
     expect(overlay).toMatch(/height: var\(--sheet-h/);
+    // The wide column keeps its own limits.
+    expect(css.slice(0, css.indexOf("@container"))).not.toMatch(/var\(--sheet-/);
     expect(css).not.toMatch(/@media \(max-width: 959px\)/);
   });
 });

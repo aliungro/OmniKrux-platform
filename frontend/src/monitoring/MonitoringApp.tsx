@@ -497,10 +497,11 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   const [creating, setCreating] = useState<{ owner: Owner | null } | null>(null);
   const createFrom = useRef<HTMLElement | null>(null);
   const newDashboard = useCallback((o: Owner | null, from: HTMLElement | null) => {
-    // From the drawer: it closes, and the dialog gives the keyboard back to the drawer's button.
+    // From the drawer: it closes with the keyboard on its button (never left in the hidden drawer
+    // while the dialog opens), and the dialog gives the keyboard back to that button.
     const fromDrawer = drawerShown.current && from !== null && navOf()?.contains(from) === true;
     createFrom.current = (fromDrawer ? drawerButton.current : from) ?? root.current?.closest("main") ?? null;
-    if (fromDrawer) closeDrawer("stay");
+    if (fromDrawer) closeDrawer("button");
     setCreating({ owner: o });
   }, [closeDrawer, navOf]);
   // N anywhere in Monitoring, outside a field, a dialog, a menu or edit mode.

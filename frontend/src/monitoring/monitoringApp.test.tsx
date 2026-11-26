@@ -208,6 +208,7 @@ describe("Narrow windows", () => {
     fireEvent.click(toggle());
     const shop = await screen.findByRole("treeitem", { name: "Shop" });
     shop.focus();
+    notBody();
     fireEvent.keyDown(shop, { key: "Escape" });
     expect(drawer()).toBeNull();
     expect(document.activeElement).toBe(toggle());
@@ -215,15 +216,47 @@ describe("Narrow windows", () => {
     // A click outside (on the page behind it) closes it the same way.
     fireEvent.click(toggle());
     expect(drawer()).toBeTruthy();
+    notBody();
     fireEvent.pointerDown(document.querySelector("[data-drawer-scrim]") as HTMLElement);
     expect(drawer()).toBeNull();
     expect(document.activeElement).toBe(toggle());
     // The keyboard leaving the drawer (Tab past its end) folds it, wherever the keyboard went.
     fireEvent.click(toggle());
+    notBody();
     const inside = document.activeElement as HTMLElement;
     expect(drawer()!.contains(inside)).toBe(true);
     act(() => screen.getByRole("main").focus());
     expect(drawer()).toBeNull();
+    notBody();
+  });
+
+  it("New dashboard from the drawer never leaves the keyboard in the folded drawer", async () => {
+    narrow();
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Shop")] });
+    renderMonitoringApp();
+    const nav = document.getElementById(toggle().getAttribute("aria-controls")!)!;
+    const inHiddenNav = () => nav.hidden && nav.contains(document.activeElement);
+    fireEvent.click(toggle());
+    await screen.findByRole("treeitem", { name: "Shop" });
+    notBody();
+    const create = within(nav).getByRole("button", { name: "New dashboard" });
+    await waitFor(() => expect(create.hasAttribute("aria-disabled")).toBe(false));
+    create.focus();
+    fireEvent.click(create);
+    // The drawer folds and the dialog has the keyboard: never a row or button in the hidden nav,
+    // not even before the dialog takes it.
+    expect(inHiddenNav()).toBe(false);
+    notBody();
+    const dialog = await screen.findByRole("dialog");
+    expect(drawer()).toBeNull();
+    expect(inHiddenNav()).toBe(false);
+    notBody();
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    // Cancel hands it back to the drawer's button.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(toggle()));
+    expect(inHiddenNav()).toBe(false);
     notBody();
   });
 });

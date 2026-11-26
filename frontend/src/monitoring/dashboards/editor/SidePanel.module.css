@@ -4,18 +4,17 @@
    the dashboard header to the bottom of the page area. That is one state, one query. Quiet rows and
    hairlines; the chart type tiles and the run line carry the panel's state. Territories tokens only.
    `--sheet-top` (the header's height) and `--sheet-h` (from where the settings show to the page
-   area's bottom) are written by SidePanel. */
+   area's bottom) are written by SidePanel; only the sheet uses them. */
 
 .side {
   position: sticky;
   /* Under the dashboard header, so its title and close button stay in view as the page scrolls. */
-  top: calc(var(--sheet-top, 46px) + 12px);
+  top: 58px;
   z-index: 3;
   flex: none;
   width: 360px;
   max-width: 100%;
-  /* Never past the page area's bottom (the status bar is below it). */
-  max-height: calc(var(--sheet-h, calc(100vh - 60px)) - 12px);
+  max-height: calc(100vh - 72px);
   display: flex;
   flex-direction: column;
   border: 1px solid var(--rule);

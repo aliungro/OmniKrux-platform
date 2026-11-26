@@ -436,7 +436,8 @@ export default function TimeSeriesChart({
   // Placed after it is measured, before the browser paints (no frame in the wrong place): right of
   // the crosshair unless the window ends there, and never past the window's top or bottom. The tip
   // is fixed on the page, so the box's own place in the window is added to placeTip's answer, and a
-  // scroll or resize under a shown tip places it again.
+  // scroll or resize under a shown tip places it again. A chart that has left the view (the window,
+  // or Monitoring's page area) takes its tip with it: the crosshair goes.
   const tipX = tip?.x ?? null;
   const tipTop = frame?.plot.y ?? 0;
   const placeNow = useRef<() => void>(() => {});
@@ -445,6 +446,15 @@ export default function TimeSeriesChart({
     const wrap = wrapRef.current;
     if (!el || !wrap || tipX === null) return;
     const box = wrap.getBoundingClientRect();
+    const area = wrap.closest("[data-monitoring-page]")?.getBoundingClientRect();
+    const top = Math.max(0, area?.top ?? 0);
+    const bottom = Math.min(window.innerHeight, area?.bottom ?? window.innerHeight);
+    // (A box with no size isn't laid out, say in a test: it is not called out of view.)
+    const laidOut = box.width > 0 || box.height > 0;
+    if (laidOut && (box.bottom <= top || box.top >= bottom || box.right <= 0 || box.left >= window.innerWidth)) {
+      setCursor(null);
+      return;
+    }
     const place = placeTip(
       { x: tipX, y: tipTop + 4 },
       { width: el.offsetWidth, height: el.offsetHeight },
@@ -541,6 +551,8 @@ export default function TimeSeriesChart({
           onKeyDown={onKeyDown}
           onMouseMove={onMouseMove}
           onMouseLeave={() => setCursor(null)}
+          // The keyboard's crosshair goes with the keyboard (the pointer's, with the pointer).
+          onBlur={() => setCursor(null)}
         >
           <canvas ref={canvasRef} className={styles.canvas} aria-hidden="true" />
           {band && frame ? (

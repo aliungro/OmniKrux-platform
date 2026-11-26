@@ -735,6 +735,46 @@ describe("ChartView time series", () => {
       expect(document.activeElement).toBe(chart);
     });
 
+    it("a keyboard tooltip goes when its chart loses the keyboard", () => {
+      stubBrowser();
+      render(<><ChartView {...base()} /><button type="button">Next</button></>);
+      const chart = screen.getByRole("img");
+      act(() => chart.focus());
+      fireEvent.keyDown(chart, { key: "ArrowRight" });
+      const tip = screen.getByRole("status");
+      expect(tip.textContent).toContain(formatTooltipTime(START + 60));
+      const next = screen.getByRole("button", { name: "Next" });
+      act(() => next.focus());
+      expect(tip.textContent).toBe("");
+      expect(document.activeElement).toBe(next);
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it("a tooltip goes when its chart scrolls out of view", () => {
+      stubBrowser();
+      vi.stubGlobal("innerWidth", 1280);
+      vi.stubGlobal("innerHeight", 800);
+      render(<ChartView {...base()} />);
+      const chart = screen.getByRole("img");
+      const wrap = chart.parentElement as HTMLElement;
+      let top = 200;
+      vi.spyOn(wrap, "getBoundingClientRect").mockImplementation(() => ({ left: 100, top, right: 700, bottom: top + 240, width: 600, height: 240, x: 100, y: top, toJSON() {} }) as DOMRect);
+      act(() => chart.focus());
+      fireEvent.keyDown(chart, { key: "ArrowRight" });
+      const tip = screen.getByRole("status");
+      expect(tip.textContent).toContain(formatTooltipTime(START + 60));
+      // Still partly in view: it follows the chart.
+      top = -100;
+      act(() => { fireEvent.scroll(window); });
+      expect(tip.textContent).not.toBe("");
+      expect(Number.parseFloat(tip.style.top)).toBeGreaterThanOrEqual(0);
+      // Gone above the window: so is the tip.
+      top = -400;
+      act(() => { fireEvent.scroll(window); });
+      expect(tip.textContent).toBe("");
+      expect(document.activeElement).toBe(chart);
+    });
+
     it("the tooltip goes with its chart", () => {
       stubBrowser();
       const { unmount } = render(<ChartView {...base()} />);
