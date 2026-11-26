@@ -156,6 +156,26 @@ describe("Empty panels say why", () => {
   });
 });
 
+describe("A year's empty panel", () => {
+  const PLAIN = "The query's metrics are collected for this project, but nothing matched in this time range.";
+  const RESTARTS = "sum by (namespace, pod) (kube_pod_container_status_restarts_total - kube_pod_container_status_restarts_total offset $__interval) > 0";
+
+  it("asks about the whole year and says the server's words, with no advice to try a longer range", async () => {
+    const year = { ...spec("Pods", [panel("p-1", "Restarts", RESTARTS, { x: 0, y: 0, w: 12, h: 8 })]), time: { from: "now-365d", to: "now" } };
+    const api = shop({
+      dashboards: { d1: seedDashboard("d1", SHOP, year) },
+      queryAnswers: { [RESTARTS.replace("$__interval", "24h")]: none },
+      whyEmpty: { reason: "nothing_matched", message: PLAIN },
+    });
+    await open();
+    expect(await within(frame("p-1")).findByText(PLAIN)).toBeTruthy();
+    const body = asked(api)[0].body as { start: number; end: number; metrics: string[] };
+    expect(body.metrics).toEqual(["kube_pod_container_status_restarts_total"]);
+    expect(body.end - body.start).toBeGreaterThanOrEqual(365 * 86400);
+    expect(within(frame("p-1")).queryByText(/longer range/)).toBeNull();
+  });
+});
+
 describe("A log query in a chart panel", () => {
   const LOGS = "{job=\"omnikrux-live-check\"}";
   const SAYS = "This is a log query: it lists lines, and a chart can't draw lines.";

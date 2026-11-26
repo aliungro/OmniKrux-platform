@@ -4,7 +4,9 @@
 project's filter, the same way the query did, so each reason is about this project only:
 
 - Prometheus: each metric the query names is looked up over the whole retention. The first one
-  with no series is `missing_metric`; when all have series, `nothing_matched`.
+  with no series is `missing_metric`; when all have series, `nothing_matched`. Its words advise a
+  longer range only when one can help: the range is shorter than 7 days and every metric has
+  samples from before it.
 - Loki: the stream labels of the last 30 days are read; a label the selector needs that no stream
   has is `missing_labels`. Then the selector's streams are counted (none: `no_streams`), and
   its newest line up to now is read: none (`no_streams`), older than the range (`older_lines`),
@@ -50,6 +52,7 @@ from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreach
 
 WHY_EMPTY_SECONDS = 10.0
 LOKI_LOOKBACK = 30 * 86400
+LONG_RANGE = 7 * 86400  # a range this long is never told to try a longer one
 MAX_METRICS = 5
 MAX_SELECTOR_CHARS = 2000
 METRIC_PATTERN = r"^[A-Za-z_:][A-Za-z0-9_:]*$"
@@ -75,9 +78,11 @@ METRIC_THINGS = (
     ("node_", "node metrics (node-exporter)"),
 )
 NOTHING_MATCHED = (
-    "The query's metrics are collected for this project, but nothing matched in this time range. "
-    "Try a longer range."
+    "The query's metrics are collected for this project, but nothing matched in this time range."
 )
+# Only when a longer range can help: the range is shorter than `LONG_RANGE` and every metric has
+# samples from before it.
+TRY_LONGER = " Try a longer range."
 MISSING_LABELS = (
     "This Loki has no streams with {labels} for this project in the last 30 days, so nothing "
     "sends these logs to it now."
@@ -234,7 +239,34 @@ async def _prometheus(
     for metric, present in zip(body.metrics, found, strict=True):
         if not present:
             return WhyEmptyOut(reason="missing_metric", message=missing_metric_words(metric))
-    return WhyEmptyOut(reason="nothing_matched", message=NOTHING_MATCHED)
+    words = NOTHING_MATCHED
+    if body.end - body.start < LONG_RANGE and await _older_than(connector, t, body, matchers):
+        words += TRY_LONGER
+    return WhyEmptyOut(reason="nothing_matched", message=words)
+
+
+async def _older_than(
+    connector: Connector, t: SourceTransport, body: WhyEmptyIn, matchers: tuple[Matcher, ...]
+) -> bool:
+    """Whether every metric has samples from before the range, so a longer range can reach them.
+    False when the check fails: the advice is left out, never guessed."""
+
+    async def older(metric: str) -> bool:
+        # No start: from the oldest sample kept. Prometheus answers by block, so this can say yes
+        # for samples a little after `end`, never no for older ones.
+        names = await connector.label_values(
+            t,
+            "__name__",
+            matchers=matchers,
+            selector=f'{{__name__="{metric}"}}',
+            end=body.start,
+        )
+        return metric in names
+
+    try:
+        return all(await gather_all([older(m) for m in body.metrics]))
+    except (SourceUnreachable, QueryRejected):
+        return False
 
 
 def _needed_labels(selector: str) -> list[str] | None:

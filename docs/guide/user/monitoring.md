@@ -129,7 +129,7 @@ A **Logs** panel, and Explore's log lines, show one line each. Click a line, or 
 An empty panel says why only when OmniKrux proved it, always for **this project** (the project's label filter is part of the check). Each reason is plain words:
 
 - A metric the query names that the Prometheus doesn't collect: "This Prometheus doesn't collect {thing} for this project: {metric} has no series." where {thing} is container usage from the kubelet (cAdvisor), Kubernetes object states (kube-state-metrics), node metrics (node-exporter) or CPU throttling.
-- Every metric exists, but nothing matched in this range: "Try a longer range."
+- Every metric exists, but nothing matched in this range: "The query's metrics are collected for this project, but nothing matched in this time range." It adds "Try a longer range." only when that can help: the range is shorter than 7 days and every metric has data from before it.
 - A Loki that has none of the labels the selector uses, or no stream matching it, in the last 30 days.
 - A stream whose newest line is older than the range: "No lines in this time range. The newest matching line is {age} old: try a longer range."
 - A stream with lines in the range that the rest of the query drops.

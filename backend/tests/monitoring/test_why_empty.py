@@ -148,6 +148,86 @@ async def test_collected_metrics_say_nothing_matched(
     )
 
 
+PLAIN_NOTHING = (
+    "The query's metrics are collected for this project, but nothing matched in this time range."
+)
+
+
+async def test_a_long_range_is_never_told_to_try_a_longer_one(
+    monitoring_app, fake_prometheus, linked_project
+):
+    http, _ = monitoring_app
+    shop = linked_project
+    fake_prometheus.label_values["__name__"] = ["kube_pod_container_status_restarts_total"]
+    now = time.time()
+    for days in (7, 365):
+        body = prometheus_body(
+            shop.source_id,
+            shop.project_id,
+            ["kube_pod_container_status_restarts_total"],
+            start=now - days * DAY,
+            end=now,
+        )
+        r = await http.post(WHY, json=body)
+        assert answer(r) == ("nothing_matched", PLAIN_NOTHING)
+
+
+async def test_a_range_that_holds_the_whole_history_is_not_told_to_try_a_longer_one(
+    monitoring_app, fake_prometheus, linked_project
+):
+    http, _ = monitoring_app
+    shop = linked_project
+    now = time.time()
+    fake_prometheus.label_values["__name__"] = ["up", "kube_pod_info"]
+    # `up` has samples from before the range, but `kube_pod_info` was first written inside it:
+    # a longer range still can't match the query.
+    fake_prometheus.first_seen = {"up": now - 30 * DAY, "kube_pod_info": now - 2 * HOUR}
+    r = await http.post(
+        WHY,
+        json=prometheus_body(
+            shop.source_id, shop.project_id, ["up", "kube_pod_info"], start=now - 6 * HOUR
+        ),
+    )
+    assert answer(r) == ("nothing_matched", PLAIN_NOTHING)
+    asked = fake_prometheus.requests[-1]
+    assert asked.path == "/api/v1/label/__name__/values"
+    assert float(asked.params["end"][0]) == pytest.approx(now - 6 * HOUR)
+    assert "start" not in asked.params  # from the oldest sample kept
+
+    # Once both have older samples, a longer range can help.
+    fake_prometheus.first_seen["kube_pod_info"] = now - 3 * DAY
+    r = await http.post(
+        WHY,
+        json=prometheus_body(
+            shop.source_id, shop.project_id, ["up", "kube_pod_info"], start=now - 6 * HOUR
+        ),
+    )
+    assert answer(r) == ("nothing_matched", f"{PLAIN_NOTHING} Try a longer range.")
+
+
+async def test_the_longer_range_check_failing_keeps_the_proved_words(
+    monitoring_app, fake_prometheus, linked_project
+):
+    http, _ = monitoring_app
+    shop = linked_project
+    fake_prometheus.label_values["__name__"] = ["up"]
+    calls = 0
+    real = fake_prometheus.route
+
+    def second_fails(request, params, headers):
+        nonlocal calls
+        if request.path == "/api/v1/label/__name__/values":
+            calls += 1
+            if calls == 2:
+                return fake_prometheus._error(500, "boom", headers)
+        return real(request, params, headers)
+
+    fake_prometheus.route = second_fails
+    r = await http.post(WHY, json=prometheus_body(shop.source_id, shop.project_id, ["up"]))
+    assert calls == 2
+    assert answer(r) == ("nothing_matched", PLAIN_NOTHING)
+
+
 async def test_missing_is_judged_under_the_project_filter(
     monitoring_app, fake_prometheus, two_projects_on_one_source
 ):

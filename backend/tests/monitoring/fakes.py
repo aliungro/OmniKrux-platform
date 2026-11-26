@@ -12,7 +12,8 @@ an empty result of the right type), `errors` (exact query -> a `bad_data` error 
 400), `labels`, `label_values`, `metadata` and `series` (the label sets `/api/v1/series` and
 `/loki/api/v1/series` answer with; Prometheus honours `limit`). Opt-ins for tests that need time
 and filters honoured: a Prometheus's `label_values_from_series` reads label values from `series`
-under the `match[]` sent; a Loki's `stream_lines` holds streams with timed lines (see `FakeLoki`).
+under the `match[]` sent, and its `first_seen` leaves a metric out of `__name__` values asked up
+to an `end` before its first sample; a Loki's `stream_lines` holds streams with timed lines (see `FakeLoki`).
 `fail_paths` (path -> status)
 answers that status instead for one path. `require` makes a request without the matching
 credentials answer 401; `echo_auth_in_errors` makes error bodies repeat the request's
@@ -186,6 +187,9 @@ class FakePrometheus(_FakeTool):
         self.rule_groups: list[dict] = []
         # Opt-in: label values come from `series`, narrowed by the `match[]` selectors sent.
         self.label_values_from_series = False
+        # Metric name -> the time (seconds) its first sample was written. A `__name__` values
+        # request with an `end` leaves out the metrics first written after it.
+        self.first_seen: dict[str, float] = {}
 
     def route(
         self, request: web.Request, params: dict[str, list[str]], headers: dict[str, str]
@@ -203,6 +207,8 @@ class FakePrometheus(_FakeTool):
             return self._labels()
         if (match := _LABEL_VALUES.match(path)) and self.label_values_from_series:
             return self._values_in_series(match["name"], params)
+        if (match := _LABEL_VALUES.match(path)) and match["name"] == "__name__" and self.first_seen:
+            return self._names_up_to(params)
         if match := _LABEL_VALUES.match(path):
             return self._label_values(match["name"])
         if path == "/api/v1/metadata":
@@ -227,6 +233,15 @@ class FakePrometheus(_FakeTool):
         limit = (params.get("limit") or [""])[0]
         data = self.series[: int(limit)] if limit.isdigit() and int(limit) > 0 else self.series
         return web.json_response({"status": "success", "data": data})
+
+    def _names_up_to(self, params: dict[str, list[str]]) -> web.Response:
+        end = float((params.get("end") or ["inf"])[0])
+        names = [
+            n
+            for n in self.label_values.get("__name__", [])
+            if self.first_seen.get(n, float("-inf")) <= end
+        ]
+        return web.json_response({"status": "success", "data": names})
 
     def _values_in_series(self, name: str, params: dict[str, list[str]]) -> web.Response:
         tests = [_selector_test(text) for text in params.get("match[]", [])]
