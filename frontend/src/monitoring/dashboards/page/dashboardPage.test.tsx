@@ -814,28 +814,49 @@ describe("The header's structure", () => {
     expect(kids[2].getAttribute("role")).toBe("tablist");
   });
 
-  it("in edit mode the views come after the controls, so title and controls share the first row", async () => {
-    // jsdom lays nothing out: the rule and the mark are checked here; the browser confirms one row
-    // at 1280 px. The views move by CSS order (the same element, so a focused view keeps the keyboard).
+  it("in edit mode the controls follow the title and the views take the next row, in drawing and keyboard order", async () => {
+    // jsdom lays nothing out: the rules and the order are checked here; the browser measured two
+    // rows at 1280 and 1440 px (title and controls, then the views).
     const { readFileSync } = await import("node:fs");
     const css = readFileSync("src/monitoring/dashboards/page/DashboardPage.module.css", "utf8");
-    expect(css).toMatch(/\.header\[data-editing\] \.tabs\s*\{[^}]*order:\s*1/);
+    // From 1100 px the edit header is a grid: title and controls in the first row, the views (and
+    // the title's problem) in rows of their own, and no CSS order to make drawing and keys disagree.
+    const wide = css.slice(css.indexOf("@media (min-width: 1100px)"));
+    expect(wide).toMatch(/\.header\[data-editing\]\s*\{[^}]*display:\s*grid/);
+    expect(wide).toMatch(/\.header\[data-editing\] > \.controls\s*\{[^}]*grid-row:\s*1/);
+    expect(css).not.toMatch(/(?<![\w-])order:/);
+    // The wide controls' 6 px gap comes after the base rule, so it is the one used.
+    expect(css.indexOf("@media (min-width: 1100px)")).toBeGreaterThan(css.search(/\n\.controls\s*\{/));
     const user = userEvent.setup();
     shop();
     renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
     const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
     await waitFor(() => expect(document.activeElement).toBe(title));
-    const viewKids = () => [...title.closest("header")!.children];
+    const header = title.closest("header")!;
+    const kids = () => [...header.children];
     // Viewing: heading, views, controls, as drawn.
-    expect(viewKids()[1].getAttribute("role")).toBe("tablist");
-    expect(title.closest("header")!.hasAttribute("data-editing")).toBe(false);
+    expect(kids()[1].getAttribute("role")).toBe("tablist");
+    expect(header.hasAttribute("data-editing")).toBe(false);
     const views = screen.getByRole("tablist", { name: "Dashboard views" });
     await user.keyboard("e");
-    await screen.findByRole("button", { name: "Save dashboard" });
+    const save = await screen.findByRole("button", { name: "Save dashboard" });
     notBody();
-    expect(title.closest("header")!.hasAttribute("data-editing")).toBe(true);
-    // Not remounted.
+    expect(header.hasAttribute("data-editing")).toBe(true);
+    // Editing: heading, controls, views. The views are not remounted.
+    expect(kids()[1].contains(save)).toBe(true);
+    expect(kids()[2]).toBe(views);
     expect(screen.getByRole("tablist", { name: "Dashboard views" })).toBe(views);
+    // Tab goes from the title through the first row's controls, then to the views.
+    screen.getByRole("textbox", { name: "Dashboard title" }).focus();
+    const reached: Element[] = [];
+    for (let i = 0; i < 12 && !views.contains(document.activeElement); i++) {
+      await user.tab();
+      notBody();
+      reached.push(document.activeElement!);
+    }
+    expect(views.contains(document.activeElement)).toBe(true);
+    expect(reached).toContain(save);
+    expect(reached.indexOf(save)).toBeLessThan(reached.length - 1);
   });
 });
 

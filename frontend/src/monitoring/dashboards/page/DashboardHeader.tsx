@@ -130,11 +130,30 @@ export function DashboardHeader(p: Props) {
     e.preventDefault();
     p.onTab(next);
   };
+  // Edit mode's controls come right after the title (row 1), so the keyboard reaches them before
+  // the views (row 2). Viewing, they come last, after the views, as drawn. The views keep their
+  // place in both, so switching modes never remounts them.
+  const editing = p.editControls !== undefined;
+  const controls = (
+    <div className={s.controls}>
+      {p.timeControl}
+      {p.refreshControl}
+      {p.editControls ?? (
+        <>
+          <button ref={p.editRef} type="button" className={s.edit} aria-keyshortcuts={p.readyMade ? undefined : "e"}
+            aria-disabled={p.onEdit ? undefined : true} onClick={() => p.onEdit?.()}>
+            {p.readyMade ? "Copy to edit" : "Edit"}
+          </button>
+          <ActionsMenu actions={p.actions} buttonRef={p.moreRef} />
+        </>
+      )}
+    </div>
+  );
   return (
-    <header className={s.header} data-editing={p.editControls ? "" : undefined}>
+    <header className={s.header} data-editing={editing ? "" : undefined}>
       <div className={s.heading}>
         <p className={s.crumb}>
-          <a href="#" className={s.owner} onClick={(e) => { e.preventDefault(); p.onOwner(e); }}>{p.ownerName}</a>
+          <a href="#" className={s.owner} title={p.ownerName} onClick={(e) => { e.preventDefault(); p.onOwner(e); }}>{p.ownerName}</a>
           <span className={s.slash} aria-hidden="true">/</span>
         </p>
         <h1 id={p.titleId} ref={p.titleRef} tabIndex={-1} className={s.title} title={p.titleField ? undefined : p.title}
@@ -144,6 +163,7 @@ export function DashboardHeader(p: Props) {
         {p.readyMade && <span className={s.readyTag}>Ready-made</span>}
         {p.badge}
       </div>
+      {editing && controls}
       {field && field.problem !== null && <p id={problemId} className={s.titleProblem}>{field.problem}</p>}
       {p.afterTitle}
       <div role="tablist" aria-label="Dashboard views" className={s.tabs} onKeyDown={onTabKey}>
@@ -159,19 +179,7 @@ export function DashboardHeader(p: Props) {
           );
         })}
       </div>
-      <div className={s.controls}>
-        {p.timeControl}
-        {p.refreshControl}
-        {p.editControls ?? (
-          <>
-            <button ref={p.editRef} type="button" className={s.edit} aria-keyshortcuts={p.readyMade ? undefined : "e"}
-              aria-disabled={p.onEdit ? undefined : true} onClick={() => p.onEdit?.()}>
-              {p.readyMade ? "Copy to edit" : "Edit"}
-            </button>
-            <ActionsMenu actions={p.actions} buttonRef={p.moreRef} />
-          </>
-        )}
-      </div>
+      {!editing && controls}
     </header>
   );
 }

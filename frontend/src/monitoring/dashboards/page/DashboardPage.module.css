@@ -93,7 +93,8 @@
 
 .titleInput {
   max-width: min(100%, 640px);
-  min-width: 0;
+  min-width: min(8ch, 100%);
+  field-sizing: content; /* as wide as the title, where supported; elsewhere its `size` */
   margin: -2px -6px;
   padding: 1px 5px;
   border: 1px dashed color-mix(in srgb, var(--ink-3) 45%, transparent);
@@ -140,39 +141,6 @@
   font-weight: 500;
 }
 
-/* The header always wraps, so a full-row child (an offered draft's banner, the title's problem)
-   keeps its own row and nothing leaves the right edge. From 1100 px the heading asks for at least
-   14rem and takes what is left, so the title, tabs and controls (Editing pill, Undo, Variables,
-   Suggestions, Discard, Save dashboard, time range, refresh) share one row when they fit; when
-   they don't, the controls drop to the next row (and wrap inside it) instead. */
-@media (min-width: 1100px) {
-  .heading {
-    flex: 1 1 14rem;
-    min-width: 0;
-  }
-
-  .heading > h1 {
-    flex: 0 1 auto;
-  }
-
-  .tabs {
-    flex: none;
-  }
-
-  .controls {
-    flex: 0 1 auto;
-    max-width: 100%;
-    gap: 6px;
-  }
-}
-
-/* Edit mode has five more controls: the views (Dashboard, JSON, Versions) are drawn after them, so
-   the title and every control share the first row at 1280 px and the views take the next one. The
-   same element moves (CSS order), so a view that has the keyboard keeps it. */
-.header[data-editing] .tabs {
-  order: 1;
-}
-
 .tabs {
   display: inline-flex;
   gap: 2px;
@@ -209,6 +177,78 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+/* The header always wraps, so a full-row child (an offered draft's banner, the title's problem)
+   keeps its own row and nothing leaves the right edge. From 1100 px the heading asks for at least
+   14rem and takes what is left, so the title, tabs and controls (time range, refresh, Edit, More)
+   share one row when they fit; when they don't, the controls drop to the next row (and wrap inside
+   it) instead. After the base `.controls` rule, so its gap is the one used. */
+@media (min-width: 1100px) {
+  .heading {
+    flex: 1 1 14rem;
+    min-width: 0;
+  }
+
+  .heading > h1 {
+    flex: 0 1 auto;
+  }
+
+  .tabs {
+    flex: none;
+  }
+
+  .controls {
+    flex: 0 1 auto;
+    max-width: 100%;
+    gap: 6px;
+  }
+
+  /* Edit mode has five more controls (Undo, Variables, Suggestions, Discard, Save dashboard), and
+     they come right after the title in the page too, so the keyboard meets them before the views.
+     Row 1: the title (at least 14rem) and the controls (they wrap inside their column rather than
+     leave the edge); then the title's problem and the views, each on a row of its own. */
+  .header[data-editing] {
+    display: grid;
+    grid-template-columns: minmax(min(14rem, 100%), 1fr) auto;
+  }
+
+  .header[data-editing] > * {
+    grid-column: 1 / -1;
+  }
+
+  .header[data-editing] > .heading {
+    grid-column: 1;
+  }
+
+  .header[data-editing] > .controls {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    justify-content: flex-end;
+  }
+
+  .header[data-editing] > .tabs {
+    justify-self: start;
+  }
+
+  .header[data-editing] > .controls > button {
+    padding-inline: 8px;
+  }
+}
+
+/* Edit mode: the owner gives way first (cut with an ellipsis; its title has all of it), so the
+   title being typed keeps its room. */
+.header[data-editing] .crumb {
+  flex: 0 100 auto;
+  min-width: 6ch; /* the owner's 4ch, the gap and the slash */
+}
+
+.header[data-editing] .owner {
+  min-width: 4ch; /* never cut to nothing: a few letters and the ellipsis stay */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chip {
