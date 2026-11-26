@@ -429,6 +429,28 @@ describe("Dashboard page", () => {
     notBody();
   });
 
+  it("an owner read that fails while the keyboard is on Suggestions keeps the keyboard on the page", async () => {
+    const user = userEvent.setup();
+    shop();
+    const held = gate();
+    intercept((url) => (url === "/api/monitoring/projects/p1"
+      ? held.opened.then(() => new Response(JSON.stringify({ detail: "The project couldn't be read." }), { status: 500 }))
+      : null));
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    await user.keyboard("e");
+    const toggle = await screen.findByRole("button", { name: "Suggestions" });
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    // The read fails: Suggestions goes with the rail, and the keyboard lands on the title, not <body>.
+    await act(async () => { held.open(); await held.opened; });
+    expect((await screen.findByRole("alert")).textContent).toContain("The project couldn't be read.");
+    expect(screen.queryByRole("button", { name: "Suggestions" })).toBeNull();
+    notBody();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { level: 1, name: "API latency" }));
+  });
+
   it("a group whose projects can't be read says why, and Try again reads them", async () => {
     const user = userEvent.setup();
     const g: GroupOut = { id: "g1", name: "Everything", project_ids: ["p1", "p2"], created_at: "", updated_at: "" };

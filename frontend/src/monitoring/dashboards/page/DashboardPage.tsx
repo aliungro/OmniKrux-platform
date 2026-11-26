@@ -596,13 +596,13 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   });
 
   // The owner read failed and Try again worked: its button went with the message, and the
-  // keyboard goes to the title rather than <body>.
+  // keyboard goes to the title rather than <body>. The same when the read fails while the keyboard
+  // is on Suggestions or in the rail: both go with the failure, before the page is painted.
   const ownerRetry = useRef<HTMLButtonElement>(null);
   const failed = ctx.ownerFailure !== null;
   const wasFailed = useRef(failed);
   useLayoutEffect(() => {
-    const active = document.activeElement;
-    if (wasFailed.current && !failed && (active === null || active === document.body)) title.current?.focus({ preventScroll: true });
+    if (wasFailed.current !== failed && focusLost()) title.current?.focus({ preventScroll: true });
     wasFailed.current = failed;
   }, [failed]);
   // The same for the dashboard's own re-read: its Try again went with the notice.
