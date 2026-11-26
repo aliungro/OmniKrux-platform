@@ -290,6 +290,27 @@ const base = (over: Partial<ChartViewProps> = {}): ChartViewProps => ({
 });
 
 describe("ChartView time series", () => {
+  it("a legend that goes while one of its items has the keyboard hands it to the chart", () => {
+    const observers: ((e: unknown[]) => void)[] = [];
+    vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private cb: (e: unknown[]) => void) { observers.push(cb); }
+      observe() { this.cb([{ contentRect: { width: SIZE.width, height: SIZE.height } }]); }
+      disconnect() {}
+      unobserve() {}
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(recorder().ctx as unknown as CanvasRenderingContext2D);
+    render(<ChartView {...base()} />);
+    const item = screen.getByRole("button", { name: /^a/ });
+    act(() => item.focus());
+    expect(document.activeElement).toBe(item);
+    // The box gets too short for a legend: it goes, and the keyboard goes to the plot.
+    act(() => { for (const cb of observers) cb([{ contentRect: { width: SIZE.width, height: 60 } }]); });
+    expect(screen.queryByRole("button", { name: /^a/ })).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByRole("img"));
+  });
+
   it("draws on the canvas it is given", () => {
     const { calls } = stubBrowser();
     render(<ChartView {...base()} />);

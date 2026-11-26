@@ -522,6 +522,22 @@ export default function TimeSeriesChart({
     setHidden((h) => (h.size === 0 ? h : NO_HIDDEN));
     setHighlighted(null);
   }, [showLegend]);
+  // The legend going while one of its items has the keyboard (the box got too short, or the series
+  // went): noted while its buttons are still on the page, then the keyboard goes to the plot, never
+  // <body>. Outside the plot, the chart's only focusable things are the legend's.
+  const [legendWas, setLegendWas] = useState(showLegend);
+  const [refocusPlot, setRefocusPlot] = useState(false);
+  if (legendWas !== showLegend) {
+    setLegendWas(showLegend);
+    const active = typeof document === "undefined" ? null : document.activeElement;
+    if (!showLegend && active && rootRef.current?.contains(active) && !plotRef.current?.contains(active)) setRefocusPlot(true);
+  }
+  useLayoutEffect(() => {
+    if (!refocusPlot) return;
+    setRefocusPlot(false);
+    const active = document.activeElement;
+    if (active === null || active === document.body || !active.isConnected) plotRef.current?.focus({ preventScroll: true });
+  }, [refocusPlot]);
 
   const tipBox = (
     <div ref={tipRef} role="status" className={styles.tip}>
