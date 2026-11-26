@@ -305,18 +305,45 @@ def same_query_text(a: str, b: str) -> bool:
     return a == b or query_shape(a) == query_shape(b)
 
 
+def _ends_in_comment(text: str) -> bool:
+    """Whether the text's last line ends inside a `#` comment (outside any string), which would
+    swallow whatever is written after it on that line."""
+    i, n, comment = 0, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            comment = False
+        elif comment:
+            pass
+        elif c == "#":
+            comment = True
+        elif c in "\"'`":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if c != "`" and text[j] == "\\" else 1
+            i = j
+        i += 1
+    return comment
+
+
+def _closed(text: str) -> str:
+    """The text and the bracket that closes the wrapper around it: on the same line, unless a
+    `#` comment at its end would swallow the bracket (a line feed then ends the comment). Nothing
+    else is added around the user's text."""
+    return f"{text}\n)" if _ends_in_comment(text) else f"{text})"
+
+
 def condition_expr(expr: str, cond: Condition) -> str:
-    """The rule's condition. A line feed ends the operand, so a `#` comment at the end of the
-    query can't swallow what the wrapper adds after it."""
+    """The rule's condition: the query wrapped as written (`(vector(1)) > 0`)."""
     sign = ">" if cond.op == "above" else "<"
     text = tidy_query(expr)
-    left = f"sum({text}\n)" if cond.of == "total" else f"({text}\n)"
+    left = f"sum({_closed(text)}" if cond.of == "total" else f"({_closed(text)}"
     return f"{left} {sign} {_number_text(cond.threshold)}"
 
 
 def eval_expr(expr: str, of: Of) -> str:
     text = tidy_query(expr)
-    return f"sum({text}\n)" if of == "total" else text
+    return f"sum({_closed(text)}" if of == "total" else text
 
 
 def is_log_query(expr: str) -> bool:

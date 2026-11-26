@@ -95,7 +95,7 @@ async def test_saving_a_panel_alert_creates_its_rule(monitoring_app, linked_proj
     }
     [target] = rule["targets"]
     assert target["project_id"] == pid and target["engine"] == "omnikrux"
-    assert target["rule_text"] == '(rate(x{cluster="a"}[4m])\n) > 0.3'
+    assert target["rule_text"] == '(rate(x{cluster="a"}[4m])) > 0.3'
     # The dashboard's save is the record: M2's details and the alert it adds, by name.
     saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
     assert [r["details"] for r in saves] == [
@@ -121,7 +121,7 @@ async def test_changing_the_panel_alert_changes_the_rule(monitoring_app, linked_
     [rule] = await rules(http)
     assert rule["id"] == first["id"] and rule["version"] == 2
     assert rule["condition"]["threshold"] == 0.5
-    assert rule["targets"][0]["rule_text"] == '(rate(x{cluster="a"}[4m])\n) > 0.5'
+    assert rule["targets"][0]["rule_text"] == '(rate(x{cluster="a"}[4m])) > 0.5'
 
     # Saving the same alert again changes nothing about the rule.
     await save(http, changed, changed["spec"] | {"title": "Latency now"})

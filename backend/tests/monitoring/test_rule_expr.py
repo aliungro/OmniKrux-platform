@@ -130,10 +130,19 @@ def test_duration_helpers():
 
 def test_condition_and_eval_expr():
     c = Condition("each", "above", 0.3, 300, 60)
-    assert condition_expr("rate(x[5m])", c) == "(rate(x[5m])\n) > 0.3"
-    assert condition_expr("x", Condition("total", "below", 2.0, 0, 60)) == "sum(x\n) < 2"
-    assert condition_expr("x", Condition("each", "below", -1.5, 0, 60)) == "(x\n) < -1.5"
-    assert eval_expr("x", "total") == "sum(x\n)" and eval_expr("x", "each") == "x"
+    assert condition_expr("rate(x[5m])", c) == "(rate(x[5m])) > 0.3"
+    assert condition_expr("x", Condition("total", "below", 2.0, 0, 60)) == "sum(x) < 2"
+    assert condition_expr("x", Condition("each", "below", -1.5, 0, 60)) == "(x) < -1.5"
+    assert eval_expr("x", "total") == "sum(x)" and eval_expr("x", "each") == "x"
+
+
+def test_the_wrapper_adds_no_line_break_around_the_query():
+    each = Condition("each", "above", 0.0, 0, 60)
+    assert condition_expr("vector(1)", each) == "(vector(1)) > 0"
+    assert condition_expr("sum(up)", Condition("each", "below", 1.0, 0, 60)) == "(sum(up)) < 1"
+    # A `#` inside a string is not a comment; one on an earlier line has ended already.
+    assert condition_expr('up{a="#"}', each) == '(up{a="#"}) > 0'
+    assert condition_expr("# why\nup", each) == "(# why\nup) > 0"
 
 
 def test_a_trailing_comment_cannot_swallow_the_wrapper():
@@ -201,8 +210,8 @@ def test_rule_query_is_wrapped_without_stray_lines():
     typed = "\n\n  count(up == 1)\n\n   \n  # still up\n\n"
     each = Condition("each", "above", 0.0, 0, 60)
     assert condition_expr(typed, each) == "(count(up == 1)\n  # still up\n) > 0"
-    assert condition_expr("count(up == 1)\n\n\n", each) == "(count(up == 1)\n) > 0"
-    assert eval_expr("\n sum(x)\n\n", "total") == "sum(sum(x)\n)"
+    assert condition_expr("count(up == 1)\n\n\n", each) == "(count(up == 1)) > 0"
+    assert eval_expr("\n sum(x)\n\n", "total") == "sum(sum(x))"
     assert eval_expr("\n sum(x)\n\n", "each") == "sum(x)"
 
 

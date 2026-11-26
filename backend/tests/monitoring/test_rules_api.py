@@ -94,7 +94,7 @@ async def test_create_a_project_rule_and_read_it_back(monitoring_app, linked_pro
     assert target["where"] == "checked by OmniKrux"
     assert target["eval_expr"] == "rate(x[5m])"
     # The condition is wrapped first, then the project's filter goes into every selector.
-    assert target["rule_text"] == '(rate(x{cluster="a"}[5m])\n) > 0.3'
+    assert target["rule_text"] == '(rate(x{cluster="a"}[5m])) > 0.3'
     assert target["state"] == "waiting" and target["leaving"] is False
     assert target["message"] == NOT_CHECKED_OFF  # this app's checks are off
 
@@ -203,7 +203,7 @@ async def test_group_rule_fans_out_per_project(monitoring_app, linked_project):
     assert rule["scope"] == {"kind": "group", "id": group, "name": "Ops"}
     b, a = rule["targets"]
     assert (b["project_name"], a["project_name"]) == ("Billing", "Shop")
-    assert a["state"] == "waiting" and a["rule_text"] == '(rate(x{cluster="a"}[5m])\n) > 0.3'
+    assert a["state"] == "waiting" and a["rule_text"] == '(rate(x{cluster="a"}[5m])) > 0.3'
     # Billing has no Prometheus: an error in words, never OK, and no other project's filter.
     assert b["state"] == "error" and b["message"] == no_source_copy("Billing", "prometheus")
     assert b["rule_text"] == "" and "cluster" not in b["eval_expr"]
@@ -260,7 +260,7 @@ async def test_tool_engine_where_possible(
     assert a["project_id"] == apps and a["engine"] == "tool" and a["tool"] == "prometheus_rule"
     assert a["where"] == "in Prometheus" and a["tool_state"] == "needs_review"
     assert a["state"] == "not_applied" and a["engine_note"] is None
-    assert a["rule_text"] == '(rate(x{cluster="c"}[5m])\n) > 0.3'
+    assert a["rule_text"] == '(rate(x{cluster="c"}[5m])) > 0.3'
     assert b["engine"] == "omnikrux" and b["tool"] is None and b["engine_note"] == NO_OPERATOR
     assert b["where"] == "checked by OmniKrux" and b["tool_state"] is None
     assert out["changes"] == [
@@ -342,7 +342,7 @@ async def test_stale_rule_save_is_refused(monitoring_app, linked_project):
     assert saved.status_code == 200, saved.text
     assert saved.json()["rule"]["version"] == 2
     [target] = saved.json()["rule"]["targets"]
-    assert target["rule_text"] == '(rate(x{cluster="a"}[5m])\n) > 0.5'
+    assert target["rule_text"] == '(rate(x{cluster="a"}[5m])) > 0.5'
 
     stale = await http.put(
         f"{RULES}/{rule['id']}", json=rule_body(pid, name="Other") | {"base_version": 1}

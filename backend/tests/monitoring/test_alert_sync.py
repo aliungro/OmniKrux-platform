@@ -53,7 +53,7 @@ async def test_each_project_gets_its_own_filter(monitoring_app, two_projects_on_
 
     first, second = await services.alert_sync.desired(rule)
     texts = {first.project_id: first.rule_text, second.project_id: second.rule_text}
-    assert texts[pair.a] == ('(sum by (route) (rate(errors{job="api",cluster="a"}[5m]))\n) > 1')
+    assert texts[pair.a] == ('(sum by (route) (rate(errors{job="api",cluster="a"}[5m]))) > 1')
     assert 'cluster="b"' not in texts[pair.a]
     assert 'cluster="b"' in texts[pair.b] and 'cluster="a"' not in texts[pair.b]
     # OmniKrux runs the query as written: `run_query` adds the project's filter at each check.
@@ -62,9 +62,9 @@ async def test_each_project_gets_its_own_filter(monitoring_app, two_projects_on_
 
     total = replace(rule, condition=Condition("total", "below", 0.5, 0, 60))
     [a_spec] = [s for s in await services.alert_sync.desired(total) if s.project_id == pair.a]
-    assert a_spec.eval_expr == f"sum({rule.expr}\n)"
+    assert a_spec.eval_expr == f"sum({rule.expr})"
     assert a_spec.rule_text.startswith("sum(sum by (route)") and a_spec.rule_text.endswith(
-        "\n) < 0.5"
+        ")) < 0.5"
     )
 
 
@@ -493,7 +493,7 @@ async def test_a_stored_rule_with_extra_whitespace_stays_applied(
     [target] = await alerts.targets(rule_id=rule.id)
     assert target.rule_text.startswith("(sum(rate(") and "\n\n" not in target.rule_text
     # As stored before the upgrade: the query as typed inside the wrapper.
-    old = target.rule_text.replace("(sum", "(\n  sum", 1).replace("\n)", "\n\n\n)")
+    old = target.rule_text.replace("(sum", "(\n  sum", 1).replace(")) >", ")\n\n\n) >")
     async with services.sessionmaker.begin() as session:
         row = await session.get(AlertTargetRow, target.id)
         row.rule_text = old

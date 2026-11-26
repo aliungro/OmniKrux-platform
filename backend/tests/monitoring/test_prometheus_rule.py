@@ -192,7 +192,7 @@ async def test_review_create_and_apply(
     assert group["name"] == f"omnikrux-{tool_rule.target_id}" and group["interval"] == "1m"
     [rule] = group["rules"]
     assert rule["alert"] == "API latency high"
-    assert rule["expr"] == '(rate(x{cluster="c"}[5m])\n) > 0.3'
+    assert rule["expr"] == '(rate(x{cluster="c"}[5m])) > 0.3'
     assert rule["for"] == "5m"
     assert rule["labels"] == {
         "severity": "warning",
