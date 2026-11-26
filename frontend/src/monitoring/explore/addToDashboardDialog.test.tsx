@@ -53,7 +53,7 @@ describe("Add to dashboard", () => {
     expect(document.activeElement).toBe(select);
     expect(within(select).getAllByRole("option")[0].textContent).toBe("New dashboard in Shop…");
     await waitFor(() => expect(within(select).getByRole("option", { name: "API latency" })).toBeTruthy());
-    expect(within(box).getByRole("textbox", { name: "Title" })).toHaveProperty("value", "Explore");
+    expect(within(box).getByRole("textbox", { name: "Title" })).toHaveProperty("value", "Targets up");
     expect(within(box).getByRole("textbox", { name: "Panel title" })).toHaveProperty("value", "Targets up");
     const chart = within(box).getByRole("combobox", { name: "Chart" }) as HTMLSelectElement;
     expect(chart.value).toBe("timeseries");
@@ -69,7 +69,8 @@ describe("Add to dashboard", () => {
     await openExplore();
     await screen.findByText("chart 1");
     // The status region is there from the start, empty: nothing settles in on page load.
-    const status = addButton().parentElement!.querySelector<HTMLElement>('[role="status"]')!;
+    // Its own row under the header (Task 25), so the header never reflows.
+    const status = document.querySelector<HTMLElement>('[data-explore-added] [role="status"]')!;
     expect(status.childElementCount).toBe(0);
     const user = userEvent.setup();
     fireEvent.click(addButton());
@@ -193,7 +194,7 @@ describe("Add to dashboard", () => {
   });
 
   it("a new dashboard is made in one POST and avoids a taken title", async () => {
-    const taken = seedDashboard("d1", owner, spec("Explore", [panel("p-1", "Latency", "up")]));
+    const taken = seedDashboard("d1", owner, spec("Targets up", [panel("p-1", "Latency", "up")]));
     const api = shop({ d1: taken });
     await openExplore();
     await screen.findByText("chart 1");
@@ -201,16 +202,41 @@ describe("Add to dashboard", () => {
     fireEvent.click(addButton());
     const box = await screen.findByRole("dialog");
     const title = within(box).getByRole("textbox", { name: "Title" }) as HTMLInputElement;
-    await waitFor(() => expect(title.value).toBe("Explore (2)"));
+    await waitFor(() => expect(title.value).toBe("Targets up (2)"));
     await user.click(within(box).getByRole("button", { name: "Add panel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const posts = api.requests.filter((r) => r.method === "POST" && r.url === "/api/monitoring/dashboards");
     expect(posts).toHaveLength(1);
     expect(puts(api)).toHaveLength(0);
     const body = posts[0].body as { spec: DashboardSpec };
-    expect(body.spec.title).toBe("Explore (2)");
+    expect(body.spec.title).toBe("Targets up (2)");
     expect(body.spec.panels.map((p) => p.title)).toEqual(["Targets up"]);
-    expect(screen.getByText('Added to "Explore (2)".')).toBeTruthy();
+    expect(screen.getByText('Added to "Targets up (2)".')).toBeTruthy();
+  });
+
+  it("the dialog suggests a title from the query", async () => {
+    shop();
+    await openExplore({ page: "explore", project: "p1", expr: "sum(rate(http_requests_total[5m]))" });
+    await screen.findByText("chart 1");
+    fireEvent.click(addButton());
+    let box = await screen.findByRole("dialog");
+    expect(within(box).getByRole("textbox", { name: "Title" })).toHaveProperty("value", "HTTP requests");
+    fireEvent.click(within(box).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // A query that names no metric: a plain new dashboard.
+    fireEvent.change(screen.getByRole("textbox", { name: "Query" }), { target: { value: "vector(1)" } });
+    await waitFor(() => expect(document.querySelector("[data-explore-meta]")?.textContent).toContain("1 series"));
+    fireEvent.click(addButton());
+    box = await screen.findByRole("dialog");
+    expect(within(box).getByRole("textbox", { name: "Title" })).toHaveProperty("value", "New dashboard");
+    cleanup();
+    // A log query: its selector.
+    shop({}, { ...seedProject("p1", "Shop"), links: [linkTo("s2", "loki")] });
+    await openExplore({ page: "explore", project: "p1", source: "s2", expr: '{job="api"} |= "error"' });
+    await waitFor(() => expect(addButton().getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(addButton());
+    box = await screen.findByRole("dialog");
+    expect(within(box).getByRole("textbox", { name: "Title" })).toHaveProperty("value", 'Logs from {job="api"}');
   });
 
   it("a query Explore marked invalid keeps the button disabled", async () => {

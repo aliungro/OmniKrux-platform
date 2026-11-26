@@ -5,6 +5,7 @@
 import type { OwnerStreamLabel } from "../catalog/merge";
 import type { BrowseMetric } from "../catalog/metrics";
 import { type Only, selectorText, SPLIT_LABELS, UnwritableQuery, writeLogQuery, writeMetricQuery } from "../build/writeQuery";
+import { normalizeQuery } from "./trailStore";
 
 export type ExploreBuilder = {
   /** The picked metric's name; `null` when none (or in logs mode). */
@@ -13,7 +14,10 @@ export type ExploreBuilder = {
   stream: boolean;
   split: string | null;
   only: Only;
-  /** The query was edited by hand after the chips wrote it. */
+  /**
+   * The query was edited by hand after the chips wrote it: no chip shows as pressed, and a chip
+   * starts a new query from itself alone (the metric and split kept) instead of toggling.
+   */
   detached: boolean;
 };
 
@@ -40,6 +44,8 @@ export function builderReducer(state: ExploreBuilder, action: BuilderAction): Ex
     case "pickStream":
       return { metric: null, stream: true, split: null, only: { [action.label]: action.value }, detached: false };
     case "split": {
+      // After a hand edit a Split chip starts over from the split alone.
+      if (state.detached) return { ...state, split: action.label, only: state.stream ? state.only : {}, detached: false };
       if (action.label === null || action.label === state.split) return { ...state, split: null, detached: false };
       // Logs: the stream the list picked stays chosen, whatever the split.
       if (state.stream) return { ...state, split: action.label, detached: false };
@@ -47,6 +53,8 @@ export function builderReducer(state: ExploreBuilder, action: BuilderAction): Ex
       return { ...state, split: action.label, only, detached: false };
     }
     case "only": {
+      // After a hand edit an Only chip starts over from that chip alone.
+      if (state.detached) return { ...state, only: action.value === null ? {} : { [action.label]: action.value }, detached: false };
       const { [action.label]: current, ...rest } = state.only;
       const next = action.value === null || action.value === current ? rest : { ...rest, [action.label]: action.value };
       return { ...state, only: next, detached: false };
@@ -70,11 +78,24 @@ export function builderQuery(state: ExploreBuilder, metrics: BrowseMetric[], str
   }
 }
 
-/** The selector that finds a metric's label values: a family's series live under a suffix. */
-export function metricMatch(m: BrowseMetric): string | null {
+/**
+ * Whether the text is the query the chips write (spacing outside quotes aside): typing it again
+ * attaches the chips to it again.
+ */
+export function isAttached(state: ExploreBuilder, expr: string, metrics: BrowseMetric[], streams: OwnerStreamLabel[]): boolean {
+  if (!builderActive(state)) return false;
+  const written = builderQuery(state, metrics, streams);
+  return written !== null && normalizeQuery(written) === normalizeQuery(expr);
+}
+
+/**
+ * The selector that finds a metric's label values: a family's series live under a suffix. `only`
+ * narrows them to the values chosen so far (a label's own choice is left out by the caller).
+ */
+export function metricMatch(m: BrowseMetric, only: Only = {}): string | null {
   const name = m.kind === "histogram" ? `${m.name}_bucket` : m.kind === "summary" ? `${m.name}_count` : m.name;
   try {
-    return selectorText(name, {});
+    return selectorText(name, only);
   } catch (err) {
     if (err instanceof UnwritableQuery) return null;
     throw err;

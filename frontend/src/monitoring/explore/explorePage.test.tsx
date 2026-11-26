@@ -409,7 +409,174 @@ describe("Explore", () => {
     expect(readTrail("p1")).toEqual([]);
     fireEvent.change(query(), { target: { value: "sum(up)" } });
     fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
-    expect(readTrail("p1").map((e) => e.expr)).toEqual(["sum(up)"]);
+    // Kept on the run's answer (Task 25, P24), not at the press.
+    await waitFor(() => expect(readTrail("p1").map((e) => e.expr)).toEqual(["sum(up)"]));
+  });
+
+  it("a source of another kind holds the old query", async () => {
+    const HELD = "This query is PromQL, and l1 name reads LogQL, so it wasn't run. Write a LogQL query, or pick a Prometheus-compatible source.";
+    const api = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("s1"), linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "s1", expr: "up" });
+    await screen.findByText("chart 1");
+    const sourceSelect = screen.getByRole("combobox", { name: "Source" });
+    const before = batches(api).length;
+    fireEvent.change(sourceSelect, { target: { value: "l1" } });
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    // Nothing is sent to Loki, nothing is drawn and no selector is named.
+    expect(batches(api)).toHaveLength(before);
+    expect(screen.queryByText(/^chart /)).toBeNull();
+    expect(screen.queryByText(/Logs from/)).toBeNull();
+    expect(meta().textContent).not.toContain("✗");
+    expect(screen.getByRole("button", { name: "Add to dashboard" }).getAttribute("aria-disabled")).toBe("true");
+    // Back to a source of the first kind: the hold ends and the text runs there.
+    fireEvent.change(sourceSelect, { target: { value: "s1" } });
+    expect(screen.queryByText(HELD)).toBeNull();
+    await screen.findByText("chart 1");
+    expect(batches(api).at(-1)?.queries[0]).toMatchObject({ query: "up", source_id: "s1" });
+    // Held again; Clear the query empties the field and keeps the keyboard there.
+    fireEvent.change(sourceSelect, { target: { value: "l1" } });
+    const clear = await screen.findByRole("button", { name: "Clear the query" });
+    await user.click(clear);
+    expect(query().value).toBe("");
+    expect(document.activeElement).toBe(query());
+    expect(screen.queryByText(HELD)).toBeNull();
+    expect(readTrail("p1").filter((e) => e.sourceId === "l1")).toEqual([]);
+    // A LogQL text ends the hold and runs.
+    fireEvent.change(query(), { target: { value: '{app="api"}' } });
+    await waitFor(() => expect(batches(api).at(-1)?.queries[0]).toMatchObject({ query: '{app="api"}', source_id: "l1" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a project switch keeps a Loki source", async () => {
+    const api = installFakeMonitoringApi({
+      projects: [
+        { ...seedProject("p1", "Alpha"), links: [linkTo("s1"), linkTo("l1", "loki")] },
+        { ...seedProject("p2", "Beta"), links: [linkTo("s2"), linkTo("l2", "loki")] },
+        { ...seedProject("p3", "Gamma"), links: [linkTo("s3"), linkTo("l1", "loki")] },
+      ],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    const project = screen.getByRole("combobox", { name: "Project" });
+    const sourceValue = () => (screen.queryByRole("combobox", { name: "Source" }) as HTMLSelectElement | null)?.value;
+    await waitFor(() => expect(sourceValue()).toBe("l1"));
+    // The same Loki is linked to Gamma: it stays.
+    fireEvent.change(project, { target: { value: "p3" } });
+    await waitFor(() => expect(sourceValue()).toBe("l1"));
+    await waitFor(() => expect(batches(api).at(-1)?.queries[0]).toMatchObject({ project_id: "p3", source_id: "l1", query: '{app="x"}' }));
+    // Beta has another Loki: the first Loki it links.
+    fireEvent.change(project, { target: { value: "p2" } });
+    await waitFor(() => expect(sourceValue()).toBe("l2"));
+    await waitFor(() => expect(batches(api).at(-1)?.queries[0]).toMatchObject({ project_id: "p2", source_id: "l2", query: '{app="x"}' }));
+    expect(batches(api).some((b) => b.queries[0].project_id === "p2" && (b.queries[0] as { source_id?: string }).source_id === "s2")).toBe(false);
+    expect(screen.queryByText(/This query is/)).toBeNull();
+  });
+
+  it("the added note goes with a project switch", async () => {
+    twoProjects({ "p1|up": one, "p2|up": one });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", expr: "up" });
+    await screen.findByText("chart 1");
+    await user.click(screen.getByRole("button", { name: "Add to dashboard" }));
+    const box = await screen.findByRole("dialog", { name: "Add to dashboard" });
+    await user.click(within(box).getByRole("button", { name: "Add panel" }));
+    const note = await screen.findByText(/^Added to "/);
+    // Its own row under the header: never among the controls.
+    expect(note.closest("[data-explore-added]")).toBeTruthy();
+    expect(note.closest("header")).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Project" }), { target: { value: "p2" } });
+    await waitFor(() => expect(screen.queryByText(/^Added to "/)).toBeNull());
+    expect(screen.queryByRole("button", { name: "Open dashboard" })).toBeNull();
+  });
+
+  it("half-typed and failed queries are not kept", async () => {
+    const empty: FakeQueryAnswer = { result_type: "matrix", series: [], took_ms: 5 };
+    shop({ node_c: empty, bad: { error: { code: "unreachable", message: "Prometheus didn't answer in time." }, status: 502 } });
+    await openExplore({ page: "explore", project: "p1", expr: "node_c" });
+    await waitFor(() => expect(meta().textContent).toContain("0 series"));
+    // An empty answer, left alone past the pause, isn't kept.
+    await pause(2300);
+    expect(readTrail("p1")).toEqual([]);
+    // A failed run isn't kept, even run on purpose.
+    fireEvent.change(query(), { target: { value: "bad" } });
+    await screen.findByRole("heading", { name: "Source unreachable" });
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    await pause(2300);
+    expect(readTrail("p1")).toEqual([]);
+    // Text that can't run isn't kept either.
+    fireEvent.change(query(), { target: { value: "sum(up" } });
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(meta().textContent).toContain("✗"));
+    expect(readTrail("p1")).toEqual([]);
+    // A run with data, left alone, is.
+    fireEvent.change(query(), { target: { value: "up" } });
+    await screen.findByText("chart 3");
+    await waitFor(() => expect(readTrail("p1").map((e) => e.expr)).toEqual(["up"]), { timeout: 3000 });
+  }, 15000);
+
+  it("an explicit run is kept even when empty", async () => {
+    shop({ node_c: { result_type: "matrix", series: [], took_ms: 5 } });
+    await openExplore({ page: "explore", project: "p1" });
+    await screen.findByRole("textbox", { name: "Query" });
+    fireEvent.change(query(), { target: { value: "node_c" } });
+    await waitFor(() => expect(meta().textContent).toContain("0 series"));
+    const hold = holdBatches();
+    hold.on = true;
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    // Not at the press: on the run's answer.
+    await waitFor(() => expect(document.querySelector("[data-explore-running]")).toBeTruthy());
+    expect(readTrail("p1")).toEqual([]);
+    hold.release();
+    await waitFor(() => expect(readTrail("p1").map((e) => e.expr)).toEqual(["node_c"]));
+  });
+
+  it("a trail chip from another source says it switched", async () => {
+    twoProjects({ "p1|up": three, "p1|rate(x[5m])": one });
+    pushTrail("p1", { expr: "up", sourceId: "s1", at: 1 });
+    pushTrail("p1", { expr: "rate(x[5m])", sourceId: "s3", at: 2 });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "s1", expr: "up" });
+    await screen.findByText("chart 3");
+    const trail = screen.getByRole("toolbar", { name: "Recent queries" });
+    const mine = within(trail).getByRole("button", { name: "up" });
+    expect(mine.getAttribute("title")).toBe("up · s1 name");
+    expect(mine.textContent).toBe("up");
+    const other = within(trail).getByRole("button", { name: "rate(x[5m]) · s3 name" });
+    expect(other.getAttribute("title")).toBe("rate(x[5m]) · s3 name");
+    expect(other.textContent).toBe("rate(x[5m]) · s3 name");
+    await user.click(other);
+    await waitFor(() => expect((screen.getByRole("combobox", { name: "Source" }) as HTMLSelectElement).value).toBe("s3"));
+    const said = within(trail.parentElement as HTMLElement).getByRole("status");
+    expect(said.textContent).toBe("Switched to s3 name.");
+    await screen.findByText("chart 1");
+    expect(query().value).toBe("rate(x[5m])");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the query field grows with wrapped text", async () => {
+    let height = 55;
+    Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", { configurable: true, get: () => height });
+    try {
+      shop();
+      await openExplore();
+      await screen.findByRole("textbox", { name: "Query" });
+      fireEvent.change(query(), { target: { value: `sum(rate(${"a".repeat(120)}[5m]))` } });
+      expect(query().style.height).toBe("55px");
+      expect(query().style.overflowY).toBe("hidden");
+      // Past ten lines it stops growing and scrolls.
+      height = 2000;
+      fireEvent.change(query(), { target: { value: `sum(rate(${"b".repeat(2000)}[5m]))` } });
+      expect(parseFloat(query().style.height)).toBeLessThan(2000);
+      expect(parseFloat(query().style.height)).toBeGreaterThan(150);
+      expect(query().style.overflowY).toBe("auto");
+    } finally {
+      delete (HTMLTextAreaElement.prototype as { scrollHeight?: number }).scrollHeight;
+    }
   });
 
   it("typing just before switching tabs still lands in the Explore tab", async () => {

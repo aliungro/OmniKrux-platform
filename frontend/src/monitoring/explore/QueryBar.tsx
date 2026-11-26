@@ -2,12 +2,30 @@
 // it saying how the last run ended. Only that line is a polite live region, and it changes only when
 // a run ends; **Running…** shows beside it, outside the live region, and never on each keystroke.
 
-import { forwardRef, type KeyboardEvent, type ReactNode } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { pressed } from "../../features/chrome/shortcuts";
 import type { ExploreKind, ExploreRunState, LinesRunState } from "./useExploreRun";
 import s from "./ExplorePage.module.css";
 
-const MAX_ROWS = 6;
+/** The field grows with its wrapped text up to this many lines, then scrolls. */
+const MAX_LINES = 10;
+/** The field's line height when the style can't be read (12.5px Geist Mono at 1.55). */
+const LINE_FALLBACK = 12.5 * 1.55;
+const px = (value: string) => {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** Sizes the field to its wrapped text (its `scrollHeight`), up to ten lines; past that it scrolls. */
+function fitToText(el: HTMLTextAreaElement) {
+  const style = getComputedStyle(el);
+  const line = parseFloat(style.lineHeight);
+  const max = (Number.isFinite(line) ? line : LINE_FALLBACK) * MAX_LINES + px(style.paddingTop) + px(style.paddingBottom);
+  el.style.height = "auto";
+  const need = el.scrollHeight;
+  el.style.height = `${Math.min(need, max) + px(style.borderTopWidth) + px(style.borderBottomWidth)}px`;
+  el.style.overflowY = need > max ? "auto" : "hidden";
+}
 export const NO_QUERY = "Pick a metric on the left, or type a query.";
 export const FAILED_TITLE = { unreachable: "Source unreachable", error: "Query error" } as const;
 
@@ -23,7 +41,23 @@ interface QueryBarProps {
 }
 
 export const QueryBar = forwardRef<HTMLTextAreaElement, QueryBarProps>(function QueryBar({ expr, language, onChange, onRun, onLeave }, ref) {
-  const rows = Math.min(MAX_ROWS, Math.max(1, expr.split("\n").length));
+  const field = useRef<HTMLTextAreaElement>(null);
+  useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
+  // A long line wraps: the field follows its wrapped height, not its count of line breaks (C16).
+  useLayoutEffect(() => { if (field.current) fitToText(field.current); }, [expr]);
+  // A narrower or wider field wraps differently: it is fitted again when its width changes.
+  useEffect(() => {
+    const el = field.current;
+    if (!el || typeof ResizeObserver !== "function") return;
+    let width = el.clientWidth;
+    const watch = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fitToText(el);
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (pressed("exploreRun", e)) {
       e.preventDefault();
@@ -38,7 +72,7 @@ export const QueryBar = forwardRef<HTMLTextAreaElement, QueryBarProps>(function 
     <div className={s.bar}>
       <span className={s.lang} aria-hidden="true">{language}</span>
       <textarea
-        ref={ref}
+        ref={field}
         className={s.input}
         aria-label="Query"
         aria-keyshortcuts="q"
@@ -47,7 +81,7 @@ export const QueryBar = forwardRef<HTMLTextAreaElement, QueryBarProps>(function 
         autoCapitalize="off"
         autoComplete="off"
         autoCorrect="off"
-        rows={rows}
+        rows={1}
         value={expr}
         placeholder={language === "LogQL" ? '{app="api"} |= "error"' : 'rate(http_requests_total{job="api"}[5m])'}
         onChange={(e) => onChange(e.target.value)}

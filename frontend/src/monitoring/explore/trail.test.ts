@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trailWords } from "./Trail";
 import { clearTrail, normalizeQuery, pushTrail, readTrail, TRAIL_MAX, TRAIL_PREFIX, TRAIL_SHOWN } from "./trailStore";
 
 beforeEach(() => localStorage.clear());
@@ -75,5 +76,19 @@ describe("trail", () => {
     expect(normalizeQuery('{a="q\\"  r"}   x')).toBe('{a="q\\"  r"} x');
     expect(normalizeQuery("`a   b`   c")).toBe("`a   b` c");
     expect(normalizeQuery("sum( up )")).not.toBe(normalizeQuery("sum(up)"));
+  });
+});
+
+describe("trail chips", () => {
+  it("a chip names its source, and says it when the source is another", () => {
+    const entry = { expr: "rate(x[5m])", sourceId: "s3", at: 1 };
+    expect(trailWords(entry, "Operator Prometheus", true)).toEqual({ text: "rate(x[5m])", title: "rate(x[5m]) · Operator Prometheus" });
+    expect(trailWords(entry, "Operator Prometheus", false)).toEqual({ text: "rate(x[5m]) · Operator Prometheus", title: "rate(x[5m]) · Operator Prometheus" });
+    // A long text is cut on the chip, never in its title.
+    const long = { ...entry, expr: `sum(rate(${"a".repeat(60)}[5m]))` };
+    expect(trailWords(long, "P", false).text).toMatch(/^sum\(rate\(a+… · P$/);
+    expect(trailWords(long, "P", false).title).toBe(`${long.expr} · P`);
+    // A source the project no longer links has no name to give.
+    expect(trailWords(entry, null, false)).toEqual({ text: "rate(x[5m])", title: "rate(x[5m])" });
   });
 });

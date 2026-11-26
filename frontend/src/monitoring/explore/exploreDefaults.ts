@@ -18,10 +18,15 @@ export function defaultExploreProject(view: Pick<ExploreView, "project">, tree: 
   return byName[0]?.id ?? null;
 }
 
-/** The view's source when the project links it; else the first Prometheus-compatible link; else the first Loki link. */
-export function defaultExploreSource(project: ProjectOut, sourceId?: string): LinkOut | null {
+/**
+ * The view's source when the project links it; else (a project switch) the first link of the kind
+ * that was shown, so a Loki stays a Loki; else the first Prometheus-compatible link; else the first
+ * Loki link.
+ */
+export function defaultExploreSource(project: ProjectOut, sourceId?: string, keepType?: LinkOut["source_type"]): LinkOut | null {
   const named = sourceId ? project.links.find((l) => l.source_id === sourceId && isQueryable(l.source_type)) : undefined;
-  return named ?? project.links.find((l) => l.source_type === "prometheus") ?? project.links.find((l) => l.source_type === "loki") ?? null;
+  const kept = keepType && isQueryable(keepType) ? project.links.find((l) => l.source_type === keepType) : undefined;
+  return named ?? kept ?? project.links.find((l) => l.source_type === "prometheus") ?? project.links.find((l) => l.source_type === "loki") ?? null;
 }
 
 /** The view's range when it reads as one (stored empty or unreadable parts are the default). */

@@ -8,6 +8,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import { DialogShell } from "../../features/dock/ConfirmDialog";
 import { useGroups } from "../api/hooks";
+import { firstMetric, logSelector } from "../build/promql";
+import { humanTitle } from "../build/writeQuery";
 import type { LinkOut, ProjectOut } from "../api/types";
 import { listDashboards, refreshAfterDashboardChange } from "../dashboards/api";
 import { editSessions } from "../dashboards/editor/useDashboardEditor";
@@ -32,6 +34,20 @@ const METRIC_CHARTS: readonly { type: PanelType; label: string }[] = [
   { type: "table", label: "Table" },
 ];
 const MAX_TITLE = 120;
+const NEW_DASHBOARD = "New dashboard";
+
+/**
+ * What a new dashboard for this query is called: the first metric it reads, in words; for a log
+ * query, its selector; else a plain "New dashboard".
+ */
+export function suggestedDashboardTitle(expr: string, sourceType: LinkOut["source_type"]): string {
+  if (sourceType === "loki") {
+    const selector = logSelector(expr);
+    return selector ? `Logs from ${selector}`.slice(0, MAX_TITLE) : NEW_DASHBOARD;
+  }
+  const metric = firstMetric(expr);
+  return metric ? humanTitle(metric).slice(0, MAX_TITLE) : NEW_DASHBOARD;
+}
 
 /** Whether this browser holds changes to the dashboard that the save below doesn't carry. */
 function holdsUnsavedWork(dashboardId: string): boolean {
@@ -100,7 +116,8 @@ export function AddToDashboard({ project, source, expr, kind, defaultTitle, unit
 
   const target = choice === NEW ? null : (targets.find((t) => t.id === choice) ?? null);
   const taken = (dashboards.data ?? []).filter((d) => d.owner_kind === "project" && d.owner_id === project.id).map((d) => d.title);
-  const titleValue = newTitle ?? freshTitle(taken);
+  const suggested = suggestedDashboardTitle(expr, source.source_type);
+  const titleValue = newTitle ?? freshTitle(taken, suggested);
   const note = target !== null && holdsUnsavedWork(target.id) ? DRAFT_NOTE : null;
 
   // A failure takes the keyboard: it is read where the problem is.
@@ -116,7 +133,7 @@ export function AddToDashboard({ project, source, expr, kind, defaultTitle, unit
     try {
       let added: Added;
       if (target === null) {
-        const made = await createDashboardWithPanel({ kind: "project", id: project.id }, titleValue.trim() === "" ? freshTitle(taken) : titleValue.trim(), make("project"));
+        const made = await createDashboardWithPanel({ kind: "project", id: project.id }, titleValue.trim() === "" ? freshTitle(taken, suggested) : titleValue.trim(), make("project"));
         added = { id: made.id, title: made.title };
       } else {
         const saved = await addPanelToDashboard(target, make(target.ownerKind));

@@ -133,7 +133,12 @@ describe("Metrics and logs on one timeline", () => {
     await openExplore();
     const region = await screen.findByRole("region", { name: "Log lines" });
     expect(within(region).getByRole("heading", { name: "Log lines" })).toBeTruthy();
-    expect(within(region).getByText("Pick values under Only, or write a LogQL selector, to see matching log lines here.")).toBeTruthy();
+    // No chips yet (Task 25, C12): the hint points only to what can be done.
+    expect(within(region).getByText("Write a LogQL selector to see matching log lines here.")).toBeTruthy();
+    expect(within(region).queryByText(/Pick values under Only/)).toBeNull();
+    const metrics = await screen.findByRole("listbox", { name: "Metrics" });
+    await user.click(await within(metrics).findByRole("option", { name: /^http_requests_total\b/ }));
+    expect(await within(region).findByText("Pick values under Only, or write a LogQL selector, to see matching log lines here.")).toBeTruthy();
     await linkByChip(user);
     const field = within(region).getByRole("textbox", { name: "Logs query" }) as HTMLTextAreaElement;
     expect(field.value).toBe('{namespace="api"}');

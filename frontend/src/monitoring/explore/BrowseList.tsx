@@ -1,7 +1,9 @@
 // The browse list (X2): the metrics of the project's Prometheus-compatible source, or the log
 // streams of its Loki source, as one virtualized listbox. The keyboard stays on the listbox:
 // Up/Down move the highlight, Enter picks, and a letter goes into the filter. A pick writes the
-// query; it never moves the focus.
+// query; it never moves the focus. The heading counts the source shown (its name, not the
+// project's), a long name has its whole self as its title (the help text is its description), and a
+// new source starts with an empty filter.
 
 import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -17,7 +19,9 @@ const FILTER_MS = 150;
 
 export interface BrowseListProps {
   mode: "metrics" | "streams";
-  projectName: string;
+  /** The source the list is about: its name heads the list, and a new one clears the filter. */
+  sourceId: string;
+  sourceName: string;
   metrics: BrowseMetric[];
   streams: OwnerStreamLabel[];
   selectedMetric: string | null;
@@ -73,7 +77,7 @@ function rowsOf(mode: "metrics" | "streams", metrics: BrowseMetric[], streams: O
 }
 
 export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function BrowseList(props, ref) {
-  const { mode, projectName, metrics, streams, selectedMetric, selectedStreams, loading, error, problems, notes, streamWindowSeconds, builtAt, refreshing, refreshError } = props;
+  const { mode, sourceId, sourceName, metrics, streams, selectedMetric, selectedStreams, loading, error, problems, notes, streamWindowSeconds, builtAt, refreshing, refreshError } = props;
   const uid = useId();
   const scroller = useRef<HTMLDivElement>(null);
   const filter = useRef<HTMLInputElement>(null);
@@ -86,6 +90,13 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
     const timer = setTimeout(() => setApplied(text), FILTER_MS);
     return () => clearTimeout(timer);
   }, [text]);
+  // Another source has another list: words typed for the last one would only hide it.
+  const [listFor, setListFor] = useState(sourceId);
+  if (listFor !== sourceId) {
+    setListFor(sourceId);
+    setText("");
+    setApplied("");
+  }
 
   const rows = useMemo(() => rowsOf(mode, metrics, streams, applied), [mode, metrics, streams, applied]);
   const options = useMemo(() => rows.flatMap((r, i) => (r.kind === "head" ? [] : [i])), [rows]);
@@ -164,7 +175,7 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
   return (
     <div className={s.browse}>
       <div className={s.headRow}>
-        <h2 className={s.heading}>{`${noun} in ${projectName} · ${total}`}</h2>
+        <h2 className={s.heading}>{`${noun} in ${sourceName} · ${total}`}</h2>
         {notes.length > 0 && <HelpTip label="About this list">{notes.join(" ")}</HelpTip>}
       </div>
       <input ref={filter} className={s.filter} type="text" autoComplete="off" spellCheck={false}
@@ -199,15 +210,16 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
                   <div key={row.key} id={optionId(i)} role="option" className={s.option} aria-selected={isSelected(row)}
                     aria-posinset={options.indexOf(i) + 1} aria-setsize={options.length}
                     data-active={i === activeRow ? "true" : undefined}
+                    aria-description={row.kind === "metric" ? (row.metric.help ?? undefined) : undefined}
                     onClick={() => { setActive(options.indexOf(i)); pickRow(i); }}>
                     {row.kind === "metric" ? (
                       <>
-                        <span className={s.name} title={row.metric.help ?? undefined}>{row.metric.name}</span>
+                        <span className={s.name} title={row.metric.name}>{row.metric.name}</span>
                         {" "}
                         <span className={s.type}>{row.metric.typeLabel}</span>
                       </>
                     ) : (
-                      <span className={s.name}>{`${row.label} = ${row.value}`}</span>
+                      <span className={s.name} title={`${row.label} = ${row.value}`}>{`${row.label} = ${row.value}`}</span>
                     )}
                   </div>
                 );

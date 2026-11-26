@@ -16,6 +16,8 @@ import s from "./LinkedLogs.module.css";
 const ChartView = lazy(() => import("../charts"));
 
 export const LINKED_HINT = "Pick values under Only, or write a LogQL selector, to see matching log lines here.";
+/** With no chips to pick from (a typed query), the hint points only to the field. */
+export const SELECTOR_HINT = "Write a LogQL selector to see matching log lines here.";
 export const METRIC_QUERY = "This is a metric query, so there are no lines to list.";
 const ROW = 22;
 const MAX_LIST = 320;
@@ -28,6 +30,8 @@ export interface LinkedLogsProps {
   sourceName: string;
   /** Metrics mode: the Logs query field's text and its edits. */
   field?: { value: string; onChange(text: string): void };
+  /** Metrics mode: the Only chips are shown, so the hint can point to them. */
+  chips?: boolean;
   /** The selector shown in the info line; `null` when there is none. */
   selector: string | null;
   /** The text is a LogQL metric query: a chart, no lines. */
@@ -44,7 +48,7 @@ export interface LinkedLogsProps {
 }
 
 export const LinkedLogs = forwardRef<HTMLElement, LinkedLogsProps>(function LinkedLogs(props, ref) {
-  const { mode, sourceName, field, selector, metricQuery, state, current, window, range, onShowAll, onRetry, showAllRef, headingRef } = props;
+  const { mode, sourceName, field, chips = false, selector, metricQuery, state, current, window, range, onShowAll, onRetry, showAllRef, headingRef } = props;
   const panel = useMemo<PanelSpec>(() => {
     const p = newPanel("logs", "explore:lines", { x: 0, y: 0, w: 12, h: 8 });
     p.title = "Log lines";
@@ -110,7 +114,7 @@ export const LinkedLogs = forwardRef<HTMLElement, LinkedLogsProps>(function Link
           <span className={s.invalidMark} aria-hidden="true">✗</span> {state.message} <span className={s.invalidStep}>{FIX_QUERY}</span>
         </p>
       ) : selector === null ? (
-        mode === "metrics" ? <p className={s.note}>{LINKED_HINT}</p> : null
+        mode === "metrics" ? <p className={s.note}>{chips ? LINKED_HINT : SELECTOR_HINT}</p> : null
       ) : (
         <>
           <div className={s.windowRow}>

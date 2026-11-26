@@ -398,14 +398,17 @@ export default function TimeSeriesChart({
       return;
     }
     if (e.key === "Escape" && onSelect) {
+      // Either way the keyboard's tooltip goes too: nothing is left standing over the chart.
       if (keyBandRef.current) {
         e.stopPropagation();
         stopKeyBand();
+        setCursor(null);
         return;
       }
       if (selection) {
         // Shows all again; the crosshair's own Esc is for when nothing is selected.
         e.stopPropagation();
+        setCursor(null);
         onSelect(null, "keyboard");
         return;
       }
