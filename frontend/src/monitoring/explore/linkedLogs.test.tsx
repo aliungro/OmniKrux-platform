@@ -677,4 +677,39 @@ describe("Explore with Loki: one query, one result", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     notBody();
   });
+
+  it("Wrap lines wraps and is remembered", async () => {
+    shop();
+    batchItems();
+    const user = userEvent.setup();
+    await openExplore();
+    await linkByChip(user);
+    await within(section()).findByText("Last 1 hour · 3 log lines");
+    const wrap = within(section()).getByRole("button", { name: "Wrap lines" });
+    expect(wrap.getAttribute("aria-pressed")).toBe("false");
+    await user.click(wrap);
+    expect(wrap.getAttribute("aria-pressed")).toBe("true");
+    expect(localStorage.getItem("omnikrux.monitoring.explore.wrap")).toBe("1");
+    expect(within(section()).getAllByRole("listitem")[0].className).toMatch(/logWrap/);
+    cleanup();
+    await openExplore();
+    await linkByChip(user);
+    await within(section()).findByText("Last 1 hour · 3 log lines");
+    expect(within(section()).getByRole("button", { name: "Wrap lines" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a full page of lines says there may be more", async () => {
+    shop({
+      '{namespace="api"}': {
+        result_type: "streams",
+        streams: [{ labels: { namespace: "api" }, entries: Array.from({ length: 1000 }, (_, i) => [nowNs(30) .replace(/d{6}$/, "") + String(i).padStart(6, "0"), `line ${i}`]) }],
+        took_ms: 4,
+      } as FakeQueryAnswer,
+    });
+    batchItems();
+    const user = userEvent.setup();
+    await openExplore();
+    await linkByChip(user);
+    expect(await within(section()).findByText(/Showing the newest 1000 lines. There may be more: narrow the range or the query./)).toBeTruthy();
+  });
 });

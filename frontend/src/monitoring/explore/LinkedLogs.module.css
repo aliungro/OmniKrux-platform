@@ -211,3 +211,31 @@
     padding: 10px 10px 12px;
   }
 }
+
+/* Wrap lines: a toggle at the header's end; pressed reads as the quiet focus tint. */
+.wrap {
+  margin-left: auto;
+  padding: 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wrap:hover {
+  border-color: var(--focus);
+}
+
+.wrap[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--focus) 55%, var(--rule));
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
+}
+
+.wrap:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

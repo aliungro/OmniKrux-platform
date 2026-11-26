@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChartLogLine } from "../dashboards/runPanel";
-import { LINES_LIMIT, linkedLogSelector, lineTone, logMarks, windowLabel } from "./logLinks";
+import { LINES_LIMIT, countWords, lineTag, linkedLogSelector, lineTone, logMarks, windowLabel } from "./logLinks";
 
 const line = (text: string, labels: Record<string, string> = {}, ts = "1700000000123000000"): ChartLogLine => ({
   key: text, ts, line: text, labels, projectName: null,
@@ -48,5 +48,18 @@ describe("logLinks", () => {
     const at = (h: number, m: number) => new Date(2026, 10, 19, h, m, 0).getTime() / 1000;
     expect(windowLabel({ start: at(13, 41), end: at(13, 49) }, 14)).toBe("13:41:00 – 13:49:00 · 14 log lines");
     expect(windowLabel({ start: at(13, 41), end: at(13, 49) }, 1)).toBe("13:41:00 – 13:49:00 · 1 log line");
+  });
+
+  it("a line's tag is the first present stream label", () => {
+    expect(lineTag({ pod: "p", job: "j" })).toBe("p");
+    expect(lineTag({ k8s_pod_name: "kp", pod: "p" })).toBe("kp");
+    expect(lineTag({ service_name: "svc", app: "a" })).toBe("svc");
+    expect(lineTag({ job: "j" })).toBe("j");
+    expect(lineTag({ namespace: "n" })).toBeNull();
+  });
+
+  it("a full page of lines says there may be more", () => {
+    expect(countWords(3)).toBe("3 log lines");
+    expect(countWords(LINES_LIMIT)).toBe("Showing the newest 1000 lines. There may be more: narrow the range or the query.");
   });
 });

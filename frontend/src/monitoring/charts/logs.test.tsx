@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChartView from "./index";
 import { dataOf, fakeBox, logLine, panelOf, RANGE } from "./panelFixtures";
@@ -107,5 +107,83 @@ describe("logs panel", () => {
     rerender(view(burst(5, 3))); // lines 3..7: line 0 is gone
     expect(document.activeElement).not.toBe(document.body);
     expect(screen.getAllByRole("listitem")).toContain(document.activeElement);
+  });
+
+  it("a click opens a line", () => {
+    draw([logLine(1, "first"), logLine(2, "second", { labels: { app: "cart" } })]);
+    const items = screen.getAllByRole("listitem");
+    fireEvent.click(items[0]);
+    expect(items[0].getAttribute("data-open")).toBe("true");
+    expect(within(screen.getByRole("status")).getByText("cart")).toBeTruthy();
+    fireEvent.click(items[0]);
+    expect(within(screen.getByRole("status")).queryByText("cart")).toBeNull();
+  });
+
+  it("a click that ended a text selection does not open the line", () => {
+    draw([logLine(1, "select me please")]);
+    const item = screen.getByRole("listitem");
+    const range = document.createRange();
+    range.selectNodeContents(item.querySelector("span")!);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.click(item);
+    expect(item.getAttribute("data-open")).toBeNull();
+    window.getSelection()!.removeAllRanges();
+  });
+
+  it("an opened line shows its full text before its labels", () => {
+    const long = "x".repeat(300);
+    draw([logLine(1, long, { labels: { app: "cart" } })], { wrap: false });
+    fireEvent.click(screen.getByRole("listitem"));
+    const strip = screen.getByRole("status");
+    const full = within(strip).getByText(long);
+    const label = within(strip).getByText("cart");
+    expect(full.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(strip).getByRole("button", { name: "Copy line" })).toBeTruthy();
+  });
+
+  it("Copy line copies the text, and says when it can't", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    draw([logLine(1, "copy this line")]);
+    fireEvent.click(screen.getByRole("listitem"));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy line" })); });
+    expect(writeText).toHaveBeenCalledWith("copy this line");
+    expect(screen.getByText("Copied")).toBeTruthy();
+    writeText.mockRejectedValue(new Error("no"));
+    cleanup();
+    draw([logLine(1, "copy this line")]);
+    fireEvent.click(screen.getByRole("listitem"));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy line" })); });
+    expect(screen.getByText("Couldn't copy")).toBeTruthy();
+  });
+
+  it("Esc on an opened line closes it and puts focus back on the line", () => {
+    draw([logLine(1, "first")]);
+    const item = screen.getByRole("listitem");
+    fireEvent.click(item);
+    screen.getByRole("button", { name: "Copy line" }).focus();
+    fireEvent.keyDown(screen.getByRole("button", { name: "Copy line" }), { key: "Escape" });
+    expect(item.getAttribute("data-open")).toBeNull();
+    expect(document.activeElement).toBe(item);
+  });
+
+  it("lines from several Pods carry a Pod tag", () => {
+    draw([
+      logLine(1, "a", { labels: { k8s_pod_name: "api-7d9f", pod: "ignored" } }),
+      logLine(2, "b", { labels: { k8s_pod_name: "a-very-long-pod-name-that-is-cut" } }),
+    ]);
+    const tags = document.querySelectorAll("[title]");
+    const titles = [...tags].map((t) => t.getAttribute("title"));
+    expect(titles).toContain("k8s_pod_name=api-7d9f");
+    expect(screen.getByText("api-7d9f")).toBeTruthy();
+    const long = screen.getByText(/^a-very-long-pod-/);
+    expect(long.textContent!.length).toBeLessThanOrEqual(18);
+    expect(long.getAttribute("title")).toBe("k8s_pod_name=a-very-long-pod-name-that-is-cut");
+  });
+
+  it("one stream shows no tags", () => {
+    draw([logLine(1, "a", { labels: { k8s_pod_name: "api-7d9f" } }), logLine(2, "b", { labels: { k8s_pod_name: "api-7d9f" } })]);
+    expect(screen.queryByText("api-7d9f")).toBeNull();
   });
 });

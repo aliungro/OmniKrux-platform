@@ -70,9 +70,25 @@ export function clockTime(seconds: number): string {
   return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
 }
 
+/** The labels that say where a line comes from, best first. */
+export const TAG_KEYS = ["k8s_pod_name", "pod", "k8s_container_name", "container", "service_name", "app", "job"];
+
+/** Which stream a line comes from: the first present of the labels above. */
+export function lineTag(labels: Record<string, string>): string | null {
+  for (const key of TAG_KEYS) {
+    const value = labels[key];
+    if (value !== undefined && value !== "") return value;
+  }
+  return null;
+}
+
 export const lineCount = (n: number) => `${n} log ${n === 1 ? "line" : "lines"}`;
+
+/** The count in words: a full page says there may be more. */
+export const countWords = (n: number) =>
+  n >= LINES_LIMIT ? `Showing the newest ${n} lines. There may be more: narrow the range or the query.` : lineCount(n);
 
 /** `13:41:00 – 13:49:00 · 14 log lines`. */
 export function windowLabel(range: { start: number; end: number }, lines: number): string {
-  return `${clockTime(range.start)} – ${clockTime(range.end)} · ${lineCount(lines)}`;
+  return `${clockTime(range.start)} – ${clockTime(range.end)} · ${countWords(lines)}`;
 }
