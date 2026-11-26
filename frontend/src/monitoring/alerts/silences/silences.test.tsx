@@ -214,8 +214,7 @@ describe("silences", () => {
     await user.click(expire);
     const dialog = await screen.findByRole("alertdialog", { name: "Expire this silence?" });
     expect(within(dialog).getByText("Its alerts notify again at their next check.")).toBeTruthy();
-    const go = within(dialog).getByRole("button", { name: "Expire silence" });
-    await waitFor(() => expect(document.activeElement).toBe(go));
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })));
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(document.activeElement).toBe(expire);

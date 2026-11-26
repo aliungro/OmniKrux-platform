@@ -381,7 +381,7 @@ describe("Project delete review", () => {
     }, fb);
   };
 
-  it("project delete review lists only what applies and opens on its button", async () => {
+  it("project delete review lists only what applies and opens on Cancel", async () => {
     const user = userEvent.setup();
     withEverything();
     open("p1");
@@ -393,7 +393,7 @@ describe("Project delete review", () => {
     expect(within(dialog).getByText("Other sources stay as they are and are only unlinked: Plain.")).toBeTruthy();
     expect(within(dialog).getByText("It leaves these groups; the groups stay: Prod.")).toBeTruthy();
     expect(within(dialog).queryByText("Only the project itself is removed.")).toBeNull();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete project" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete project…" }));
@@ -513,8 +513,8 @@ describe("Project delete review", () => {
     await waitFor(() => expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete project" }).getAttribute("aria-disabled")).toBeNull());
     expect(api.requests.some((r) => r.method === "DELETE" && r.url.startsWith("/api/monitoring/alerts/rules/r1"))).toBe(true);
     expect(within(screen.getByRole("alertdialog")).queryByText(/Remove its rules/)).toBeNull();
-    // The keyboard is on the action, never on the body.
-    await waitFor(() => expect(document.activeElement).toBe(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete project" })));
+    // The keyboard is on Cancel once unblocked, never on the body.
+    await waitFor(() => expect(document.activeElement).toBe(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" })));
   });
 
   it("when a rule's Review goes, the keyboard moves to the next rule's button", async () => {

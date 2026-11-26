@@ -223,7 +223,7 @@ describe("Grafana connections on the Sources page", () => {
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Grafana connections" }));
   });
 
-  it("removing a connection asks first and opens on its button", async () => {
+  it("removing a connection asks first and opens on Cancel", async () => {
     const user = userEvent.setup();
     const api = installFakeMonitoringApi({ transfer: { grafana: [grafana("g1", "Main", { dashboards_imported: 2 })] } }, fallback);
     open();
@@ -231,8 +231,7 @@ describe("Grafana connections on the Sources page", () => {
     await user.click(remove);
     const ask = screen.getByRole("alertdialog", { name: "Remove the connection Main?" });
     expect(within(ask).getByText("Dashboards imported from it stay. To update them from their source later, pick their file.")).toBeTruthy();
-    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Remove connection" }));
-    expect(within(ask).getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Cancel" }));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(document.activeElement).toBe(remove);

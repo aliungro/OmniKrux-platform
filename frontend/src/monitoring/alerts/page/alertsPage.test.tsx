@@ -353,7 +353,7 @@ describe("the Alerts page", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByRole("heading").textContent).toBe('Delete the rule "SlowCheckout"?');
     await waitFor(() => expect(dialog.textContent).toContain(`Its panel "Latency" loses its alert; the dashboard saves a new version.`));
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete rule" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     // Esc goes back to More actions and deletes nothing.
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());

@@ -148,18 +148,33 @@ describe("deleting a source", () => {
     return installFakeMonitoringApi({ sources: [prom], projects: [dev] }, fallback);
   };
 
-  it("delete review opens on its action button and Ctrl+Enter confirms", async () => {
+  it("delete review opens on Cancel and Ctrl+Enter confirms", async () => {
     const api = seed();
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Delete Prom" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Delete source Prom?" });
     expect(await within(dialog).findByText("Projects that use it lose it: Dev.")).toBeTruthy();
     const go = within(dialog).getByRole("button", { name: "Delete source" });
-    expect(document.activeElement).toBe(go);
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     fireEvent.keyDown(go, { key: "Enter", ctrlKey: true });
     await waitFor(() => expect(api.state.sources).toHaveLength(0));
     expect(await screen.findByText("No sources yet. Add one here or while setting up a project.")).toBeTruthy();
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("Enter on Cancel cancels the delete and gives the keyboard back", async () => {
+    const api = seed();
+    open();
+    const opener = await screen.findByRole("button", { name: "Delete Prom" });
+    fireEvent.click(opener);
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete source Prom?" });
+    await within(dialog).findByText("Projects that use it lose it: Dev.");
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(document.activeElement).toBe(cancel);
+    await userEvent.setup().keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(api.state.sources).toHaveLength(1);
+    expect(document.activeElement).toBe(opener);
   });
 
   it("stale delete review asks again", async () => {

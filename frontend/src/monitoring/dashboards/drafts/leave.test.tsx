@@ -142,6 +142,17 @@ describe("Leaving a dashboard with unsaved changes", () => {
     notBody();
   });
 
+  it("after Discard changes the keyboard is on the next page's heading", async () => {
+    setup();
+    const user = await editing();
+    await user.click(await screen.findByRole("treeitem", { name: "Shop" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Discard changes" }));
+    const heading = await screen.findByRole("heading", { level: 1, name: "Shop" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(document.activeElement?.tagName).not.toBe("MAIN");
+    notBody();
+  });
+
   it("opening another item from the sidebar in the same tab asks first", async () => {
     setup();
     const user = await editing();

@@ -191,8 +191,7 @@ describe("Edit mode", () => {
     const discard = screen.getByRole("button", { name: "Discard" });
     await user.click(discard);
     const dialog = screen.getByRole("alertdialog", { name: 'Discard your changes to "API latency"?' });
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Discard changes" }));
-    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(document.activeElement).toBe(discard);

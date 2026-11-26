@@ -92,7 +92,7 @@ describe("Groups", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByRole("heading", { name: "Delete group Prod?" })).toBeTruthy();
     expect(within(dialog).getByText("Its projects stay as they are.")).toBeTruthy();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete group" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
     expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
     expect(api.state.groups).toHaveLength(0);
@@ -122,7 +122,7 @@ describe("Groups", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText("Its projects stay as they are.")).toBeTruthy();
     expect(within(dialog).getByText("Its dashboards go with it: Errors, Overview.")).toBeTruthy();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete group" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
     expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
     expect(api.requests.some((r) => r.method === "DELETE" && r.url === "/api/monitoring/groups/g1?token=review-token")).toBe(true);

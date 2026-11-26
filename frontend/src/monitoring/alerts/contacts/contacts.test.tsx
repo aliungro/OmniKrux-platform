@@ -267,7 +267,7 @@ describe("contact points", () => {
     expect(document.activeElement).toBe(field);
   });
 
-  it("delete lists the rules that lose it and opens on its action", async () => {
+  it("delete lists the rules that lose it and opens on Cancel", async () => {
     const user = userEvent.setup();
     const { api } = open({
       contactPoints: [point({ used_by: [{ id: "r1", name: "PodCrashLooping" }, { id: "r2", name: "NodeNotReady" }] }), point({ id: "c2", name: "Spare", secrets_set: ["url"] })],
@@ -276,8 +276,7 @@ describe("contact points", () => {
     await user.click(del);
     const dialog = await screen.findByRole("alertdialog", { name: 'Delete the contact point "Ops hook"?' });
     expect(await within(dialog).findByText("These rules stop notifying it: PodCrashLooping, NodeNotReady.")).toBeTruthy();
-    const go = within(dialog).getByRole("button", { name: "Delete contact point" });
-    await waitFor(() => expect(document.activeElement).toBe(go));
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })));
     // Esc goes back to Delete….
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -287,7 +286,7 @@ describe("contact points", () => {
     await user.click(screen.getByRole("button", { name: "Delete Spare…" }));
     const second = await screen.findByRole("alertdialog", { name: 'Delete the contact point "Spare"?' });
     expect(await within(second).findByText("No rule uses it.")).toBeTruthy();
-    await waitFor(() => expect(document.activeElement).toBe(within(second).getByRole("button", { name: "Delete contact point" })));
+    await waitFor(() => expect(document.activeElement).toBe(within(second).getByRole("button", { name: "Cancel" })));
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(api.requests.some((r) => r.method === "DELETE" && r.url.includes("/contact-points/c2"))).toBe(true));
     await waitFor(() => expect(screen.queryByText("Spare")).toBeNull());
@@ -309,7 +308,7 @@ describe("contact points", () => {
     await user.click(await screen.findByRole("button", { name: "Delete Ops hook…" }));
     const dialog = await screen.findByRole("alertdialog");
     const go = await within(dialog).findByRole("button", { name: "Delete contact point" });
-    await waitFor(() => expect(document.activeElement).toBe(go));
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })));
     await user.click(go);
     expect(await within(dialog).findByText("Something changed since the review. Review it again.")).toBeTruthy();
     expect(api.requests.filter((r) => r.url.endsWith("/delete-review"))).toHaveLength(2);

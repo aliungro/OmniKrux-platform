@@ -5,7 +5,7 @@ import type { AppTabs } from "../features/shell/workspace";
 import { useMonitoringTree, useSources } from "./api/hooks";
 import type { SourceOut, TreeOut } from "./api/types";
 import { pageKey, pressed } from "../features/chrome/shortcuts";
-import { focusMainFrom } from "./focus";
+import { focusMainFrom, focusNextHeading } from "./focus";
 import { readRecent, recordRecent } from "./home/recent";
 import GroupForm from "./groups/GroupForm";
 import GroupPage from "./groups/GroupPage";
@@ -359,6 +359,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       if (l.setupDraft) removeSetupDraft(l.tabId);
       returnFocus.current = root.current?.closest("main") ?? null;
       focusMainFrom(root.current);
+      focusNextHeading(root.current);
       asking.current = false;
       setLeaving(null);
       l.proceed();
@@ -377,6 +378,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     forgetSession(l.tabId);
     returnFocus.current = root.current?.closest("main") ?? null;
     focusMainFrom(root.current);
+    focusNextHeading(root.current);
     asking.current = false;
     setLeaving(null);
     l.proceed();

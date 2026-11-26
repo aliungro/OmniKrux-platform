@@ -258,7 +258,7 @@ describe("Copy and delete", () => {
     let dialog = await screen.findByRole("alertdialog", { name: 'Delete dashboard "API latency"?' });
     expect(await within(dialog).findByText("Its 2 saved versions go with it.")).toBeTruthy();
     expect(within(dialog).getByText("Your unsaved draft in this browser goes too.")).toBeTruthy();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete dashboard" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(document.activeElement).toBe(more);

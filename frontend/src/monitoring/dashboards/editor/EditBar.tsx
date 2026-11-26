@@ -96,7 +96,7 @@ export function EditNotice({ error, onShowJson, actionRef }: {
   );
 }
 
-/** Asked before Discard drops changes: focus on Discard changes, Ctrl+Enter confirms, Esc cancels. */
+/** Asked before Discard drops changes: focus on Cancel, Ctrl+Enter confirms, Esc cancels. */
 export function DiscardDialog({ title, onCancel, onDiscard, restoreFocusTo }: {
   title: string;
   onCancel(): void;
@@ -104,14 +104,14 @@ export function DiscardDialog({ title, onCancel, onDiscard, restoreFocusTo }: {
   restoreFocusTo: RefObject<HTMLElement | null>;
 }) {
   const id = useId();
-  const go = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
   return (
-    <DialogShell provider="monitoring" busy={false} onCancel={onCancel} onConfirm={onDiscard} first={go}
+    <DialogShell provider="monitoring" busy={false} onCancel={onCancel} onConfirm={onDiscard} first={cancel}
       restoreFocusTo={restoreFocusTo} labelledBy={`${id}-t`} className={s.dialog}>
       <h2 id={`${id}-t`} className={s.dialogTitle}>Discard your changes to "{title}"?</h2>
       <div className={s.dialogActions}>
-        <button type="button" className={s.secondary} onClick={onCancel}>Cancel</button>
-        <button ref={go} type="button" className={s.danger} onClick={onDiscard}>Discard changes</button>
+        <button ref={cancel} type="button" className={s.secondary} onClick={onCancel}>Cancel</button>
+        <button type="button" className={s.danger} onClick={onDiscard}>Discard changes</button>
       </div>
     </DialogShell>
   );
