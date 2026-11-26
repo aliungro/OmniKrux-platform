@@ -4,7 +4,7 @@
 import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { pressed } from "../../../features/chrome/shortcuts";
 import { isQueryable } from "../../sources/sourceLabels";
-import { usePanelEmptyReason } from "../emptyReason";
+import { usePanelEmptyWords } from "../emptyReason";
 import { PANEL_COPY } from "../grid/PanelState";
 import { isLokiLogQuery, LOG_QUERY_IN_CHART, logQueryFirst, logQueryInChart, SWITCH_TO_LOGS } from "../logQueries";
 import type { DashboardOwner, PanelData } from "../runPanel";
@@ -117,7 +117,8 @@ export function QueryTab({ panel, update, owner, ownerKind, data, live, jsonPend
   // Under the run line's count: why the run came back empty, once the check proves it.
   const settled = !live?.pending && !live?.waiting && !live?.fetching;
   const logsInChart = logQueryInChart(panel);
-  const reason = usePanelEmptyReason(panel, live?.run ?? null, settled && data?.state === "empty" && !logsInChart, settled);
+  // The tile's own rule (the window hint first, then a proved reason), so the two never disagree.
+  const reason = usePanelEmptyWords(panel, live?.run ?? null, settled && data?.state === "empty", settled, !settled);
   // A draft edit like any other: refused while the JSON does not apply; then the keyboard goes to the log query.
   const switchToLogs = () => {
     if (jsonPending) { setRefused((was) => ({ text: JSON_FIRST, attempt: (was?.attempt ?? 0) + 1 })); return; }

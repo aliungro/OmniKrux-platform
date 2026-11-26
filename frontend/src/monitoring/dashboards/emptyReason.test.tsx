@@ -208,6 +208,31 @@ describe("A window shorter than the step", () => {
     expect(api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty")).toHaveLength(0);
   });
 
+  it("the Query tab says the same as the tile: the window hint, not the server's reason", async () => {
+    const NOTHING = "The query's metrics are collected for this project, but nothing matched in this time range. Try a longer range.";
+    const api: FakeMonitoringApi = installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, spec("CPU", [panel("p-1", "Rate", "rate(up[1s])", { x: 0, y: 0, w: 12, h: 8 })])) },
+      queryAnswers: { "rate(up[1s])": none },
+      whyEmpty: { reason: "nothing_matched", message: NOTHING },
+    }, async () => json([]));
+    const user = userEvent.setup();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1 });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    await screen.findByText(/longer than the query's window \[1s\]/);
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    await user.keyboard("{Enter}");
+    const aside = await screen.findByRole("complementary", { name: "Panel settings" });
+    expect(document.activeElement).not.toBe(document.body);
+    const hint = await within(aside).findByText(/longer than the query's window \[1s\]/);
+    expect(hint.textContent).toMatch(/^This range's step is \d+[smh], longer than the query's window \[1s\]/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(NOTHING)).toBeNull();
+    expect(api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty")).toHaveLength(0);
+  });
+
   it("a dimmed older result never wears the new run's hint", async () => {
     const user = userEvent.setup();
     installFakeMonitoringApi({

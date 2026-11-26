@@ -9,6 +9,7 @@ import { logSelector, rangeDurations, scanSelectors } from "../build/promql";
 import { whyEmpty, type WhyEmptyIn, type WhyEmptyOut } from "./api";
 import type { PanelRun } from "./runPanel";
 import type { PanelSpec } from "./schema";
+import { logQueryInChart } from "./logQueries";
 import { durationText } from "./time";
 
 export type EmptySourceType = "prometheus" | "loki";
@@ -147,4 +148,18 @@ export function panelWindowHint(run: PanelRun | null): string | null {
     if (hint) return hint;
   }
   return null;
+}
+
+/**
+ * What an empty panel says in place of the generic words, one rule for the tile and its settings
+ * (failures are said before this, by the caller): a log query in a chart says nothing here (its own
+ * note speaks), then a window shorter than the step (seen from the text alone, so no check is
+ * asked; never over a dimmed older result, whose step belongs to the newer question), then the
+ * server's proved reason. Null: the generic words stay. Call it before any early return.
+ */
+export function usePanelEmptyWords(panel: PanelSpec, run: PanelRun | null, empty: boolean, settled: boolean, stale: boolean): string | null {
+  const isEmpty = empty && !logQueryInChart(panel);
+  const hint = isEmpty && !stale ? panelWindowHint(run) : null;
+  const reason = usePanelEmptyReason(panel, run, isEmpty && hint === null, settled);
+  return hint ?? reason;
 }
