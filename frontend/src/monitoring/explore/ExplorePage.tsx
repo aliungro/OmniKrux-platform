@@ -13,7 +13,7 @@ import { pressed } from "../../features/chrome/shortcuts";
 import { getProject } from "../api/client";
 import { projectKey, useMonitoringTree } from "../api/hooks";
 import { RecommendationBar } from "../build/RecommendationBar";
-import { firstMetric, isLogQlMetric, logSelector, quickCheck, severalQueries } from "../build/promql";
+import { firstMetric, isLogQlMetric, logSelector, metricNames, quickCheck, severalQueries } from "../build/promql";
 import { guessUnit, humanTitle } from "../build/writeQuery";
 import { useOwnerCatalog } from "../catalog/merge";
 import { browseMetrics } from "../catalog/metrics";
@@ -37,7 +37,7 @@ import { builderActive, builderQuery, builderReducer, EMPTY_BUILDER, metricMatch
 import { LabelChips } from "./LabelChips";
 import { LinkedLogs } from "./LinkedLogs";
 import { linkedLogSelector, logMarks } from "./logLinks";
-import { FAILED_TITLE, MetaLine, QueryBar } from "./QueryBar";
+import { FAILED_TITLE, MetaLine, NO_SUCH_METRIC, QueryBar } from "./QueryBar";
 import { Trail, trailKey } from "./Trail";
 import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trailStore";
 import { EXPLORE_DEBOUNCE_MS, explorePanel, linesKey, useExploreRun, useLinesRun } from "./useExploreRun";
@@ -276,10 +276,19 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     () => {
       // Only an answer about exactly this text, project and source: never one being replaced.
       const fresh = state.status === "done" && state.expr === expr && state.projectId === project && state.sourceId === (source?.source_id ?? null);
-      return { panel: recPanel, data: fresh ? state.data : null, catalog, stepSeconds: fresh ? (state.step ?? 0) : 0 };
+      return { panel: recPanel, data: fresh ? state.data : null, catalog, stepSeconds: fresh ? (state.step ?? 0) : 0, invalid: state.shown === "invalid" };
     },
-    [recPanel, state.status, state.expr, state.projectId, state.sourceId, state.data, state.step, expr, project, source, catalog],
+    [recPanel, state.shown, state.status, state.expr, state.projectId, state.sourceId, state.data, state.step, expr, project, source, catalog],
   );
+  // A metric the text names that this source's catalog (read whole, `ok`) doesn't list: said beside the run.
+  const missingMetric = useMemo(() => {
+    if (!catalog || !source || source.source_type !== "prometheus" || catalog.ownerKind !== "project") return null;
+    if (catalog.sourceStates?.[source.source_id] !== "ok") return null;
+    if (state.shown !== "done" || state.expr !== expr) return null;
+    const known = new Set(catalog.metrics.filter((m) => m.sourceId === null || m.sourceId === source.source_id).map((m) => m.name));
+    const name = metricNames(expr).find((n) => !known.has(n));
+    return name ? NO_SUCH_METRIC.replace("{name}", name).replace("{source}", source.source_name) : null;
+  }, [catalog, source, state.shown, state.expr, expr]);
   const applyRec = (apply: (p: PanelSpec) => PanelSpec): string | void => {
     const next = apply(recPanel).queries[0]?.expr;
     if (next === undefined || next === expr) return;
@@ -623,7 +632,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
                 onSplit={(label) => applyBuilder({ type: "split", label })}
                 onOnly={(label, value) => applyBuilder({ type: "only", label, value })} />
             )}
-            <MetaLine state={state} expr={expr} kind={kind} lines={kind === "logs" ? lines : undefined} />
+            <MetaLine state={state} expr={expr} kind={kind} lines={kind === "logs" ? lines : undefined} missing={kind === "logs" ? null : missingMetric} />
             <RecommendationBar context={recContext} scope={`explore:${project}`} onApply={applyRec}
               onDone={() => queryField.current?.focus()} />
             <div className={s.result}>{result}</div>

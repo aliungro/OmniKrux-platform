@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { QueryResponse } from "../api/types";
+import { catalogOf, metric, source } from "../catalog/fixtures";
 import { recordRecent } from "../home/recent";
 import { gate, intercept, linkedProject, linkTo, seedDashboard, spec } from "../test/dashboardSeeds";
 import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeQueryAnswer } from "../test/fakeMonitoringApi";
@@ -102,6 +103,37 @@ describe("Explore", () => {
     expect(query().getAttribute("aria-keyshortcuts")).toBe("q");
     expect(query().getAttribute("spellcheck")).toBe("false");
     expect(meta().textContent).toBe("Pick a metric on the left, or type a query.");
+  });
+
+  it("an empty run has no green check", async () => {
+    shop({}, { result_type: "matrix", series: [], took_ms: 5 });
+    await openExplore();
+    await waitFor(() => expect(meta().textContent).toContain("0 series · 5 ms"));
+    expect(meta().textContent).not.toContain("✓");
+    expect(meta().querySelector("span")?.className ?? "").not.toMatch(/metaOk/);
+  });
+
+  it("an unknown metric is named", async () => {
+    const catalogs = (state: "ok" | "partial") => ({ p1: catalogOf("p1", source("s1", { state, metrics: [metric("http_requests_total", { type: "counter", labels: ["job"], series: 3 })] })) });
+    shop({}, { result_type: "matrix", series: [], took_ms: 5 }, { catalogs: catalogs("ok") });
+    await openExplore({ page: "explore", project: "p1", expr: "rate(nope_total[5m])" });
+    await waitFor(() => expect(meta().textContent).toMatch(/0 series.*No metric named nope_total in .+ for this project\./));
+    cleanup();
+    // A name the catalog lists is never called missing.
+    shop({}, { result_type: "matrix", series: [], took_ms: 5 }, { catalogs: catalogs("ok") });
+    await openExplore({ page: "explore", project: "p1", expr: "http_requests_total" });
+    await waitFor(() => expect(meta().textContent).toContain("0 series"));
+    expect(meta().textContent).not.toContain("No metric named");
+  });
+
+  it("a partial catalog names no missing metric", async () => {
+    shop({}, { result_type: "matrix", series: [], took_ms: 5 }, {
+      catalogs: { p1: catalogOf("p1", source("s1", { state: "partial", metrics: [metric("http_requests_total", { series: 3 })] })) },
+    });
+    await openExplore({ page: "explore", project: "p1", expr: "rate(nope_total[5m])" });
+    await waitFor(() => expect(meta().textContent).toContain("0 series"));
+    await pause(50);
+    expect(meta().textContent).not.toContain("No metric named");
   });
 
   it("meta line reads like the prototype", async () => {

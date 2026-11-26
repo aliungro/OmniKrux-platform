@@ -26,6 +26,7 @@ from omnikrux.monitoring.query.filters import (
     render_matchers,
 )
 from omnikrux.monitoring.query.series import MAX_QUERY_CHARS, QueryRequest, QueryResponse
+from omnikrux.monitoring.query.words import plain_query_error
 from omnikrux.monitoring.services import MonitoringServices
 from omnikrux.monitoring.sources.connector import (
     Connector,
@@ -196,6 +197,14 @@ def _filtered(connector: Connector, query: str, matchers: Sequence[Matcher]) -> 
         raise QueryError(400, "bad_query", str(exc)) from None
 
 
+def _rejected(connector: Connector, exc: QueryRejected) -> QueryError:
+    """A tool's refusal; a `bad_query` one in plain words (anything unrecognised unchanged)."""
+    message = exc.message
+    if exc.code == "bad_query" and connector.language in ("promql", "logql"):
+        message = plain_query_error(connector.language, message)
+    return QueryError(exc.status, exc.code, message)
+
+
 async def run_query(services: MonitoringServices, req: QueryRequest) -> QueryResponse:
     """Run one query, with its project's filter when it names a project. Checks run in this
     order: the range, the source, the link, the connector, the filter, the secrets."""
@@ -228,7 +237,7 @@ async def run_query(services: MonitoringServices, req: QueryRequest) -> QueryRes
     except SourceUnreachable as exc:
         raise transport_error(exc) from None
     except QueryRejected as exc:
-        raise QueryError(exc.status, exc.code, exc.message) from None
+        raise _rejected(connector, exc) from None
     took_ms = int((time.perf_counter() - began) * 1000)
 
     return QueryResponse(
@@ -309,6 +318,6 @@ async def read_label_values(
     except SourceUnreachable as exc:
         raise transport_error(exc) from None
     except QueryRejected as exc:
-        raise QueryError(exc.status, exc.code, exc.message) from None
+        raise _rejected(connector, exc) from None
     values.sort()
     return values[:MAX_LABEL_VALUES], len(values) > MAX_LABEL_VALUES

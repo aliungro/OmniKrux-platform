@@ -36,12 +36,12 @@ export const QUERY_CHANGED = "That query changed. Review it and try again.";
 export function RecommendationBar({ context, scope, onApply, onDone }: RecommendationBarProps) {
   const [gone, setGone] = useState(0);
   const [refusal, setRefusal] = useState<{ text: string; seq: number } | null>(null);
-  const { panel, data, catalog, stepSeconds, alert } = context;
+  const { panel, data, catalog, stepSeconds, alert, invalid } = context;
   const rec = useMemo(
-    () => recommendFor({ panel, data, catalog, stepSeconds, alert }, readDismissed(scope)),
+    () => recommendFor({ panel, data, catalog, stepSeconds, alert, invalid }, readDismissed(scope)),
     // `gone` re-reads the dismissals after one is stored.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [panel, data, catalog, stepSeconds, alert, scope, gone],
+    [panel, data, catalog, stepSeconds, alert, invalid, scope, gone],
   );
 
   // A refusal belongs to the suggestion and the panel it was made for.

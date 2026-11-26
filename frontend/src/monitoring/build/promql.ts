@@ -246,6 +246,11 @@ export function isRateQuery(expr: string): boolean {
   return close + 1 === wrapClose && skipClause(t, wrapClose + 1) === t.length;
 }
 
+/** Every metric name the text selects, in order, once each. */
+export function metricNames(expr: string): string[] {
+  return [...new Set((scanSelectors(expr) ?? []).flatMap((r) => (r.metric !== null ? [r.metric] : [])))];
+}
+
 export function firstMetric(expr: string): string | null {
   return (scanSelectors(expr) ?? []).find((r) => r.metric !== null)?.metric ?? null;
 }

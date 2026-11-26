@@ -240,6 +240,17 @@ describe("Recommendation bar on its own", () => {
     expect(screen.getByRole("region", { name: "Recommendation" }).textContent).toContain("5 minutes");
   });
 
+  it("no hint on a query that doesn't read", () => {
+    // The same text that reads gets its advice; broken, or after a run refused as invalid, nothing.
+    const ctx = (expr: string, invalid?: boolean) => ({ panel: timeseries(expr), data, catalog: null, stepSeconds: 60, invalid });
+    const { rerender } = render(<RecommendationBar context={ctx("rate(x[1m])")} scope="reads" onApply={() => {}} />);
+    expect(screen.getByRole("region", { name: "Recommendation" }).textContent).toContain("5 minutes");
+    rerender(<RecommendationBar context={ctx("rate(x[1m]")} scope="reads" onApply={() => {}} />);
+    expect(screen.queryByRole("region", { name: "Recommendation" })).toBeNull();
+    rerender(<RecommendationBar context={ctx("rate(x[1m])", true)} scope="reads" onApply={() => {}} />);
+    expect(screen.queryByRole("region", { name: "Recommendation" })).toBeNull();
+  });
+
   it("a dismissed rule lets the next one show", async () => {
     const user = userEvent.setup();
     const p = timeseries("rate(x[1m])");

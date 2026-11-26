@@ -9,7 +9,7 @@ import { gate, intercept, linkedProject, linkTo, panel, seedDashboard, spec, wat
 import { seedProject } from "../test/renderMonitoringApp";
 import { renderMonitoringApp, tabsWith } from "../test/renderMonitoringApp";
 import { editSessions } from "./editor/useDashboardEditor";
-import { emptyCheck, useEmptyReason, type EmptyAsk } from "./emptyReason";
+import { WINDOW_SHORTER, windowHint, emptyCheck, useEmptyReason, type EmptyAsk } from "./emptyReason";
 
 vi.mock("../charts", async () => {
   const { createElement } = await import("react");
@@ -181,5 +181,30 @@ describe("A newer window of the same query", () => {
     expect(view.result.current).toBeNull();
     hold.release();
     await calls.settled();
+  });
+});
+
+describe("A window shorter than the step", () => {
+  it("a window shorter than the step says so", async () => {
+    // Only a fixed window counts: longer ones, variables and no step say nothing.
+    expect(windowHint("rate(up[5s])", 60)).toBe(WINDOW_SHORTER.replace("{step}", "1m").replace("{window}", "5s"));
+    expect(windowHint("sum(rate(a[5m])) / rate(b[30s])", 60)).toContain("[30s]");
+    expect(windowHint("rate(up[5m])", 60)).toBeNull();
+    expect(windowHint("rate(up[$__rate_interval])", 60)).toBeNull();
+    expect(windowHint("rate(up[5s])", 0)).toBeNull();
+    expect(windowHint("rate(up[5s]", 60)).toBeNull();
+
+    const api: FakeMonitoringApi = installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, spec("CPU", [panel("p-1", "Rate", "rate(up[1s])", { x: 0, y: 0, w: 12, h: 8 })])) },
+      queryAnswers: { "rate(up[1s])": none },
+      whyEmpty: { reason: "missing_metric", message: MISSING },
+    }, async () => json([]));
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const note = await screen.findByText(/longer than the query's window \[1s\]/);
+    expect(note.textContent).toMatch(/^This range's step is \d+[smh], longer than the query's window \[1s\], so most points are skipped\. Use \[\$__rate_interval\] instead\.$/);
+    expect(screen.queryByText(MISSING)).toBeNull();
+    // Said before any server check, and the check isn't asked.
+    expect(api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty")).toHaveLength(0);
   });
 });

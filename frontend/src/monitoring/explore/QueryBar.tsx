@@ -90,7 +90,9 @@ function linesBody(lines: LinesRunState): ReactNode {
  * Running… beside it). Its time words are the ones that run read, not the picker's current range.
  * A log query has no chart: given `lines`, the line speaks for the log lines' run instead.
  */
-export function MetaLine({ state, expr, lines }: { state: ExploreRunState; expr: string; kind?: ExploreKind; lines?: LinesRunState }) {
+export const NO_SUCH_METRIC = "No metric named {name} in {source} for this project.";
+
+export function MetaLine({ state, expr, lines, missing }: { state: ExploreRunState; expr: string; kind?: ExploreKind; lines?: LinesRunState; missing?: string | null }) {
   let body: ReactNode = null;
   let tone: "bad" | "quiet" = "quiet";
   const running = (lines ?? state).status === "running";
@@ -106,10 +108,12 @@ export function MetaLine({ state, expr, lines }: { state: ExploreRunState; expr:
     body = (state.expr ?? expr).trim() === "" ? NO_QUERY : null;
   } else if (state.shown === "done" && state.data) {
     // A chart counts its series (a log query's line is `linesBody`).
-    const n = `${state.data.series.length} series`;
+    // An empty answer is not a success: no check, no green.
+    const count = state.data.series.length;
+    const n = `${count} series`;
     body = (
       <>
-        <span className={s.metaOk}>✓ {n} · {state.tookMs ?? 0} ms</span>
+        <span className={count > 0 ? s.metaOk : undefined}>{count > 0 ? "✓ " : ""}{n} · {state.tookMs ?? 0} ms</span>
         {state.timeText && (
           <>
             <span className={s.metaSep}>·</span>
@@ -130,6 +134,9 @@ export function MetaLine({ state, expr, lines }: { state: ExploreRunState; expr:
   } else if (state.shown === "failed") {
     tone = "bad";
     body = `✗ ${FAILED_TITLE[state.failure ?? "error"]}`;
+  }
+  if (missing && body !== null && tone === "quiet") {
+    body = <>{body}<span className={s.metaSep}>·</span><span>{missing}</span></>;
   }
   return (
     <div className={s.metaRow}>

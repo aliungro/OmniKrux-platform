@@ -5,10 +5,11 @@
 import { useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { QueryRequest } from "../api/types";
-import { logSelector, scanSelectors } from "../build/promql";
+import { logSelector, rangeDurations, scanSelectors } from "../build/promql";
 import { whyEmpty, type WhyEmptyIn, type WhyEmptyOut } from "./api";
 import type { PanelRun } from "./runPanel";
 import type { PanelSpec } from "./schema";
+import { durationText } from "./time";
 
 export type EmptySourceType = "prometheus" | "loki";
 type Range = { start: number; end: number };
@@ -125,4 +126,25 @@ export function usePanelEmptyReason(panel: PanelSpec, run: PanelRun | null, empt
   else if (settled) asked.current = panelAsk(panel, run);
   const words = useEmptyReason(asked.current?.ask ?? null);
   return words !== null && asked.current ? `${asked.current.prefix}${words}` : null;
+}
+
+export const WINDOW_SHORTER = "This range's step is {step}, longer than the query's window [{window}], so most points are skipped. Use [$__rate_interval] instead.";
+
+/** The first fixed `[window]` shorter than the step: a chart over such a window reads gaps, so it
+ * says so before any server check. Null for no step, or no such window. */
+export function windowHint(expr: string, stepSeconds: number): string | null {
+  if (!(stepSeconds > 0)) return null;
+  const hit = rangeDurations(expr).find((d) => d.seconds < stepSeconds);
+  if (!hit) return null;
+  return WINDOW_SHORTER.replace("{step}", durationText(stepSeconds)).replace("{window}", expr.slice(hit.start, hit.end));
+}
+
+/** The hint for a panel's run: the first range request whose text has such a window. */
+export function panelWindowHint(run: PanelRun | null): string | null {
+  for (const r of run?.requests ?? []) {
+    if (r.kind !== "range") continue;
+    const hint = windowHint(r.query, r.step ?? run?.step ?? 0);
+    if (hint) return hint;
+  }
+  return null;
 }

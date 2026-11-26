@@ -3,7 +3,7 @@ import type { OwnerCatalog } from "../catalog/merge";
 import type { PanelData } from "../dashboards/runPanel";
 import type { PanelSpec, QuerySpec } from "../dashboards/schema";
 import { durationText } from "../dashboards/time";
-import { findRawCounters, isRateQuery, rangeDurations, replaceDurations, scanSelectors, wrapRate } from "./promql";
+import { findRawCounters, isRateQuery, quickCheck, rangeDurations, replaceDurations, scanSelectors, wrapRate } from "./promql";
 
 export type RecText = (string | { strong: string })[];
 
@@ -15,6 +15,8 @@ export type RecommendationContext = {
   stepSeconds: number;
   /** Reserved for M4's dry run; M3 never sets it. */
   alert?: unknown;
+  /** The last run ended as "the text doesn't read": nothing is suggested about it. */
+  invalid?: boolean;
 };
 
 export type Recommendation = {
@@ -169,6 +171,8 @@ export function registerRecommendationRule(rule: RecommendationRule): () => void
 
 /** The first rule's result whose key has not been dismissed. */
 export function recommendFor(ctx: RecommendationContext, dismissed: ReadonlySet<string>): Recommendation | null {
+  // A query that doesn't read, or whose last run was refused as such, gets no advice.
+  if (ctx.invalid || ctx.panel.queries.some((q) => !q.hidden && quickCheck(q.expr) !== null)) return null;
   for (const rule of RULES) {
     const rec = rule.evaluate(ctx);
     if (rec && !dismissed.has(rec.key)) return rec;

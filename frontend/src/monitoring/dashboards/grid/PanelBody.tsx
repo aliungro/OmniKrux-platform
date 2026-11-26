@@ -3,7 +3,7 @@
 import { lazy, Suspense } from "react";
 import type { PanelDataResult, PanelRun } from "../runPanel";
 import type { PanelSpec } from "../schema";
-import { usePanelEmptyReason } from "../emptyReason";
+import { panelWindowHint, usePanelEmptyReason } from "../emptyReason";
 import { LOG_QUERY_IN_CHART, logQueryInChart } from "../logQueries";
 import { PANEL_COPY, PanelFailure, PanelNote } from "./PanelState";
 
@@ -26,7 +26,10 @@ export function PanelBody({ panel, run, result, waiting, changeId, animate }: Pr
   // Before any return (hooks keep their order): why an empty answer was empty, once it is known.
   // A log query in a chart panel answers lines (so it is rarely empty): its note wins over any reason.
   const logsInChart = logQueryInChart(panel);
-  const reason = usePanelEmptyReason(panel, run, !waiting && data?.state === "empty" && !logsInChart, !waiting && !result.fetching);
+  // A window shorter than the step is a cause seen from the text alone: it speaks first, and no check is asked.
+  const isEmpty = !waiting && data?.state === "empty" && !logsInChart;
+  const hint = isEmpty ? panelWindowHint(run) : null;
+  const reason = usePanelEmptyReason(panel, run, isEmpty && hint === null, !waiting && !result.fetching);
   // Waiting on variables, nothing read yet, or the last thing kept is from before this panel had a run.
   if (waiting || data === null || (data.state === "noQuery" && run.requests.length > 0)) {
     return <PanelNote text={PANEL_COPY.loading} busy />;
@@ -40,6 +43,7 @@ export function PanelBody({ panel, run, result, waiting, changeId, animate }: Pr
       return <PanelNote text={PANEL_COPY.noQuery} />;
     case "empty":
       // The generic words stay until a reason is proved; a reason replaces them, never a "checking" line.
+      if (hint) return <PanelNote text={hint} reason />;
       return reason ? <PanelNote text={reason} reason /> : <PanelNote text={PANEL_COPY.empty} />;
     case "unreachable":
       return <PanelFailure kind="unreachable" reason={data.problems[0]} onRetry={result.refetch} />;
