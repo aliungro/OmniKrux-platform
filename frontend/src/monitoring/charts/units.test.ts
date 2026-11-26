@@ -54,3 +54,13 @@ describe("formatValue", () => {
     for (const u of UNITS) expect(formatValue(1, u, null)).not.toBe("");
   });
 });
+
+describe("small CPU values", () => {
+  it("read as millicores", () => {
+    expect(formatValue(0.0347, "cores", null)).toBe("34.7 m");
+    expect(formatValue(0.002, "cores", null)).toBe("2 m");
+    expect(formatValue(0, "cores", null)).toBe("0 cores");
+    expect(formatValue(0.1, "cores", null)).toBe("0.1 cores");
+    expect(formatValue(2.5, "cores", null)).toBe("2.5 cores");
+  });
+});

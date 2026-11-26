@@ -223,6 +223,23 @@
   color: var(--ink);
 }
 
+/* The range in words, cut with an ellipsis (its title has all of it) before it can widen the header. */
+.chipText {
+  min-width: 0;
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formats {
+  max-width: 260px;
+  margin: 0 0 2px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
 .chipIcon {
   width: 12px;
   height: 12px;

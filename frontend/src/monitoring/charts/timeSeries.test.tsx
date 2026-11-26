@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChartSeries, PanelData } from "../dashboards/runPanel";
@@ -782,5 +784,12 @@ describe("ChartView time series", () => {
       unmount();
       expect(screen.queryByRole("status")).toBeNull();
     });
+  });
+});
+
+describe("tooltip width", () => {
+  it("the tooltip can't widen the page", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/monitoring/charts/Charts.module.css"), "utf8");
+    expect(/\.tip \{[^}]*max-width: min\(420px, calc\(100vw - 16px\)\);/.test(css)).toBe(true);
   });
 });

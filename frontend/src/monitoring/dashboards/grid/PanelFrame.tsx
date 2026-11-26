@@ -169,7 +169,7 @@ export const PanelFrame = memo(function PanelFrame({
   const run = useStableRun(built);
   const ran = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting && blocked === null, changeId);
   const result = useMemo<PanelDataResult>(
-    () => (blocked === null || waiting ? ran : { ...ran, data: blockedData(blocked), fetching: false, updatedAt: null, failedAt: null }),
+    () => (blocked === null || waiting ? ran : { ...ran, data: blockedData(blocked), fetching: false, stale: false, updatedAt: null, failedAt: null }),
     [ran, blocked, waiting],
   );
   const key = panelRunKey(run);
@@ -205,6 +205,8 @@ export const PanelFrame = memo(function PanelFrame({
   });
 
   const state = waiting ? null : result.data?.state;
+  // The last result, kept while the answer to a changed range or changed queries is on its way.
+  const stale = !waiting && blocked === null && result.stale;
   const partial = state === "partial" && result.data !== null;
   const { x, y, w, h } = layout ?? panel.layout;
   const place = {
@@ -229,7 +231,7 @@ export const PanelFrame = memo(function PanelFrame({
     : null;
 
   return (
-    <section ref={frame} className={classes} style={place} {...named} data-state={state ?? "loading"} data-panel-id={panel.id} data-spot={spot || undefined}
+    <section ref={frame} className={classes} style={place} {...named} data-state={state ?? "loading"} data-stale={stale || undefined} aria-busy={stale || undefined} data-panel-id={panel.id} data-spot={spot || undefined}
       tabIndex={tile?.tabIndex} data-tile-id={tile ? panel.id : undefined} data-selected={tile?.selected || undefined}
       data-dragging={tile?.dragging || undefined} data-motion={tile && reduced ? "off" : undefined}
       onKeyDown={tile?.onKeyDown} onClick={tile?.onClick}
@@ -256,6 +258,7 @@ export const PanelFrame = memo(function PanelFrame({
         )}
         {(badge || tile) && <span className={s.headEnd}>{badge}{tile?.menu}{tile?.grab}</span>}
       </header>
+      {stale && <span className={s.progress} aria-hidden="true" />}
       <div className={s.body}>
         {/* Only edits animate: view mode has none, and reduced motion always jumps. */}
         <PanelBody panel={panel} run={run} result={result} waiting={waiting} changeId={changeId}

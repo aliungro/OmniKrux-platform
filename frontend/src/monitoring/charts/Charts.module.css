@@ -64,7 +64,7 @@
   position: fixed;
   z-index: 55;
   min-width: 120px;
-  max-width: min(320px, calc(100vw - 16px));
+  max-width: min(420px, calc(100vw - 16px));
   box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--rule);
@@ -540,6 +540,13 @@
   cursor: pointer;
   font-weight: 600;
   user-select: none;
+}
+
+.thText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .th:hover {

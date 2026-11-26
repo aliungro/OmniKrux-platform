@@ -225,7 +225,7 @@ export function buildFrame(
     if (filled && minOpt === null) extMin = Math.min(0, extMin);
     const eMin = minOpt ?? extMin;
     const eMax = maxOpt ?? Math.max(extMax, eMin);
-    const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4);
+    const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4, opts.unit);
     const lo = minOpt ?? ticks[0];
     let hi = maxOpt ?? ticks[ticks.length - 1];
     if (!(hi > lo)) hi = lo + 1;

@@ -168,7 +168,7 @@ describe("mergePanelResults", () => {
   it("one project failing makes a group panel partial and names it", () => {
     const data = mergePanelResults(panel, run, [ok(seriesFor("a")), fail("unreachable", "Can't reach Prometheus · b: the connection was refused. Check the address and that the tool is running.")], "group");
     expect(data.state).toBe("partial");
-    expect(data.series.map((s) => s.name)).toEqual(['projA · {job="x"}']);
+    expect(data.series.map((s) => s.name)).toEqual(['projA · up']);
     expect(data.series[0]).toMatchObject({ queryRef: "A", projectName: "projA", labels: { __name__: "up", job: "x" }, points: [[0, 1], [5, 2]] });
     expect(data.problems).toEqual(["projB: Can't reach Prometheus · b: the connection was refused. Check the address and that the tool is running."]);
     expect(data.summary).toEqual({ series: 1, points: 2, tookMs: 3 });
@@ -220,7 +220,7 @@ describe("mergePanelResults", () => {
     expect(mergePanelResults(panel, run, [ok(), ok()], "group").state).toBe("empty");
     const data = mergePanelResults(panel, run, [ok(seriesFor("a")), ok({ ...seriesFor("b"), took_ms: 9 })], "group");
     expect(data.state).toBe("ready");
-    expect(data.series.map((s) => s.name)).toEqual(['projA · {job="x"}', 'projB · {job="x"}']);
+    expect(data.series.map((s) => s.name)).toEqual(['projA · up', 'projB · up']);
     expect(new Set(data.series.map((s) => s.key)).size).toBe(2);
     expect(data.summary).toEqual({ series: 2, points: 4, tookMs: 9 });
   });

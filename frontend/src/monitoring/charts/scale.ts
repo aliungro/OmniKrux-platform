@@ -11,8 +11,16 @@ function niceStep(raw: number): number {
   return nice * 10 ** exp;
 }
 
-/** Ticks that cover `[min, max]` on round numbers, about `count` of them. */
-export function niceTicks(min: number, max: number, count: number): number[] {
+/** A step that is a power of two (1 KiB, 256 MiB, 1 GiB, ...): what byte axes read round in. */
+function binaryStep(raw: number): number {
+  return 2 ** Math.ceil(Math.log2(raw) - 1e-9);
+}
+
+/**
+ * Ticks that cover `[min, max]` on round numbers, about `count` of them: 1-2-5 steps, except that
+ * a byte axis steps in powers of two.
+ */
+export function niceTicks(min: number, max: number, count: number, unit?: string): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
   if (max < min) [min, max] = [max, min];
   if (max === min) {
@@ -25,7 +33,7 @@ export function niceTicks(min: number, max: number, count: number): number[] {
   const range = max - min;
   if (!Number.isFinite(range) || !(range > 0)) return two();
   const raw = range / Math.max(1, count - 1);
-  const step = raw > 0 ? niceStep(raw) : 0;
+  const step = raw > 0 ? (unit === "bytes" || unit === "Bps" ? binaryStep(raw) : niceStep(raw)) : 0;
   if (!(step > 0) || !Number.isFinite(step)) return two();
   const first = Math.floor(clean(min / step));
   const last = Math.ceil(clean(max / step));
@@ -35,20 +43,41 @@ export function niceTicks(min: number, max: number, count: number): number[] {
   return out;
 }
 
-const INTERVALS = [60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400];
+const INTERVALS = [10, 30, 60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400];
 const DAY = 86400;
 
-/** Ticks inside `[start, end]` on clock marks (1, 5, 15, 30 min, 1, 3, 6, 12 h, 1 d, then whole days). */
-export function timeTicks(start: number, end: number, count: number): number[] {
-  const range = end - start;
-  if (!(range > 0)) return [];
-  let interval = INTERVALS.find((i) => range / i <= count);
-  if (interval === undefined) interval = Math.ceil(range / count / DAY) * DAY;
+/** The labels an axis always has across any range. */
+export const MIN_TIME_LABELS = 3;
+
+const marks = (start: number, end: number, interval: number): number[] => {
   // Marks fall on the local clock: shift by the zone's offset (it can differ across a DST change; the start's is used).
   const offset = -new Date(start * 1000).getTimezoneOffset() * 60;
   const ticks: number[] = [];
-  let t = Math.ceil((start + offset) / interval) * interval - offset;
-  for (; t <= end; t += interval) ticks.push(t);
+  for (let t = Math.ceil((start + offset) / interval) * interval - offset; t <= end; t += interval) ticks.push(t);
+  return ticks;
+};
+
+/**
+ * Ticks inside `[start, end]` on clock marks (10 s up to 12 h, 1 d, then whole days): about `count`
+ * of them, and at least three across any range (a finer step is taken when the first one leaves fewer).
+ */
+export function timeTicks(start: number, end: number, count: number): number[] {
+  const range = end - start;
+  if (!(range > 0)) return [];
+  const steps = [...INTERVALS];
+  const days = Math.ceil(range / count / DAY);
+  let at = steps.findIndex((i) => range / i <= count);
+  let interval = at >= 0 ? steps[at] : days * DAY;
+  let ticks = marks(start, end, interval);
+  while (ticks.length < MIN_TIME_LABELS) {
+    if (at < 0 && interval > DAY) interval -= DAY;
+    else {
+      at = at < 0 ? steps.length - 1 : at - 1;
+      if (at < 0) break;
+      interval = steps[at];
+    }
+    ticks = marks(start, end, interval);
+  }
   return ticks;
 }
 

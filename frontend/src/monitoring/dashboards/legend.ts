@@ -20,3 +20,15 @@ export function legendName(template: string, labels: Record<string, string>, fal
   if (Object.keys(labels).length === 0) return fallback;
   return formatLabels(labels);
 }
+
+/**
+ * Names for the series of one query that has no legend template: each is named by the labels whose
+ * values differ between the series (`k=v`, joined by `, `; `__name__` only when it differs). A lone
+ * series keeps its metric name. "" means nothing tells it apart: the caller's own words stand.
+ */
+export function seriesNames(labelSets: Record<string, string>[]): string[] {
+  if (labelSets.length === 1) return [labelSets[0].__name__ ?? ""];
+  const keys = [...new Set(labelSets.flatMap((l) => Object.keys(l)))].sort();
+  const differing = keys.filter((k) => new Set(labelSets.map((l) => (Object.hasOwn(l, k) ? l[k] : undefined))).size > 1);
+  return labelSets.map((l) => differing.filter((k) => Object.hasOwn(l, k)).map((k) => `${k}=${l[k]}`).join(", "));
+}

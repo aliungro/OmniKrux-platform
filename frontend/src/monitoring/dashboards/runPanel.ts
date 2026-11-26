@@ -8,7 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { GroupOut, ProjectOut, QueryRequest, QueryErrorCode } from "../api/types";
 import { DashboardRequestError, runBatch, type BatchItemOut } from "./api";
 import { interpolate, VariableError, type ResolvedVars } from "./interpolate";
-import { legendName } from "./legend";
+import { legendName, seriesNames } from "./legend";
 import type { OwnerKind, PanelSpec, PanelType, QuerySpec } from "./schema";
 import { alignRange, stepFor } from "./time";
 
@@ -219,8 +219,10 @@ export function mergePanelResults(panel: PanelSpec, run: PanelRun, results: Batc
     const projectName = group ? part.projectName : null;
     truncated ||= res.truncated;
     tookMs = Math.max(tookMs, res.took_ms);
-    for (const s of res.series) {
-      const name = legendName(q?.legend ?? "", s.labels, q?.expr ?? part.queryRef);
+    // Without a legend, a query's series are named by the labels that tell them apart.
+    const told = (q?.legend ?? "").trim() === "" ? seriesNames(res.series.map((s) => s.labels)) : null;
+    for (const [at, s] of res.series.entries()) {
+      const name = told?.[at] || legendName(q?.legend ?? "", s.labels, q?.expr ?? part.queryRef);
       points += s.points.length;
       series.push({
         key: seriesKey(JSON.stringify([part.queryRef, part.projectId, sortedLabels(s.labels)])),
@@ -290,6 +292,12 @@ export interface PanelDataResult {
   data: PanelData | null;
   /** A request for this panel is on its way. */
   fetching: boolean;
+  /**
+   * What is shown answered an older question (another range or other queries) and the new answer
+   * is on its way: it is the last result, kept, and not current. Plain refreshes (the same
+   * question over a newer window) are not stale.
+   */
+  stale: boolean;
   /** When the data shown was read; null while a failure is shown. */
   updatedAt: number | null;
   /** When the failure shown happened; null otherwise. */
@@ -297,7 +305,7 @@ export interface PanelDataResult {
   refetch(): void;
 }
 
-type Shown = { data: PanelData; updatedAt: number | null; failedAt: number | null; owner: string };
+type Shown = { data: PanelData; updatedAt: number | null; failedAt: number | null; owner: string; asked: string };
 
 /**
  * The panel's data, run on the server. Keyed by what is sent, so a new window is a new key; the
@@ -347,6 +355,8 @@ export function usePanelData(
   // What was shown last, for this dashboard's panel only (another panel's data is never kept).
   const owner = JSON.stringify([dashboardId, panel.id]);
   const last = useRef<Shown | null>(null);
+  // The question without its window's position: the queries and how long a range they span.
+  const asked = JSON.stringify([run.requests.map(withoutWindow), run.range.end - run.range.start, run.step]);
 
   const answers = query.status === "success" ? query.data : undefined;
   const merged = useMemo(
@@ -363,9 +373,9 @@ export function usePanelData(
   );
 
   let shown: Shown | null;
-  if (idle) shown = { data: idle, updatedAt: null, failedAt: null, owner };
-  else if (failed) shown = { data: failed, updatedAt: null, failedAt: query.errorUpdatedAt, owner };
-  else if (merged) shown = { data: merged, updatedAt: query.dataUpdatedAt, failedAt: null, owner };
+  if (idle) shown = { data: idle, updatedAt: null, failedAt: null, owner, asked };
+  else if (failed) shown = { data: failed, updatedAt: null, failedAt: query.errorUpdatedAt, owner, asked };
+  else if (merged) shown = { data: merged, updatedAt: query.dataUpdatedAt, failedAt: null, owner, asked };
   // This key hasn't answered yet: keep what was shown for the same panel.
   else shown = last.current?.owner === owner ? last.current : null;
   if (shown !== last.current && (idle || failed || merged)) last.current = shown;
@@ -373,6 +383,7 @@ export function usePanelData(
   return {
     data: shown?.data ?? null,
     fetching: !nothing && query.isFetching,
+    stale: !nothing && query.isFetching && shown !== null && shown.asked !== asked && shown.data.state !== "error" && shown.data.state !== "unreachable",
     updatedAt: shown?.updatedAt ?? null,
     failedAt: shown?.failedAt ?? null,
     refetch: () => { if (!nothing) void query.refetch(); },

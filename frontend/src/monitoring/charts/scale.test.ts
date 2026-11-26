@@ -61,3 +61,24 @@ describe("time labels", () => {
     expect(formatTooltipTime(t)).toBe("19 Nov 09:05:07");
   });
 });
+
+describe("axes people read", () => {
+  const MIB = 1024 ** 2;
+  it("byte ticks are round", () => {
+    expect(niceTicks(0, 1000 * MIB, 5, "bytes")).toEqual([0, 256 * MIB, 512 * MIB, 768 * MIB, 1024 * MIB]);
+    const t = niceTicks(0, 3 * 1024 ** 3, 5, "bytes");
+    expect(t.slice(0, 3)).toEqual([0, 1024 ** 3, 2 * 1024 ** 3]);
+    // Other units keep 1-2-5 steps.
+    expect(niceTicks(0, 100, 5, "short")).toEqual([0, 20, 40, 60, 80, 100]);
+    expect(niceTicks(0, 100, 5)).toEqual([0, 20, 40, 60, 80, 100]);
+  });
+
+  it("there are at least three time labels across any range", () => {
+    for (const range of [45, 90, 150, 400, 4000, 90000, 2 * 86400, 3 * 86400 + 5000, 9 * 86400, 400 * 86400]) {
+      for (const count of [2, 3, 6]) {
+        const start = 1_700_000_123;
+        expect(timeTicks(start, start + range, count).length, `${range}s / ${count}`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+});

@@ -1,8 +1,8 @@
 // The time range: a button showing it, and a menu of the presets and a custom range.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { escapeCloses } from "../../focus";
-import { TIME_COPY, type TimeSpec } from "../schema";
-import { parseTimeExpr, TIME_PRESETS, timeLabel } from "../time";
+import type { TimeSpec } from "../schema";
+import { LOCAL_TIME_COPY, parseTimeExpr, rangeWords, storedTime, TIME_PRESETS } from "../time";
 import { closesOnLeave, menuKeys, POPUP, useCloseOutside } from "./popover";
 import s from "./DashboardPage.module.css";
 
@@ -51,26 +51,29 @@ export function TimeRangePicker({ time, open, onOpen, onClose, onPick, buttonRef
   const apply = (e: FormEvent) => {
     e.preventDefault();
     const now = Math.floor(Date.now() / 1000);
-    const start = parseTimeExpr(from, now);
-    const end = parseTimeExpr(to, now);
+    // Typed local times are stored as UTC; the others as they are.
+    const fromText = storedTime(from);
+    const toText = storedTime(to);
+    const start = fromText === null ? null : parseTimeExpr(fromText, now);
+    const end = toText === null ? null : parseTimeExpr(toText, now);
     const next = {
-      from: start === null ? TIME_COPY : undefined,
-      to: end === null ? TIME_COPY : start !== null && start >= end ? AFTER : undefined,
+      from: start === null ? LOCAL_TIME_COPY : undefined,
+      to: end === null ? LOCAL_TIME_COPY : start !== null && start >= end ? AFTER : undefined,
     };
     setProblems(next);
     if (next.from) { fromField.current?.focus(); return; }
     if (next.to) return;
-    onPick({ from: from.trim(), to: to.trim() });
+    onPick({ from: fromText as string, to: toText as string });
   };
 
-  const label = timeLabel(time);
+  const label = rangeWords(time, Math.floor(Date.now() / 1000));
   return (
     <div ref={root} className={s.popAnchor}>
       <button ref={buttonRef} type="button" className={s.chip} aria-haspopup="menu" aria-expanded={open} aria-keyshortcuts="t"
         onPointerDown={() => { pressing.current = true; setTimeout(() => { pressing.current = false; }, 500); }}
         onClick={() => { pressing.current = false; if (open) onClose(true); else onOpen(); }}>
         <svg className={s.chipIcon} viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.3" /></svg>
-        {label}
+        <span className={s.chipText} title={label}>{label}</span>
         <span className={s.caret} aria-hidden="true">▾</span>
       </button>
       {open && (
@@ -92,17 +95,18 @@ export function TimeRangePicker({ time, open, onOpen, onClose, onPick, buttonRef
           </div>
           {custom && (
             <form className={s.custom} onSubmit={apply} noValidate>
+              <p id={`${id}-formats`} className={s.formats}>{LOCAL_TIME_COPY}</p>
               <label className={s.field}>
                 <span className={s.fieldLabel}>From</span>
                 <input ref={fromField} className={s.input} value={from} placeholder="now-6h" spellCheck={false} autoComplete="off"
-                  aria-invalid={problems.from ? true : undefined} aria-describedby={problems.from ? `${id}-from` : undefined}
+                  aria-invalid={problems.from ? true : undefined} aria-describedby={problems.from ? `${id}-from ${id}-formats` : `${id}-formats`}
                   onChange={(e) => { setFrom(e.target.value); setProblems((p) => ({ ...p, from: undefined })); }} />
               </label>
               {problems.from && <p id={`${id}-from`} className={s.fieldProblem}>{problems.from}</p>}
               <label className={s.field}>
                 <span className={s.fieldLabel}>To</span>
                 <input className={s.input} value={to} placeholder="now" spellCheck={false} autoComplete="off"
-                  aria-invalid={problems.to ? true : undefined} aria-describedby={problems.to ? `${id}-to` : undefined}
+                  aria-invalid={problems.to ? true : undefined} aria-describedby={problems.to ? `${id}-to ${id}-formats` : `${id}-formats`}
                   onChange={(e) => { setTo(e.target.value); setProblems((p) => ({ ...p, to: undefined })); }} />
               </label>
               {problems.to && <p id={`${id}-to`} className={s.fieldProblem}>{problems.to}</p>}

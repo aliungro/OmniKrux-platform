@@ -153,6 +153,52 @@
   background: var(--surf);
 }
 
+/* A changed range or query: the last result stays, dimmed, under a 2 px line along the top until the new answer arrives. */
+.panel {
+  --stale-opacity: 0.45;
+  position: relative;
+}
+
+.panel[data-stale="true"] .body {
+  opacity: var(--stale-opacity);
+}
+
+.progress {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 10px;
+  left: 10px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--focus) 22%, transparent);
+  pointer-events: none;
+}
+
+.progress::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: 2px;
+  background: var(--focus);
+  content: "";
+  animation: progress-run 1.1s ease-in-out infinite;
+}
+
+@keyframes progress-run {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(290%); }
+}
+
+/* Reduced motion: the line doesn't move; it is a still, full cue. */
+@media (prefers-reduced-motion: reduce) {
+  .progress::after {
+    width: 100%;
+    animation: none;
+  }
+}
+
 .panel[data-state="unreachable"],
 .panel[data-state="error"] {
   border-color: color-mix(in srgb, var(--bad) 32%, var(--rule));

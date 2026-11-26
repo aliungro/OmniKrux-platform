@@ -73,6 +73,8 @@ export function formatValue(v: number | null, unit: Unit, decimals: number | nul
     case "reqps":
       return `${si(v, decimals)} req/s`;
     case "cores": {
+      // Small CPU values read as millicores (0.0347 cores is 34.7 m).
+      if (v !== 0 && Math.abs(v) < 0.1 && decimals === null) return `${number(v * 1000, null)} m`;
       const text = number(v, decimals);
       return `${text} ${text === "1" ? "core" : "cores"}`;
     }

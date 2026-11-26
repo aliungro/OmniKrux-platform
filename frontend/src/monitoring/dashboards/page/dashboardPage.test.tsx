@@ -168,6 +168,51 @@ describe("Dashboard page", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Last 1 hour" }));
   });
 
+  it("the custom form shows its formats up front", async () => {
+    const user = userEvent.setup();
+    shop();
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    await user.click(await screen.findByRole("button", { name: "Last 6 hours" }));
+    await user.click(screen.getByRole("menuitem", { name: "Custom range…" }));
+    // Before any error, once.
+    expect(screen.getAllByText("Use now, now-6h, now-7d, or a local time like 2026-11-25 10:00.")).toHaveLength(1);
+    const from = screen.getByLabelText("From");
+    await user.clear(from);
+    await user.type(from, "2026-11-25 10:00");
+    const to = screen.getByLabelText("To");
+    await user.clear(to);
+    await user.type(to, "2026-11-25 12:00");
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    const view = current().tabs[0].view as { time: { from: string; to: string } };
+    expect(view.time.from).toBe(new Date(2026, 10, 25, 10, 0).toISOString().replace(/\.\d{3}Z$/, "Z"));
+    expect(view.time.to).toBe(new Date(2026, 10, 25, 12, 0).toISOString().replace(/\.\d{3}Z$/, "Z"));
+    notBody();
+  });
+
+  it("a range change dims the old result until the new one arrives", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const panelEl = () => document.querySelector<HTMLElement>('[data-panel-id="p-1"]')!;
+    expect(panelEl().dataset.stale).toBeUndefined();
+
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
+    await user.click(screen.getByRole("button", { name: "Last 6 hours" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Last 7 days" }));
+    // The last result stays, dimmed, and is marked as on its way; never read as current.
+    await waitFor(() => expect(panelEl().dataset.stale).toBe("true"));
+    expect(panelEl().getAttribute("aria-busy")).toBe("true");
+    expect(within(panelEl()).getByText("chart 1")).toBeTruthy();
+    expect(panelEl().querySelector('[class*="progress"]')).not.toBeNull();
+    act(() => held.open());
+    await waitFor(() => expect(panelEl().dataset.stale).toBeUndefined());
+    expect(panelEl().getAttribute("aria-busy")).toBeNull();
+    expect(panelEl().querySelector('[class*="progress"]')).toBeNull();
+    notBody();
+  });
+
   it("a custom range checks its fields and keeps the menu open", async () => {
     const user = userEvent.setup();
     shop();
@@ -180,7 +225,8 @@ describe("Dashboard page", () => {
     await user.clear(from);
     await user.type(from, "yesterday");
     await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(screen.getByText('Use "now", "now-<number><s|m|h|d|w>", or a UTC time like 2026-11-19T10:00:00Z.')).toBeTruthy();
+    // The formats, said up front, are said again as the problem.
+    expect(screen.getAllByText("Use now, now-6h, now-7d, or a local time like 2026-11-25 10:00.")).toHaveLength(2);
     expect(screen.getByRole("menu", { name: "Time range" })).toBeTruthy();
     await user.clear(from);
     await user.type(from, "now-2h");
