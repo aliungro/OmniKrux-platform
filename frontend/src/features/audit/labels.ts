@@ -97,7 +97,9 @@ export function whatOf(r: Pick<AuditRecord, "app" | "action" | "kind" | "name" |
     if (typeof node === "string" && node !== "") return { kind: null, name: `Node ${node}` };
   }
   if (r.app === "monitoring") {
-    const word = MONITORING_KINDS[r.kind] ?? MONITORING_KINDS[kindWord(r.kind)];
+    // Own keys only: a kind such as "constructor" never reads an inherited property.
+    const own = (key: string) => (Object.hasOwn(MONITORING_KINDS, key) ? MONITORING_KINDS[key] : undefined);
+    const word = own(r.kind) ?? own(kindWord(r.kind));
     if (word !== undefined) return { kind: word, name: r.name ?? "" };
   }
   return { kind: kindWord(r.kind), name: r.name ?? "" };

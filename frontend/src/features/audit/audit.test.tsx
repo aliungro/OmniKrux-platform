@@ -572,6 +572,13 @@ describe("monitoring entries", () => {
     for (const [, , label] of pairs) expect(labels).toContain(label);
   });
 
+  it("a Monitoring kind named like an inherited property reads as its own word", async () => {
+    serve(() => ({ records: [monitoring({ id: 3, action: "silence_add", kind: "constructor", name: "odd" })], next_before: null }));
+    show();
+    const row = await screen.findByRole("row", { name: /odd/ });
+    expect(within(row).getByText("constructor")).toBeTruthy();
+  });
+
   it("removing an expired silence has its own words", async () => {
     serve(() => ({ records: [
       monitoring({ id: 2, action: "silence_remove", kind: "silence", name: 'alertname="a"', details: { removed_expired: true, matchers: 'alertname="a"' } }),
