@@ -27,17 +27,17 @@ const UNKNOWN: HealthOut = { state: "unknown", message: null, version: null, che
 const STALE_REVIEW = "Something changed since the review. Review it again.";
 
 /** The project's dashboards, then its ready-made views (generated from its Prometheus and Loki). */
-export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab, clusterDown = false }: {
+export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab, downCluster = null }: {
   project: ProjectOut;
-  /** Every failing source is down for one cluster, which the page says once: views don't repeat why. */
-  clusterDown?: boolean;
+  /** Every failing source is down for this one cluster, which the page says once: views don't repeat why. */
+  downCluster?: string | null;
   tabId: string;
   nav: MonitoringPageProps["nav"];
   openInNewTab(view: MonitoringView): void;
 }) {
   return (
     <OwnerDashboards owner={{ kind: "project", id: project.id, name: project.name }} tabId={tabId} nav={nav} openInNewTab={openInNewTab}
-      readyMade={project.links.some((l) => l.source_type === "prometheus" || l.source_type === "loki")} clusterDown={clusterDown}
+      readyMade={project.links.some((l) => l.source_type === "prometheus" || l.source_type === "loki")} downCluster={downCluster}
       manyPrometheus={project.links.filter((l) => l.source_type === "prometheus").length >= 2} />
   );
 }
@@ -548,7 +548,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab, leaveDelet
           <ExportButton kind="project" id={project.id} label="Export project" name={project.name} />
           <ImportButton onOpen={(e) => open({ page: "import", target: { kind: "project", id: project.id } }, e)} />
         </div>
-        <ProjectDashboardsSlot project={project} tabId={tabId} nav={nav} openInNewTab={openInNewTab} clusterDown={downCluster !== null} />
+        <ProjectDashboardsSlot project={project} tabId={tabId} nav={nav} openInNewTab={openInNewTab} downCluster={downCluster} />
       </section>
 
       <section aria-labelledby="monitoring-project-groups" className={s.section}>

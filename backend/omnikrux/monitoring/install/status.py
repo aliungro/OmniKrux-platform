@@ -183,7 +183,7 @@ async def read_status(
             log.info("Reading the monitoring tools failed (%s)", type(exc).__name__)
             cloud = bool(await registry.is_cloud(cluster_id))
             action = messages.READ_TOOLS_STEP.format(namespace=record.namespace)
-            return (), _cluster_words(exc, action, cloud=cloud)
+            return (), _cluster_words(exc, action, cloud=cloud, cluster=info.name)
 
     (found_releases, problem), discovered = await asyncio.gather(
         releases(), services.discovery.find(cluster_id)

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 import yaml
+from aiohttp import ClientConnectorError
 from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
 
@@ -46,6 +47,7 @@ from omnikrux.monitoring.install.settings import COMPONENT_ORDER, InstallSetting
 from omnikrux.monitoring.install.store import INTERRUPTED
 from omnikrux.monitoring.install.values import RELEASES, ReleaseSpec, values_for
 from omnikrux.monitoring.projects.store import UnknownProject
+from omnikrux.monitoring.sources.messages import cluster_words
 
 if TYPE_CHECKING:
     from omnikrux.monitoring.services import MonitoringServices
@@ -113,11 +115,14 @@ def total_steps(components: Sequence[str]) -> int:
     )
 
 
-def _cluster_words(exc: Exception, action: str, *, cloud: bool) -> str:
+def _cluster_words(exc: Exception, action: str, *, cloud: bool, cluster: str | None = None) -> str:
     """A failed cluster call in plain words (cloud clusters keep their privacy rule); never the
-    transport's own text for an error OmniKrux doesn't know."""
+    transport's own text for an error OmniKrux doesn't know. A cluster that can't be connected to
+    is named plainly (`cluster_words`: no errno, no address)."""
     if cloud:
         return cloud_kube_error(action, exc=exc).message
+    if isinstance(exc, ClientConnectorError | ConnectionError):
+        return cluster_words(exc, cluster or "the cluster", action)
     if isinstance(exc, KUBE_ERRORS):
         return _sentence(kube_error_message(exc, action))
     return f"Couldn't {action}."

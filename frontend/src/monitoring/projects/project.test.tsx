@@ -1053,6 +1053,30 @@ describe("Project page, one cluster banner", () => {
     expect(screen.queryByText(refused)).toBeNull();
   });
 
+  it("a view whose Loki labels couldn't be read says Can't be checked now under the banner, once", async () => {
+    const loki = source("s2", "Loki in dev", { type: "loki", reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "loki", port: "3100" });
+    const prom = source("s1", "Prom in dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "prom", port: "9090" });
+    const down = "Can't reach dev, so Loki in dev can't be read. Check that the cluster is running.";
+    const promDown = "Can't reach dev, so Prom in dev can't be read. Check that the cluster is running.";
+    const unread = `OmniKrux couldn't read this Loki's labels (${down}), so its log panels assume namespace and pod labels and may stay empty.`;
+    const bad = (message: string) => ({ state: "down" as const, message, version: null, checked_at: new Date().toISOString() });
+    const PODS = { key: "pods" as const, id: "ready:p1:pods", title: "Pod health", description: "Pods.", missing: [], notes: [unread], checked: false, check_message: promDown, source_name: "Prom in dev" };
+    const LOGS = { key: "logs" as const, id: "ready:p1:logs", title: "Logs overview", description: "Logs.", missing: [], notes: [unread], checked: false, check_message: null, source_name: null };
+    installFakeMonitoringApi({
+      sources: [prom, loki],
+      projects: [project("p1", "Dev", [link(prom, "", { source_cluster_id: "c1" }), link(loki, "", { source_cluster_id: "c1" })], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: { s1: bad(promDown), s2: bad(down) },
+      readyMade: { p1: [PODS, LOGS] },
+    }, async (url: string) => json(url === "/api/clusters" ? [{ id: "c1", name: "dev", provider: "kind", state: "ready" }] : []));
+    open("p1");
+    expect(await screen.findByText("dev can't be reached, so this project's data can't be read now.")).toBeTruthy();
+    await screen.findByRole("button", { name: "Pod health" });
+    expect(screen.queryByText(unread)).toBeNull();
+    expect(screen.queryByText(promDown)).toBeNull();
+    // One line per view, not one per reason.
+    expect(screen.getAllByText("Can't be checked now.")).toHaveLength(2);
+  });
+
   it("a failing source of another cluster keeps its own reason", async () => {
     const a = source("s1", "Prom in dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev" });
     const b = source("s2", "By address");

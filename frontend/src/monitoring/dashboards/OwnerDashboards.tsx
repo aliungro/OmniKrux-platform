@@ -70,9 +70,12 @@ function DashboardRow({ d, onOpen }: { d: DashboardSummaryOut; onOpen(id: string
 }
 
 /** A project's ready-made views: what each shows, what its sources lack, and Copy to edit. */
-function ReadyMadeViews({ projectId, readyMade, opener, onOpen, clusterDown, manyPrometheus }: {
-  projectId: string; readyMade: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void; clusterDown: boolean; manyPrometheus: boolean;
+function ReadyMadeViews({ projectId, readyMade, opener, onOpen, downCluster, manyPrometheus }: {
+  projectId: string; readyMade: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void; downCluster: string | null; manyPrometheus: boolean;
 }) {
+  // Under the page's one cluster line, a reason that is that cluster's (the server's words
+  // `Can't reach {cluster}, so …`, also inside a note) is said once per view as Can't be checked now.
+  const byDownCluster = (text: string) => downCluster !== null && text.includes(`Can't reach ${downCluster}, so `);
   const ready = useReadyMade(projectId);
   const copy = useCopyToEdit(opener);
   if (!readyMade) return <p className={s.muted}>{NO_READY}</p>;
@@ -90,8 +93,10 @@ function ReadyMadeViews({ projectId, readyMade, opener, onOpen, clusterDown, man
                 <button type="button" className={s.readyTitle} onClick={(e) => onOpen(r.id, toNewTab(e))}>{r.title}</button>
                 {r.description && <p className={s.description}>{r.description}</p>}
                 {manyPrometheus && r.source_name && <p className={s.reads}>{`Reads ${r.source_name}.`}</p>}
-                {r.notes.map((n) => <p key={n} className={s.readyNote}>{n}</p>)}
-                {!r.checked && r.check_message && <p className={s.readyNote}>{clusterDown ? CANT_CHECK : r.check_message}</p>}
+                {r.notes.filter((n) => !byDownCluster(n)).map((n) => <p key={n} className={s.readyNote}>{n}</p>)}
+                {downCluster !== null && ((!r.checked && r.check_message) || r.notes.some(byDownCluster))
+                  ? <p className={s.readyNote}>{CANT_CHECK}</p>
+                  : !r.checked && r.check_message && <p className={s.readyNote}>{r.check_message}</p>}
                 {copy.error?.from === r.id && <p className={s.bad} role="alert">{copy.error.text}</p>}
               </div>
               <button type="button" className={s.copy} aria-label={`Copy to edit ${r.title}`} aria-disabled={copy.busy !== null || undefined}
@@ -106,7 +111,7 @@ function ReadyMadeViews({ projectId, readyMade, opener, onOpen, clusterDown, man
   );
 }
 
-export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = false, clusterDown = false, manyPrometheus = false }: {
+export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = false, downCluster = null, manyPrometheus = false }: {
   owner: Owner;
   /** The tab the page is in: a dashboard made here opens in it (or a new one when it holds unsaved edits). */
   tabId: string;
@@ -114,8 +119,8 @@ export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = f
   openInNewTab(view: MonitoringView): void;
   /** A project with a Prometheus-compatible or Loki source linked (ready-made views come from them). */
   readyMade?: boolean;
-  /** The project's cluster can't be reached, which its page says once: a view doesn't say why again. */
-  clusterDown?: boolean;
+  /** The cluster every failing source can't reach, which the project page says once: a view doesn't say why again. */
+  downCluster?: string | null;
   /** The project links two or more Prometheus sources: each ready-made view says which one it reads. */
   manyPrometheus?: boolean;
 }) {
@@ -149,7 +154,7 @@ export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = f
           {list.data.map((d) => <DashboardRow key={d.id} d={d} onOpen={open} />)}
         </ul>
       )}
-      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} readyMade={readyMade} opener={opener} onOpen={open} clusterDown={clusterDown} manyPrometheus={manyPrometheus} />}
+      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} readyMade={readyMade} opener={opener} onOpen={open} downCluster={downCluster} manyPrometheus={manyPrometheus} />}
       {creating && (
         <NewDashboardDialog owner={owner} restoreFocusTo={newButton} onCancel={() => setCreating(false)}
           onCreated={(out) => { setCreating(false); openMade(out, { edit: true }, opener); }} />
