@@ -9,6 +9,7 @@ import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fak
 import { gate, intercept, linkedProject, panel, seedDashboard, spec, variable } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { ReadyMadeOut } from "../api";
+import { rangeWords } from "../time";
 import { editSessions } from "../editor/useDashboardEditor";
 import { writeDraft } from "../drafts/draftStore";
 
@@ -221,7 +222,7 @@ describe("Dashboard page", () => {
     const panelEl = () => document.querySelector<HTMLElement>('[data-panel-id="p-1"]')!;
     const held = gate();
     intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
-    await user.click(screen.getByRole("button", { name: /^24 Nov/ }));
+    await user.click(screen.getByRole("button", { name: rangeWords({ from: "2026-11-24T10:00:00Z", to: "2026-11-24T12:00:00Z" }, Math.floor(Date.now() / 1000)) }));
     await user.click(screen.getByRole("menuitem", { name: "Custom range…" }));
     const from = screen.getByLabelText("From");
     await user.clear(from);

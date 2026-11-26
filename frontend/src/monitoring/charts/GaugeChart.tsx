@@ -66,8 +66,10 @@ export default function GaugeChart({ panel, series, alert = null }: GaugeChartPr
         {shown.map((s) => {
           const value = reduceSeries(s.points, o.calc);
           const tone = value === null ? null : thresholdColor(value, o.thresholds);
-          const text = formatValue(value, o.unit, o.decimals);
-          const range = `${formatValue(min, o.unit, o.decimals)} to ${formatValue(max, o.unit, o.decimals)}`;
+          // The value, minimum and maximum read in one unit (never "0 m to 2 cores").
+          const shared = Math.max(Math.abs(min), Math.abs(max), value === null ? 0 : Math.abs(value));
+          const text = formatValue(value, o.unit, o.decimals, shared);
+          const range = `${formatValue(min, o.unit, o.decimals, shared)} to ${formatValue(max, o.unit, o.decimals, shared)}`;
           return (
             <div
               key={s.key}

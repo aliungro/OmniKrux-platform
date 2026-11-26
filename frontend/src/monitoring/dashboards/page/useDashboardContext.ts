@@ -12,7 +12,7 @@ import type { GroupOut, ProjectOut } from "../../api/types";
 import type { MonitoringView } from "../../shell/tabState";
 import { labelValues, type LabelValuesOut, type LabelValuesParams } from "../api";
 import { interpolate, VariableError, type ResolvedVars, type VarValue } from "../interpolate";
-import type { DashboardOwner } from "../runPanel";
+import type { DashboardOwner, RangePin } from "../runPanel";
 import { variablesUsed, type DashboardSpec, type OwnerKind, type PanelSpec, type RefreshSpec, type SourceRef, type TimeSpec, type VariableSpec } from "../schema";
 import { REFRESH_LABELS, refreshMs as refreshMsOf, resolveTime, stepFor } from "../time";
 
@@ -148,7 +148,7 @@ export interface DashboardContext {
   variables: VariableState[];
   projects: { all: ProjectRef[]; selected: VarValue } | null;
   /** The time range in seconds, from `now`. */
-  range: { start: number; end: number; fixed?: boolean };
+  range: { start: number; end: number; pin?: RangePin };
   time: TimeSpec;
   /** Milliseconds; advances on refresh, on each auto-refresh tick and on time changes. */
   now: number;
@@ -224,11 +224,12 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     const now = Math.max(Date.now(), clock.now + 1);
     setClock({ key: timeKey, now, valuesNow: now, seq: clock.seq });
   }
-  // `fixed`: the range ends at an absolute time, so it is one window; a relative one only slides with "now".
-  const fixed = !time.to.startsWith("now");
+  // `pin`: what stays put in the range. An absolute end makes it one window ("window"); an absolute
+  // start with an end of now only grows ("start"); a relative one only slides with "now".
+  const pin: RangePin | undefined = !time.to.startsWith("now") ? "window" : !time.from.startsWith("now") ? "start" : undefined;
   const rangeAt = (seconds: number) => ({
     ...(resolveTime({ from: time.from, to: time.to }, seconds) ?? resolveTime(spec.time, seconds) ?? { start: seconds - 21600, end: seconds }),
-    fixed,
+    pin,
   });
   const nowSeconds = Math.floor(clock.now / 1000);
   const valuesSeconds = Math.floor(clock.valuesNow / 1000);

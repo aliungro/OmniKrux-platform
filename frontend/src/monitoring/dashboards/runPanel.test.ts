@@ -302,9 +302,9 @@ describe("usePanelData", () => {
   it("a range change dims the old result: a moved fixed window does, a sliding one doesn't", async () => {
     installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
     const client = new QueryClient();
-    type P = { run: PanelRun; fixed: boolean; panel: PanelSpec };
-    const { result, rerender } = renderHook(({ run, fixed, panel: p }: P) => usePanelData("d1", p, run, null, true, 0, fixed), {
-      wrapper: wrapper(client), initialProps: { run: at(0), fixed: true, panel } as P,
+    type P = { run: PanelRun; pin?: "window" | "start"; panel: PanelSpec };
+    const { result, rerender } = renderHook(({ run, pin, panel: p }: P) => usePanelData("d1", p, run, null, true, 0, pin), {
+      wrapper: wrapper(client), initialProps: { run: at(0), pin: "window", panel } as P,
     });
     // First load: nothing earlier to show, so nothing is dimmed (the panel says it is loading).
     expect(result.current.data).toBeNull();
@@ -317,7 +317,7 @@ describe("usePanelData", () => {
     const inner = globalThis.fetch;
     vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => { await held; return inner(...args); }));
     // The same length, another window (yesterday to today, as a custom range): not the last answer.
-    rerender({ run: at(86400), fixed: true, panel });
+    rerender({ run: at(86400), pin: "window", panel });
     await waitFor(() => expect(result.current.fetching).toBe(true));
     expect(result.current.stale).toBe(true);
     expect(result.current.data?.series).toHaveLength(1);
@@ -325,15 +325,39 @@ describe("usePanelData", () => {
     await waitFor(() => expect(result.current.stale).toBe(false));
 
     // A relative range only slides with now: a plain refresh never dims.
-    rerender({ run: at(86400), fixed: false, panel });
+    rerender({ run: at(86400), pin: undefined, panel });
     await waitFor(() => expect(result.current.stale).toBe(false));
     const slow = new Promise<void>(() => {});
     vi.stubGlobal("fetch", vi.fn(async () => { await slow; return new Response("{}"); }));
-    rerender({ run: at(86460), fixed: false, panel });
+    rerender({ run: at(86460), pin: undefined, panel });
     await waitFor(() => expect(result.current.fetching).toBe(true));
     expect(result.current.stale).toBe(false);
     // A changed query is another question.
-    rerender({ run: buildPanelRun({ panel: ts("sum(up)"), owner: project(projA), vars: {}, range: { start: 86460, end: 90060 }, ownerName: "projA" }), fixed: false, panel: ts("sum(up)") });
+    rerender({ run: buildPanelRun({ panel: ts("sum(up)"), owner: project(projA), vars: {}, range: { start: 86460, end: 90060 }, ownerName: "projA" }), pin: undefined, panel: ts("sum(up)") });
+    await waitFor(() => expect(result.current.stale).toBe(true));
+  });
+
+  it("a range from an absolute start to now doesn't dim on refresh ticks, only when its start moves", async () => {
+    installFakeMonitoringApi({ projects: [projA], queryAnswers: { "a|up": { series: [{ labels: { job: "x" }, points: [[0, 1]] }] } } });
+    const client = new QueryClient();
+    const span = (start: number, end: number) => buildPanelRun({ panel, owner: project(projA), vars: {}, range: { start, end }, ownerName: "projA" });
+    const { result, rerender } = renderHook(({ run }: { run: PanelRun }) => usePanelData("d1", panel, run, null, true, 0, "start"), {
+      wrapper: wrapper(client), initialProps: { run: span(1000, 5000) },
+    });
+    await waitFor(() => expect(result.current.data?.state).toBe("ready"));
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => { await held; return inner(...args); }));
+    // Auto-refresh ticks: the end moves, the span grows, the start stays.
+    rerender({ run: span(1000, 5060) });
+    await waitFor(() => expect(result.current.fetching).toBe(true));
+    expect(result.current.stale).toBe(false);
+    await act(async () => release());
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    // The user moves the start: another question.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    rerender({ run: span(2000, 5120) });
     await waitFor(() => expect(result.current.stale).toBe(true));
   });
 

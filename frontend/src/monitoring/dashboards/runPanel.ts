@@ -24,6 +24,9 @@ export type RunPart = { queryRef: string; projectId: string; projectName: string
 /** A query (on one project, or on all when `projectName` is null) that isn't sent, and why. */
 export type SkippedPart = { queryRef: string; projectName: string | null; message: string; state: "error" };
 
+/** What a range keeps while "now" moves: both ends (an absolute window), its start, or nothing (it slides). */
+export type RangePin = "window" | "start";
+
 export interface PanelRun {
   requests: QueryRequest[];
   parts: RunPart[];
@@ -320,8 +323,8 @@ export function usePanelData(
   refreshMs: number | null,
   enabled: boolean,
   editId = 0,
-  /** The range is one fixed window (it ends at an absolute time): moving it is a new question. */
-  fixedWindow = false,
+  /** What the range keeps (`RangePin`): moving what it keeps is a new question; sliding with now is not. */
+  pin?: RangePin,
 ): PanelDataResult {
   const key = panelRunKey(run);
   // The edit count each key was first seen with: its fetch began then. Later option-only edits
@@ -357,9 +360,9 @@ export function usePanelData(
   // What was shown last, for this dashboard's panel only (another panel's data is never kept).
   const owner = JSON.stringify([dashboardId, panel.id]);
   const last = useRef<Shown | null>(null);
-  // The question without a sliding window's position: the queries and how long a range they span (a
-  // fixed window's own start and end).
-  const asked = JSON.stringify([run.requests.map(withoutWindow), fixedWindow ? [run.range.start, run.range.end] : run.range.end - run.range.start, run.step]);
+  // The question without a sliding window's position: the queries and what the range keeps (its span
+  // when it slides, its start when only the end moves, both ends when it is one window).
+  const asked = JSON.stringify([run.requests.map(withoutWindow), pin === "window" ? [run.range.start, run.range.end] : pin === "start" ? run.range.start : run.range.end - run.range.start, run.step]);
 
   const answers = query.status === "success" ? query.data : undefined;
   const merged = useMemo(

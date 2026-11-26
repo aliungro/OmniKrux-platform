@@ -4,7 +4,7 @@
 import { useLayoutEffect, useMemo, useRef, type RefObject } from "react";
 import { useEditableGrid, type GridEditing, type GridEditor } from "../editor/EditableGrid";
 import type { ResolvedVars } from "../interpolate";
-import type { DashboardOwner } from "../runPanel";
+import type { DashboardOwner, RangePin } from "../runPanel";
 import type { PanelSpec } from "../schema";
 import type { PanelStatusStore } from "../page/useDashboardContext";
 import { PanelFrame } from "./PanelFrame";
@@ -16,7 +16,7 @@ interface Props {
   owner: DashboardOwner | null;
   ownerName: string;
   vars: ResolvedVars;
-  range: { start: number; end: number; fixed?: boolean };
+  range: { start: number; end: number; pin?: RangePin };
   waiting(panel: PanelSpec): boolean;
   /** Why a panel can't run (a variable it uses has no values), else null. */
   blocked(panel: PanelSpec): string | null;

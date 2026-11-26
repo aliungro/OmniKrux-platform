@@ -9,7 +9,7 @@ import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, typ
 import { usePanelStates } from "../../alerts/api";
 import { notRefreshedWords, STATE_LABEL, STATE_READING, STATE_UNKNOWN, stateTone } from "../../alerts/format";
 import { interpolateTitle, type ResolvedVars } from "../interpolate";
-import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun } from "../runPanel";
+import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun, type RangePin } from "../runPanel";
 import { sameJson } from "../sameJson";
 import type { Layout, PanelAlert, PanelSpec } from "../schema";
 import type { TileProps } from "../editor/EditableGrid";
@@ -26,7 +26,7 @@ interface Props {
   owner: DashboardOwner | null;
   ownerName: string;
   vars: ResolvedVars;
-  range: { start: number; end: number; fixed?: boolean };
+  range: { start: number; end: number; pin?: RangePin };
   waiting: boolean;
   /** Why it can't run (a variable it uses has no values): said as its failure, and nothing is sent. */
   blocked: string | null;
@@ -167,7 +167,7 @@ export const PanelFrame = memo(function PanelFrame({
     [runPanel, owner, vars, range, ownerName],
   );
   const run = useStableRun(built);
-  const ran = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting && blocked === null, changeId, range.fixed === true);
+  const ran = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting && blocked === null, changeId, range.pin);
   const result = useMemo<PanelDataResult>(
     () => (blocked === null || waiting ? ran : { ...ran, data: blockedData(blocked), fetching: false, stale: false, updatedAt: null, failedAt: null }),
     [ran, blocked, waiting],
