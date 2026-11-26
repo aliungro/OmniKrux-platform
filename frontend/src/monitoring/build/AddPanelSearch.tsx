@@ -13,7 +13,7 @@ import type { ResolvedVars } from "../dashboards/interpolate";
 import type { NewPanel } from "../dashboards/layout";
 import type { DashboardOwner } from "../dashboards/runPanel";
 import { nextPanelId, type DashboardSpec, type OwnerKind } from "../dashboards/schema";
-import { candidatePanel, type Candidate } from "./candidates";
+import { candidatePanel, heldKeys, type Candidate } from "./candidates";
 import { buildFinderIndex, findPanels } from "./finder";
 import HelpTip from "./HelpTip";
 import PreviewCard from "./PreviewCard";
@@ -73,6 +73,8 @@ export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars,
   // Typed text previews its own matches; with no text the suggestions' previews are the page's.
   const found = usePreviews(searching ? candidates : [], { owner, ownerName, vars, range });
   const previews = searching ? found : suggestions.previews;
+  // What the dashboard already holds says Added here, as in the suggestions column.
+  const added = useMemo(() => heldKeys(candidates, draft.panels), [candidates, draft.panels]);
 
   // The active option: the first, until the arrows move it; a new list starts at its first again.
   const listKey = JSON.stringify([query, candidates.map((c) => c.key)]);
@@ -81,6 +83,29 @@ export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars,
   const empty = candidates.length;
   const active = picked.key === listKey ? Math.min(picked.at, count - 1) : 0;
   const moveTo = (at: number) => setPicked({ key: listKey, at: (at + count) % count });
+  const results = useRef<HTMLDivElement>(null);
+  /** Cards in one grid row, measured: the options that share the first one's top. */
+  const columns = () => {
+    const opts = Array.from(results.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+    if (opts.length === 0) return 1;
+    const top = opts[0].getBoundingClientRect().top;
+    const n = opts.findIndex((o) => Math.abs(o.getBoundingClientRect().top - top) > 1);
+    return n === -1 ? 1 : n; // all in one row: up and down step by card
+  };
+  const moveRow = (down: boolean) => {
+    const cols = columns();
+    const last = count - 1;
+    if (down) {
+      if (active + cols <= last) moveTo(active + cols);
+      else if (Math.floor(active / cols) < Math.floor(last / cols)) moveTo(last); // a short last row
+      else moveTo(active % cols); // down from the last row wraps to the top of the column
+    } else if (active - cols >= 0) moveTo(active - cols);
+    else {
+      let at = Math.floor(last / cols) * cols + (active % cols); // up from the first row wraps to the bottom of the column
+      if (at > last) at -= cols;
+      moveTo(at);
+    }
+  };
 
   useEffect(() => {
     document.getElementById(`${base}-o${active}`)?.scrollIntoView?.({ block: "nearest" });
@@ -93,10 +118,21 @@ export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars,
     else add(candidates[i], from ?? rectOf(i));
   };
 
+  const atEdge = (e: KeyboardEvent<HTMLInputElement>) => {
+    const t = e.currentTarget;
+    if (t.value === "") return true;
+    if (t.selectionStart !== t.selectionEnd) return false;
+    return e.key === "ArrowLeft" ? t.selectionStart === 0 : t.selectionStart === t.value.length;
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      moveTo(active + (e.key === "ArrowDown" ? 1 : -1));
+      moveRow(e.key === "ArrowDown");
+    } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && atEdge(e)) {
+      // Left and right move by card; inside typed text they move the caret, until it reaches that end.
+      e.preventDefault();
+      moveTo(active + (e.key === "ArrowRight" ? 1 : -1));
     } else if (e.key === "End" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       moveTo(empty);
@@ -169,7 +205,7 @@ export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars,
         <input ref={input} className={s.input} type="text" autoComplete="off" spellCheck={false}
           role="combobox" aria-label="What do you want to see" aria-expanded="true" aria-autocomplete="list"
           aria-controls={ids.list} aria-activedescendant={ids.option(active)} aria-describedby={ids.hint}
-          aria-keyshortcuts="ArrowUp ArrowDown Enter Control+End Escape"
+          aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Enter Control+End Escape"
           placeholder="Type what you want to see, like errors by route"
           value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} />
         <span id={ids.hint} className={s.hint}>{active === 0 ? "Enter adds the first" : "Enter adds the highlighted one"}</span>
@@ -198,10 +234,10 @@ export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars,
         )}
         {catalog && catalog.problems.map((n) => <p key={n} className={s.muted}>{n}</p>)}
 
-        <div role="listbox" id={ids.list} aria-label="Results" className={s.results}>
+        <div ref={results} role="listbox" id={ids.list} aria-label="Results" className={s.results}>
           {candidates.map((c, i) => (
             <PreviewCard key={c.key} option id={ids.option(i)} candidate={c} preview={previews[c.key]}
-              active={i === active} onPick={(rect) => pick(i, rect)} />
+              active={i === active} added={added.has(c.key)} onPick={(rect) => pick(i, rect)} />
           ))}
           <div role="option" id={ids.option(empty)} aria-selected={active === empty}
             aria-labelledby={`${ids.option(empty)}-t`} aria-describedby={`${ids.option(empty)}-d`}

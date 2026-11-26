@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OwnerStreamLabel } from "../catalog/merge";
 import type { BrowseMetric, MetricKind } from "../catalog/metrics";
 import {
-  guessUnit, humanTitle, selectorText, writeLogQuery, writeMetricQuery, writeVolumeQuery,
+  guessUnit, humanTitle, legendFor, selectorText, writeLogQuery, writeMetricQuery, writeVolumeQuery,
 } from "./writeQuery";
 
 const m = (name: string, kind: MetricKind): BrowseMetric => ({
@@ -74,9 +74,26 @@ describe("writeQuery", () => {
     expect(guessUnit(m("http_request_duration_seconds", "histogram"))).toBe("s");
     expect(guessUnit(m("mem_bytes", "gauge"))).toBe("bytes");
     expect(guessUnit(m("mem", "unknown"))).toBe("short");
-    expect(humanTitle("http_requests_total")).toBe("Http requests");
+    expect(humanTitle("http_requests_total")).toBe("HTTP requests");
     expect(humanTitle("container_cpu_usage_seconds_total")).toBe("CPU");
     expect(humanTitle("up")).toBe("Targets up");
+  });
+
+  it("titles keep CPU and HTTP in capitals", () => {
+    expect(humanTitle("node_cpu_guest_seconds_total")).toBe("Node CPU guest");
+    expect(humanTitle("grpc_server_handled_total")).toBe("gRPC server handled");
+    expect(humanTitle("go_gc_duration_seconds")).toBe("Go GC duration");
+    expect(humanTitle("node_disk_io_time_seconds_total")).toBe("Node disk IO time");
+    expect(humanTitle("coredns_dns_requests_total")).toBe("Coredns DNS requests");
+    expect(humanTitle("net_tcp_udp_api_total")).toBe("Net TCP UDP API");
+  });
+
+  it("legends name the grouping labels, never the query", () => {
+    expect(legendFor("sum by (a, b) (rate(x[1m]))", "Title")).toBe("{{a}} {{b}}");
+    expect(legendFor("topk(5, sum by (namespace, pod) (rate(x[1m])))", "T")).toBe("{{namespace}} {{pod}}");
+    expect(legendFor("histogram_quantile(0.9, sum by (le) (rate(x_bucket[1m])))", "p90 Latency")).toBe("p90 Latency");
+    expect(legendFor("sum(rate(x[1m]))", "Request rate")).toBe("Request rate");
+    expect(legendFor("a / b", "Error rate")).toBe("Error rate");
   });
 
   it("a volume query is not swallowed by a trailing comment", () => {

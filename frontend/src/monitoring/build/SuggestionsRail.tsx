@@ -11,7 +11,7 @@ import { failure } from "../../api/http";
 import { JSON_FIRST } from "../dashboards/editor/editorState";
 import type { NewPanel } from "../dashboards/layout";
 import { nextPanelId, type DashboardSpec, type OwnerKind } from "../dashboards/schema";
-import { candidatePanel } from "./candidates";
+import { candidatePanel, heldKeys } from "./candidates";
 import PreviewCard from "./PreviewCard";
 import type { Suggestions } from "./useSuggestions";
 import s from "./SuggestionsRail.module.css";
@@ -58,13 +58,7 @@ export function SuggestionsRail({ suggestions, ownerName, ownerKind, draft, onAd
   const catalog = cat.catalog;
 
   /** The candidates the draft already holds, by key. */
-  const added = useMemo(() => {
-    const held = new Set<string>();
-    for (const c of candidates) {
-      if (draft.panels.some((p) => p.type === c.panelType && p.queries.some((q) => q.expr === c.expr))) held.add(c.key);
-    }
-    return held;
-  }, [candidates, draft.panels]);
+  const added = useMemo(() => heldKeys(candidates, draft.panels), [candidates, draft.panels]);
 
   const cards = () => Array.from(list.current?.querySelectorAll<HTMLElement>("button") ?? []);
   const firstUnused = (from: number, used: ReadonlySet<string>) => {

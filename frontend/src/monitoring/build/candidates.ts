@@ -1,7 +1,7 @@
 // A panel the finder or the suggestions offer, and the panel it becomes when added.
 import type { NewPanel } from "../dashboards/layout";
 import { DEFAULT_SIZES, newPanel } from "../dashboards/schema";
-import type { OwnerKind, PanelType, Unit } from "../dashboards/schema";
+import type { OwnerKind, PanelSpec, PanelType, Unit } from "../dashboards/schema";
 
 export type Candidate = {
   key: string;
@@ -15,6 +15,15 @@ export type Candidate = {
   legend: string;
   options?: Record<string, unknown>;
 };
+
+/** The keys of the candidates the panels already hold (same type, same query). */
+export function heldKeys(candidates: Candidate[], panels: readonly PanelSpec[]): Set<string> {
+  const held = new Set<string>();
+  for (const c of candidates) {
+    if (panels.some((p) => p.type === c.panelType && p.queries.some((q) => q.expr === c.expr))) held.add(c.key);
+  }
+  return held;
+}
 
 /** A new panel from a candidate. A group's panels never pin a source (the same name can come from a different one in each project). */
 export function candidatePanel(c: Candidate, id: string, ownerKind: OwnerKind): NewPanel {

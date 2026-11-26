@@ -159,7 +159,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "panelResize", scope: "dashboard", keys: ["Ctrl Shift ← → ↑ ↓"], macKeys: ["⌘ Shift ← → ↑ ↓"], match: ARROWS, ctrl: true, shift: true, label: "While editing: make the panel narrower, wider, shorter or taller" },
   { id: "panelSettings", scope: "dashboard", keys: ["Enter"], match: ["Enter"], label: "While editing: open the panel's settings" },
   { id: "panelAdd", scope: "dashboard", keys: ["a"], match: ["a"], label: "While editing: add a panel (type what you want to see)" },
-  { id: "addPanelPick", scope: "dashboard", keys: ["↑ ↓", "Enter"], match: ["ArrowUp", "ArrowDown", "Enter"], label: "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)" },
+  { id: "addPanelPick", scope: "dashboard", keys: ["↑ ↓ ← →", "Enter"], match: ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter"], label: "In Add panel: move between results by row or card and add one (Ctrl+End: Empty panel; Esc clears, then closes)" },
   { id: "suggestionsFocus", scope: "dashboard", keys: ["s"], match: ["s"], label: "While editing: show the suggestions and go to them" },
   // Matched with isDeleteKey, like deleteFocused.
   { id: "panelRemove", scope: "dashboard", keys: ["Ctrl Del"], macKeys: ["⌘ ⌫"], label: "While editing: remove the panel from the draft" },

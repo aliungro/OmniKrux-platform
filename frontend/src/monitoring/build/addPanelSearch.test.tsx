@@ -129,7 +129,7 @@ describe("Add panel search", () => {
   it("typing finds results and the first is active", async () => {
     await typed("errors by route");
     const list = options();
-    expect(list[0].textContent).toContain("Http requests errors per second by route");
+    expect(list[0].textContent).toContain("HTTP requests errors per second by route");
     expect(active()).toBe(list[0]);
     expect(within(dialog()).getByText("Enter adds the first")).toBeTruthy();
     expect(within(list[0]).getByText("Enter to add")).toBeTruthy();
@@ -160,13 +160,13 @@ describe("Add panel search", () => {
     await user.keyboard("{Enter}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull());
     const added = draft().draft.panels.at(-1)!;
-    expect(added.title).toBe("Http requests errors per second by route");
+    expect(added.title).toBe("HTTP requests errors per second by route");
     expect(added.queries[0].expr).toBe(ERRORS_BY_ROUTE.expr);
     expect(added.queries[0].source).toEqual({ type: "prometheus", id: "s1" });
     expect(draft().selected).toBeNull();
-    await waitFor(() => expect(document.activeElement).toBe(tile("Http requests errors per second by route")));
+    await waitFor(() => expect(document.activeElement).toBe(tile("HTTP requests errors per second by route")));
     notBody();
-    expect(grid().textContent).toBe('Added "Http requests errors per second by route". Enter opens its settings.');
+    expect(grid().textContent).toBe('Added "HTTP requests errors per second by route". Enter opens its settings.');
     // Enter on it opens its settings.
     await user.keyboard("{Enter}");
     expect(await screen.findByRole("complementary", { name: "Panel settings" })).toBeTruthy();
@@ -371,5 +371,57 @@ describe("Add panel search", () => {
     expect(api.requests.some((r) => r.url === "/api/monitoring/projects/p1/catalog?refresh=true")).toBe(true);
     // The keyboard stayed in the search.
     expect(document.activeElement).toBe(input());
+  });
+});
+
+describe("Add panel search: grid keys and marks", () => {
+  /** Three cards to a row: each option reports a place by its index. */
+  const threeAcross = () => vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const at = Number(/o(\d+)$/.exec(this.id)?.[1]);
+    if (Number.isNaN(at)) return new DOMRect();
+    return new DOMRect((at % 3) * 200, Math.floor(at / 3) * 120, 196, 110);
+  });
+
+  it("down moves to the card below, up back, left and right by card", async () => {
+    threeAcross();
+    const { user } = await opened();
+    await within(dialog()).findByText("Suggested for Shop · from what Prometheus has");
+    const list = options();
+    expect(list.length).toBeGreaterThan(4);
+    await user.keyboard("{ArrowDown}");
+    expect(active()).toBe(list[3]);
+    notBody();
+    await user.keyboard("{ArrowUp}");
+    expect(active()).toBe(list[0]);
+    await user.keyboard("{ArrowRight}");
+    expect(active()).toBe(list[1]);
+    await user.keyboard("{ArrowLeft}");
+    expect(active()).toBe(list[0]);
+    expect(document.activeElement).toBe(input());
+  });
+
+  it("left and right keep editing the typed text", async () => {
+    threeAcross();
+    const { user } = await opened();
+    await user.keyboard("abc{ArrowLeft}");
+    expect((input() as HTMLInputElement).selectionStart).toBe(2);
+    expect(active()).toBe(options()[0]);
+  });
+
+  it("a suggestion on the dashboard says Added in the picker", async () => {
+    const { user } = await opened();
+    await within(dialog()).findByText("Suggested for Shop · from what Prometheus has");
+    const first = options()[0];
+    const title = first.querySelector("span > span")!.textContent!;
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add panel" })).toBeNull());
+    await user.keyboard("a");
+    await waitFor(() => expect(document.activeElement).toBe(input()));
+    await within(dialog()).findByText("Added");
+    expect(options().filter((o) => o.textContent?.includes("Added"))).toHaveLength(1);
+    expect(options().find((o) => o.textContent?.includes("Added"))!.textContent).toContain(title);
+    // Typed text marks it too.
+    await user.keyboard("requests");
+    await waitFor(() => expect(options().some((o) => o.textContent?.includes("Added"))).toBe(true));
   });
 });

@@ -6,7 +6,7 @@ import { browseMetrics } from "../catalog/metrics";
 import type { BrowseMetric } from "../catalog/metrics";
 import type { Candidate } from "./candidates";
 import {
-  LEVEL_LABELS, SPLIT_LABELS, STATUS_LABELS, STREAM_LABELS, UnwritableQuery, selectorText, writeLogQuery,
+  LEVEL_LABELS, SPLIT_LABELS, STATUS_LABELS, STREAM_LABELS, UnwritableQuery, legendFor, selectorText, writeLogQuery,
   writeMetricQuery, writeVolumeQuery,
 } from "./writeQuery";
 
@@ -45,7 +45,8 @@ export function suggestionsHeading(ownerName: string, candidates: Candidate[]): 
 type Make = (metrics: Map<string, BrowseMetric>, all: BrowseMetric[], catalog: OwnerCatalog) => Candidate | null;
 
 const prom = { sourceType: "prometheus" as const };
-const named = (c: Candidate): Candidate => c;
+/** The legend names the grouping labels, or the title; a logs panel has none. */
+const named = (c: Candidate): Candidate => (c.panelType === "logs" ? c : { ...c, legend: legendFor(c.expr, c.title) });
 
 function lokiLabel(catalog: OwnerCatalog) {
   const writable = catalog.streams.filter((s) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s.name));
@@ -191,6 +192,14 @@ function run(rules: Make[], byName: Map<string, BrowseMetric>, all: BrowseMetric
     }
   }
   return out;
+}
+
+/** Every curated suggestion the catalog supports, with no limit (search lists them for typed words). */
+export function curatedPanels(catalog: OwnerCatalog): Candidate[] {
+  const all = browseMetrics(catalog);
+  const byName = new Map(all.map((m) => [m.name, m]));
+  const max = PROMETHEUS_RULES.length + LOKI_RULES.length;
+  return [...run(PROMETHEUS_RULES, byName, all, catalog, max), ...run(LOKI_RULES, byName, all, catalog, max)];
 }
 
 /**

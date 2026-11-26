@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { FINDER_MAX_RESULTS, buildFinderIndex, findPanels } from "./finder";
-import { CAT, bigCatalog, catalog, counter, gauge } from "./testCatalogs";
+import { CAT, KIND, bigCatalog, catalog, counter, gauge } from "./testCatalogs";
 
 describe("findPanels", () => {
   it("errors by route finds the 5xx rate by route first", () => {
     const [top] = findPanels(buildFinderIndex(CAT), "errors by route");
-    expect(top.title).toBe("Http requests errors per second by route");
+    expect(top.title).toBe("HTTP requests errors per second by route");
     expect(top.expr).toBe('sum by (route) (rate(http_requests_total{status=~"5.."}[$__rate_interval]))');
   });
 
@@ -16,7 +16,7 @@ describe("findPanels", () => {
 
   it("p99 latency picks the histogram with that quantile", () => {
     const [top] = findPanels(buildFinderIndex(CAT), "p99 latency");
-    expect(top.title).toBe("p99 Http request duration");
+    expect(top.title).toBe("p99 HTTP request duration");
     expect(top.expr.startsWith("histogram_quantile(0.99,")).toBe(true);
   });
 
@@ -46,12 +46,12 @@ describe("findPanels", () => {
   it("never offers a name it can't write", () => {
     const odd = catalog([counter("http_requests_total", ["route"]), counter("bad-name_total", ["route"])]);
     const r = findPanels(buildFinderIndex(odd), "requests");
-    expect(r.map((c) => c.expr)).toEqual(["sum(rate(http_requests_total[$__rate_interval]))"]);
+    expect(r.map((c) => c.expr)).toEqual(["sum by (route) (rate(http_requests_total[$__rate_interval]))", "sum(rate(http_requests_total[$__rate_interval]))"]);
   });
 
   it("writes catalog values with escaping", () => {
     const c = catalog([], [{ name: "app", values: ['a"b'], sourceId: "loki", projectIds: [] }]);
-    const [top] = findPanels(buildFinderIndex(c), "logs app");
+    const top = findPanels(buildFinderIndex(c), "logs app").find((x) => x.title.startsWith("Logs from"))!;
     expect(top.expr).toBe('{app="a\\"b"}');
   });
 
@@ -67,5 +67,38 @@ describe("findPanels", () => {
     const t0 = performance.now();
     for (const text of texts) findPanels(index, text);
     expect((performance.now() - t0) / texts.length).toBeLessThan(50);
+  });
+});
+
+describe("curated suggestions in search", () => {
+  it("typing cpu lists the curated CPU suggestions first", () => {
+    const r = findPanels(buildFinderIndex(KIND), "cpu");
+    expect(r.slice(0, 2).map((c) => c.title)).toEqual(["CPU by pod", "Node CPU busy"]);
+  });
+
+  it("curated suggestions match the metric name too", () => {
+    const r = findPanels(buildFinderIndex(KIND), "node_cpu_seconds_total");
+    expect(r[0].title).toBe("Node CPU busy");
+  });
+
+  it("node cpu seconds is offered as Node CPU busy", () => {
+    const r = findPanels(buildFinderIndex(KIND), "node cpu seconds");
+    expect(r[0]).toMatchObject({ title: "Node CPU busy", unit: "percentunit" });
+    expect(r[0].expr).toBe('1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[$__rate_interval]))');
+    expect(r.filter((c) => /^sum\(rate\(node_cpu_seconds_total/.test(c.expr))).toEqual([]);
+  });
+
+  it("without a mode label node cpu seconds is not offered at all", () => {
+    const r = findPanels(buildFinderIndex(catalog([counter("node_cpu_seconds_total", ["cpu"])], [])), "node cpu");
+    expect(r).toEqual([]);
+  });
+
+  it("legends name the grouping labels or the title, never the query", () => {
+    for (const c of findPanels(buildFinderIndex(KIND), "cpu requests restarts")) {
+      expect(c.legend).not.toContain("rate(");
+      expect(c.legend).toBe(c.legend.includes("{{") ? c.legend : c.title);
+    }
+    const [top] = findPanels(buildFinderIndex(CAT), "requests");
+    expect(top.legend).toBe(top.title === "Request rate" ? "{{route}}" : top.title);
   });
 });

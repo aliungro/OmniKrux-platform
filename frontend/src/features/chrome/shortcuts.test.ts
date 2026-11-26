@@ -158,7 +158,7 @@ describe("shortcut registry", () => {
       ["panelResize", ["Ctrl Shift ← → ↑ ↓"], "While editing: make the panel narrower, wider, shorter or taller"],
       ["panelSettings", ["Enter"], "While editing: open the panel's settings"],
       ["panelAdd", ["a"], "While editing: add a panel (type what you want to see)"],
-      ["addPanelPick", ["↑ ↓", "Enter"], "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)"],
+      ["addPanelPick", ["↑ ↓ ← →", "Enter"], "In Add panel: move between results by row or card and add one (Ctrl+End: Empty panel; Esc clears, then closes)"],
       ["suggestionsFocus", ["s"], "While editing: show the suggestions and go to them"],
       ["panelRemove", ["Ctrl Del"], "While editing: remove the panel from the draft"],
       ["panelDuplicate", ["d"], "While editing: duplicate the panel"],

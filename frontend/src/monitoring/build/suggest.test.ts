@@ -165,3 +165,19 @@ describe("candidatePanel", () => {
     }
   });
 });
+
+describe("suggestion legends", () => {
+  it("legends name the grouping labels, never the query", () => {
+    const s = Object.fromEntries(suggestPanels(catalog([
+      counter("http_requests_total", ["route", "status"]),
+      family("http_request_duration_seconds", "histogram", ["route"]),
+      gauge("container_memory_working_set_bytes", ["namespace", "pod", "container"]),
+    ], [streamOf("level", ["error"]), streamOf("app", ["a"])])).map((c) => [c.key, c]));
+    expect(s.requestRate.legend).toBe("{{route}}");
+    expect(s.errorRate.legend).toBe("Error rate");
+    expect(s.latencyP95.legend).toBe("p95 latency");
+    expect(s.memoryByPod.legend).toBe("{{namespace}} {{pod}}");
+    expect(s.logVolume.legend).toBe("{{level}}");
+    for (const c of Object.values(s)) expect(c.legend).not.toMatch(/rate\(|\{app/);
+  });
+});

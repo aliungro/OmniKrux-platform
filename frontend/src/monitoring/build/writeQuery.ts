@@ -135,6 +135,11 @@ const KNOWN_TITLES: Record<string, string> = {
   up: "Targets up",
 };
 
+// Words a title keeps in their usual case (gRPC is the odd one).
+const ACRONYMS: Record<string, string> = {
+  cpu: "CPU", io: "IO", http: "HTTP", gc: "GC", tcp: "TCP", udp: "UDP", dns: "DNS", api: "API", grpc: "gRPC",
+};
+
 export function humanTitle(name: string): string {
   if (Object.hasOwn(KNOWN_TITLES, name)) return KNOWN_TITLES[name];
   let base = name;
@@ -144,6 +149,21 @@ export function humanTitle(name: string): string {
       if (base.endsWith(suffix) && base.length > suffix.length) { base = base.slice(0, -suffix.length); again = true; }
     }
   }
-  const words = base.replace(/_/g, " ").trim();
-  return words ? words[0].toUpperCase() + words.slice(1) : name;
+  const words = base.split("_").filter(Boolean).map((w) => ACRONYMS[w.toLowerCase()] ?? w);
+  if (words.length === 0) return name;
+  const first = words[0];
+  if (!Object.values(ACRONYMS).includes(first)) words[0] = first[0].toUpperCase() + first.slice(1);
+  return words.join(" ");
+}
+
+/**
+ * What a series is called in the legend: the grouping labels (`by (a, b)` is `{{a}} {{b}}`), or the
+ * panel's title when the query doesn't group. Never the query itself. `le` is a bucket, not a series.
+ */
+export function legendFor(expr: string, title: string): string {
+  for (const m of expr.matchAll(/\bby\s*\(([^)]*)\)/g)) {
+    const labels = m[1].split(",").map((l) => l.trim()).filter((l) => LABEL_NAME.test(l) && l !== "le");
+    if (labels.length > 0) return labels.map((l) => `{{${l}}}`).join(" ");
+  }
+  return title;
 }
