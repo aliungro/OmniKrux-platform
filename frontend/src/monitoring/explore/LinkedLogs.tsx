@@ -122,10 +122,15 @@ export const LinkedLogs = forwardRef<HTMLElement, LinkedLogsProps>(function Link
       {metricQuery ? (
         <p className={s.note}>{METRIC_QUERY}</p>
       ) : invalid ? (
-        // The text is wrong: fixing it is the way on, so there's no Try again.
-        <p className={s.invalid} data-lines-invalid="">
-          <span className={s.invalidMark} aria-hidden="true">✗</span> {state.message} <span className={s.invalidStep}>{FIX_QUERY}</span>
-        </p>
+        // The text is wrong: fixing it is the way on, so there's no Try again. A log query's meta
+        // line already says what is wrong (it speaks for these lines): here only the step.
+        mode === "logs"
+          ? <p className={s.invalid} data-lines-invalid=""><span className={s.invalidStep}>{FIX_QUERY}</span></p>
+          : (
+            <p className={s.invalid} data-lines-invalid="">
+              <span className={s.invalidMark} aria-hidden="true">✗</span> {state.message} <span className={s.invalidStep}>{FIX_QUERY}</span>
+            </p>
+          )
       ) : selector === null ? (
         mode === "metrics" ? <p className={s.note}>{chips ? LINKED_HINT : SELECTOR_HINT}</p> : null
       ) : (

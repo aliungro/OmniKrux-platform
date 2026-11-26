@@ -27,6 +27,8 @@ function fitToText(el: HTMLTextAreaElement) {
   el.style.overflowY = need > max ? "auto" : "hidden";
 }
 export const NO_QUERY = "Pick a metric on the left, or type a query.";
+/** The same hint on a Loki source: its list holds log streams, and it reads LogQL. */
+export const NO_LOG_QUERY = "Pick a log stream on the left, or type a LogQL query.";
 export const FAILED_TITLE = { unreachable: "Source unreachable", error: "Query error" } as const;
 
 interface QueryBarProps {
@@ -126,12 +128,17 @@ function linesBody(lines: LinesRunState): ReactNode {
  */
 export const NO_SUCH_METRIC = "No metric named {name} in {source} for this project.";
 
-export function MetaLine({ state, expr, lines, missing }: { state: ExploreRunState; expr: string; kind?: ExploreKind; lines?: LinesRunState; missing?: string | null }) {
+export function MetaLine({ state, expr, lines, missing, language }: {
+  state: ExploreRunState; expr: string; kind?: ExploreKind; lines?: LinesRunState; missing?: string | null;
+  /** The source's language: the empty field's hint names what its list holds. */
+  language?: "PromQL" | "LogQL";
+}) {
+  const NO_QUERY_HINT = language === "LogQL" ? NO_LOG_QUERY : NO_QUERY;
   let body: ReactNode = null;
   let tone: "bad" | "quiet" = "quiet";
   const running = (lines ?? state).status === "running";
   if (lines) {
-    if (lines.shown === "idle") body = expr.trim() === "" ? NO_QUERY : null;
+    if (lines.shown === "idle") body = expr.trim() === "" ? NO_QUERY_HINT : null;
     else if (lines.shown === "done") body = linesBody(lines);
     else {
       tone = "bad";
@@ -139,7 +146,7 @@ export function MetaLine({ state, expr, lines, missing }: { state: ExploreRunSta
     }
   } else if (state.shown === "idle") {
     // Nothing ran, or an emptied field ended its run: the hint. Before the first end, the field says.
-    body = (state.expr ?? expr).trim() === "" ? NO_QUERY : null;
+    body = (state.expr ?? expr).trim() === "" ? NO_QUERY_HINT : null;
   } else if (state.shown === "done" && state.data) {
     // A chart counts its series (a log query's line is `linesBody`).
     // An empty answer is not a success: no check, no green.

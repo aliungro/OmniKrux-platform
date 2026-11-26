@@ -741,7 +741,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
                 onSplit={(label, keyed) => applyBuilder({ type: "split", label }, keyed)}
                 onOnly={(label, value, keyed) => applyBuilder({ type: "only", label, value }, keyed)} />
             )}
-            <MetaLine state={state} expr={expr} kind={kind} lines={kind === "logs" ? lines : undefined} missing={kind === "logs" ? null : missingMetric} />
+            <MetaLine state={state} expr={expr} kind={kind} language={language} lines={kind === "logs" ? lines : undefined} missing={kind === "logs" ? null : missingMetric} />
             {/* The live region is always there (empty while nothing is held), so the note is read when it comes. */}
             <div className={heldNote ? s.held : undefined} data-explore-held="">
               <p className={s.heldText} role="status">{heldNote ?? ""}</p>

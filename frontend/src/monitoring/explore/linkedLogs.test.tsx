@@ -524,6 +524,13 @@ describe("Explore with Loki: one query, one result", () => {
     expect(document.querySelector("[data-chart]")).toBeNull();
   });
 
+  it("an empty field on a Loki source points to its streams", async () => {
+    shop();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: "" });
+    await waitFor(() => expect(meta().textContent).toBe("Pick a log stream on the left, or type a LogQL query."));
+    expect(screen.queryByText(/Pick a metric/)).toBeNull();
+  });
+
   it("a LogQL metric query keeps the chart", async () => {
     shop();
     const sent = batchItems();
@@ -538,8 +545,10 @@ describe("Explore with Loki: one query, one result", () => {
     shop();
     const sent = batchItems();
     await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="shop"}\n{app="web"}' });
-    await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${ONE} ${FIX}`));
+    // Said once, on the meta line; the Log lines box says only how to go on.
+    await waitFor(() => expect(invalidNote()?.textContent).toBe(FIX));
     expect(meta().textContent).toBe(`✗ ${ONE}`);
+    expect(screen.getAllByText(new RegExp(ONE.slice(0, 30)))).toHaveLength(1);
     // Nothing was sent, nothing can be tried again, and no selector is named.
     expect(sent).toEqual([]);
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
@@ -551,7 +560,7 @@ describe("Explore with Loki: one query, one result", () => {
     shop({ [BAD]: refusedBad });
     const sent = batchItems();
     await openExplore({ page: "explore", project: "p1", source: "l1", expr: BAD });
-    await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${PARSE} ${FIX}`));
+    await waitFor(() => expect(invalidNote()?.textContent).toBe(FIX));
     expect(linesSent(sent).map((q) => q.query)).toEqual([BAD]);
     expect(meta().textContent).toBe(`✗ ${PARSE}`);
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
@@ -585,7 +594,8 @@ describe("Explore with Loki: one query, one result", () => {
     expect(await within(await screen.findByRole("region", { name: "Log lines" })).findByText("Last 1 hour · 3 log lines")).toBeTruthy();
     expect(within(section()).getByText((_, el) => el?.tagName === "P" && el.textContent === 'Logs from {app="shop"} · l1 name')).toBeTruthy();
     fireEvent.change(query(), { target: { value: BAD } });
-    await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${PARSE} ${FIX}`));
+    await waitFor(() => expect(invalidNote()?.textContent).toBe(FIX));
+    expect(meta().textContent).toBe(`✗ ${PARSE}`);
     // Nothing of the query before it is left: no lines, no selector, no last good result.
     expect(within(section()).queryByRole("list", { name: "Log lines" })).toBeNull();
     expect(within(section()).queryByText(/Logs from/)).toBeNull();
@@ -666,7 +676,8 @@ describe("Explore with Loki: one query, one result", () => {
     await user.paste('{app="shop"}\n{app="web"}');
     notBody();
     await user.keyboard("{Control>}{Enter}{/Control}");
-    await waitFor(() => expect(invalidNote()?.textContent).toBe(`✗ ${ONE} ${FIX}`));
+    await waitFor(() => expect(invalidNote()?.textContent).toBe(FIX));
+    expect(meta().textContent).toBe(`✗ ${ONE}`);
     expect(document.activeElement).toBe(query());
     await user.keyboard("{Escape}");
     expect(document.activeElement).toBe(heading);
