@@ -17,12 +17,14 @@ Open it from the left rail, or press `Alt 2`.
 
 Use **+** next to Projects in the sidebar, or **Set up a project** on Home. When no project exists yet, Home offers a button for each connected cluster that starts the setup for that cluster. The setup has four steps.
 
-1. **What to monitor.** Choose **A Kubernetes cluster**, **A Docker host**, **Servers** or **Something of your own**. For a cluster, pick one of the clusters OmniKrux already knows. If none is connected, **Open Settings** takes you to where you add one.
-2. **Sources.** For a cluster, OmniKrux looks inside it for Prometheus, Loki and Grafana and lists what it found. A tool shows as **Reachable** or **Missing**; Grafana only shows as **Found**, because OmniKrux doesn't read from it as a source: step 3 copies its dashboards instead. A tool OmniKrux installed carries **Installed by OmniKrux** and a **Monitoring tools** link. Tick the tools to use. A missing Prometheus or Loki has an **Install Prometheus…** or **Install Loki…** button: press it to install that tool once the project is created (the row then says **To install**; see [Installing the tools](#installing-the-tools)). Where OmniKrux can't install, the row says why ("Installing isn't available here: …"). A source you added earlier can be reused under **Use an existing source**. If nothing is found, or you want a tool that runs elsewhere, use **Add a source by hand**. **Look again** searches the cluster again. For **A Docker host** or **Servers**, this step can also write the files that run the tools there (see [Docker hosts and servers](#docker-hosts-and-servers)).
-3. **Import from Grafana.** When step 2 found a Grafana, tick the dashboards to copy into the new project. Each Grafana data source reads the project's first source of the same type, and what can't be copied is counted in the step's summary (see [What converts from Grafana](#what-converts-from-grafana)). Nothing in Grafana changes. When the Grafana asks for a sign-in that OmniKrux can't give, **Use its address instead** opens a form for a token, and **Enter it again** appears when a sign-in wasn't kept with your half-finished setup. **Skip import** leaves the step; with nothing found it reads **Nothing to import**, and **Continue without importing** moves on. The dashboards are copied right after the project is created. If that fails, the project stays, and **Try the import again** and **Open the project** are offered.
+1. **What to monitor.** Choose **A Kubernetes cluster**, **A Docker host**, **Servers** or **Something of your own**. For a cluster, **Which cluster?** lists the clusters OmniKrux already knows; one it can't reach reads **{name} · Can't be reached**. If none is connected, **Open Settings** takes you to where you add one.
+2. **Sources.** For a cluster, OmniKrux looks inside it for Prometheus, Loki and Grafana and lists what it found. A tool shows as **Reachable** or **Missing**; Grafana only shows as **Found**, because OmniKrux doesn't read from it as a source: step 3 copies its dashboards instead. A tool OmniKrux installed carries **Installed by OmniKrux** and a **Monitoring tools** link. Tick the tools to use. A missing Prometheus or Loki has an **Install Prometheus…** or **Install Loki…** button: press it to install that tool once the project is created (the row then says **To install**; see [Installing the tools](#installing-the-tools)). Where OmniKrux can't install, the row says why ("Installing isn't available here: …"). A source you added earlier can be reused under **Use an existing source**. If nothing is found, or you want a tool that runs elsewhere, use **Add a source by hand**. **Look again** searches the cluster again. When OmniKrux can't look inside the cluster at all, the step says **Can't look inside {cluster}** and why, and the rest of the step stays as it was: add a source by hand, or fix the cluster and press **Look again**. A source inside the cluster is reached through the cluster itself, so it never asks for an address. For **A Docker host** or **Servers**, this step can also write the files that run the tools there (see [Docker hosts and servers](#docker-hosts-and-servers)).
+3. **Import from Grafana.** When step 2 found a Grafana, tick the dashboards to copy into the new project. Each Grafana data source goes to the first source of its type in this project, and what can't be copied is counted in the step's summary (see [What converts from Grafana](#what-converts-from-grafana)). Nothing in Grafana changes. When the Grafana asks for a sign-in that OmniKrux can't give, **Use its address instead** opens a form for a token, and **Enter it again** appears when a sign-in wasn't kept with your half-finished setup. **Skip import** leaves the step; with nothing found it reads **Nothing to import**, and **Continue without importing** moves on. The dashboards are copied right after the project is created. If that fails, the project stays, and **Try the import again** and **Open the project** are offered.
 4. **Name and review.** Give the project a name (leave it empty to keep the suggested one), check the summary of sources, their filters and what will be installed, and press **Create project** (**Create project and review the install** when you asked for an install). The project, its new sources and all the links are created together, or not at all. The install review opens right after; nothing is installed until you confirm it there.
 
-A setup you leave half way is kept in that Monitoring tab and comes back when you open setup there again, until you create the project or close the tab. Passwords, tokens and header values are never kept: a source that needed one comes back **Not in use**, with **Enter it again**.
+Each Grafana data source goes to the first source of its type in this project. A filter that matches nothing in a picked source is flagged under its field (see [Label filters](#label-filters)).
+
+A setup you leave half way is kept in that Monitoring tab and comes back when you open setup there again, until you create the project or close the tab. Passwords, tokens and header values are never kept: a source that needed one comes back **Not in use**, with **Enter it again**. Closing the tab while you have made choices asks first ("Closing this tab loses the project you started setting up."); going elsewhere in the tab does not, because the draft comes back.
 
 ## Add a source by hand
 
@@ -40,9 +42,11 @@ Use **Add a source by hand** in the setup, or **Add a source** on the **Sources*
 - **Custom headers**: extra headers sent with every request. Use **Add header** (up to 20) and **Remove**. Header values are treated as secrets.
 - **CA certificate (PEM, optional)**: trust a private certificate authority for an `https://` address.
 
-**Test connection** asks the tool a simple question and reports what it answered, including its version. **Save source** stores it (in setup, the button is **Use this source** and the source is stored with the project).
+**Test connection** asks the tool a simple question and reports what it answered, including its version. An address that answers but isn't the kind of tool you picked (a web page, say) is told apart from one that doesn't answer: the words say so and name the type to choose instead. Changing the type clears an earlier test result, and the name is filled in from the type and host until you write your own. **Save source** stores it (in setup, the button is **Use this source** and the source is stored with the project).
 
 Passwords, tokens, keys and header values are stored encrypted and are never shown again. When you edit a source, a saved secret shows "Saved. Leave empty to keep it."; leave the field empty to keep it, or type a new value to replace it. A source's type and how it is reached can't change after it is saved; add a new source instead. A source found inside a cluster is reached through that cluster's connection, so its address and sign-in aren't edited here.
+
+The **Sources** page and a source's own page say where each source stands in the same words: **Up**, **Not checked yet** (while it reads **Checking…**), **Can't be reached** or, for an address that answers as something else, **Answers, but not as …**. When a source lives in a cluster OmniKrux can't reach, the words name the cluster instead of the tool. A source's page shows its facts, **Test** and **Delete…**.
 
 ## Label filters
 
@@ -52,8 +56,9 @@ Each link between a project and a source has a filter. On the project's page, ev
 - For a Kubernetes project, OmniKrux fills in the filter when it can tell one is needed. It looks at the labels that usually name a cluster (`cluster`, `cluster_name`, `k8s_cluster_name`, `kubernetes_cluster`). When one has several values and one of them is this cluster's name, the filter keeps that value, and the field says why. A source that runs inside the cluster holds only its data and needs no filter. If a source holds several clusters and none is named like yours, the filter stays empty and OmniKrux asks you to set it.
 - An automatic filter is only a suggestion. You can change it at any time, and your change is kept.
 - Projects of other kinds start with no filter.
+- A filter that selects nothing in its source is said at once: a moment after you stop typing, OmniKrux asks the source one small question and, only when it proves the answer, says "Nothing in {source} matches this filter. Check the label names and values." A source that can't answer says nothing, because a failed check proves nothing.
 
-**Check data** on a source in a project page reports how many metrics and labels the project can see through its filter (for a Loki source, how many labels). Use it to confirm that a filter keeps what you expect. The count belongs to the saved filter: it goes away when you edit or save the filter, so check again afterwards.
+**Check data** on a source in a project page reports how many metrics and labels the project can see through its filter (for a Loki source, how many labels). Use it to confirm that a filter keeps what you expect. The count belongs to the saved filter: it goes away when you edit or save the filter, so check again afterwards. When nothing at all is visible the line turns amber and says "Nothing in {source} is visible to this project. Check the filter." **Unlink** says **Unlinked {name}.** with **Undo** for a few seconds, and "Filter saved." fades after a few seconds. A source inside the project's own cluster never carries the warning about mixing clusters.
 
 ## Groups and shortcuts
 
@@ -63,6 +68,15 @@ In the sidebar a group lists its projects as shortcuts (**Go to project …**), 
 
 **Explore** in the sidebar opens [Explore](#explore). **Alerts** opens the [Alerts](#alerts) page.
 
+Home's cards put the state dot on the first line, say **No projects yet** for a group with none, and give a project the same order everywhere. A group's **Edit projects** asks you to **Pick the projects**.
+
+## Tabs, Find and narrow windows
+
+- **Tabs.** Each Monitoring tab keeps its own page, range and drafts. When many are open the strip scrolls sideways, and each tab shows an ellipsis for a long title (its full name is the tooltip). **+** stays beside the strip. Closing a tab that holds a form with something typed (a rule, a silence, a contact point, a source, a setup) asks first.
+- **Find.** `/` or `Ctrl K` (`⌘ K`) opens **Find in Monitoring**: type part of a name ("projects, dashboards, sources…") to find projects, groups, sources, dashboards, ready-made views and pages (**Home**, **Explore**, **Alerts**, **Sources** and **Import**). It shows eight hits; when there are more it says "{n} more: keep typing to narrow them down." With nothing found it says **Nothing matches “…”**.
+- **Narrow windows.** Below about 760 px the sidebar folds behind a **Projects and pages** button above the page; Find and the open groups stay as you left them. A panel's settings open as a sheet below the dashboard's header, and the Alerts page tightens its spacing.
+- Press `?` for every key. With nothing open, the dock at the bottom of Monitoring says **Press ? to see all keys.**
+
 ## Dashboards
 
 A dashboard is a grid of panels. Each panel runs one or more queries and draws the answer as a chart, a number, a table or log lines. A dashboard belongs to one **project** or one **group**; the owner's page lists its dashboards under **Dashboards**, and the sidebar lists them under their owner. Every query a dashboard makes goes through its project's label filter, so a project's dashboards only ever show that project's data.
@@ -71,10 +85,10 @@ A dashboard is a grid of panels. Each panel runs one or more queries and draws t
 
 Open a dashboard from its owner's page, from the sidebar, or by finding it with **/** (Find). Hold Ctrl or Cmd while you open it to use a new tab.
 
-The header shows the owner, the title, the views (**Dashboard**, **JSON** and **Versions**), the time range, the refresh controls and **Edit**.
+The header shows the owner, the title, the views (**Dashboard**, **JSON** and **Versions**), the time range, the refresh controls and **Edit**. A title that uses a variable shows its chosen value.
 
-- **Time range.** The time button shows the range in use. It offers the presets from **Last 5 minutes** to **Last 7 days**, and **Custom range…**, where **From** and **To** take `now`, `now-6h`-style offsets (units `s`, `m`, `h`, `d`, `w`) or a UTC time such as `2026-11-19T10:00:00Z`. **To** has to be after **From**.
-- **Refresh.** The refresh button (or `r`) reads everything again. **Auto-refresh** re-reads every 10 s, 30 s, 1 min, 5 min, 15 min or 1 h, or is **Off**. It only runs while the page is visible, and each refresh moves the window to the new "now".
+- **Time range.** The time button shows the range in use, in words (for example `25 Nov 10:00 – 12:00`, or **Last 365 days**; the full text is its tooltip). It offers the presets from **Last 5 minutes** to **Last 7 days**, and **Custom range…**, where **From** and **To** take `now`, `now-6h`-style offsets (units `s`, `m`, `h`, `d`, `w`) or a local time such as `2026-11-25 10:00` ("Use now, now-6h, now-7d, or a local time like 2026-11-25 10:00."). **To** has to be after **From**. A second click on the button closes the menu.
+- **Refresh.** The refresh button (or `r`) reads everything again. **Auto-refresh** re-reads every 10 s, 30 s, 1 min, 5 min, 15 min or 1 h, or is **Off**. It only runs while the page is visible, and each refresh moves the window to the new "now". A range that doesn't end at now never refreshes by itself: the select is off and says "A fixed time range doesn't change. Pick a range that ends now to refresh it."
 - **Updated.** Under the header, **Updated** and a clock time says when the data was last read. It shows the oldest read among the panels, and **Updating…** while any panel is loading.
 
 The time range, auto-refresh, the variables and the open view belong to the workspace tab you are in. Changing them does not change the saved dashboard; its own starting range and refresh are part of its JSON.
@@ -83,7 +97,7 @@ The time range, auto-refresh, the variables and the open view belong to the work
 
 A dashboard can have variables, shown as buttons under the header such as **Namespace: All**. A variable's values are read from its source (through the project's filter) for the time range in use. Open one to choose a value, or several when it allows it (**All** is there when the variable includes it). With more than ten values a **Filter values** box appears. A variable can depend on the ones before it, for example a Pod list that follows the chosen namespaces. A value chosen earlier that no longer exists shows as "(not found)" until you change it.
 
-If a variable's values can't be read, the list says why. **Try again** appears when the read failed, and **Link one on …'s page** when the project has no source of that type.
+Open **Variables** while editing to add, change, reorder or remove them without the JSON (see [Edit a dashboard](#edit-a-dashboard)). If a variable's values can't be read, the list says why. **Try again** appears when the read failed, and **Link one on …'s page** when the project has no source of that type.
 
 On a group dashboard the first button is **Projects**. It chooses which of the group's projects the dashboard shows. Every panel runs each of its queries once per chosen project, and its series are named with the project in front (for example `Shop · web`). A project that lacks the source a query needs fails on its own: the panel is marked **Partial** and says which project it is.
 
@@ -91,27 +105,48 @@ Variables are placed in a query with care. OmniKrux escapes a value for the quot
 
 ### What a panel says
 
-- **Loading…** until its queries first answer. Later runs (a refresh, another time range or variable value) keep the chart until the new answer arrives, and the **Updating…** line above says data is being read.
+- **Loading…** until its queries first answer. Later runs (a refresh) keep the chart until the new answer arrives, and the **Updating…** line above says data is being read. When the range or the query changed, the chart you see belongs to the old question: it is dimmed with a thin moving line until the new answer lands, and never passes as current.
 - **This panel has no query yet.** when no query has text.
-- **No data in this time range.** when the queries answered with nothing.
+- **No data in this time range.** when the queries answered with nothing, unless a check proves why (see [Why a panel is empty](#why-a-panel-is-empty)).
 - **Partial** (a mark in the panel's header; hover or focus it for the reasons) when some queries failed, were skipped, or an answer was cut short. The rest is drawn and the reasons say what is missing. A failure is never shown as "no data".
 - **Source unreachable** when every query failed because the tool did not answer (it is down, refused the sign-in, timed out or answered with an error of its own). **Try again** runs the panel's queries once more.
-- **Query error** when every query was refused, for example a query the tool can't parse, a variable that can't be placed, or a source that is no longer linked. The reason is the tool's or OmniKrux's own words. A panel using a variable whose values couldn't be read, with nothing chosen, doesn't run at all: it says "$name couldn't load its values. Its menu above says why."
+- **Query error** when every query was refused, for example a query the tool can't parse, a variable that can't be placed, or a source that is no longer linked. The reason is in plain words: a query the tool can't parse says what is wrong and where, and a range the tool won't read says how many days it allows. When the project's filter was added, the position is left out, because it would point into text you didn't write. A panel using a variable whose values couldn't be read, with nothing chosen, doesn't run at all: it says "$name couldn't load its values. Its menu above says why."
 
 A panel's **ⓘ** shows its description when it has one. A failed panel draws no chart; it never shows the answer from an earlier run as if it were current.
 
 If the dashboard itself can't be read again (for example when you come back to the window and the server doesn't answer), the page stays as it was, edits included, and says "Couldn't read this dashboard again, so it shows as last read." with the reason and **Try again**.
 
-The panel types are **Time series** (**Lines**, **Area** or **Stacked**), **Stat**, **Gauge**, **Bar**, **Table** (click a column header to sort it) and **Logs** (one Loki query; press Enter on a line to show its labels).
+The panel types are **Time series** (**Lines**, **Area**, **Stacked** or **Bars**), **Stat**, **Gauge**, **Bar**, **Table** (click a column header to sort it; headers read in sentence case and each cell's tooltip holds its full text) and **Logs** (one Loki query; see [Log lines](#log-lines)).
+
+Charts name a series by what tells it apart (`namespace=demo, pod=api-1`) when the query gives no legend, round their axes to steady steps (bytes in powers of two, a CPU under one core in millicores such as `347 m`) and show seconds on a very short range. The tooltip lists at most ten series and says "and {n} more"; a legend longer than twelve folds into "{n} series" with the list behind it. Click a name to show only that series, Ctrl+click to hide or show it. A panel never draws outside its tile: a very short tile drops its axis labels, and the smallest height a panel can have depends on its type.
+
+#### Log lines
+
+A **Logs** panel, and Explore's log lines, show one line each. Click a line, or press Enter, to open it: the whole line, wrapped and selectable, with **Copy line** (it says **Copied**), then its labels. Esc closes it. **Wrap lines** wraps every line. Lines tagged with the Pod or container they came from show a short tag when there are two or more. A full list says "Showing the newest 1000 lines. There may be more: narrow the range or the query."
+
+### Why a panel is empty
+
+An empty panel says why only when OmniKrux proved it, always for **this project** (the project's label filter is part of the check). Each reason is plain words:
+
+- A metric the query names that the Prometheus doesn't collect: "This Prometheus doesn't collect {thing} for this project: {metric} has no series." where {thing} is container usage from the kubelet (cAdvisor), Kubernetes object states (kube-state-metrics), node metrics (node-exporter) or CPU throttling.
+- Every metric exists, but nothing matched in this range: "Try a longer range."
+- A Loki that has none of the labels the selector uses, or no stream matching it, in the last 30 days.
+- A stream whose newest line is older than the range: "No lines in this time range. The newest matching line is {age} old: try a longer range."
+- A stream with lines in the range that the rest of the query drops.
+- A range whose step is longer than the query's window: "This range's step is {step}, longer than the query's window [{window}], so most points are skipped. Use [$__rate_interval] instead."
+
+A check that fails, takes more than ten seconds or can't read the source's secrets says nothing new: the panel keeps **No data in this time range.** The same words appear under a query in the panel's settings, in Explore, and for the log lines. A log query in a chart panel shows a note with **Switch to a logs panel** instead (a draft edit; **Discard** undoes it).
 
 ### Edit a dashboard
 
-Press **Edit** (or `e`). The header then says **Editing** and shows **Discard** and **Save dashboard**. Nothing is saved until you press **Save dashboard** (or Ctrl S, which works inside fields too). A save with no changes writes nothing: it just ends editing.
+Press **Edit** (or `e`). The header then says **Editing** and shows **Undo**, **Variables**, **Suggestions**, **Discard** and **Save dashboard**. The title becomes a field (**Dashboard title**; **Rename…** in the **More actions** menu opens it with the text selected); an empty title is refused ("Give the dashboard a title."). Nothing is saved until you press **Save dashboard** (or Ctrl S, which works inside fields too), which says `Saved "{title}".` A save with no changes writes nothing: it just ends editing. Editing is refused while a draft waits ("Restore the draft or discard it before editing."). In a narrow window the settings open as a sheet that never covers **Save dashboard**.
 
 - **Add:** the dashed **Add panel** tile (or `a`) opens a search where you type what you want to see; see [Adding panels](#adding-panels).
 - **Move and resize with the mouse:** drag a panel by its **⋮⋮** handle, and resize it from its corner. Other panels move out of the way, and Esc cancels a drag in progress.
 - **Move and resize with the keys:** click a panel, or Tab to one. The arrow keys move between panels. Shift with an arrow moves the panel one step, and Ctrl Shift with an arrow makes it narrower, wider, shorter or taller. A message announces each change.
-- **Remove:** Ctrl Del (Cmd Backspace on a Mac) removes the panel from the draft. **Discard** brings it back.
+- **Remove and duplicate:** a panel's **⋯** menu has **Settings**, **Duplicate** and **Remove** (Ctrl Del, Cmd Backspace on a Mac, removes it; `d` duplicates it as "{title} (copy)" under the original, without its alert). A removal says `Removed "{title}". Ctrl+Z brings it back.` with **Undo** for ten seconds.
+- **Undo:** **Undo** or Ctrl Z takes back the last change, one step at a time (up to fifty; typing in one field counts as one step). It is a draft edit like any other: **Discard** still throws all of it away. There is no redo.
+- **Variables:** **Variables** opens a dialog with a row for each variable (**Name**, **Label**, **Source**, **Label name**, **Match**, **Several values**, **Offer All**, move up and down, **Remove**), **Add variable**, **Apply** (Ctrl Enter) and **Cancel**. A variable a panel still uses can't be removed; the dialog names the panels. **Apply** is one undo step.
 - **Settings:** click a panel or press Enter to open **Panel settings** beside the grid. Esc closes them; the next Esc goes to **Save dashboard**.
 
 At the top of the settings a one-line recommendation can appear (see [Recommendations](#recommendations)). Below it are four tabs.
@@ -125,23 +160,23 @@ Charts redraw as you edit. A panel whose query you change morphs to the new data
 
 ### Adding panels
 
-**Add panel** (the dashed tile, or `a`) opens a search over what the owner's sources hold. Type plain words, such as `errors by route`, `p99 latency`, `crashes` or `api logs`, and the matching panels are listed as cards, best first, up to six.
+**Add panel** (the dashed tile, or `a`) opens a search over what the owner's sources hold. Type plain words, such as `errors by route`, `p99 latency`, `crashes` or `api logs`, and the matching panels are listed as cards, best first, up to six. A word such as `cpu` lists the curated panels first; titles keep CPU, HTTP and the like in capitals, and a legend names its grouping labels instead of the query.
 
 - **What it matches.** The words are matched against metric names, their help text and their labels, and against log label values. Filler words ("show me the") are ignored. Related words count as the same thing, so `errors`, `failures` and `5xx` find alike, as do `latency` and `duration`, `restarts` and `crashes`, or `logs` and `lines`. `by route` splits a panel by that label, and `p50`, `p90`, `p95` or `p99` picks a latency percentile. It is fixed rules over names, help text and labels: no AI and no paid service is involved, and your words are never sent anywhere.
 - **What it writes.** A counter is shown as a rate per second, a histogram as a percentile and a gauge as it is. An error card for a request counter keeps the 5xx status codes, using the label that holds the status. Each card names its metric and kind, so you can see what it will run.
 - **Previews.** The first few cards draw a small live preview of their query, run through the owner's label filter. Looking at a preview saves nothing.
-- **Keys.** The keyboard stays in the field. `↑` and `↓` move the highlight, **Enter** adds the highlighted card (the first one until you move), and `Ctrl End` jumps to **Empty panel**. **Esc** clears the text, and a second **Esc** closes the search. With no text, it lists the suggestions for this owner.
+- **Keys.** The keyboard stays in the field. `↑` and `↓` move the highlight by row, `←` and `→` by card (in text they move the caret until it reaches that end), **Enter** adds the highlighted card (the first one until you move), and `Ctrl End` jumps to **Empty panel**. A card already added reads **Added**. **Esc** clears the text, and a second **Esc** closes the search. With no text, it lists the suggestions for this owner.
 - **Empty panel.** Always the last entry: a blank time series that you fill in yourself ("Write the query yourself.").
-- **Refresh list.** The list of known metrics and log labels is read from the sources and kept for a few minutes, so a metric that appeared a minute ago may not be there yet. The footer says how old it is ("Known metrics from 2 min ago"). **Refresh list** reads the sources again. If reading fails, **Try again** does the same.
+- **Refresh list.** The list of known metrics and log labels is read from the sources and kept for a few minutes, so a metric that appeared a minute ago may not be there yet. The picker and the suggestions rail read one list, so they never disagree. The footer says how old it is ("Known metrics from 2 min ago"). **Refresh list** reads the sources again. If reading fails, **Try again** does the same.
 
 A card adds a panel to your draft like any other edit, so **Discard** takes it back.
 
 ### Suggestions on a new dashboard
 
-When you start editing a dashboard that has no panels (a new one, or one you emptied), a rail beside the grid offers up to eight ready-made panels, headed "Suggested for _name_ · from what Prometheus and Loki have". It offers only what the sources hold: a request rate, an error rate, a p95 latency, pod restarts, CPU and memory by pod, node CPU busy, targets that are down, log volume (by level when there is a level label) and error log lines. Each card shows a live preview.
+When you start editing a dashboard that has no panels (a new one, or one you emptied), a rail beside the grid offers up to eight ready-made panels, headed "Suggested for _name_ · from what Prometheus and Loki have" (or "… from what Prometheus has" or "… from what Loki has"). A card whose data is empty now says **No data now** and **Nothing to show in this time range.**; it stays in its place. It offers only what the sources hold: a request rate, an error rate, a p95 latency, pod restarts, CPU and memory by pod, node CPU busy, targets that are down, log volume (by level when there is a level label) and error log lines. Each card shows a live preview.
 
 - Pick a card with the mouse or Enter. It flies to its place in the grid and the card reads **Added**. The keyboard stays in the rail on the next suggestion, so a dashboard can be built with Enter alone.
-- `s` moves to the first suggestion not yet added.
+- `s` (or the **Suggestions** button) shows the rail and moves to the first suggestion not yet added.
 - **Hide suggestions** closes the rail for this edit. Esc on a suggestion goes back to **Add panel**.
 - When nothing in the sources fits, the rail says so and points to **Add panel**.
 
@@ -183,11 +218,15 @@ Tick two versions and press **Compare** to see what changed, or use **Compare wi
 
 ### Ready-made views
 
-A project with a Prometheus-compatible source gets ready-made views, listed under **Ready-made views** on its page. A Kubernetes project gets **Cluster health**, **Node health**, **Namespace health**, **Workload health** and **Pod health**; other kinds of project get **Node health**. They are generated from what the project's Prometheus holds, tagged **Ready-made**, and can't be changed or deleted.
+A project with a Prometheus-compatible source gets ready-made views, listed under **Ready-made views** on its page and under **Ready-made** in the sidebar. A Kubernetes project gets **Cluster health**, **Node health**, **Namespace health**, **Workload health** and **Pod health**; other kinds of project get **Node health**. A project with a Loki source also gets **Logs overview** (Loki-only projects too), and Pod health's **Logs** panel reads the same labels. They are generated from what the project holds, tagged **Ready-made**, and can't be changed or deleted. Linking a source says which views it adds ("Linked {name}. It adds …").
+
+When a project links several Prometheus sources, each view reads the one that has its metrics (the project page says "Reads {source}."), not simply the first. A source that couldn't be read is never guessed about: the view says it didn't check. The numbers are counted with care: requested CPU and memory are shares of what is scheduled, workloads are named without their ReplicaSet hash (a Pod with no owner reads `(no owner)`), nodes by name, restarts as whole numbers, and Restarts as bars.
+
+**Logs overview** shows **Log lines per second**, **Errors and warnings**, **Noisiest streams** and **Recent error lines**. It reads the labels the Loki has: the OpenTelemetry Collector's (`k8s_namespace_name`, `k8s_pod_name`) when both exist, else the classic ones (`namespace`, `pod`), else the first label the streams carry. When the labels can't be read, the view's notes say so and its panels may stay empty; with no streams at all it says "This Loki holds no log streams for this project from the last 7 days, so this view stays empty until logs arrive."
 
 Each says what its Prometheus lacks and what that leaves empty: kube-state-metrics, container usage from the kubelet (cAdvisor) or node-exporter. If OmniKrux can't read the metric names to tell, it says why and doesn't guess. Node health needs node-exporter; where it isn't running the view still opens, with a note.
 
-**Copy to edit** (on the project's page, in the view's header, or on its **JSON** tab) copies the view into the project and opens the copy in edit mode. The copy is a normal dashboard with the view's title, without "(copy)". If the project already has a dashboard with that title, a number is added, for example "Pod health (2)".
+**Copy to edit** (on the project's page, in the view's header, or on its **JSON** tab) copies the view into the project, with the variable values you had chosen, and opens the copy in edit mode at the top of the page (`Copied "…". Changes go to your copy.`). The copy is a normal dashboard with the view's title, without "(copy)". If the project already has a dashboard with that title, a number is added, for example "Pod health (2)". A long title is cut so that " (copy)" still fits.
 
 ### Create, copy and delete
 
@@ -203,7 +242,7 @@ These are the keys listed under **Monitoring** and **Dashboards** in the **?** s
 
 | Key | What it does |
 | --- | --- |
-| `/` | Find a project, group or source |
+| `/`, `Ctrl K` (`⌘ K`) | Find a project, group, source or page |
 | `↑ ↓`, `← →`, `Enter` | In the sidebar: move, close or open a group, open the item |
 | `N` | New dashboard |
 | `e` | Edit the dashboard |
@@ -211,18 +250,20 @@ These are the keys listed under **Monitoring** and **Dashboards** in the **?** s
 | `t` | Pick the time range |
 | `r` | Refresh now |
 | `Ctrl S` (`⌘ S`) | While editing, in fields too: save the dashboard |
+| `Ctrl Z` (`⌘ Z`) | While editing: undo the last change |
 | `← → ↑ ↓` | While editing: move between panels |
 | `Shift` + arrows | While editing: move the panel one step |
 | `Ctrl Shift` + arrows (`⌘ Shift`) | While editing: make the panel narrower, wider, shorter or taller |
 | `Enter` | While editing: open the panel's settings |
 | `a` | While editing: add a panel (type what you want to see) |
+| `d` | While editing: duplicate the panel |
 | `Ctrl Del` (`⌘ ⌫`) | While editing: remove the panel from the draft |
 | `Esc` | Close the panel's settings, then go to **Save dashboard** |
-| `↑ ↓`, `Enter` | In Add panel: pick a result and add it (`Ctrl End`: Empty panel; Esc clears, then closes) |
-| `s` | While editing a new dashboard: go to the suggestions |
+| `↑ ↓ ← →`, `Enter` | In Add panel: move between results by row or card and add one (`Ctrl End`: Empty panel; Esc clears, then closes) |
+| `s` | While editing: show the suggestions and go to them |
 | `Ctrl Enter` (`⌘ Enter`) | In a query: run it now. In the JSON: review the changes |
 | `← →` | On a chart: move the crosshair; Esc hides it |
-| `Enter` | On a table column: sort by it. On a log line: show its labels |
+| `Enter` | On a table column: sort by it. On a log line: open it |
 
 ## Explore
 
@@ -233,38 +274,42 @@ These are the keys listed under **Monitoring** and **Dashboards** in the **?** s
 - **Project** and **Source** pick what to read. Explore opens on the project you came from, else the one you opened last. The source is the project's first Prometheus-compatible one, else its first Loki one. Every query goes through the project's label filter, as everywhere else in Monitoring.
 - The time button sets the range (the default is the last hour) and offers the same presets and **Custom range…** as a dashboard. `t` opens it.
 - The page's state (project, source, query, logs query and range) belongs to the workspace tab. After a reload, or Back, it is as you left it.
+- Switching the source or the project never runs a query on the wrong tool. If the text is PromQL and the new source reads LogQL (or the other way round), the text is held, not run, and the page says "This query is {from}, and {source} reads {to}, so it wasn't run. Write a {to} query, or pick a {fromType} source." with **Clear the query**. Nothing is recorded and **Add to dashboard** stays off until you write a query for the source.
 
 ### The query bar
 
 Type a PromQL query (LogQL for a Loki source) in the **Query** field. It runs 300 ms after you stop typing, and **Ctrl Enter** runs it now. A line under it says how the last run ended, for example `✓ 4 series · 38 ms · Last 1 hour · updated 10:21:07`, and **Running…** shows beside it while a run is on.
 
-- A query the tool refuses as unreadable (a syntax error, say) keeps the last result on screen, dimmed and labelled **Last good result** with the query that made it, so a typo while typing never blanks the chart. The line says what is wrong and "showing the last result".
+- Explore runs one query at a time. Two queries in the field are refused on the spot ("Explore runs one query at a time. Keep one query in the field, or run them one after another."); a line that continues the one above (an operator such as `or` or `/`, or a `by (…)` clause) is still one query.
+- A query the tool refuses as unreadable (a syntax error, say) keeps the last result on screen, dimmed and labelled **Last good result** with the query that made it, so a typo while typing never blanks the chart. The line says what is wrong in plain words (where it can, the position, with no jargon) and "showing the last result". In a logs query, an invalid text clears the lines and says "✗ {message} Fix the query to run it again."
 - Text with an unclosed bracket or quote is refused on the spot with a message and is not sent.
 - A tool that didn't answer (**Source unreachable**) or failed in any other way (**Query error**) draws no chart, never the old one as if it were current, and offers **Try again**.
 - A slow answer to an older text never replaces a newer one.
+- A metric query that answers with no series says `0 series` and, when the source's list of metrics was read and the project is looking at it, whether the metric exists ("No metric named {name} in {source} for this project."), and otherwise why the answer is empty (see [Why a panel is empty](#why-a-panel-is-empty)). A step longer than a query's window gets the same advice as on a dashboard.
+- A recommendation never appears for a query that doesn't read or didn't run.
 
 ### The trail
 
-**Recent queries** keeps the project's last queries that answered (twenty kept, the newest eight shown). Pick one with the mouse or Enter, or move with `←` and `→`, to bring back its query and its source. **Clear** empties the trail. A query joins the trail when it answered and its text stayed for two seconds, when you press Ctrl Enter, or when you add it to a dashboard. The trail is kept in this browser, per project.
+**Recent queries** keeps the project's last queries that answered (twenty kept, the newest eight shown). Pick one with the mouse or Enter, or move with `←` and `→`, to bring back its query and its source; a chip that belongs to another source says so, and picking it says **Switched to {source}.** **Clear** empties the trail. A query joins the trail only when it answered, with something to show, and its text stayed for two seconds; a half-typed or failed query is never kept. Ctrl Enter and **Add to dashboard** record a query that answered, even when it was empty. The trail is kept in this browser, per project.
 
 ### Browsing
 
-The list on the left shows **Metrics** for a Prometheus-compatible source, or **Log streams** for Loki, as they are under the project's filter. Type in **Filter** to narrow it, and `b` goes to the list. Letters typed on the list go into **Filter**. Pick a metric and Explore writes its query: a counter as a rate per second, a histogram as a percentile, a gauge as it is. Pick a log stream (`label = value`) and it writes the selector. The footer says how old the list is and has **Refresh list**. On a narrow window the list folds behind a **Metrics** or **Log streams** button.
+The list on the left shows **Metrics in {source}** for a Prometheus-compatible source, or **Log streams in {source}** for Loki, each with its count, as they are under the project's filter. Loki's streams are read over the last 7 days; an empty list says "No log streams in the last 7 days." Notes about what couldn't be read sit behind **About this list**. Type in **Filter** to narrow it, and `b` goes to the list. Letters typed on the list go into **Filter**. Pick a metric and Explore writes its query: a counter as a rate per second, a histogram as a percentile, a gauge as it is. Pick a log stream (`label = value`) and it writes the selector. The footer says how old the list is and has **Refresh list**. On a narrow window the list folds behind a **Metrics** or **Log streams** button.
 
 Chips under the query shape it:
 
 - **Split by** groups the result by one label.
-- **Only** keeps one value of a label (`label=value`). It offers six labels: the ones Loki also has, then common labels such as `namespace`, `pod` and `container`, and chart labels such as `app_kubernetes_io_*` last. A label you chose a value of always stays, so you can turn it off, and choosing never moves a row. A label with more than eight values has a **more…** popover with a **Filter values** box. For logs the values come from the log streams.
+- **Only** keeps one value of a label (`label=value`). It offers up to six labels: the ones Loki also has, then common labels such as `namespace`, `pod` and `container`, shown with the most values first. A label you chose a value of always stays, so you can turn it off, and choosing never moves a row. Each label shows eight values, then **{n} more** opens the rest in place. Labels such as `id` or with more than fifty values get no chips (a stream label still has its place in the list). For logs the values come from the log streams.
 
-Clicking a chip rewrites the query and runs it. If you edit the query by hand, Explore says "You edited the query by hand. Clicking a chip writes it again from the chips." and leaves your text alone until you click a chip. You can always write the query yourself; the list and chips are only a way to start.
+Clicking a chip rewrites the query and runs it. If you edit the query by hand, the chips let go and Explore says "You edited the query by hand. A chip now starts a new query from that chip." Your text stays until you click a chip; typing the chips' own query again attaches them again. You can always write the query yourself; the list and chips are only a way to start.
 
 ### Logs on the same timeline
 
 Under the chart, **Log lines** shows the lines of the same time range, newest first, up to 1000.
 
-- With a metrics query, the lines come from the **Only** chips whose labels Loki also has, or from a LogQL selector you type in the **Logs query** field. Ticks along the chart mark the times of the lines, toned by level. A project with no Loki source has no lines.
+- With a metrics query, the lines come from the **Only** chips whose labels Loki also has, or from a LogQL selector you type in the **Logs query** field ("Write a LogQL selector to see matching log lines here."). The Pod, namespace and container labels are matched on whichever label names the Loki uses: OpenTelemetry's (`k8s_pod_name`) or the classic ones. Ticks along the chart mark the times of the lines, toned by level. A project with no Loki source has no lines.
 - **Drag a window** across the chart, or press `Shift ←` or `Shift →` on the focused chart, and the lines narrow to exactly that window. With the keys the chart keeps the keyboard, so more `Shift ←` or `Shift →` presses widen or narrow the window. **Show all** (or Esc on the chart) goes back to the whole range.
-- With a Loki source the query bar takes LogQL. Explore charts the log volume (split by the **Split by** chip) and lists the lines below it. A LogQL query that counts something, such as `rate({app="api"}[5m])`, is a metric query: it draws a chart and lists no lines.
+- With a Loki source the query bar takes LogQL, and Explore shows only the lines (no chart), under a line such as `✓ 14 lines · Last 1 hour · updated 10:21:07`. A LogQL query that counts something, such as `rate({app="api"}[5m])`, is a metric query: it draws a chart and lists no lines. Lines open, wrap and copy as described under [Log lines](#log-lines).
 
 ### Add to dashboard
 
@@ -338,9 +383,9 @@ If the page can't read the states for a moment, it keeps what it showed, says ho
 In **Rules**:
 
 - The list on the left has what is firing pinned on top, then every rule under its project or group. `↑` and `↓` move through it and show the rule; `Enter` opens it on a narrow window.
-- The details on the right show the rule's **State**, **Where** it runs, how often it is **Checked**, what it **Notifies**, its **Severity**, and its project or group. A rule made from a panel says **From panel** and has **Edit on its panel**; any other rule has **Edit rule**.
+- The details on the right show the rule's **State** (for a firing rule, **Firing for {duration} in {project}**), **Where** it runs, how often it is **Checked** (left out while the rule hasn't been checked yet), what it **Notifies**, its **Severity**, and its project or group. A rule that runs in a tool says "In {source}: fires even when OmniKrux is off." The rule's query is shown without blank lines, and its chart leaves headroom above the threshold. A rule made from a panel says **From panel** and has **Edit on its panel**; any other rule has **Edit rule**.
 - A chart draws the rule's query with the threshold, and **Recent** lists what happened lately: **Started firing**, **Resolved**, **Can't check**, **Checking again**, **Query error**, **Applied**, **Couldn't apply** and **Removed**. OmniKrux keeps seven days of it.
-- **Silence** (or `s`) opens a silence for the selected rule. **More actions** has **Pause** and **Resume**, **Attach to a panel…** (for a rule made on this page) and **Delete rule…**.
+- **Silence** (or `s`) opens a silence for the selected rule. A dry run that finds the condition true right now, with the wait not yet over, says "Its condition holds now; it fires after {for}." **More actions** has **Pause** and **Resume**, **Attach to a panel…** (for a rule made on this page) and **Delete rule…**.
 
 Rules are read again every 15 seconds.
 
@@ -403,10 +448,15 @@ A **silence** mutes the notifications of what it matches; it never changes what 
 - **Where.** **OmniKrux** silences the rules OmniKrux checks. Each linked Alertmanager is a choice of its own (listed under its name) and silences what it sends, which is how you silence a rule that runs in the tool. A rule's **Silence** button picks the right one and fills in the matchers. The list shows them as **In OmniKrux** and **In Alertmanager**.
 - **Matchers.** Written like `alertname="API latency high"` or `project="shop", team=~"web|api"`. Use `=`, `!=`, `=~` and `!~`; regular expressions must match the whole value. At least one matcher must name something. While you type, a line says how many alerts it silences now and names the first rules.
 - **Lasts.** **1 h**, **2 h**, **4 h**, **1 day** or **Until…** (a date and time; a silence lasts at most 90 days), and a **Comment** so others know why.
-- Ended silences stay listed for a day. **Expire silence** ends one now ("Its alerts notify again at their next check.").
+- A silence says where it is (**In OmniKrux** or **In {source}**) and, once over, **Expired at {hh:mm}**. Ended silences stay listed for a day, folded under **Expired ({n})**; an expired OmniKrux silence has **Remove**, which deletes it at once. **Expire silence** ends a running one now ("Its alerts notify again at their next check."); removing one that hasn't ended is refused ("Expire it first."). An Alertmanager that can't be reached is listed as **{name} (can't be reached)** and can't be chosen.
+- Home's **Silence** opens this form with the matchers filled in. If the alert stopped firing meanwhile, the page says "That alert isn't firing any more, so there's nothing to prefill."
 - A silence or contact point you are writing isn't kept anywhere else, so going elsewhere (the sidebar, Back, another view), switching or closing the Monitoring tab, or reloading asks first: **Leave "…" with unsaved changes?** ("Leaving loses what you entered in this form.").
 
-An Alertmanager that can't be read is listed under **Problems**; it never hides the others.
+An Alertmanager that can't be read is listed under **Problems**; it never hides the others. The count on **Rules** and on **Alerts** in the sidebar leaves out rules whose firing instances are all silenced.
+
+### Contact point details
+
+A Slack contact point's address must start with `https://hooks.slack.com/`; any other address is refused at its field. A page that a webhook answers with is never shown: the test says "{name} answered HTTP {status}." A failed test's words go as soon as you change a field. The list says **No rule uses it** or "Used by {n} rules", and after a test from its row **Last test {hh:mm}**. Email and chat messages don't print OmniKrux's own `omnikrux_rule` label; a webhook's JSON keeps every label.
 
 ### Alertmanager sources and channels
 
@@ -414,7 +464,7 @@ Link a Prometheus you run to its Alertmanager by adding an **Alertmanager** sour
 
 ### Home and the sidebar
 
-Home shows a **Firing** section above the projects: a row for each rule that fires, with its project, how long and a summary, which opens the rule, plus **Silence**. With nothing firing it says "All quiet" and how many rules there are; a rule that can't be checked adds a line that opens the Alerts page. Project and group cards say "2 firing", and **Alerts** in the sidebar carries the count. If the alerts can't be read, Home says so rather than "All quiet".
+Home shows a **Firing** section above the projects: a row for each rule that fires, with its project, how long and a summary, which opens the rule, plus **Silence**. With nothing firing it says "All quiet" and how many rules there are; a rule that can't be checked adds a line that opens the Alerts page. Project and group cards say "2 firing", and **Alerts** in the sidebar carries the count of rules that still make noise (silenced ones aren't counted). If the alerts can't be read, Home says so rather than "All quiet".
 
 ### A rule that may read another cluster
 
@@ -425,10 +475,11 @@ If a Kubernetes project's source link has no label filter, because OmniKrux coul
 - **Delete rule…** says what goes with it. A rule that runs in a cluster needs its own review to remove its `PrometheusRule`, and stays in the list, "being removed", until that is done. A Loki rule is removed from the ruler first, and nothing is deleted if the ruler refuses.
 - **Delete project…** and **Delete group…** list "Alert rules that go with it". When some of a project's rules still run in its cluster, the review says "Remove its rules that run in ... first" and gives each a **Review** button that removes the rule and then opens its removal in the cluster for you to confirm. The project is deleted after that.
 - Deleting a contact point first lists the rules that lose it.
+- A project's delete review also lists its OmniKrux silences ("Its silences go too: {matchers; …}."); silences in an Alertmanager are never touched.
 
 ### Audit
 
-The Audit log records **Added an alert rule**, **Changed an alert rule**, **Removed an alert rule**, **Added a contact point**, **Changed a contact point**, **Removed a contact point**, **Sent a test message**, **Added a silence**, **Expired a silence**, and for rules in a Loki ruler **Wrote a Loki rule** and **Removed a Loki rule**. A `PrometheusRule` goes through the normal cluster change record. An entry names the rule, contact point or silence and what changed, never a webhook address, token, password or routing key.
+The Audit log records **Added an alert rule**, **Changed an alert rule**, **Removed an alert rule**, **Added a contact point**, **Changed a contact point**, **Removed a contact point**, **Sent a test message**, **Added a silence**, **Expired a silence** (also when an expired one is removed: the entry says "Removed the expired silence {matchers}."), and for rules in a Loki ruler **Wrote a Loki rule** and **Removed a Loki rule**. A `PrometheusRule` goes through the normal cluster change record. An entry names the rule, contact point or silence and what changed, never a webhook address, token, password or routing key.
 
 ## Installing the tools
 
@@ -581,9 +632,9 @@ A summary line counts the dashboards chosen and the things not copied. **Import 
 Connect a Grafana from the import page (**Connect a Grafana…**) or on the **Sources** page, under **Grafana connections**, where each connection can be tested (**Test** says the Grafana's version and how many dashboards it lists), edited or removed. A connection is one of:
 
 - **By its address**, such as `http://grafana.example:3000`, with a **Sign-in** of **None**, **Service account token** or **User name and password**. Secrets are write-only: once saved, the form says "Saved. Leave empty to keep it."
-- **Inside a cluster**: a Grafana found in a connected cluster (cluster, namespace, service and port), reached through the cluster's own API. This way is read **without a sign-in**, so that Grafana must allow anonymous viewing; use its address if it needs a token.
+- **Inside a cluster**: a Grafana found in a connected cluster (cluster, namespace, service and port; the form starts at `monitoring`, `grafana` and `80`), reached through the cluster's own API. **Test** with an empty field says "Enter the {field}." and moves to it. This way is read **without a sign-in**, so that Grafana must allow anonymous viewing; use its address if it needs a token.
 
-OmniKrux only reads from a Grafana. Removing a connection leaves the dashboards imported through it; to update them later you pick their file.
+OmniKrux only reads from a Grafana. After a good test, a note says when another connection already reaches the same Grafana. The import picker names a connection as `{name} · {namespace}/{service}:{port}`. Removing a connection leaves the dashboards imported through it. When another connection reaches the same Grafana, the dashboards are handed to it, so **Update from source** keeps working (the removal says so, and the audit names that connection); otherwise you pick their file to update them later.
 
 ### What converts from Grafana
 
@@ -599,19 +650,19 @@ A Grafana dashboard becomes an OmniKrux dashboard on a 24-column grid. Whatever 
 | Logs | Logs |
 | Text and any other type | Skipped; row headers only organise panels |
 
-- **Layout**: panel positions are kept. Overlapping panels are moved down and then up into free space, and an old dashboard made of rows gets a grid from them. A dashboard holds at most 100 panels: the panels after the 100th are listed as skipped.
+- **Layout**: panel positions are kept. Overlapping panels are moved down and then up into free space, an old dashboard made of rows gets a grid from them, and the gaps left by skipped panels are closed. A dashboard holds at most 100 panels: the panels after the 100th are listed as skipped.
 - **Units**: none, short, percent, percentunit, seconds, milliseconds, bytes, bytes per second and requests per second are kept; the duration and decimal or binary byte units map to the nearest one; rate-like units (ops, rps, wps, iops, cps) show as plain numbers; any other unit is dropped and listed.
 - **Thresholds and colours** become OmniKrux's good, warning and bad tones.
-- **Variables**: query variables built on `label_values(...)` become label-values variables. Other kinds (interval, custom, text, ad hoc and the like) are skipped, and a variable's regex is dropped; each is listed.
+- **Variables**: query variables built on `label_values(...)` become label-values variables; a variable whose current value is **All** starts at All when it offers it. Other kinds (interval, custom, text, ad hoc and the like) are skipped, and a variable's regex is dropped; each is listed.
 - **Queries** keep their text and legend; what OmniKrux can't run is listed.
-- **Alerts**: an old per-panel alert, or a Grafana-managed alert rule linked to a panel, becomes one OmniKrux alert on that panel when it checks a value **above** or **below** a threshold with last, mean, max, min or sum, with its wait time. Notification channels, the no-data and error states, and rules that combine queries or check anything else are listed as skipped. Grafana's rules are read only when the connection's sign-in can read them; otherwise the review says that no alert was copied.
+- **Alerts**: an old per-panel alert, or a Grafana-managed alert rule linked to a panel, becomes one OmniKrux alert on that panel when it checks a value **above** or **below** a threshold with last, mean, max, min or sum, with its wait time. Notification channels, the no-data and error states (said as "When there's no data: it keeps its last state" and the like), and rules that combine queries or check anything else are listed as skipped. Grafana's rules are read only when the connection's sign-in can read them; otherwise the review says that no alert was copied.
 
 ### Update from source
 
 A dashboard that was imported says where it came from under its title ("Imported from … on 3 Mar 2026"). **Update from source…** in its **More actions** menu re-reads that source:
 
 - For a dashboard imported through a saved Grafana connection, OmniKrux reads the Grafana again. For one imported from a file or pasted JSON, it asks you to **Pick the file again** or paste its JSON, then press **Check**.
-- The dialog shows the dashboard **Now (version n)** beside **From the source**, with any **New data sources** and **Skipped (n)**. When nothing differs it says **Nothing changed: the source matches this dashboard.**
+- Pasted JSON that isn't valid says where: "This isn't valid JSON: line {l}, column {c}: {plain}." The dialog shows the dashboard **Now (version n)** beside **From the source**, with any **New data sources** and **Skipped (n)**. When nothing differs it says **Nothing changed: the source matches this dashboard.**
 - When the dashboard was changed in OmniKrux after it was imported, the dialog warns that updating replaces those changes. They stay in **Versions**, where the update appears as a new version.
 - **Replace with the source** saves the source as the next version. The dashboard keeps its title, and each alert keeps its contact points, where it runs and how often it is checked; the rest of an alert comes from the source. When Grafana's alert rules weren't read this time (an update from the file of a dashboard that came from a Grafana, or a Grafana that didn't send its rules), each panel keeps its alert as it is, and **Skipped** says so.
 - An update is refused while a draft of the dashboard is open: save or discard the draft first.
@@ -636,7 +687,11 @@ A source a project did not create, or that another project still uses, is never 
 
 ## Audit
 
-Every change in Monitoring is written to the Audit log, marked as coming from Monitoring: **Added a source**, **Changed a source**, **Removed a source**, and the same for projects and groups. For dashboards the entries are **Added a dashboard** (a new one or a copy), **Saved a dashboard**, **Restored a dashboard version** and **Removed a dashboard**. An entry names what changed and whether it succeeded. A dashboard's entries say who owns it, which versions are involved and how many panels it has, never its queries. A panel added from Explore to an existing dashboard is recorded as **Saved a dashboard**, with a note that it came from Explore and the title of the panel added. Details never include secrets: an entry says which kind of sign-in a source uses, not the password or token. Reading is not audited: testing a source, opening a project or running a query leaves no entry.
+Every change in Monitoring is written to the Audit log, marked as coming from Monitoring, with the kind of thing it was (**Source**, **Project**, **Group**, **Dashboard**, **Grafana connection** and so on): **Added a source**, **Changed a source**, **Removed a source**, and the same for projects and groups. Entries say what changed: a link or filter change gives the sentence (for example the filter before and after), a rename names the project or group before the change and the new name, and a refused rename names the one it tried to rename. For dashboards the entries are **Added a dashboard** (a new one or a copy), **Saved a dashboard**, **Restored a dashboard version** and **Removed a dashboard**. An entry names what changed and whether it succeeded. A dashboard's entries say who owns it, which versions are involved and how many panels it has, never its queries. A panel added from Explore to an existing dashboard is recorded as **Saved a dashboard**, with a note that it came from Explore and the title of the panel added. Details never include secrets: an entry says which kind of sign-in a source uses, not the password or token. Reading is not audited: testing a source, opening a project or running a query leaves no entry.
+
+**Settings.** Removing a cluster in Settings says, when Monitoring uses it, "Monitoring uses this cluster: 2 projects (A, B) and 1 source (C). They stay, but their data can't be read until the cluster is added again." Nothing is said when Monitoring doesn't use the cluster, or when that can't be read.
+
+**Questions that start on Cancel.** Every question that deletes or discards something in Monitoring (a source, project, group, dashboard, contact point, rule, an expiring silence, a Grafana connection, or changes in the editor) starts with the keyboard on **Cancel**, so a stray Enter never confirms it. The questions that ask **Stay** or **Keep editing** already start on the safe choice.
 
 ## What comes in later updates
 
