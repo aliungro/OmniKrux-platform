@@ -131,7 +131,7 @@ export function DashboardHeader(p: Props) {
     p.onTab(next);
   };
   return (
-    <header className={s.header}>
+    <header className={s.header} data-editing={p.editControls ? "" : undefined}>
       <div className={s.heading}>
         <p className={s.crumb}>
           <a href="#" className={s.owner} onClick={(e) => { e.preventDefault(); p.onOwner(e); }}>{p.ownerName}</a>

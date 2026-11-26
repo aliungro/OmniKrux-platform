@@ -166,6 +166,13 @@
   }
 }
 
+/* Edit mode has five more controls: the views (Dashboard, JSON, Versions) are drawn after them, so
+   the title and every control share the first row at 1280 px and the views take the next one. The
+   same element moves (CSS order), so a view that has the keyboard keeps it. */
+.header[data-editing] .tabs {
+  order: 1;
+}
+
 .tabs {
   display: inline-flex;
   gap: 2px;

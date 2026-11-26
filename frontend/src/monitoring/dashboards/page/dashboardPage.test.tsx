@@ -813,6 +813,30 @@ describe("The header's structure", () => {
     expect(kids.indexOf(banner)).toBe(1);
     expect(kids[2].getAttribute("role")).toBe("tablist");
   });
+
+  it("in edit mode the views come after the controls, so title and controls share the first row", async () => {
+    // jsdom lays nothing out: the rule and the mark are checked here; the browser confirms one row
+    // at 1280 px. The views move by CSS order (the same element, so a focused view keeps the keyboard).
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync("src/monitoring/dashboards/page/DashboardPage.module.css", "utf8");
+    expect(css).toMatch(/\.header\[data-editing\] \.tabs\s*\{[^}]*order:\s*1/);
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    const viewKids = () => [...title.closest("header")!.children];
+    // Viewing: heading, views, controls, as drawn.
+    expect(viewKids()[1].getAttribute("role")).toBe("tablist");
+    expect(title.closest("header")!.hasAttribute("data-editing")).toBe(false);
+    const views = screen.getByRole("tablist", { name: "Dashboard views" });
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    notBody();
+    expect(title.closest("header")!.hasAttribute("data-editing")).toBe(true);
+    // Not remounted.
+    expect(screen.getByRole("tablist", { name: "Dashboard views" })).toBe(views);
+  });
 });
 
 describe("Copy to edit", () => {
